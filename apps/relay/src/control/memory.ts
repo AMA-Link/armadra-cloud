@@ -10,6 +10,7 @@ import type {
   LimitKind,
   LimitResult,
   LimitRule,
+  NodeCommand,
   PresenceEvent,
   Route,
 } from "./types.ts";
@@ -17,16 +18,24 @@ import { DEFAULT_LIMIT_RULES } from "./types.ts";
 
 export interface MemoryControlPlaneOptions {
   issuer: string;
-  /** personal：签名密钥的公钥集（R2 的 signer 提供）；测试：协议包的测试钥。 */
+  /** personal：签名钥的公钥集（`personal/signer.ts`）；测试：协议包的测试钥。 */
   jwks: () => JwkSet | Promise<JwkSet>;
   mode?: "saas" | "personal";
   now?: () => number;
   limits?: Partial<Record<LimitKind, LimitRule>>;
+  /**
+   * 撤销表之外的撤销判断（personal：`jti` 里编码了源 / 设备，按状态文件判它们是否已撤）。
+   * 两者任一为真即视为撤销。
+   */
+  revoked?: (jti: string) => boolean | Promise<boolean>;
 }
 
 export interface MemoryControlPlane extends ControlPlane {
   /** 测试与 `/health` 用：当前未过期的路由数。 */
   routeCount(): number;
+  /** 进程内的节点命令通道（personal：撤销源时关它的隧道）。 */
+  nodeCommands: { subscribe(fn: (command: NodeCommand) => void): () => void };
+  command(command: NodeCommand): void;
 }
 
 /** 超过这个条目数时，写入顺手清一遍过期项。 */
@@ -42,6 +51,7 @@ export function createMemoryControlPlane(
   const concurrent = new Map<string, number>();
   const revoked = new Map<string, number>();
   const listeners = new Set<(event: PresenceEvent) => void>();
+  const commandListeners = new Set<(command: NodeCommand) => void>();
 
   const sweep = <V>(map: Map<string, V>, expiry: (value: V) => number) => {
     if (map.size < SWEEP_AT) return;
@@ -132,17 +142,29 @@ export function createMemoryControlPlane(
     tokens: {
       async isRevoked(jti) {
         const until = revoked.get(jti);
-        if (until === undefined) return false;
-        if (until <= now()) {
-          revoked.delete(jti);
-          return false;
-        }
-        return true;
+        if (until !== undefined && until <= now()) revoked.delete(jti);
+        else if (until !== undefined) return true;
+        return options.revoked ? await options.revoked(jti) : false;
       },
       async revoke(jti, expMs) {
         sweep(revoked, (until) => until);
         if (expMs > now()) revoked.set(jti, expMs);
       },
+    },
+    nodeCommands: {
+      subscribe(fn) {
+        commandListeners.add(fn);
+        return () => commandListeners.delete(fn);
+      },
+    },
+    command(command) {
+      for (const listener of [...commandListeners]) {
+        try {
+          listener(command);
+        } catch {
+          // 同 presence：一个订阅者出错不影响其它。
+        }
+      }
     },
     routeCount() {
       const at = now();

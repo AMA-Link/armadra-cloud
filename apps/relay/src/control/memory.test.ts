@@ -139,3 +139,26 @@ it("memory.ts 不 import Redis / PostgreSQL（personal 模式无外部依赖）"
   );
   expect(imports.every((path) => path?.startsWith("./"))).toBe(true);
 });
+
+it("撤销判断：撤销表或 revoked 钩子任一为真即撤销", async () => {
+  const control = createMemoryControlPlane({
+    issuer: "https://relay.test",
+    jwks: () => ({ keys: [] }),
+    now: () => 1_000,
+    revoked: (jti) => jti.startsWith("dead."),
+  });
+  expect(await control.tokens.isRevoked("dead.1")).toBe(true);
+  expect(await control.tokens.isRevoked("live.1")).toBe(false);
+  await control.tokens.revoke("live.1", 2_000);
+  expect(await control.tokens.isRevoked("live.1")).toBe(true);
+});
+
+it("节点命令：进程内发给订阅者（personal 撤销源时关隧道）", () => {
+  const { control } = plane();
+  const seen: unknown[] = [];
+  const off = control.nodeCommands.subscribe((command) => seen.push(command));
+  control.command({ type: "closeTunnel", sourceId: "s" });
+  off();
+  control.command({ type: "closeTunnel", sourceId: "s" });
+  expect(seen).toEqual([{ type: "closeTunnel", sourceId: "s" }]);
+});

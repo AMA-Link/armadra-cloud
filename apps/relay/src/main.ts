@@ -1,20 +1,25 @@
 /**
  * 中继内核装配（中继设计 §1）：控制面 → 令牌校验 → 隧道终端 + 边缘 → HTTP 服务器
  * （+ 可选的指标监听）。两种模式都走这里，差别只在调用方给的 `control`、`addressing`
- * 与 `extra`（personal 的 `/v1`、托管页面在 R2 挂进来）。
+ * 与 `extra` / `extraUpgrade`（personal 的 `/v1`、`/v1/me/stream`、托管页面）。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 
 import type { ListenAddress } from "@armadra/cloud-shared/config";
 import type { Probe } from "@armadra/cloud-shared/health";
-import { listen, type RunningServer } from "@armadra/cloud-shared/http";
+import {
+  listen,
+  type RunningServer,
+  type TlsPair,
+} from "@armadra/cloud-shared/http";
 import type { Logger } from "@armadra/cloud-shared/log";
 import { LIMITS } from "@armadra/platform-protocol/tunnel";
 
 import { createAuthContext } from "./auth/context.ts";
 import type { ControlPlane } from "./control/types.ts";
 import type { Addressing } from "./edge/addressing.ts";
-import { Edge } from "./edge/server.ts";
+import { Edge, type EdgeConnectionFilter } from "./edge/server.ts";
 import { sendRelayError } from "./http/errors.ts";
 import {
   createMetricsHandler,
@@ -48,6 +53,14 @@ export interface RelayOptions {
   shutdownGraceMs?: number;
   /** 模式自己的路由（personal `/v1` 等）：认领了返回 true。 */
   extra?: (req: IncomingMessage, res: ServerResponse) => boolean;
+  /** 模式自己的 WS 升级（personal `/v1/me/stream`）：认领了返回 true。 */
+  extraUpgrade?: (
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+  ) => boolean;
+  /** 给了就监听 HTTPS（personal 的自签 CA / ACME / 文件证书）。 */
+  tls?: TlsPair;
   now?: () => number;
 }
 
@@ -56,6 +69,10 @@ export interface RunningRelay {
   metricsUrl?: string;
   tunnels: TunnelServer;
   metrics: RelayMetrics;
+  /** 换证书（叶证书续期、文件热加载）；明文监听上是空操作。 */
+  setTls(tls: TlsPair): void;
+  /** 断开匹配的客户端 WS（撤销源、撤销访客时用）；HTTP 请求逐个验令牌，不需要断。 */
+  disconnect(filter: EdgeConnectionFilter): number;
   close(graceMs?: number): Promise<void>;
 }
 
@@ -111,18 +128,23 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
       url: req.url ?? "/",
       host: req.headers.host,
     }) !== null;
-  const server: RunningServer = await listen(options.listen, (req, res) => {
-    if (!addressed(req)) return router.handle(req, res);
-    return edge.handleRequest(req, res).catch((error: unknown) => {
-      log.error("边缘请求异常", { error: errorName(error) });
-      if (!res.headersSent) sendRelayError(res, "internal");
-      else res.destroy();
-    });
-  });
+  const server: RunningServer = await listen(
+    options.listen,
+    (req, res) => {
+      if (!addressed(req)) return router.handle(req, res);
+      return edge.handleRequest(req, res).catch((error: unknown) => {
+        log.error("边缘请求异常", { error: errorName(error) });
+        if (!res.headersSent) sendRelayError(res, "internal");
+        else res.destroy();
+      });
+    },
+    options.tls ? { tls: options.tls } : {},
+  );
   server.server.on(
     "upgrade",
     dispatchUpgrade({
       addressed,
+      extra: options.extraUpgrade,
       tunnel: (req, socket, head) =>
         tunnelServer.handleUpgrade(req, socket, head),
       edge: (req, socket, head) => {
@@ -151,6 +173,10 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     metricsUrl: metricsServer?.url,
     tunnels: tunnelServer,
     metrics,
+    setTls(tls) {
+      server.setTls?.(tls);
+    },
+    disconnect: (filter) => edge.disconnect(filter),
     close(graceMs = options.shutdownGraceMs ?? LIMITS.goawayGraceMs) {
       closing ??= (async () => {
         await tunnelServer.shutdown(graceMs);

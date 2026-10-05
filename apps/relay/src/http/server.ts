@@ -5,8 +5,9 @@
  * - `GET /ready`：逐项探针（saas 报 Redis），失败答 503。
  * - 指向某个源的请求与升级（saas 的 `<id>.src.<域>`、personal 的 `/s/<id>/…`）先于一切
  *   交给边缘——源自己也有 `/health`，不能被中继的同名端点截走。
- * - 升级 `/t/v1` → 隧道终端；其余升级 → 边缘（答 404）。
- * - 其余请求：精确路由 → `extra`（personal 的 `/v1`、托管页面等，R2 挂）→ 404。
+ * - 升级 `/t/v1` → 隧道终端；模式自己的升级（personal `/v1/me/stream`）→ extra；其余升级
+ *   → 边缘（答 404）。
+ * - 其余请求：精确路由 → `extra`（personal 的 `/v1`、托管页面等）→ 404。
  * - `/metrics` 不在这里：只在单独的 `RELAY_METRICS_LISTEN` 上（{@link createMetricsHandler}）。
  */
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -68,17 +69,23 @@ export function createRelayRouter(options: RelayHttpOptions): Router {
 export interface UpgradeTargets {
   /** 这个请求指向某个源（交给边缘）。 */
   addressed(req: IncomingMessage): boolean;
+  /** 模式自己的升级（personal `/v1/me/stream`）：认领了返回 true。 */
+  extra?: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
   tunnel(req: IncomingMessage, socket: Duplex, head: Buffer): void;
   edge(req: IncomingMessage, socket: Duplex, head: Buffer): void;
 }
 
-/** `upgrade` 事件分派：指向源 → 边缘；`/t/v1` → 隧道；其余 → 边缘（404）。 */
+/** `upgrade` 事件分派：指向源 → 边缘；`/t/v1` → 隧道；模式自己的 → extra；其余 → 边缘（404）。 */
 export function dispatchUpgrade(targets: UpgradeTargets) {
   return (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
+    if (targets.addressed(req)) {
+      targets.edge(req, socket, head);
+      return;
+    }
     const path = (req.url ?? "/").split("?")[0];
-    if (!targets.addressed(req) && path === TUNNEL_PATH)
-      targets.tunnel(req, socket, head);
-    else targets.edge(req, socket, head);
+    if (path === TUNNEL_PATH) targets.tunnel(req, socket, head);
+    else if (!targets.extra?.(req, socket, head))
+      targets.edge(req, socket, head);
   };
 }
 
