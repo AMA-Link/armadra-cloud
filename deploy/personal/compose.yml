@@ -1,4 +1,11 @@
-# 单人中转：一个服务，不带数据库（平台设计 §17）。personal 模式在 R2 落地。
+# 单人中转：一个服务、不带数据库，不依赖 PostgreSQL / Redis（平台设计 §17）。
+#
+#   RELAY_HOST=203.0.113.5 docker compose -f deploy/personal/compose.yml up -d
+#
+# 现阶段只有健康检查与 --tls plain；账号、签名、自签 CA / ACME 在 R2 落地。在那之前
+# 端口只映射到本机回环，对外要放在终止 TLS 的反向代理之后；R2 起改为 --tls self-signed
+# 并映射 443:8443。口令文件给 R2 的首次自动 init 用，现在不读，但要存在：
+#   printf '%s' '<口令>' > deploy/personal/relay_password.txt && chmod 600 deploy/personal/relay_password.txt
 name: armadra-relay-personal
 
 services:
@@ -10,14 +17,17 @@ services:
         "serve",
         "--host",
         "${RELAY_HOST:?set RELAY_HOST to your public IP or domain}",
+        "--tls",
+        "plain",
       ]
     environment:
+      RELAY_DATA_DIR: /data
       RELAY_PERSONAL_ACCOUNT: "${RELAY_ACCOUNT:-me}"
       RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/relay_password
     secrets:
       - relay_password
     ports:
-      - "443:8443"
+      - "127.0.0.1:8443:8443"
     volumes:
       - relay-data:/data
     restart: unless-stopped

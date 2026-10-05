@@ -35,10 +35,21 @@
 | `RELAY_ALLOW_INSECURE_TUNNEL` |      | `1` 允许明文隧道，只用于本地开发 |
 | `RELAY_LOG_LEVEL`             |      | 缺省 `info`                      |
 
+中继（`armadra-relay personal serve`，参数优先，其次环境变量）：
+
+| 参数 / 变量                     | 必填 | 说明                                           |
+| ------------------------------- | ---- | ---------------------------------------------- |
+| `--data-dir` / `RELAY_DATA_DIR` | 是   | 数据目录（权限 0700）                          |
+| `--host` / `RELAY_HOST`         | 是   | 对外的 IP 或域名                               |
+| `--port`                        |      | 缺省 8443                                      |
+| `--tls` / `RELAY_TLS`           |      | 缺省 `self-signed`；现阶段只支持 `plain`       |
+| `--listen` / `RELAY_LISTEN`     |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0` |
+
 ## 端点
 
 - `GET /health`：进程存活，200 即活着（镜像的 `HEALTHCHECK` 用它）。
-- `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，relay 报 Redis），任一不可达答 503。
+- `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，saas relay 报 Redis，personal relay 报数据目录），任一不可达答 503。
+- 控制面的 `/v1/*` 与 `/.well-known/*` 业务路由现在是预留，答 501 `{ code: "not_implemented", message, requestId }`。
 
 ## 升级顺序
 

@@ -16,3 +16,4 @@ coverage/
 .data/
 
 *.log
+deploy/personal/relay_password.txt
