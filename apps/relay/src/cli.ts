@@ -32,7 +32,8 @@ serve:
   --port PORT            端口，默认 8443
   --tls MODE             self-signed | acme | file | plain，默认 self-signed；现在只支持 plain
   --listen HOST:PORT     监听地址（或 RELAY_LISTEN），默认回环 --host 用 127.0.0.1，否则 0.0.0.0
-  --log-level LEVEL      debug | info | warn | error，默认 info`;
+  --log-level LEVEL      debug | info | warn | error，默认 info
+  --metrics-listen H:P   指标监听（或 RELAY_METRICS_LISTEN），默认不开；RELAY_METRICS_TOKEN 设访问令牌`;
 
 /** 尚未实现的子命令以 69 退出（EX_UNAVAILABLE），用法错误以 64 退出（EX_USAGE）。 */
 const NOT_IMPLEMENTED_EXIT_CODE = 69;
