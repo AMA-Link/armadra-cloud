@@ -1,0 +1,47 @@
+export {
+  CLOSE,
+  FRAME_TYPE,
+  RST,
+  type CloseCode,
+  type FrameTypeName,
+  type RstCode,
+} from "./codes.ts";
+export {
+  decodeFrame,
+  encodeFrame,
+  FRAME_HEADER_BYTES,
+  FrameError,
+  goawayPayloadSchema,
+  openPayloadSchema,
+  type Frame,
+  type FrameErrorCode,
+  type GoawayReason,
+  type OpenPayload,
+} from "./frames.ts";
+export {
+  authSchema,
+  challengeSchema,
+  challengeSigningInput,
+  helloSchema,
+  hex32Schema,
+  nonceSchema,
+  protocolVersionSchema,
+  readySchema,
+  rejectSchema,
+  signatureSchema,
+  TUNNEL_REJECT_CODES,
+  tunnelClientMessageSchema,
+  tunnelLimitsSchema,
+  tunnelRejectCodeSchema,
+  tunnelServerMessageSchema,
+  type Auth,
+  type Challenge,
+  type Hello,
+  type Ready,
+  type Reject,
+  type TunnelClientMessage,
+  type TunnelRejectCode,
+  type TunnelServerMessage,
+} from "./handshake.ts";
+export { LIMITS, type TunnelLimits } from "./limits.ts";
+export { PROTOCOL_VERSION, TUNNEL_PATH } from "../version.ts";

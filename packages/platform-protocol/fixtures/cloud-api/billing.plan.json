@@ -1,0 +1,12 @@
+{
+  "input": {
+    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "plan": "team",
+    "status": "active",
+    "seats": 5,
+    "periodEndsAtMs": 1762592000000
+  }
+}

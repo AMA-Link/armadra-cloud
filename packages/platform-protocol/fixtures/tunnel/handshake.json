@@ -1,0 +1,47 @@
+{
+  "$comment": "固定密钥（assertion/keys.json 的 source）与固定 nonce；auth.sig 是对 signingInput 的 Ed25519 签名。",
+  "signingInput": "0123456789abcdef0123456789abcdef\noaGhoaGhoaGhoaGhoaGhoQ\nsrKysrKysrKysrKysrKysg\nrelay-1",
+  "hello": {
+    "type": "hello",
+    "protocol": {
+      "major": 1,
+      "minor": 0
+    },
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "coreVersion": "0.2.0",
+    "capabilities": [
+      "identity.native-session.v1"
+    ],
+    "tunnelToken": "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtaXNzdWVyLTIwMjUtMTAiLCJ0eXAiOiJhcm1hZHJhLXR1bm5lbCJ9.eyJpc3MiOiJodHRwczovL2Nsb3VkLmFybWFkcmEudGVzdCIsInN1YiI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwiYXVkIjoicmVsYXktdHVubmVsIiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Im9KcWw5SHBuV1lBdi1WWDQzQzBxRktYSm5TTy1sX2hrRW5fNU9EUlZwUEEifX0sImlhdCI6MTc2MDAwMDAwMCwiZXhwIjoxNzYwMDAzNjAwLCJqdGkiOiJqdGktdHVubmVsLTAwMDEiLCJ2ZXIiOjF9.mzh_cPL3Swl0tuVCEYJvX6Mr2Lxg9fqJV_hUPW1MtmdfuQst1JLP6ik0RRfkPVpp7RBklmNrXTy5oD0790owCg",
+    "nonce": "oaGhoaGhoaGhoaGhoaGhoQ"
+  },
+  "challenge": {
+    "type": "challenge",
+    "nonce2": "srKysrKysrKysrKysrKysg",
+    "relayNode": "relay-1"
+  },
+  "auth": {
+    "type": "auth",
+    "sig": "Y6jOA4HXnMDXFpjiamzQkqM0-EM7LDUijouY37T81ASVIuL0y2CrfEUxSLjBCtCrINbJCPq0ctdQO3f1m-8eCg"
+  },
+  "ready": {
+    "type": "ready",
+    "tunnelId": "fedcba9876543210fedcba9876543210",
+    "limits": {
+      "maxStreams": 256,
+      "streamWindow": 262144,
+      "tunnelWindow": 8388608,
+      "maxFrameBytes": 1048576
+    },
+    "heartbeatMs": 20000,
+    "protocol": {
+      "major": 1,
+      "minor": 0
+    }
+  },
+  "reject": {
+    "type": "reject",
+    "code": "tunnel_token_expired",
+    "message": "tunnel token expired"
+  }
+}

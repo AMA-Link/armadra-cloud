@@ -1,0 +1,14 @@
+{
+  "input": {},
+  "output": {
+    "devices": [
+      {
+        "deviceId": "dev_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "platform": "desktop",
+        "name": "Dev laptop",
+        "lastSeenAtMs": 1760000000000,
+        "current": true
+      }
+    ]
+  }
+}

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "libs:build": "pnpm --filter @armadra/platform-protocol build",
-    "check": "pnpm libs:build && pnpm format:check && pnpm lint && pnpm typecheck && pnpm repo:check && pnpm contract:check && pnpm ci:workflows && pnpm notices:check",
+    "check": "pnpm libs:build && pnpm format:check && pnpm lint && pnpm typecheck && pnpm repo:check && pnpm contract:check && pnpm protocol:check && pnpm ci:workflows && pnpm notices:check",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
@@ -21,6 +21,8 @@
     "repo:test": "node --test tools/*.test.mjs tools/ci/*.test.mjs tools/contract/*.test.mjs",
     "contract:check": "node tools/contract/generate.mjs --check",
     "contract:generate": "node tools/contract/generate.mjs",
+    "protocol:check": "pnpm --filter @armadra/platform-protocol fixtures:check && node scripts/gen-vectors.mjs --check",
+    "protocol:pack": "node scripts/pack-protocol.mjs",
     "ci:workflows": "node tools/ci/validate-workflows.mjs",
     "notices": "node tools/notices.mjs",
     "notices:check": "node tools/notices.mjs --check",
@@ -34,7 +36,10 @@
     "images:build": "docker build -f apps/cloud/Dockerfile -t armadra-cloud:local . && docker build -f apps/relay/Dockerfile -t armadra-relay:local ."
   },
   "devDependencies": {
+    "@armadra/platform-protocol": "workspace:*",
     "@eslint/js": "9.39.5",
+    "@orpc/openapi": "1.15.4",
+    "@orpc/zod": "1.15.4",
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",
@@ -43,6 +48,7 @@
     "prettier": "3.6.2",
     "typescript": "5.9.2",
     "typescript-eslint": "8.71.0",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "zod": "4.4.3"
   }
 }

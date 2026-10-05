@@ -1,0 +1,10 @@
+{
+  "input": {
+    "code": "123456"
+  },
+  "output": {
+    "recoveryCodes": [
+      "uvwxy-zabcd"
+    ]
+  }
+}

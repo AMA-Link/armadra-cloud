@@ -1,0 +1,16 @@
+{
+  "input": {
+    "kind": "source_invite",
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "invitationId": "inv_01",
+    "label": "For Alice",
+    "role": "editor",
+    "expiresAtMs": 1760604800000,
+    "maxUses": 5
+  },
+  "output": {
+    "linkId": "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "url": "https://cloud.armadra.test/j/lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "expiresAtMs": 1760604800000
+  }
+}

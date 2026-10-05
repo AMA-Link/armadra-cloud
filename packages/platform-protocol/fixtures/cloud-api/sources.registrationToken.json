@@ -1,0 +1,8 @@
+{
+  "input": {},
+  "output": {
+    "registrationToken": "test-registration-token",
+    "expiresAtMs": 1760000600000,
+    "issuer": "https://cloud.armadra.test"
+  }
+}

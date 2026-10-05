@@ -1,0 +1,11 @@
+{
+  "input": {
+    "code": "123456"
+  },
+  "output": {
+    "recoveryCodes": [
+      "abcde-fghij",
+      "klmno-pqrst"
+    ]
+  }
+}

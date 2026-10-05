@@ -1,0 +1,7 @@
+{
+  "input": {},
+  "output": {
+    "secret": "JBSWY3DPEHPK3PXP",
+    "otpauthUri": "otpauth://totp/Armadra:dev?secret=JBSWY3DPEHPK3PXP"
+  }
+}

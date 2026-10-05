@@ -1,0 +1,15 @@
+{
+  "input": {
+    "label": "YubiKey"
+  },
+  "output": {
+    "challengeId": "pk_01",
+    "options": {
+      "challenge": "dGVzdC1jaGFsbGVuZ2U",
+      "rp": {
+        "id": "armadra.test",
+        "name": "Armadra"
+      }
+    }
+  }
+}

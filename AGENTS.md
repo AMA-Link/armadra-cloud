@@ -29,7 +29,8 @@
 ## 按需阅读与验证
 
 - 怎么跑见 [README](README.md)；文档索引在 [docs/README.md](docs/README.md)，新增文档要登记。
-- 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
+- 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表与 `cloud-openapi.json` 由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
+- 协议包的黄金夹具与身份向量是生成物：改了帧、声明、契约或身份常量，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`node scripts/gen-vectors.mjs`），`pnpm protocol:check` 守住。
 - 验证：`pnpm check`、`pnpm repo:test`、`pnpm test`、`pnpm test:integration`（需 `pnpm dev:up`）、`pnpm images:build`。
 - 发布（npm、GHCR）、域名、证书、密钥都是对外操作，由维护者执行；本地绝不手动 `npm publish` / `docker push`。
 - 依赖写精确版本（无 `^`）；改生产依赖后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。

@@ -1,0 +1,39 @@
+{
+  "$comment": "只用于测试：私钥公开在仓库里。",
+  "issuer": {
+    "kid": "test-issuer-2025-10",
+    "privateJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc",
+      "d": "ERERERERERERERERERERERERERERERERERERERERERE"
+    },
+    "publicJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc",
+      "kid": "test-issuer-2025-10",
+      "alg": "EdDSA",
+      "use": "sig"
+    },
+    "issuer": "https://cloud.armadra.test"
+  },
+  "source": {
+    "kid": "0123456789abcdef0123456789abcdef",
+    "privateJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA",
+      "d": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI"
+    },
+    "publicJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA",
+      "kid": "0123456789abcdef0123456789abcdef",
+      "alg": "EdDSA",
+      "use": "sig"
+    },
+    "sourceId": "0123456789abcdef0123456789abcdef"
+  }
+}

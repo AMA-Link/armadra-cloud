@@ -1,0 +1,16 @@
+{
+  "input": {
+    "sourceId": "0123456789abcdef0123456789abcdef"
+  },
+  "output": {
+    "access": [
+      {
+        "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "email": "dev@armadra.test",
+        "via": "link",
+        "linkId": "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "grantedAtMs": 1760000000000
+      }
+    ]
+  }
+}

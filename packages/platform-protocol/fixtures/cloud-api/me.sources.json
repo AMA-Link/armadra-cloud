@@ -1,0 +1,18 @@
+{
+  "input": {},
+  "output": {
+    "sources": [
+      {
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "name": "Workstation",
+        "kind": "desktop",
+        "online": true,
+        "lastSeenAtMs": 1760000000000,
+        "owner": true,
+        "via": "owner",
+        "relayOrigin": "https://relay.armadra.test",
+        "coreVersion": "0.2.0"
+      }
+    ]
+  }
+}

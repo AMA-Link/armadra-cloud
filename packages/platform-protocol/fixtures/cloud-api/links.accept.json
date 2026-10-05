@@ -1,0 +1,17 @@
+{
+  "input": {
+    "linkId": "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "secret": "test-link-secret",
+    "device": {
+      "platform": "desktop",
+      "name": "Dev laptop"
+    }
+  },
+  "output": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "relayOrigin": "https://relay.armadra.test",
+    "relayBaseUrl": "https://0123456789abcdef0123456789abcdef.src.relay.armadra.test",
+    "assertion": "test-assertion",
+    "relayToken": "test-relay-token"
+  }
+}

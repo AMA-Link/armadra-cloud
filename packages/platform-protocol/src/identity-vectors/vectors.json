@@ -1,0 +1,71 @@
+{
+  "scrypt": [
+    {
+      "password": "correct horse battery staple",
+      "salt": "000102030405060708090a0b0c0d0e0f",
+      "hex": "7a8e34241db898d59175c696538c417467a975ffe569068425f16188d3159c58"
+    },
+    {
+      "password": "armadra-dev-password",
+      "salt": "f0e1d2c3b4a5968778695a4b3c2d1e0f",
+      "hex": "c5910ec518f3364643db95067331198016d67da51ffd14cd48430dd75e817b7a"
+    },
+    {
+      "password": "口令里有中文与 emoji 🔐",
+      "salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "hex": "a2f5b003c8dbc405bc28e3aa8251ee756d0321e35005da0bb7fac546ef34bff1"
+    }
+  ],
+  "tokenHash": [
+    {
+      "kind": "bootstrap",
+      "value": "aGVsbG8td29ybGQ",
+      "hex": "2acfc146fa7bb16da695414e82d048056cf409c541078635381e6533bc3f6dee"
+    },
+    {
+      "kind": "bootstrap",
+      "value": "0123456789abcdef0123456789abcdef",
+      "hex": "4e300c40d582530fa6070425e1a6182d999d41097be32af8c792385324f96775"
+    },
+    {
+      "kind": "access",
+      "value": "aGVsbG8td29ybGQ",
+      "hex": "dc4953f6bb981629bb62f4529fde5bf03c557ce973695397fda2f9502367eb91"
+    },
+    {
+      "kind": "access",
+      "value": "0123456789abcdef0123456789abcdef",
+      "hex": "832a0c0c16a9d569dea7a0e11a15d23089c7605102ec75e83119e76a7fdc991a"
+    },
+    {
+      "kind": "refresh",
+      "value": "aGVsbG8td29ybGQ",
+      "hex": "9d771ce908badf3dd7a8842182a0234f78c7128852d43a03953121d8ff38cfa0"
+    },
+    {
+      "kind": "refresh",
+      "value": "0123456789abcdef0123456789abcdef",
+      "hex": "25ec600fd5ade1e6bb59fcfcbfa9fcbc81a39bbafbcf51cad4c003fa212eb095"
+    },
+    {
+      "kind": "csrf",
+      "value": "aGVsbG8td29ybGQ",
+      "hex": "24f2f6255773a9fe8af9d98d875c2bbaf759dd9cf302b4d556d57e7b681c15ad"
+    },
+    {
+      "kind": "csrf",
+      "value": "0123456789abcdef0123456789abcdef",
+      "hex": "56c7399de2d5e30528dbfbcbb2690630f83ceff6f78e307830be722eb6d75460"
+    },
+    {
+      "kind": "reset",
+      "value": "aGVsbG8td29ybGQ",
+      "hex": "2abcb4e55ae2c03dbd20f4e01515577301b395584b14ed45dc3746128a756e51"
+    },
+    {
+      "kind": "reset",
+      "value": "0123456789abcdef0123456789abcdef",
+      "hex": "f3b2c3a068c8eb84eace2dceecc2cdcf5ce87546d6c4abb40506b611ed65df3e"
+    }
+  ]
+}

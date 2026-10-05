@@ -1,0 +1,8 @@
+{
+  "input": {
+    "code": "123456"
+  },
+  "output": {
+    "disabled": true
+  }
+}

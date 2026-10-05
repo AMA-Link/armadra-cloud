@@ -1,0 +1,19 @@
+{
+  "input": {
+    "challengeId": "pk_01",
+    "response": {
+      "id": "cred",
+      "type": "public-key"
+    },
+    "label": "YubiKey"
+  },
+  "output": {
+    "credentialId": "cred",
+    "label": "YubiKey",
+    "aaguid": "00000000-0000-0000-0000-000000000000",
+    "transports": [
+      "usb"
+    ],
+    "createdAtMs": 1760000000000
+  }
+}

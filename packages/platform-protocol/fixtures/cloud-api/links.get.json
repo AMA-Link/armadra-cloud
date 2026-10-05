@@ -1,0 +1,14 @@
+{
+  "input": {
+    "linkId": "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "kind": "source_invite",
+    "label": "For Alice",
+    "role": "editor",
+    "sourceName": "Workstation",
+    "expiresAtMs": 1760604800000,
+    "exhausted": false,
+    "requiresAccount": true
+  }
+}

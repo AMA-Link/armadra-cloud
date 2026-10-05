@@ -1,0 +1,23 @@
+{
+  "input": {
+    "sourceId": "0123456789abcdef0123456789abcdef"
+  },
+  "output": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "name": "Workstation",
+    "kind": "desktop",
+    "online": true,
+    "lastSeenAtMs": 1760000000000,
+    "owner": true,
+    "via": "owner",
+    "relayOrigin": "https://relay.armadra.test",
+    "coreVersion": "0.2.0",
+    "trustedOrigins": [
+      "https://app.armadra.test"
+    ],
+    "capabilities": [
+      "identity.native-session.v1"
+    ],
+    "registeredAtMs": 1759913600000
+  }
+}

@@ -59,7 +59,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # libs:build + prettier + eslint（只有 error 失败）+ typecheck + repo:check +
-      # contract:check + ci:workflows + notices:check
+      # contract:check + protocol:check（夹具与向量）+ ci:workflows + notices:check
       - run: pnpm check
 
       - run: pnpm repo:test
@@ -74,6 +74,9 @@ jobs:
         env:
           ARMADRA_CLOUD_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
           REDIS_URL: redis://localhost:6379
+
+      - name: 协议包打包（pnpm pack 出 tgz 并核对内容，不发布）
+        run: pnpm protocol:pack --out "$RUNNER_TEMP/pack"
 
       - name: 构建两个镜像（只 --load，不推送）
         run: pnpm images:build

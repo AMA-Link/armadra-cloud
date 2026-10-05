@@ -2,7 +2,16 @@ import { listen, type RunningServer } from "@armadra/cloud-shared/http";
 import { createLogger } from "@armadra/cloud-shared/log";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createReservedMatcher, RESERVED_ROUTES } from "./reserved.ts";
+import {
+  cloudContract,
+  listProcedures,
+} from "@armadra/platform-protocol/cloud-api";
+
+import {
+  createReservedMatcher,
+  IMPLEMENTED,
+  RESERVED_ROUTES,
+} from "./reserved.ts";
 import { createCloudRouter } from "./server.ts";
 
 const SOURCE_ID = "0123456789abcdef0123456789abcdef";
@@ -25,7 +34,11 @@ beforeAll(async () => {
 afterAll(() => running.close());
 
 describe("预留路由表", () => {
-  it("覆盖协议包设计 §5 的全部业务路由（除 /health），方法 + 路径唯一", () => {
+  it("契约里除已实现的之外全部预留，方法 + 路径唯一", () => {
+    const contract = listProcedures(cloudContract).map((entry) => entry.key);
+    expect(RESERVED_ROUTES.map((route) => route.key)).toEqual(
+      contract.filter((key) => !IMPLEMENTED.has(key)),
+    );
     expect(RESERVED_ROUTES).toHaveLength(51);
     const routes = RESERVED_ROUTES.map(
       (route) => `${route.method} ${route.path}`,
