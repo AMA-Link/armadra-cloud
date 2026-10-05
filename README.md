@@ -38,7 +38,7 @@ pnpm relay:personal            # 从源码起个人中转：http://127.0.0.1:810
 curl http://127.0.0.1:8102/health
 ```
 
-容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/owlbay/armadra-relay:local .` 之后按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。现阶段只有健康检查与 `--tls plain`，账号、签名、TLS 在后续包落地。
+容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/owlbay/armadra-relay:local .` 之后按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。现阶段有中继内核（隧道终端 `/t/v1`、`/s/<sourceId>/` 边缘、`/health`、可选 `--metrics-listen` 上的 `/metrics`）与 `--tls plain`；账号、签名钥、源注册与 TLS 在后续包落地，在那之前没有可用的令牌，隧道与边缘一律拒绝。
 
 ## SaaS 本地开发
 

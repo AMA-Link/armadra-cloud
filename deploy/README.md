@@ -37,13 +37,15 @@
 
 中继（`armadra-relay personal serve`，参数优先，其次环境变量）：
 
-| 参数 / 变量                     | 必填 | 说明                                           |
-| ------------------------------- | ---- | ---------------------------------------------- |
-| `--data-dir` / `RELAY_DATA_DIR` | 是   | 数据目录（权限 0700）                          |
-| `--host` / `RELAY_HOST`         | 是   | 对外的 IP 或域名                               |
-| `--port`                        |      | 缺省 8443                                      |
-| `--tls` / `RELAY_TLS`           |      | 缺省 `self-signed`；现阶段只支持 `plain`       |
-| `--listen` / `RELAY_LISTEN`     |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0` |
+| 参数 / 变量                                 | 必填 | 说明                                                |
+| ------------------------------------------- | ---- | --------------------------------------------------- |
+| `--data-dir` / `RELAY_DATA_DIR`             | 是   | 数据目录（权限 0700）                               |
+| `--host` / `RELAY_HOST`                     | 是   | 对外的 IP 或域名                                    |
+| `--port`                                    |      | 缺省 8443                                           |
+| `--tls` / `RELAY_TLS`                       |      | 缺省 `self-signed`；现阶段只支持 `plain`            |
+| `--listen` / `RELAY_LISTEN`                 |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`      |
+| `--metrics-listen` / `RELAY_METRICS_LISTEN` |      | `/metrics` 的单独监听（只绑内网地址），缺省不开     |
+| `RELAY_METRICS_TOKEN`                       |      | 设了则 `/metrics` 要 `Authorization: Bearer <令牌>` |
 
 ## 端点
 
