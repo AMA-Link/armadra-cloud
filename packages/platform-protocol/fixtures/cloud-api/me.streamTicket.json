@@ -1,0 +1,7 @@
+{
+  "input": {},
+  "output": {
+    "ticket": "test-ticket",
+    "expiresAtMs": 1760000030000
+  }
+}

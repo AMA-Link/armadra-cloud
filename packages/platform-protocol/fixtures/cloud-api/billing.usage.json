@@ -1,0 +1,17 @@
+{
+  "input": {
+    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "period": "2025-10"
+  },
+  "output": {
+    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "period": "2025-10",
+    "usage": [
+      {
+        "metric": "relay.bytes",
+        "value": 1024,
+        "limit": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "input": {
+    "slug": "dev-org",
+    "name": "Dev Org"
+  },
+  "output": {
+    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "slug": "dev-org",
+    "name": "Dev Org",
+    "role": "owner",
+    "createdAtMs": 1760000000000
+  }
+}

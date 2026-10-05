@@ -1,0 +1,23 @@
+{
+  "input": {
+    "challengeId": "mfa_01",
+    "code": "123456"
+  },
+  "output": {
+    "session": {
+      "accessToken": "test-access-token",
+      "refreshToken": "test-refresh-token",
+      "accessExpiresAtMs": 1760000900000,
+      "expiresAtMs": 1762592000000,
+      "account": {
+        "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "email": "dev@armadra.test",
+        "displayName": "Dev",
+        "emailVerified": true
+      },
+      "device": {
+        "deviceId": "dev_01JAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  }
+}

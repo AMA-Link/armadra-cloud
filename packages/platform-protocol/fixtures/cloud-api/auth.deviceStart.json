@@ -1,0 +1,15 @@
+{
+  "input": {
+    "device": {
+      "platform": "server",
+      "name": "armadra-server"
+    }
+  },
+  "output": {
+    "deviceCode": "test-device-code",
+    "userCode": "BCDF-GHJK",
+    "verificationUrl": "https://cloud.armadra.test/device",
+    "expiresAtMs": 1760000600000,
+    "intervalMs": 5000
+  }
+}

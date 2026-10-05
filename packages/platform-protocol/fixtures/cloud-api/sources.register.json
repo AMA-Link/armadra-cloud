@@ -1,0 +1,33 @@
+{
+  "input": {
+    "registrationToken": "test-registration-token",
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "publicKey": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    },
+    "name": "Workstation",
+    "kind": "desktop",
+    "coreVersion": "0.2.0",
+    "capabilities": [
+      "identity.native-session.v1"
+    ],
+    "protocol": {
+      "major": 1,
+      "minor": 0
+    }
+  },
+  "output": {
+    "issuer": "https://cloud.armadra.test",
+    "jwksUrl": "https://cloud.armadra.test/.well-known/jwks.json",
+    "relayOrigins": [
+      "https://relay.armadra.test"
+    ],
+    "trustedOrigins": [
+      "https://app.armadra.test"
+    ],
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "ownerAccountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

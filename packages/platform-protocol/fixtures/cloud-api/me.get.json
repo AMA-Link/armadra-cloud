@@ -1,0 +1,18 @@
+{
+  "input": {},
+  "output": {
+    "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "email": "dev@armadra.test",
+    "displayName": "Dev",
+    "emailVerified": true,
+    "orgs": [
+      {
+        "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "slug": "dev-org",
+        "name": "Dev Org",
+        "role": "owner"
+      }
+    ],
+    "mfaEnabled": false
+  }
+}

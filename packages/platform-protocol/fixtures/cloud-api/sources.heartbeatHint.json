@@ -1,0 +1,20 @@
+{
+  "input": {},
+  "output": {
+    "tunnelToken": "test-tunnel-token",
+    "expiresAtMs": 1760003600000,
+    "nodes": [
+      {
+        "url": "wss://relay-1.armadra.test/t/v1",
+        "region": "ap-east",
+        "weight": 1
+      }
+    ],
+    "limits": {
+      "maxStreams": 256,
+      "streamWindow": 262144,
+      "tunnelWindow": 8388608,
+      "maxFrameBytes": 1048576
+    }
+  }
+}

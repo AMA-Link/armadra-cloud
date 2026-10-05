@@ -1,0 +1,13 @@
+{
+  "input": {},
+  "output": {
+    "challengeId": "pk_02",
+    "options": {
+      "challenge": "dGVzdC1jaGFsbGVuZ2U",
+      "rp": {
+        "id": "armadra.test",
+        "name": "Armadra"
+      }
+    }
+  }
+}

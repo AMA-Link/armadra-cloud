@@ -14,20 +14,58 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./tunnel": {
+      "types": "./dist/tunnel/index.d.ts",
+      "default": "./dist/tunnel/index.js"
+    },
+    "./assertion": {
+      "types": "./dist/assertion/index.d.ts",
+      "default": "./dist/assertion/index.js"
+    },
+    "./cloud-api": {
+      "types": "./dist/cloud-api/index.d.ts",
+      "default": "./dist/cloud-api/index.js"
+    },
+    "./core-api": {
+      "types": "./dist/core-api/index.d.ts",
+      "default": "./dist/core-api/index.js"
+    },
+    "./errors": {
+      "types": "./dist/errors/index.d.ts",
+      "default": "./dist/errors/index.js"
+    },
+    "./identity-vectors": {
+      "types": "./dist/identity-vectors/index.d.ts",
+      "default": "./dist/identity-vectors/index.js"
+    },
+    "./fixtures": {
+      "types": "./dist/fixtures/index.d.ts",
+      "default": "./dist/fixtures/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "fixtures"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fixtures": "node scripts/gen-fixtures.ts",
+    "fixtures:check": "node scripts/gen-fixtures.ts --check"
+  },
+  "peerDependencies": {
+    "zod": ">=4.0.0 <5"
+  },
+  "dependencies": {
+    "@orpc/contract": "1.15.4"
   },
   "devDependencies": {
     "@types/node": "24.3.0",
     "typescript": "5.9.2",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "zod": "4.4.3"
   },
   "publishConfig": {
     "access": "public",

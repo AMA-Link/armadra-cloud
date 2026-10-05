@@ -1,0 +1,18 @@
+{
+  "input": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "device": {
+      "platform": "desktop",
+      "name": "Dev laptop"
+    }
+  },
+  "output": {
+    "assertion": "test-assertion",
+    "assertionExpiresAtMs": 1760000300000,
+    "relayToken": "test-relay-token",
+    "relayTokenExpiresAtMs": 1760003600000,
+    "relayOrigin": "https://relay.armadra.test",
+    "relayBaseUrl": "https://0123456789abcdef0123456789abcdef.src.relay.armadra.test",
+    "online": true
+  }
+}

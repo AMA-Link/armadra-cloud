@@ -1,0 +1,28 @@
+{
+  "input": {
+    "email": "dev@armadra.test",
+    "password": "correct horse battery staple",
+    "displayName": "Dev",
+    "device": {
+      "platform": "desktop",
+      "name": "Dev laptop"
+    }
+  },
+  "output": {
+    "session": {
+      "accessToken": "test-access-token",
+      "refreshToken": "test-refresh-token",
+      "accessExpiresAtMs": 1760000900000,
+      "expiresAtMs": 1762592000000,
+      "account": {
+        "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "email": "dev@armadra.test",
+        "displayName": "Dev",
+        "emailVerified": true
+      },
+      "device": {
+        "deviceId": "dev_01JAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  }
+}

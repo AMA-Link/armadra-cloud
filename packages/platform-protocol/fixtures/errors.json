@@ -1,0 +1,155 @@
+{
+  "bad_request": {
+    "status": 400
+  },
+  "unauthenticated": {
+    "status": 401
+  },
+  "forbidden": {
+    "status": 403
+  },
+  "not_found": {
+    "status": 404
+  },
+  "conflict": {
+    "status": 409
+  },
+  "rate_limited": {
+    "status": 429
+  },
+  "internal": {
+    "status": 500
+  },
+  "unavailable": {
+    "status": 503
+  },
+  "email_taken": {
+    "status": 409
+  },
+  "credentials_invalid": {
+    "status": 401
+  },
+  "account_locked": {
+    "status": 429
+  },
+  "account_disabled": {
+    "status": 403
+  },
+  "email_unverified": {
+    "status": 403
+  },
+  "session_expired": {
+    "status": 401
+  },
+  "session_revoked": {
+    "status": 401
+  },
+  "mfa_required": {
+    "status": 401
+  },
+  "mfa_invalid": {
+    "status": 401
+  },
+  "mfa_expired": {
+    "status": 410
+  },
+  "password_too_short": {
+    "status": 400
+  },
+  "password_too_long": {
+    "status": 400
+  },
+  "password_too_common": {
+    "status": 400
+  },
+  "password_contains_name": {
+    "status": 400
+  },
+  "password_breached": {
+    "status": 400
+  },
+  "device_code_pending": {
+    "status": 428
+  },
+  "device_code_expired": {
+    "status": 410
+  },
+  "device_code_denied": {
+    "status": 403
+  },
+  "registration_token_invalid": {
+    "status": 401
+  },
+  "source_taken": {
+    "status": 409
+  },
+  "source_revoked": {
+    "status": 410
+  },
+  "source_offline": {
+    "status": 503
+  },
+  "source_access_denied": {
+    "status": 403
+  },
+  "protocol_unsupported": {
+    "status": 426
+  },
+  "link_invalid": {
+    "status": 404
+  },
+  "link_expired": {
+    "status": 410
+  },
+  "link_exhausted": {
+    "status": 410
+  },
+  "link_secret_invalid": {
+    "status": 403
+  },
+  "org_role_insufficient": {
+    "status": 403
+  },
+  "org_slug_taken": {
+    "status": 409
+  },
+  "relay_token_invalid": {
+    "status": 401
+  },
+  "relay_source_mismatch": {
+    "status": 403
+  },
+  "limit_reached": {
+    "status": 429
+  },
+  "cloud_not_registered": {
+    "status": 401
+  },
+  "cloud_account_unlinked": {
+    "status": 401
+  },
+  "cloud_assertion_invalid": {
+    "status": 401
+  },
+  "cloud_assertion_replayed": {
+    "status": 401
+  },
+  "cloud_already_registered": {
+    "status": 409
+  },
+  "cloud_issuer_mismatch": {
+    "status": 400
+  },
+  "invitation_invalid": {
+    "status": 401
+  },
+  "source_unreachable": {
+    "status": 502
+  },
+  "source_unauthorized": {
+    "status": 401
+  },
+  "fingerprint_mismatch": {
+    "status": 400
+  }
+}
