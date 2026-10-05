@@ -10,6 +10,10 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import {
+  createServer as createHttpsServer,
+  type Server as HttpsServer,
+} from "node:https";
 import type { AddressInfo } from "node:net";
 
 import type { ErrorCode } from "@armadra/platform-protocol/errors";
@@ -118,16 +122,37 @@ export interface RunningServer {
   server: Server;
   address: ListenAddress;
   url: string;
+  /** 只有 HTTPS 监听有：换证书（续期、文件热加载），已建立的连接不受影响。 */
+  setTls?(tls: TlsPair): void;
   close(): Promise<void>;
+}
+
+/** PEM 证书链与私钥。 */
+export interface TlsPair {
+  cert: string;
+  key: string;
+}
+
+export interface ListenOptions {
+  /** 给了就是 HTTPS（`node:https`，HTTP/1.1）。 */
+  tls?: TlsPair;
 }
 
 export async function listen(
   address: ListenAddress,
   handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>,
+  options: ListenOptions = {},
 ): Promise<RunningServer> {
-  const server = createServer((req, res) => {
+  const onRequest = (req: IncomingMessage, res: ServerResponse) => {
     void handler(req, res);
-  });
+  };
+  const tls = options.tls;
+  const server: Server = tls
+    ? createHttpsServer(
+        { cert: tls.cert, key: tls.key, minVersion: "TLSv1.2" },
+        onRequest,
+      )
+    : createServer(onRequest);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(address.port, address.host, () => {
@@ -140,7 +165,17 @@ export async function listen(
   return {
     server,
     address: { host: bound.address, port: bound.port },
-    url: `http://${host}:${bound.port}`,
+    url: `${tls ? "https" : "http"}://${host}:${bound.port}`,
+    ...(tls
+      ? {
+          setTls(pair: TlsPair) {
+            (server as HttpsServer).setSecureContext({
+              cert: pair.cert,
+              key: pair.key,
+            });
+          },
+        }
+      : {}),
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
