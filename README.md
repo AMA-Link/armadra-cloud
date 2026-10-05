@@ -29,11 +29,22 @@ Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`，以�
 pnpm install
 ```
 
-## 本地跑起来
+## 个人中转
+
+不需要 PostgreSQL / Redis：
+
+```sh
+pnpm relay:personal            # 从源码起个人中转：http://127.0.0.1:8102，数据目录 .data/personal
+curl http://127.0.0.1:8102/health
+```
+
+容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/owlbay/armadra-relay:local .` 之后按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。现阶段只有健康检查与 `--tls plain`，账号、签名、TLS 在后续包落地。
+
+## SaaS 本地开发
 
 ```sh
 pnpm dev:up      # 首次生成 .env.dev；起 PostgreSQL 17(127.0.0.1:5440)、Redis 8(127.0.0.1:6390)、mailpit；等健康后执行迁移
-pnpm dev         # 从源码起 cloud(http://127.0.0.1:8100) 与 relay saas(http://127.0.0.1:8101)，改源码自动重启
+pnpm dev         # 从源码起 cloud(http://127.0.0.1:8100) 与 relay saas(http://127.0.0.1:8101)，改源码自动重启；/v1 业务路由预留，答 501
 curl http://127.0.0.1:8100/health
 curl http://127.0.0.1:8101/health
 curl http://127.0.0.1:8100/ready   # 依赖就绪：PostgreSQL 与 Redis

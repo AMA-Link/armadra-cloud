@@ -9,6 +9,18 @@
 - relay 不碰数据库；relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
 - `personal` 模式不得引入对 PostgreSQL / Redis 的运行时依赖（`control/memory.ts` 的 import 扫描测试守）。
 
+## 范围与优先级
+
+- 先交付个人中转（`armadra-relay personal`）；SaaS 服务端（控制面的账号、组织、源目录、计费，中继的 Redis 实现）只预留接口：协议包的 `cloud-api` schema 保留，`apps/cloud` 的业务路由在路由表里统一答 501 `not_implemented`（测试守住），实现时逐条拿掉。
+- 个人中转的入口（`pnpm relay:personal`、`deploy/personal/compose.yml`）不得依赖 PostgreSQL / Redis。
+
+## 界面与文案统一
+
+- 所有平台的前后端遵循同一套设计逻辑、样式、语言格式与多语言形式。任何页面遵循用户级 `better-*` 规则与 Armadra 的 `docs/design/design-system.md`（token、组件与形态，只用现有 shadcn 组件与 ui 原语）；极简界面，不加说明性文字，不中英混排，文案进 i18n、中英同步、术语统一。
+- 个人中转托管的页面直接托管 Armadra `apps/web` 的构建产物，不在本仓另写前端；本仓若必须有页面（中继首页、错误页），复用同一份 token 与文案风格，接入同样的语言切换。
+- 错误一律 `{ code, message }`，`code` 稳定且登记在协议包的注册表；界面按 `code` 取 i18n 文案，不直接展示后端 `message`。
+- CLI 与日志的语言风格统一：用法写成「用法: <命令> …」加两格缩进的子命令表；提示与错误是简体中文短句，取值放在全角冒号之后；日志 `msg` 是简体中文短句，变量进字段。
+
 ## 数据库
 
 - 迁移只有一个目录 `apps/cloud/src/db/migrations/`，编号从 0001 连续；字节记进 `migrations.lock`（`pnpm repo:check`）；已发布迁移不得修改；未知 / 损坏的账本拒绝启动，禁止自动清库或重建。
