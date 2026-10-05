@@ -1,33 +1,38 @@
 # 单人中转：一个服务、不带数据库，不依赖 PostgreSQL / Redis（平台设计 §17）。
 #
-#   RELAY_HOST=203.0.113.5 docker compose -f deploy/personal/compose.yml up -d
-#
-# 现阶段只有健康检查与 --tls plain；账号、签名、自签 CA / ACME 在 R2 落地。在那之前
-# 端口只映射到本机回环，对外要放在终止 TLS 的反向代理之后；R2 起改为 --tls self-signed
-# 并映射 443:8443。口令文件给 R2 的首次自动 init 用，现在不读，但要存在：
 #   printf '%s' '<口令>' > deploy/personal/relay_password.txt && chmod 600 deploy/personal/relay_password.txt
+#   （Linux 上再 sudo chown 10002 deploy/personal/relay_password.txt：镜像里以 armadra 用户运行）
+#   RELAY_HOST=203.0.113.5 docker compose -f deploy/personal/compose.yml up -d
+#   docker compose -f deploy/personal/compose.yml logs relay | grep fingerprint   # CA 指纹，客户端添加时比对
+#
+# 首次启动用 RELAY_ACCOUNT（缺省 me）与口令文件自动初始化；之后口令文件不再读取，改口令用
+#   docker compose -f deploy/personal/compose.yml exec relay node /app/out/cli.js personal passwd --password-file /run/secrets/relay_password
+# 缺省自签 TLS（CA 在卷里，/ca.crt 可下载）。有域名时把 command 换成 --tls acme --acme-email <邮箱>
+# 并加映射 80:80；已有证书用 --tls file 与 RELAY_TLS_CERT / RELAY_TLS_KEY。
+# 页面：把 Armadra apps/web 的构建产物挂到 /app/web（或用带页面的镜像），否则 /app 答错误页。
 name: armadra-relay-personal
 
 services:
   relay:
-    image: ghcr.io/owlbay/armadra-relay:${ARMADRA_RELAY_VERSION:-latest}
+    image: ${ARMADRA_RELAY_IMAGE:-ghcr.io/owlbay/armadra-relay:latest}
     command:
       [
         "personal",
         "serve",
         "--host",
         "${RELAY_HOST:?set RELAY_HOST to your public IP or domain}",
-        "--tls",
-        "plain",
+        "--port",
+        "${RELAY_PORT:-443}",
       ]
     environment:
       RELAY_DATA_DIR: /data
+      RELAY_LISTEN: 0.0.0.0:8443
       RELAY_PERSONAL_ACCOUNT: "${RELAY_ACCOUNT:-me}"
       RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/relay_password
     secrets:
       - relay_password
     ports:
-      - "127.0.0.1:8443:8443"
+      - "${RELAY_BIND:-0.0.0.0}:${RELAY_PORT:-443}:8443"
     volumes:
       - relay-data:/data
     restart: unless-stopped
