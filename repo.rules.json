@@ -1,0 +1,85 @@
+{
+  "$comment": "仓库结构规则，由 tools/repo-check.mjs 执行（与 Armadra 同一份实现，差异只在本文件）。",
+  "root": [
+    ".dockerignore",
+    ".gitattributes",
+    ".github",
+    ".gitignore",
+    ".npmrc",
+    ".prettierignore",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "apps",
+    "deploy",
+    "docs",
+    "eslint.config.js",
+    "knip.json",
+    "migrations.lock",
+    "package.json",
+    "packages",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "repo.rules.json",
+    "scripts",
+    "tools",
+    "tsconfig.base.json"
+  ],
+  "blacklist": [
+    "dist/",
+    "out/",
+    "coverage/",
+    ".data/",
+    ".idea/",
+    ".env",
+    ".env.dev",
+    "*.tgz"
+  ],
+  "docs": {
+    "root": "docs",
+    "index": "docs/README.md",
+    "directoryOnly": ["runbooks"]
+  },
+  "links": {
+    "include": ["*.md", "apps/", "deploy/", "docs/", "packages/", "tools/"],
+    "exclude": []
+  },
+  "naming": [
+    {
+      "directory": "packages",
+      "manifest": "package.json",
+      "prefix": "@armadra/"
+    },
+    {
+      "directory": "apps",
+      "manifest": "package.json",
+      "prefix": "@armadra/"
+    }
+  ],
+  "fileSize": {
+    "max": 1500,
+    "roots": ["apps", "packages", "tools", "scripts"],
+    "extensions": [".ts", ".mts", ".mjs", ".js"],
+    "excludeSegments": ["/node_modules/"],
+    "exemptions": []
+  },
+  "migrations": {
+    "lock": "migrations.lock",
+    "$comment": "PostgreSQL 迁移只有一个目录，编号从 0001 连续；lock 守住已发布迁移的字节。",
+    "sources": [
+      {
+        "path": "apps/cloud/src/db/migrations",
+        "kind": "directory"
+      }
+    ]
+  },
+  "pinnedVersions": [
+    {
+      "$comment": "接口层 oRPC 1.15.4 精确锁：只能写精确版本、不得预发布、全树同一版本。",
+      "packages": "@orpc/*"
+    }
+  ]
+}
