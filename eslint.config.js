@@ -1,0 +1,143 @@
+// ESLint（flat config）。规则与 Armadra 根配置同源，裁掉了 React 相关部分；
+// 格式交给 Prettier（eslint-config-prettier 放最后）。
+//
+// error 只给代码边界（AGENTS.md「代码边界」）；其余推荐规则 warn，只报不阻断。
+import js from "@eslint/js";
+import prettier from "eslint-config-prettier";
+import globals from "globals";
+import tseslint from "typescript-eslint";
+
+/** 把一组共享配置里的 error 统一降为 warn。 */
+function warnOnly(configs) {
+  return configs.map((config) => {
+    if (!config.rules) return config;
+    const rules = {};
+    for (const [name, value] of Object.entries(config.rules)) {
+      if (value === "error" || value === 2) rules[name] = "warn";
+      else if (Array.isArray(value) && (value[0] === "error" || value[0] === 2))
+        rules[name] = ["warn", ...value.slice(1)];
+      else rules[name] = value;
+    }
+    return { ...config, rules };
+  });
+}
+
+const TS = ["**/*.{ts,mts,cts}"];
+const JS = ["**/*.{js,mjs,cjs}"];
+
+// ------------------------------------------------------------ import 边界
+
+/** `@orpc/*` 只能出现在门面里（AGENTS.md）；门面文件在下方单独放开。 */
+const orpcPattern = {
+  group: ["@orpc/*"],
+  message:
+    "@orpc/* 只能出现在 packages/platform-protocol/src/cloud-api/、apps/cloud/src/http/rpc.ts、apps/relay/src/personal/api.ts、tools/contract/。",
+};
+
+/** 与 Armadra 的往来只经协议包与容器镜像，不 import 它的源码。 */
+const armadraSourcePattern = {
+  group: [
+    "@armadra/shared",
+    "@armadra/shared/*",
+    "@armadra/desktop",
+    "@armadra/desktop/*",
+    "@armadra/web",
+    "@armadra/web/*",
+    "@armadra/server",
+    "@armadra/server/*",
+  ],
+  message:
+    "不得 import Armadra 仓的源码；只经 @armadra/platform-protocol 与容器镜像往来。",
+};
+
+/** relay 不得 import apps/cloud，也不碰数据库。 */
+const relayPatterns = [
+  {
+    group: ["@armadra/cloud", "@armadra/cloud/*"],
+    message: "apps/relay 不得 import apps/cloud；两者只共享 packages/*。",
+  },
+  {
+    regex: "^(\\.\\./)+cloud/",
+    message: "apps/relay 不得 import apps/cloud；两者只共享 packages/*。",
+  },
+  {
+    group: ["postgres", "@armadra/cloud-shared/db"],
+    message: "relay 不碰数据库。",
+  },
+];
+
+/** 协议包只含 schema、类型、纯编解码与常量：不 import node:*（fixtures 子路径除外）。 */
+const nodeBuiltinPattern = {
+  regex: "^node:",
+  message:
+    "协议包要能在页面与手机里直接用，不得 import node:*（只有 src/fixtures/ 例外）。",
+};
+
+const restrictImports = (...patterns) => ({
+  "no-restricted-imports": ["error", { patterns }],
+});
+
+export default tseslint.config(
+  {
+    ignores: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/out/**",
+      "**/coverage/**",
+      "**/*.d.ts",
+      ".pnpm-store/**",
+      ".data/**",
+      "docs/**",
+    ],
+  },
+  { linterOptions: { reportUnusedDisableDirectives: "off" } },
+
+  ...warnOnly([js.configs.recommended]),
+  ...warnOnly(tseslint.configs.recommended),
+  {
+    files: [...TS, ...JS],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: "module",
+      globals: { ...globals.node },
+    },
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrors: "none",
+        },
+      ],
+      ...restrictImports(orpcPattern, armadraSourcePattern),
+    },
+  },
+  {
+    files: ["apps/relay/**/*.ts"],
+    rules: restrictImports(orpcPattern, armadraSourcePattern, ...relayPatterns),
+  },
+  {
+    files: ["packages/platform-protocol/src/**/*.ts"],
+    ignores: ["packages/platform-protocol/src/fixtures/**"],
+    rules: restrictImports(
+      orpcPattern,
+      armadraSourcePattern,
+      nodeBuiltinPattern,
+    ),
+  },
+  {
+    files: ["packages/platform-protocol/src/cloud-api/**/*.ts"],
+    rules: restrictImports(armadraSourcePattern, nodeBuiltinPattern),
+  },
+  {
+    files: ["apps/cloud/src/http/rpc.ts", "tools/contract/**"],
+    rules: restrictImports(armadraSourcePattern),
+  },
+  {
+    files: ["apps/relay/src/personal/api.ts"],
+    rules: restrictImports(armadraSourcePattern, ...relayPatterns),
+  },
+
+  prettier,
+);

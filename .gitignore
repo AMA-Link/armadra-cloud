@@ -1,0 +1,19 @@
+.DS_Store
+.idea/
+.vscode/
+
+node_modules/
+.pnpm-store/
+dist/
+out/
+coverage/
+*.tgz
+
+# 本地开发：dev.sh 生成的口令与密钥、开发数据目录
+.env
+.env.*
+!.env.example
+.data/
+
+*.log
+deploy/personal/relay_password.txt

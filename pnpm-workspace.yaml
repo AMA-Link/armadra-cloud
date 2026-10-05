@@ -1,0 +1,16 @@
+packages:
+  - apps/*
+  - packages/*
+
+# 新发布的版本至少放 7 天再进锁文件（单位：分钟）。
+minimumReleaseAge: 10080
+
+# 与 Armadra 工程规范化 E0 同版的 lint 工具链；发布不满 7 天，逐个登记。
+minimumReleaseAgeExclude:
+  - globals@17.13.0
+  - knip@6.39.0
+
+allowBuilds:
+  esbuild: true
+
+storeDir: .pnpm-store

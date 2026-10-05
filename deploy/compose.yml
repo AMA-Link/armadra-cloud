@@ -1,0 +1,80 @@
+# 参考部署：cloud + relay + PostgreSQL + Redis（平台设计 §16.4）。
+#
+# 生产环境应把 postgres / redis 换成托管服务；证书与签名密钥由运维提供并挂载；
+# 滚动升级先升 relay、后升 cloud。配置写在同目录 .env（见 README.md 的变量表）。
+name: armadra-cloud
+
+services:
+  cloud:
+    image: ghcr.io/owlbay/armadra-cloud:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+    env_file: .env
+    environment:
+      ARMADRA_CLOUD_LISTEN: 0.0.0.0:8100
+      ARMADRA_CLOUD_DATABASE_URL: "postgres://armadra:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/armadra_cloud"
+      ARMADRA_CLOUD_REDIS_URL: redis://redis:6379
+      ARMADRA_CLOUD_SIGNING_KEY_FILE: /run/secrets/signing_keys
+      ARMADRA_CLOUD_REQUIRE_EMAIL_VERIFIED: "1"
+    secrets:
+      - signing_keys
+    ports:
+      - "8100:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  relay:
+    image: ghcr.io/owlbay/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+    command: ["saas", "serve"]
+    env_file: .env
+    environment:
+      RELAY_CLOUD_ISSUER: http://cloud:8100
+      RELAY_REDIS_URL: redis://redis:6379
+      RELAY_TLS_CERT: /run/secrets/relay_cert
+      RELAY_TLS_KEY: /run/secrets/relay_key
+    secrets:
+      - relay_cert
+      - relay_key
+    ports:
+      - "443:8443"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: armadra
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
+      POSTGRES_DB: armadra_cloud
+    volumes:
+      - pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "armadra", "-d", "armadra_cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.8.3-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+secrets:
+  signing_keys:
+    file: ./signing-keys.json
+  relay_cert:
+    file: ./tls/relay.crt
+  relay_key:
+    file: ./tls/relay.key
+
+volumes:
+  pg: {}
