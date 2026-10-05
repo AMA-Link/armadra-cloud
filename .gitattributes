@@ -1,0 +1,6 @@
+# 换行统一为 LF：prettier --check 比较字节，CRLF 的工作副本会失败。
+* text=auto eol=lf
+
+# 黄金字节与二进制夹具不是文本。
+*.bin binary
+*.png binary

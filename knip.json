@@ -1,0 +1,24 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["tools/**/*.mjs", "scripts/**/*.mjs"],
+      "project": ["tools/**/*.mjs", "scripts/**/*.mjs"]
+    },
+    "apps/cloud": {
+      "entry": ["src/cli.ts", "scripts/build.mjs"],
+      "project": ["src/**/*.ts"]
+    },
+    "apps/relay": {
+      "entry": ["src/cli.ts", "scripts/build.mjs"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/cloud-shared": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/platform-protocol": {
+      "entry": ["scripts/build.mjs"],
+      "project": ["src/**/*.ts"]
+    }
+  }
+}
