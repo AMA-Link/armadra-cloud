@@ -62,7 +62,19 @@ pnpm test              # 全部单测
 pnpm test:integration  # 集成测试，需要 pnpm dev:up；见下
 pnpm images:build      # 本地构建两个镜像（不推送）
 pnpm db:migrate        # 执行数据库迁移（读 .env.dev）
+pnpm protocol:pack     # 协议包打成 tgz（.data/pack/），核对内容，不发布
 ```
+
+## 协议包
+
+`packages/platform-protocol`（[说明](packages/platform-protocol/README.md)）是与 Armadra 共用的 schema 与编解码。改形状的顺序：
+
+1. 改 `src/` 里的 schema 或常量；
+2. `pnpm --filter @armadra/platform-protocol fixtures` 重新生成黄金夹具，改了身份常量再 `node scripts/gen-vectors.mjs`；
+3. `pnpm contract:generate` 更新 `docs/contracts/cloud-api.md` 的形状表与 `cloud-openapi.json`；
+4. `pnpm check`（含 `protocol:check` 与 `contract:check`）。
+
+发布前 Armadra 用 `pnpm link ../armadra-cloud/packages/platform-protocol` 联调（不提交）。
 
 集成测试读 `ARMADRA_CLOUD_TEST_DATABASE_URL` 与 `REDIS_URL`（没有时退回 `.env.dev` 里的 `ARMADRA_CLOUD_DATABASE_URL` 与 `ARMADRA_CLOUD_REDIS_URL`）：
 
