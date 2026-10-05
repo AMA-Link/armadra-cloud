@@ -16,10 +16,10 @@ importers:
         version: 9.39.5
       '@orpc/openapi':
         specifier: 1.15.4
-        version: 1.15.4
+        version: 1.15.4(ws@8.21.0)
       '@orpc/zod':
         specifier: 1.15.4
-        version: 1.15.4(@orpc/contract@1.15.4)(@orpc/server@1.15.4)(zod@4.4.3)
+        version: 1.15.4(@orpc/contract@1.15.4)(@orpc/server@1.15.4(ws@8.21.0))(ws@8.21.0)(zod@4.4.3)
       '@vitest/coverage-v8':
         specifier: 4.1.11
         version: 4.1.11(vitest@4.1.11)
@@ -84,6 +84,9 @@ importers:
       '@armadra/platform-protocol':
         specifier: workspace:*
         version: link:../../packages/platform-protocol
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -91,6 +94,9 @@ importers:
       '@types/node':
         specifier: 24.3.0
         version: 24.3.0
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -861,6 +867,9 @@ packages:
 
   '@types/node@24.3.0':
     resolution: {integrity: sha512-aPTXCrfwnDLj4VvXrm+UUCQjNEvJgNA8s5F1cvwQU+3KNltTOkBm1j30uNLyqqPNe7gE3KFzImYoZEfLhp4Yow==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@typescript-eslint/eslint-plugin@8.71.0':
     resolution: {integrity: sha512-pqcS9c1HxZTHt7End4nXqd0s5lJrrFzrgCkKFJrsbUnaL6M3+6oBFZaslg6Gjsl3argl2DDRFROnXARaZ2e4Nw==}
@@ -1680,6 +1689,18 @@ packages:
     resolution: {integrity: sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==}
     engines: {node: '>=0.10.0'}
 
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   yaml@2.9.1:
     resolution: {integrity: sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==}
     engines: {node: '>= 14.6'}
@@ -1901,12 +1922,12 @@ snapshots:
 
   '@orpc/interop@1.15.4': {}
 
-  '@orpc/json-schema@1.15.4':
+  '@orpc/json-schema@1.15.4(ws@8.21.0)':
     dependencies:
       '@orpc/contract': 1.15.4
       '@orpc/interop': 1.15.4
-      '@orpc/openapi': 1.15.4
-      '@orpc/server': 1.15.4
+      '@orpc/openapi': 1.15.4(ws@8.21.0)
+      '@orpc/server': 1.15.4(ws@8.21.0)
       '@orpc/shared': 1.15.4
       json-schema-typed: 8.0.2
     transitivePeerDependencies:
@@ -1924,13 +1945,13 @@ snapshots:
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/openapi@1.15.4':
+  '@orpc/openapi@1.15.4(ws@8.21.0)':
     dependencies:
       '@orpc/client': 1.15.4
       '@orpc/contract': 1.15.4
       '@orpc/interop': 1.15.4
       '@orpc/openapi-client': 1.15.4
-      '@orpc/server': 1.15.4
+      '@orpc/server': 1.15.4(ws@8.21.0)
       '@orpc/shared': 1.15.4
       '@orpc/standard-server': 1.15.4
       json-schema-typed: 8.0.2
@@ -1941,7 +1962,7 @@ snapshots:
       - fastify
       - ws
 
-  '@orpc/server@1.15.4':
+  '@orpc/server@1.15.4(ws@8.21.0)':
     dependencies:
       '@orpc/client': 1.15.4
       '@orpc/contract': 1.15.4
@@ -1954,6 +1975,8 @@ snapshots:
       '@orpc/standard-server-node': 1.15.4
       '@orpc/standard-server-peer': 1.15.4
       cookie: 1.1.1
+    optionalDependencies:
+      ws: 8.21.0
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - fastify
@@ -2008,12 +2031,12 @@ snapshots:
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/zod@1.15.4(@orpc/contract@1.15.4)(@orpc/server@1.15.4)(zod@4.4.3)':
+  '@orpc/zod@1.15.4(@orpc/contract@1.15.4)(@orpc/server@1.15.4(ws@8.21.0))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
       '@orpc/contract': 1.15.4
-      '@orpc/json-schema': 1.15.4
-      '@orpc/openapi': 1.15.4
-      '@orpc/server': 1.15.4
+      '@orpc/json-schema': 1.15.4(ws@8.21.0)
+      '@orpc/openapi': 1.15.4(ws@8.21.0)
+      '@orpc/server': 1.15.4(ws@8.21.0)
       '@orpc/shared': 1.15.4
       escape-string-regexp: 5.0.0
       wildcard-match: 5.1.4
@@ -2234,6 +2257,10 @@ snapshots:
   '@types/node@24.3.0':
     dependencies:
       undici-types: 7.10.0
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 24.3.0
 
   '@typescript-eslint/eslint-plugin@8.71.0(@typescript-eslint/parser@8.71.0(eslint@9.39.5(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.2))(eslint@9.39.5(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.2)':
     dependencies:
@@ -3053,6 +3080,8 @@ snapshots:
   wildcard-match@5.1.4: {}
 
   word-wrap@1.2.5: {}
+
+  ws@8.21.0: {}
 
   yaml@2.9.1: {}
 
