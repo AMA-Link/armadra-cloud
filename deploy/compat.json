@@ -1,0 +1,12 @@
+{
+  "$comment": "验证过的 armadra-server 镜像区间：nightly 跨仓端到端用 min 与 latest；发布构建的页面产物取 web。",
+  "armadraServer": {
+    "image": "ghcr.io/owlbay/armadra-server",
+    "min": "0.2.0",
+    "web": "0.2.0"
+  },
+  "protocol": {
+    "major": 1,
+    "minor": 0
+  }
+}

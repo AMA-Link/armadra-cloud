@@ -1,0 +1,91 @@
+# 本地开发依赖（pnpm dev:up）。端口全部只绑回环，并与 Armadra dev-stack 错开。
+#
+# 缺省只起 postgres + redis + mailpit；cloud 与 relay 用 `pnpm dev` 从源码跑。
+#   --profile stack  另起 cloud(127.0.0.1:8110) 与 relay(127.0.0.1:8111) 两个容器（本地构建镜像）
+#   --profile acme   另起 pebble（ACME 测试目录，给 personal 模式的 ACME 用）
+# 口令与密钥来自 scripts/dev.sh 首次生成的 .env.dev（不提交）。
+name: armadra-cloud-dev
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: armadra
+      POSTGRES_PASSWORD: "${DEV_PG_PASSWORD:?run pnpm dev:up}"
+      POSTGRES_DB: armadra_cloud
+    ports:
+      - "127.0.0.1:5440:5432"
+    volumes:
+      - pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "armadra", "-d", "armadra_cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:8.8.3-alpine
+    ports:
+      - "127.0.0.1:6390:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:v1.31.4
+    ports:
+      - "127.0.0.1:1026:1025"
+      - "127.0.0.1:8026:8025"
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:2.10.1
+    profiles: ["acme"]
+    environment:
+      PEBBLE_VA_ALWAYS_VALID: "1"
+    ports:
+      - "127.0.0.1:14001:14000"
+
+  cloud:
+    profiles: ["stack"]
+    build:
+      context: ../..
+      dockerfile: apps/cloud/Dockerfile
+    image: armadra-cloud:local
+    environment:
+      ARMADRA_CLOUD_ISSUER: http://127.0.0.1:8110
+      ARMADRA_CLOUD_APP_ORIGIN: http://127.0.0.1:8110
+      ARMADRA_CLOUD_LISTEN: 0.0.0.0:8100
+      ARMADRA_CLOUD_DATABASE_URL: "postgres://armadra:${DEV_PG_PASSWORD:?run pnpm dev:up}@postgres:5432/armadra_cloud"
+      ARMADRA_CLOUD_REDIS_URL: redis://redis:6379
+      ARMADRA_CLOUD_MASTER_KEY: "${ARMADRA_CLOUD_MASTER_KEY:?run pnpm dev:up}"
+      ARMADRA_CLOUD_RELAY_DOMAIN: src.localhost
+    ports:
+      - "127.0.0.1:8110:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  relay:
+    profiles: ["stack"]
+    build:
+      context: ../..
+      dockerfile: apps/relay/Dockerfile
+    image: armadra-relay:local
+    environment:
+      RELAY_NODE_ID: dev-container-1
+      RELAY_DOMAIN: src.localhost
+      RELAY_CLOUD_ISSUER: http://cloud:8100
+      RELAY_REDIS_URL: redis://redis:6379
+      RELAY_ALLOW_INSECURE_TUNNEL: "1"
+    ports:
+      - "127.0.0.1:8111:8443"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  pg: {}

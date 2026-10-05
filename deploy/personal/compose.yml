@@ -1,0 +1,30 @@
+# 单人中转：一个服务，不带数据库（平台设计 §17）。personal 模式在 R2 落地。
+name: armadra-relay-personal
+
+services:
+  relay:
+    image: ghcr.io/owlbay/armadra-relay:${ARMADRA_RELAY_VERSION:-latest}
+    command:
+      [
+        "personal",
+        "serve",
+        "--host",
+        "${RELAY_HOST:?set RELAY_HOST to your public IP or domain}",
+      ]
+    environment:
+      RELAY_PERSONAL_ACCOUNT: "${RELAY_ACCOUNT:-me}"
+      RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/relay_password
+    secrets:
+      - relay_password
+    ports:
+      - "443:8443"
+    volumes:
+      - relay-data:/data
+    restart: unless-stopped
+
+secrets:
+  relay_password:
+    file: ./relay_password.txt
+
+volumes:
+  relay-data: {}
