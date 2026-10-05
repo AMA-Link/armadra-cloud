@@ -1,14 +1,17 @@
 /**
- * personal 模式装配：数据目录 → HTTP。**不碰 PostgreSQL / Redis**（AGENTS.md；
- * `boundaries.test.ts` 扫 import 守住）。账号、签名、源目录、分享与 TLS 在 R2 落地；
- * 现在只有健康检查与就绪检查。
+ * personal 模式装配：数据目录 → 内存控制面 → 中继内核（隧道终端 + 边缘，`/s/<id>/` 寻址）。
+ * **不碰 PostgreSQL / Redis**（AGENTS.md；`boundaries.test.ts` 扫 import 守住）。
+ *
+ * 账号、签名钥、源目录、分享与 TLS 在 R2 落地。在那之前 JWKS 是空的：隧道令牌与中继令牌
+ * 都验不过，隧道与边缘对外是「全部拒绝」——起得来、`/health` 正常，但不放任何流量。
  */
-import { listen, type RunningServer } from "@armadra/cloud-shared/http";
 import { createLogger } from "@armadra/cloud-shared/log";
 import { constants } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
 
-import { createRelayRouter } from "../http/server.ts";
+import { createMemoryControlPlane } from "../control/memory.ts";
+import { pathAddressing } from "../edge/addressing.ts";
+import { startRelay } from "../main.ts";
 import { RELAY_VERSION } from "../version.ts";
 import {
   isLoopback,
@@ -19,7 +22,16 @@ import {
 
 export interface RunningPersonalRelay {
   url: string;
+  metricsUrl?: string;
   close(): Promise<void>;
+}
+
+/** personal 的 issuer：`https://<--host>:<--port>`（中继设计 §7 `RELAY_PUBLIC_ORIGIN` 的缺省）。 */
+export function personalIssuer(options: PersonalServeOptions): string {
+  const host = options.host.includes(":") ? `[${options.host}]` : options.host;
+  return options.port === 443
+    ? `https://${host}`
+    : `https://${host}:${options.port}`;
 }
 
 export async function startPersonalRelay(
@@ -40,28 +52,37 @@ export async function startPersonalRelay(
       },
     );
   }
-  const router = createRelayRouter({
+  const control = createMemoryControlPlane({
+    mode: "personal",
+    issuer: personalIssuer(options),
+    // R2：换成签名钥的公钥集。
+    jwks: () => ({ keys: [] }),
+  });
+  const relay = await startRelay({
     mode: "personal",
     nodeId: options.host,
     version: RELAY_VERSION,
+    listen: options.listen,
+    control,
+    addressing: pathAddressing(),
     log,
-    counts: () => ({ tunnels: 0, streams: 0 }),
     probes: {
       dataDir: () => access(options.dataDir, constants.R_OK | constants.W_OK),
     },
+    metricsListen: options.metricsListen,
+    metricsToken: options.metricsToken,
   });
-  const server: RunningServer = await listen(options.listen, (req, res) =>
-    router.handle(req, res),
-  );
   log.info("个人中转已启动", {
-    url: server.url,
+    url: relay.url,
     host: options.host,
     tls: options.tls,
+    ...(relay.metricsUrl ? { metrics: relay.metricsUrl } : {}),
   });
   return {
-    url: server.url,
+    url: relay.url,
+    metricsUrl: relay.metricsUrl,
     async close() {
-      await server.close();
+      await relay.close(5_000);
       log.info("个人中转已停止");
     },
   };

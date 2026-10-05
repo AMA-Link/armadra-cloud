@@ -23,6 +23,10 @@ export interface PersonalServeOptions {
   listen: ListenAddress;
   tls: TlsMode;
   logLevel: "debug" | "info" | "warn" | "error";
+  /** 指标单独监听（`--metrics-listen` / `RELAY_METRICS_LISTEN`）；缺省不开。 */
+  metricsListen?: ListenAddress;
+  /** 指标要求的 Bearer 令牌（`RELAY_METRICS_TOKEN`，只走环境变量）。 */
+  metricsToken?: string;
 }
 
 export class UsageError extends Error {
@@ -59,6 +63,7 @@ const KNOWN = new Set([
   "tls",
   "listen",
   "log-level",
+  "metrics-listen",
 ]);
 
 export function parsePersonalServe(
@@ -97,5 +102,25 @@ export function parsePersonalServe(
     "info") as PersonalServeOptions["logLevel"];
   if (!["debug", "info", "warn", "error"].includes(logLevel))
     throw new UsageError(`--log-level 不合法：${logLevel}`);
-  return { dataDir: resolve(cwd, dataDir), host, port, listen, tls, logLevel };
+  const metricsText = values.get("metrics-listen") ?? env.RELAY_METRICS_LISTEN;
+  let metricsListen: ListenAddress | undefined;
+  if (metricsText) {
+    try {
+      metricsListen = parseListen(metricsText);
+    } catch {
+      throw new UsageError(`--metrics-listen 不是一个地址：${metricsText}`);
+    }
+  }
+  return {
+    dataDir: resolve(cwd, dataDir),
+    host,
+    port,
+    listen,
+    tls,
+    logLevel,
+    ...(metricsListen ? { metricsListen } : {}),
+    ...(env.RELAY_METRICS_TOKEN
+      ? { metricsToken: env.RELAY_METRICS_TOKEN }
+      : {}),
+  };
 }

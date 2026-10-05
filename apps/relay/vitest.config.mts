@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "test/**/*.test.ts"],
     environment: "node",
     coverage: {
       enabled: process.env.ARMADRA_COVERAGE === "1",

@@ -44,18 +44,20 @@ it("relay 源码不 import 控制面、不 import 数据库客户端", () => {
   ).toEqual([]);
 });
 
-it("personal 模式及它依赖的模块不 import Redis 与 saas", () => {
-  const personal = sources(join(SRC, "personal"));
-  expect(personal.length).toBeGreaterThan(0);
-  const shared = ["http/server.ts", "version.ts"].map((name) =>
-    join(SRC, name),
+it("personal 模式及它依赖的内核（除 saas/、control/redis.ts 与按需分派的 cli.ts 外的全部源码）不 import Redis 与 saas", () => {
+  const kernel = sources(SRC).filter((file) => {
+    const path = relative(SRC, file).split("\\").join("/");
+    return (
+      !path.startsWith("saas/") &&
+      path !== "control/redis.ts" &&
+      path !== "cli.ts"
+    );
+  });
+  expect(kernel.some((file) => file.includes("personal"))).toBe(true);
+  expect(kernel.some((file) => file.endsWith("main.ts"))).toBe(true);
+  expect(offenders(kernel, [...REDIS, /["']\.\.?\/(\.\.\/)?saas\//])).toEqual(
+    [],
   );
-  expect(
-    offenders(
-      [...personal, ...shared],
-      [...REDIS, /["']\.\.?\/(\.\.\/)?saas\//],
-    ),
-  ).toEqual([]);
 });
 
 it("cli 不静态 import 任何模式（各模式按需动态 import）", () => {
