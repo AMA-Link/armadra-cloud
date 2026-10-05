@@ -58,10 +58,18 @@ export interface Router {
   handle(req: IncomingMessage, res: ServerResponse): Promise<void>;
 }
 
-/** 方法 + 精确路径；HEAD 走 GET 的处理器。未命中 → 404 `not_found`。 */
-export function createRouter(
-  options: { onError?: (error: unknown) => void } = {},
-): Router {
+export interface RouterOptions {
+  onError?: (error: unknown) => void;
+  /** 精确路由都没命中时调用；返回 false 表示也不认识，落到 404。 */
+  fallback?: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    context: { requestId: string; url: URL; method: string },
+  ) => boolean;
+}
+
+/** 方法 + 精确路径；HEAD 走 GET 的处理器。都没命中且 `fallback` 不认 → 404 `not_found`。 */
+export function createRouter(options: RouterOptions = {}): Router {
   const routes = new Map<string, Handler>();
   const router: Router = {
     get(path, handler) {
@@ -74,6 +82,7 @@ export function createRouter(
       const method = req.method === "HEAD" ? "GET" : (req.method ?? "GET");
       const handler = routes.get(`${method} ${url.pathname}`);
       if (!handler) {
+        if (options.fallback?.(req, res, { requestId, url, method })) return;
         sendError(res, 404, {
           code: "not_found",
           message: "Not found",

@@ -15,14 +15,13 @@ import { startCloud } from "./main.ts";
 import { migrate } from "./migrate.ts";
 import { CLOUD_VERSION } from "./version.ts";
 
-export const USAGE = `用法：armadra-cloud <命令>
+export const USAGE = `用法: armadra-cloud <命令>
 
-命令：
-  serve     起控制面（缺省）
+  serve     起控制面（缺省）；/v1 业务路由预留，答 501 not_implemented
   migrate   执行数据库迁移
   version   打印版本
 
-配置见 deploy/README.md（ARMADRA_CLOUD_* 环境变量）。`;
+配置走 ARMADRA_CLOUD_* 环境变量，见 deploy/README.md。`;
 
 async function main(argv: string[]): Promise<number> {
   const [command = "serve", ...rest] = argv;
