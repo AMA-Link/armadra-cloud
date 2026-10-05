@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { isLoopback, parsePersonalServe, UsageError } from "./args.ts";
+import {
+  defaultIssuer,
+  isLoopback,
+  parseLinks,
+  parsePersonalInit,
+  parsePersonalServe,
+  UsageError,
+} from "./args.ts";
 
 describe("parsePersonalServe", () => {
   it("缺省：端口 8443、--tls self-signed；回环 host 只绑回环", () => {
@@ -43,16 +50,92 @@ describe("parsePersonalServe", () => {
     });
   });
 
-  it("环境变量兜底 data-dir 与 host", () => {
-    const options = parsePersonalServe([], {
-      RELAY_DATA_DIR: "/data",
-      RELAY_HOST: "relay.example",
-      RELAY_TLS: "plain",
-    });
+  it("环境变量兜底 data-dir、host、tls、web-root 与首次初始化的账号", () => {
+    const options = parsePersonalServe(
+      [],
+      {
+        RELAY_DATA_DIR: "/data",
+        RELAY_HOST: "relay.example",
+        RELAY_TLS: "self-signed",
+        RELAY_WEB_ROOT: "/app/web",
+        RELAY_PERSONAL_ACCOUNT: "me",
+        RELAY_PERSONAL_PASSWORD_FILE: "/run/secrets/pw",
+        RELAY_PUBLIC_ORIGIN: "https://relay.example/ignored-path",
+      },
+      "/work",
+    );
     expect(options).toMatchObject({
       dataDir: "/data",
       host: "relay.example",
-      tls: "plain",
+      tls: "self-signed",
+      webRoot: "/app/web",
+      account: "me",
+      passwordFile: "/run/secrets/pw",
+      publicOrigin: "https://relay.example",
+    });
+  });
+
+  it("--tls plain 只允许监听回环地址", () => {
+    expect(
+      parsePersonalServe(
+        ["--data-dir", "d", "--host", "127.0.0.1", "--tls", "plain"],
+        {},
+      ).tls,
+    ).toBe("plain");
+    expect(() =>
+      parsePersonalServe(
+        ["--data-dir", "d", "--host", "relay.example", "--tls", "plain"],
+        {},
+      ),
+    ).toThrow("--tls plain 只允许监听回环地址");
+    expect(() =>
+      parsePersonalServe(
+        [
+          "--data-dir",
+          "d",
+          "--host",
+          "127.0.0.1",
+          "--tls",
+          "plain",
+          "--listen",
+          "0.0.0.0:8443",
+        ],
+        {},
+      ),
+    ).toThrow(UsageError);
+  });
+
+  it("--tls file 要成对的证书文件；--tls acme 要邮箱", () => {
+    expect(() =>
+      parsePersonalServe(
+        ["--data-dir", "d", "--host", "h", "--tls", "file", "--tls-cert", "c"],
+        {},
+      ),
+    ).toThrow("--tls-key");
+    expect(() =>
+      parsePersonalServe(
+        ["--data-dir", "d", "--host", "h", "--tls", "acme"],
+        {},
+      ),
+    ).toThrow("--acme-email");
+    expect(
+      parsePersonalServe(
+        [
+          "--data-dir",
+          "d",
+          "--host",
+          "relay.example",
+          "--tls",
+          "acme",
+          "--acme-email",
+          "ops@example.com",
+        ],
+        {},
+        "/work",
+      ).acme,
+    ).toEqual({
+      email: "ops@example.com",
+      httpListen: { host: "0.0.0.0", port: 80 },
     });
   });
 
@@ -68,6 +151,68 @@ describe("parsePersonalServe", () => {
     expect(() => parsePersonalServe(argv, {})).toThrow(UsageError);
     expect(() => parsePersonalServe(argv, {})).toThrow(mention);
   });
+});
+
+describe("parsePersonalInit", () => {
+  it("要账号与 host；账号名只允许字母数字与 . _ -", () => {
+    expect(
+      parsePersonalInit(
+        [
+          "--data-dir",
+          "d",
+          "--account",
+          "me",
+          "--host",
+          "h",
+          "--password-file",
+          "-",
+        ],
+        {},
+        "/work",
+      ),
+    ).toMatchObject({
+      dataDir: "/work/d",
+      account: "me",
+      host: "h",
+      port: 8443,
+      passwordFile: "-",
+    });
+    expect(() =>
+      parsePersonalInit(["--data-dir", "d", "--host", "h"], {}),
+    ).toThrow("--account");
+    expect(() =>
+      parsePersonalInit(
+        ["--data-dir", "d", "--host", "h", "--account", "a b"],
+        {},
+      ),
+    ).toThrow(UsageError);
+  });
+});
+
+describe("parseLinks", () => {
+  it("list | revoke <16 位 hex>", () => {
+    expect(parseLinks(["list", "--data-dir", "d"], {}, "/w")).toEqual({
+      action: "list",
+      dataDir: "/w/d",
+    });
+    expect(
+      parseLinks(["revoke", "0123456789abcdef", "--data-dir", "d"], {}, "/w"),
+    ).toEqual({
+      action: "revoke",
+      linkId: "0123456789abcdef",
+      dataDir: "/w/d",
+    });
+    expect(() => parseLinks(["revoke", "x", "--data-dir", "d"], {})).toThrow(
+      UsageError,
+    );
+    expect(() => parseLinks(["drop"], {})).toThrow(UsageError);
+  });
+});
+
+it("defaultIssuer：443 省略端口，IPv6 加方括号", () => {
+  expect(defaultIssuer("relay.example", 443)).toBe("https://relay.example");
+  expect(defaultIssuer("203.0.113.5", 8443)).toBe("https://203.0.113.5:8443");
+  expect(defaultIssuer("2001:db8::1", 8443)).toBe("https://[2001:db8::1]:8443");
 });
 
 it("isLoopback", () => {

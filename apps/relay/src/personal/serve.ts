@@ -1,66 +1,177 @@
 /**
- * personal 模式装配：数据目录 → 内存控制面 → 中继内核（隧道终端 + 边缘，`/s/<id>/` 寻址）。
- * **不碰 PostgreSQL / Redis**（AGENTS.md；`boundaries.test.ts` 扫 import 守住）。
+ * `personal serve` 装配（中继设计 §1、§6）：状态文件 → 签名钥 → 内存控制面（JWKS = 自己的公钥，
+ * 撤销按状态文件判）→ TLS → 中继内核（隧道终端 + `/s/<id>/` 边缘）+ `/v1` 子集 + `/v1/me/stream`
+ * + 托管页面。
  *
- * 账号、签名钥、源目录、分享与 TLS 在 R2 落地。在那之前 JWKS 是空的：隧道令牌与中继令牌
- * 都验不过，隧道与边缘对外是「全部拒绝」——起得来、`/health` 正常，但不放任何流量。
+ * **不碰 PostgreSQL / Redis**（AGENTS.md；`boundaries.test.ts` 扫 import 守住）。日志只有启动 /
+ * 停止 / 证书 / 状态文件这类进程事件，不记请求、令牌、口令。
  */
-import { createLogger } from "@armadra/cloud-shared/log";
-import { constants } from "node:fs";
+import { constants, readFileSync } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
+
+import { createLogger, type Logger } from "@armadra/cloud-shared/log";
 
 import { createMemoryControlPlane } from "../control/memory.ts";
 import { pathAddressing } from "../edge/addressing.ts";
-import { startRelay } from "../main.ts";
+import { errorName } from "../log.ts";
+import { startRelay, type RunningRelay } from "../main.ts";
 import { RELAY_VERSION } from "../version.ts";
 import {
-  isLoopback,
-  SUPPORTED_TLS_MODES,
-  UsageError,
-  type PersonalServeOptions,
-} from "./args.ts";
+  startAcme,
+  LETS_ENCRYPT_DIRECTORY,
+  type AcmeIssuer,
+  type AcmeManager,
+} from "./acme.ts";
+import { createPersonalApi } from "./api.ts";
+import {
+  createEventBus,
+  guestPrefix,
+  type PersonalContext,
+} from "./context.ts";
+import { createState, readPasswordFile } from "./init.ts";
+import { LAST_SEEN_FLUSH_MS } from "./sessions.ts";
+import { Signer } from "./signer.ts";
+import { isRevokedJti } from "./sources.ts";
+import { stateExists, StateStore, type State } from "./state.ts";
+import { createMeStream } from "./stream.ts";
+import {
+  fileManager,
+  selfSignedManager,
+  tlsNames,
+  type TlsManager,
+} from "./tls.ts";
+import { defaultIssuer, type PersonalServeOptions } from "./args.ts";
+import { createWebPages, usableWebRoot } from "./web.ts";
 
 export interface RunningPersonalRelay {
   url: string;
+  issuer: string;
   metricsUrl?: string;
+  /** 信任锚指纹（自签 / 文件模式）；明文与 ACME 没有要钉的指纹时为 null。 */
+  fingerprint: string | null;
+  relay: RunningRelay;
+  store: StateStore;
   close(): Promise<void>;
 }
 
-/** personal 的 issuer：`https://<--host>:<--port>`（中继设计 §7 `RELAY_PUBLIC_ORIGIN` 的缺省）。 */
-export function personalIssuer(options: PersonalServeOptions): string {
-  const host = options.host.includes(":") ? `[${options.host}]` : options.host;
-  return options.port === 443
-    ? `https://${host}`
-    : `https://${host}:${options.port}`;
+export interface PersonalServeDeps {
+  now?: () => number;
+  log?: Logger;
+  acmeIssuer?: AcmeIssuer;
+  /** 测试用：缩短 me/stream 的心跳。 */
+  streamPingMs?: number;
+}
+
+export function issuerFor(options: PersonalServeOptions): string {
+  return options.publicOrigin ?? defaultIssuer(options.host, options.port);
+}
+
+/** 打开状态文件；没有时若给了账号与口令就自动 init（compose 与 `pnpm relay:personal` 走这条）。 */
+async function openOrInit(
+  options: PersonalServeOptions,
+  issuer: string,
+  log: Logger,
+): Promise<StateStore> {
+  if (
+    !stateExists(options.dataDir) &&
+    options.account &&
+    options.passwordFile
+  ) {
+    const store = await createState({
+      dataDir: options.dataDir,
+      account: options.account,
+      password: readPasswordFile(options.passwordFile),
+      issuer,
+    });
+    log.info("已初始化个人中转", { account: options.account });
+    return store;
+  }
+  return StateStore.open(options.dataDir);
 }
 
 export async function startPersonalRelay(
   options: PersonalServeOptions,
+  deps: PersonalServeDeps = {},
 ): Promise<RunningPersonalRelay> {
-  if (!SUPPORTED_TLS_MODES.includes(options.tls)) {
-    throw new UsageError(
-      `--tls ${options.tls} 尚未实现，当前只支持 --tls plain`,
-    );
-  }
-  const log = createLogger({ name: "relay", level: options.logLevel });
+  const log =
+    deps.log ?? createLogger({ name: "relay", level: options.logLevel });
+  const now = deps.now ?? Date.now;
   await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
-  if (options.tls === "plain" && !isLoopback(options.listen.host)) {
-    log.warn(
-      "明文监听非回环地址，只应放在终止 TLS 的反向代理或容器端口映射之后",
-      {
-        listen: `${options.listen.host}:${options.listen.port}`,
-      },
-    );
+  const issuer = issuerFor(options);
+  const store = await openOrInit(options, issuer, log);
+  if (store.current.issuer !== issuer) {
+    store.update((draft) => {
+      draft.issuer = issuer;
+    });
+    log.warn("对外地址变了，已登记的源需要重新登记", { issuer });
   }
+
+  let tls: TlsManager | undefined;
+  let acme: AcmeManager | undefined;
+  if (options.tls === "self-signed")
+    tls = selfSignedManager(options.dataDir, tlsNames(options.host));
+  else if (options.tls === "file" && options.tlsCert && options.tlsKey)
+    tls = fileManager(options.tlsCert, options.tlsKey);
+  else if (options.tls === "acme" && options.acme) {
+    acme = await startAcme({
+      dataDir: options.dataDir,
+      email: options.acme.email,
+      names: [options.host],
+      directoryUrl: options.acme.directory ?? LETS_ENCRYPT_DIRECTORY,
+      ...(options.acme.caBundle
+        ? { caBundle: readFileSync(options.acme.caBundle, "utf8") }
+        : {}),
+      httpListen: options.acme.httpListen,
+      redirectOrigin: issuer,
+      ...(deps.acmeIssuer ? { issuer: deps.acmeIssuer } : {}),
+      onEvent: (event, failures) =>
+        event === "renewed"
+          ? log.info("ACME 证书已续期")
+          : log.warn("ACME 续期失败，继续用旧证书", { failures }),
+    });
+    tls = acme;
+  }
+
+  const signer = new Signer(() => store.current, now);
   const control = createMemoryControlPlane({
     mode: "personal",
-    issuer: personalIssuer(options),
-    // R2：换成签名钥的公钥集。
-    jwks: () => ({ keys: [] }),
+    issuer,
+    jwks: () => signer.jwks(),
+    revoked: (jti) => isRevokedJti(store.current, jti, now()),
+    now,
   });
+  const bus = createEventBus();
+  // 内核起来之前没有可断开的连接；之后指向它。
+  const relayRef: { current?: RunningRelay } = {};
+  const context: PersonalContext = {
+    store,
+    signer,
+    control,
+    now,
+    disconnect: (filter) => relayRef.current?.disconnect(filter),
+    ...bus,
+  };
+  const stream = createMeStream(
+    context,
+    deps.streamPingMs ? { pingMs: deps.streamPingMs } : {},
+  );
+  const webRoot = usableWebRoot(options.webRoot);
+  if (options.webRoot && !webRoot)
+    log.warn("页面产物目录没有 index.html，/app 答错误页", {
+      webRoot: options.webRoot,
+    });
+  const api = createPersonalApi(context, stream, {
+    webApp: () => (webRoot ? `${signer.issuer}/app/` : null),
+    onError: (error) => log.error("请求处理失败", { error: errorName(error) }),
+  });
+  const web = createWebPages({
+    webRoot,
+    caPem: () => tls?.current().anchor,
+  });
+
   const relay = await startRelay({
     mode: "personal",
-    nodeId: options.host,
+    nodeId: options.host.slice(0, 64),
     version: RELAY_VERSION,
     listen: options.listen,
     control,
@@ -71,19 +182,117 @@ export async function startPersonalRelay(
     },
     metricsListen: options.metricsListen,
     metricsToken: options.metricsToken,
+    extra: (req, res) => api.handle(req, res) || web.handle(req, res),
+    extraUpgrade: (req, socket, head) =>
+      stream.handleUpgrade(req, socket, head),
+    ...(tls ? { tls: tls.current() } : {}),
+    now,
+  }).catch(async (error: unknown) => {
+    await acme?.close();
+    throw error;
   });
+  relayRef.current = relay;
+
+  // 源上下线：记最近在线与版本（只在内存累计，和设备的 lastSeen 一起每 5 分钟落盘）。
+  const seenSources = new Map<string, { atMs: number; coreVersion?: string }>();
+  const offPresence = control.presence.subscribe((event) => {
+    seenSources.set(event.sourceId, {
+      atMs: event.atMs,
+      ...(event.type === "sourceOnline"
+        ? { coreVersion: event.coreVersion }
+        : {}),
+    });
+  });
+  const flush = () => {
+    try {
+      api.authenticator.flush();
+      if (seenSources.size > 0) {
+        const batch = new Map(seenSources);
+        seenSources.clear();
+        store.update((draft) => {
+          for (const source of draft.sources) {
+            const seen = batch.get(source.sourceId);
+            if (!seen) continue;
+            source.lastSeenAtMs = Math.max(source.lastSeenAtMs ?? 0, seen.atMs);
+            if (seen.coreVersion) source.coreVersion = seen.coreVersion;
+          }
+        });
+      }
+    } catch (error) {
+      log.warn("最近在线时间写入失败", { error: errorName(error) });
+    }
+  };
+  const flushTimer = setInterval(flush, LAST_SEEN_FLUSH_MS);
+  flushTimer.unref();
+
+  // 别的进程（passwd / rotate-key / links revoke）改了状态文件：撤销立即断开。
+  let previous: State = store.current;
+  const stopWatch = store.watch(
+    () => {
+      const current = store.current;
+      for (const source of current.sources) {
+        const before = previous.sources.find(
+          (row) => row.sourceId === source.sourceId,
+        );
+        if (source.revokedAtMs !== null && before?.revokedAtMs === null) {
+          control.command({ type: "closeTunnel", sourceId: source.sourceId });
+          relay.disconnect({ sourceId: source.sourceId });
+        }
+      }
+      for (const link of current.links) {
+        const before = previous.links.find((row) => row.linkId === link.linkId);
+        if (link.revokedAtMs !== null && before?.revokedAtMs === null)
+          relay.disconnect({ subjectPrefix: guestPrefix(link.linkId) });
+      }
+      previous = current;
+      log.info("状态文件已重新载入");
+    },
+    (error) => log.error("状态文件重新载入失败", { error: errorName(error) }),
+  );
+
+  const stopTls = tls?.start(
+    (material) => {
+      relay.setTls(material);
+      log.info("证书已更换", { notAfter: material.notAfter });
+    },
+    (error) =>
+      log.warn("证书更新失败，继续用旧证书", { error: errorName(error) }),
+  );
+
+  const material = tls?.current();
+  const fingerprint =
+    material && material.source !== "acme" ? material.fingerprint : null;
   log.info("个人中转已启动", {
     url: relay.url,
+    issuer,
     host: options.host,
     tls: options.tls,
+    ...(fingerprint ? { fingerprint } : {}),
+    web: webRoot ? "ready" : "missing",
     ...(relay.metricsUrl ? { metrics: relay.metricsUrl } : {}),
   });
+
+  let closing: Promise<void> | undefined;
   return {
     url: relay.url,
+    issuer,
     metricsUrl: relay.metricsUrl,
-    async close() {
-      await relay.close(5_000);
-      log.info("个人中转已停止");
+    fingerprint,
+    relay,
+    store,
+    close() {
+      closing ??= (async () => {
+        clearInterval(flushTimer);
+        stopWatch();
+        stopTls?.();
+        offPresence();
+        flush();
+        stream.close();
+        await relay.close(5_000);
+        await acme?.close();
+        log.info("个人中转已停止");
+      })();
+      return closing;
     },
   };
 }
