@@ -1,9 +1,10 @@
 /**
- * 代码边界（AGENTS.md）：relay 不得 import apps/cloud，不碰数据库。
- * ESLint 也守同一条；这里扫源码文本，连动态 import 一起拦。
+ * 代码边界（AGENTS.md）：relay 不 import 控制面、不碰数据库；personal 模式不引入
+ * PostgreSQL / Redis 的运行时依赖；cli 只按需 import 各模式。ESLint 也守前两条；
+ * 这里扫源码文本，连动态 import 一起拦。
  */
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
@@ -19,21 +20,52 @@ function sources(directory: string): string[] {
   });
 }
 
-const FORBIDDEN = [
-  /["']@armadra\/cloud["'/]/,
-  /["'](\.\.\/)+cloud\//,
-  /["']postgres["']/,
-  /["']@armadra\/cloud-shared\/db["']/,
-];
+function offenders(files: string[], patterns: RegExp[]): string[] {
+  return files.flatMap((file) => {
+    const text = readFileSync(file, "utf8");
+    return patterns
+      .filter((pattern) => pattern.test(text))
+      .map((pattern) => `${relative(SRC, file)}: ${pattern}`);
+  });
+}
+
+const DATABASE = [/["']postgres["']/, /["']@armadra\/cloud-shared\/db["']/];
+const REDIS = [/["']redis["']/, /["']@armadra\/cloud-shared\/redis["']/];
 
 it("relay 源码不 import 控制面、不 import 数据库客户端", () => {
   const files = sources(SRC);
   expect(files.length).toBeGreaterThan(0);
-  const offenders = files.flatMap((file) => {
-    const text = readFileSync(file, "utf8");
-    return FORBIDDEN.filter((pattern) => pattern.test(text)).map(
-      (pattern) => `${file}: ${pattern}`,
-    );
-  });
-  expect(offenders).toEqual([]);
+  expect(
+    offenders(files, [
+      /["']@armadra\/cloud["'/]/,
+      /["'](\.\.\/)+cloud\//,
+      ...DATABASE,
+    ]),
+  ).toEqual([]);
+});
+
+it("personal 模式及它依赖的模块不 import Redis 与 saas", () => {
+  const personal = sources(join(SRC, "personal"));
+  expect(personal.length).toBeGreaterThan(0);
+  const shared = ["http/server.ts", "version.ts"].map((name) =>
+    join(SRC, name),
+  );
+  expect(
+    offenders(
+      [...personal, ...shared],
+      [...REDIS, /["']\.\.?\/(\.\.\/)?saas\//],
+    ),
+  ).toEqual([]);
+});
+
+it("cli 不静态 import 任何模式（各模式按需动态 import）", () => {
+  const cli = readFileSync(join(SRC, "cli.ts"), "utf8");
+  const staticImports = [
+    ...cli.matchAll(/^import .* from ["']([^"']+)["'];?$/gm),
+  ].map((match) => match[1]);
+  expect(
+    staticImports.filter((path) =>
+      /saas|personal|redis|config\.ts/.test(path ?? ""),
+    ),
+  ).toEqual([]);
 });

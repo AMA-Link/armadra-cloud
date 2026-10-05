@@ -1,11 +1,11 @@
-/** saas 模式装配：配置 → Redis → HTTP。中继不碰数据库（AGENTS.md）。 */
+/** saas 模式装配：配置 → Redis → HTTP。saas 控制面适配（Redis 路由、限流、撤销）预留到 R3（总计划 §12.2）。中继不碰数据库。 */
 import { listen, type RunningServer } from "@armadra/cloud-shared/http";
 import { createLogger } from "@armadra/cloud-shared/log";
 import { createRedis, pingRedis } from "@armadra/cloud-shared/redis";
 
-import type { SaasRelayConfig } from "./config.ts";
-import { createRelayRouter } from "./http/server.ts";
-import { RELAY_VERSION } from "./version.ts";
+import type { SaasRelayConfig } from "../config.ts";
+import { createRelayRouter } from "../http/server.ts";
+import { RELAY_VERSION } from "../version.ts";
 
 export interface RunningRelay {
   url: string;

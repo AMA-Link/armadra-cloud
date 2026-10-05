@@ -1,4 +1,4 @@
-/** 中继环境变量（中继设计 §7）。C0-1 只解析 saas 起服务与探活要用到的那几项。 */
+/** saas 模式的环境变量（中继设计 §7）。只解析起服务与探活要用到的那几项；personal 的参数在 personal/args.ts。 */
 import {
   flagSchema,
   listenSchema,
