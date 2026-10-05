@@ -13,7 +13,34 @@
 
 <!-- rpc:begin contract=§2 -->
 
-_形状表由协议包的 `/v1` 契约生成（C0-2）。_
+| procedure                     | 方法与路径                               | scope       | 错误码                                                                                                                                         |
+| ----------------------------- | ---------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform.info`               | `GET /.well-known/armadra-platform`      | `anonymous` | —                                                                                                                                              |
+| `platform.jwks`               | `GET /.well-known/jwks.json`             | `anonymous` | —                                                                                                                                              |
+| `platform.health`             | `GET /health`                            | `anonymous` | `unavailable`                                                                                                                                  |
+| `auth.register`               | `POST /v1/auth/register`                 | `anonymous` | `email_taken`、`rate_limited`、`password_too_short`、`password_too_long`、`password_too_common`、`password_contains_name`、`password_breached` |
+| `auth.login`                  | `POST /v1/auth/login`                    | `anonymous` | `credentials_invalid`、`account_locked`、`account_disabled`、`rate_limited`                                                                    |
+| `auth.mfaVerify`              | `POST /v1/auth/mfa/verify`               | `anonymous` | `mfa_invalid`、`mfa_expired`、`account_locked`                                                                                                 |
+| `auth.refresh`                | `POST /v1/auth/refresh`                  | `anonymous` | `session_expired`、`session_revoked`                                                                                                           |
+| `auth.logout`                 | `POST /v1/auth/logout`                   | `session`   | —                                                                                                                                              |
+| `auth.deviceStart`            | `POST /v1/auth/device/start`             | `anonymous` | `rate_limited`                                                                                                                                 |
+| `auth.devicePoll`             | `POST /v1/auth/device/poll`              | `anonymous` | `rate_limited`                                                                                                                                 |
+| `auth.deviceApprove`          | `POST /v1/auth/device/approve`           | `session`   | `device_code_expired`、`not_found`                                                                                                             |
+| `auth.passkeyRegisterOptions` | `POST /v1/auth/passkey/register/options` | `session`   | —                                                                                                                                              |
+| `auth.passkeyRegister`        | `POST /v1/auth/passkey/register`         | `session`   | —                                                                                                                                              |
+| `auth.passkeyLoginOptions`    | `POST /v1/auth/passkey/login/options`    | `anonymous` | `rate_limited`                                                                                                                                 |
+| `auth.passkeyLogin`           | `POST /v1/auth/passkey/login`            | `anonymous` | `credentials_invalid`、`rate_limited`                                                                                                          |
+| `auth.totpEnroll`             | `POST /v1/auth/totp/enroll`              | `session`   | `conflict`                                                                                                                                     |
+| `auth.totpConfirm`            | `POST /v1/auth/totp/confirm`             | `session`   | `mfa_invalid`                                                                                                                                  |
+| `auth.totpDisable`            | `POST /v1/auth/totp/disable`             | `session`   | `mfa_invalid`                                                                                                                                  |
+| `auth.recoveryCodesRotate`    | `POST /v1/auth/recovery-codes/rotate`    | `session`   | `mfa_invalid`                                                                                                                                  |
+| `me.get`                      | `GET /v1/me`                             | `session`   | —                                                                                                                                              |
+| `me.update`                   | `PATCH /v1/me`                           | `session`   | `bad_request`                                                                                                                                  |
+| `me.sources`                  | `GET /v1/me/sources`                     | `session`   | —                                                                                                                                              |
+| `me.devices`                  | `GET /v1/me/devices`                     | `session`   | —                                                                                                                                              |
+| `me.deviceRevoke`             | `DELETE /v1/me/devices/{deviceId}`       | `session`   | `not_found`                                                                                                                                    |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
 <!-- rpc:end -->
 
@@ -21,7 +48,20 @@ _形状表由协议包的 `/v1` 契约生成（C0-2）。_
 
 <!-- rpc:begin contract=§3 -->
 
-_形状表由协议包的 `/v1` 契约生成（C0-2）。_
+| procedure           | 方法与路径                                    | scope                 | 错误码                                                       |
+| ------------------- | --------------------------------------------- | --------------------- | ------------------------------------------------------------ |
+| `orgs.create`       | `POST /v1/orgs`                               | `session`             | `org_slug_taken`、`bad_request`                              |
+| `orgs.get`          | `GET /v1/orgs/{orgId}`                        | `session`             | `not_found`                                                  |
+| `orgs.update`       | `PATCH /v1/orgs/{orgId}`                      | `org:admin`           | `not_found`、`org_role_insufficient`                         |
+| `orgs.delete`       | `DELETE /v1/orgs/{orgId}`                     | `org:owner`           | `not_found`、`org_role_insufficient`                         |
+| `orgs.members`      | `GET /v1/orgs/{orgId}/members`                | `session`             | `not_found`、`org_role_insufficient`                         |
+| `orgs.memberRole`   | `PATCH /v1/orgs/{orgId}/members/{accountId}`  | `org:admin`           | `not_found`、`org_role_insufficient`                         |
+| `orgs.memberRemove` | `DELETE /v1/orgs/{orgId}/members/{accountId}` | `org:admin`           | `not_found`、`org_role_insufficient`                         |
+| `orgs.sources`      | `GET /v1/orgs/{orgId}/sources`                | `session`             | `not_found`、`org_role_insufficient`                         |
+| `orgs.sourceAttach` | `POST /v1/orgs/{orgId}/sources`               | `owner`               | `not_found`、`org_role_insufficient`、`source_access_denied` |
+| `orgs.sourceDetach` | `DELETE /v1/orgs/{orgId}/sources/{sourceId}`  | `owner` / `org:admin` | `not_found`、`org_role_insufficient`                         |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
 <!-- rpc:end -->
 
@@ -29,7 +69,20 @@ _形状表由协议包的 `/v1` 契约生成（C0-2）。_
 
 <!-- rpc:begin contract=§4 -->
 
-_形状表由协议包的 `/v1` 契约生成（C0-2）。_
+| procedure                   | 方法与路径                                         | scope       | 错误码                                                                               |
+| --------------------------- | -------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------ |
+| `sources.registrationToken` | `POST /v1/sources/registration-tokens`             | `session`   | `email_unverified`、`limit_reached`、`org_role_insufficient`                         |
+| `sources.register`          | `POST /v1/sources/register`                        | `anonymous` | `registration_token_invalid`、`source_taken`、`protocol_unsupported`、`rate_limited` |
+| `sources.heartbeatHint`     | `GET /v1/sources/me/relay`                         | `source`    | `source_revoked`、`unauthenticated`                                                  |
+| `sources.list`              | `GET /v1/sources`                                  | `session`   | —                                                                                    |
+| `sources.get`               | `GET /v1/sources/{sourceId}`                       | `session`   | `not_found`                                                                          |
+| `sources.update`            | `PATCH /v1/sources/{sourceId}`                     | `owner`     | `not_found`、`bad_request`                                                           |
+| `sources.revoke`            | `DELETE /v1/sources/{sourceId}`                    | `owner`     | `not_found`                                                                          |
+| `sources.assertion`         | `POST /v1/sources/{sourceId}/assertion`            | `session`   | `source_access_denied`、`source_revoked`、`rate_limited`                             |
+| `sources.accessList`        | `GET /v1/sources/{sourceId}/access`                | `owner`     | `not_found`                                                                          |
+| `sources.accessRevoke`      | `DELETE /v1/sources/{sourceId}/access/{accountId}` | `owner`     | `not_found`                                                                          |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
 <!-- rpc:end -->
 
@@ -37,7 +90,15 @@ _形状表由协议包的 `/v1` 契约生成（C0-2）。_
 
 <!-- rpc:begin contract=§5 -->
 
-_形状表由协议包的 `/v1` 契约生成（C0-2）。_
+| procedure      | 方法与路径                       | scope                   | 错误码                                                                                  |
+| -------------- | -------------------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| `links.create` | `POST /v1/links`                 | `owner` / `org:admin`   | `source_access_denied`、`org_role_insufficient`、`bad_request`                          |
+| `links.get`    | `GET /v1/links/{linkId}`         | `anonymous`             | `link_invalid`                                                                          |
+| `links.accept` | `POST /v1/links/{linkId}/accept` | `session` / `anonymous` | `link_invalid`、`link_expired`、`link_exhausted`、`link_secret_invalid`、`rate_limited` |
+| `links.list`   | `GET /v1/links`                  | `owner` / `org:admin`   | —                                                                                       |
+| `links.revoke` | `DELETE /v1/links/{linkId}`      | `owner` / `org:admin`   | `not_found`                                                                             |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
 <!-- rpc:end -->
 
@@ -45,7 +106,11 @@ _形状表由协议包的 `/v1` 契约生成（C0-2）。_
 
 <!-- rpc:begin contract=§6 -->
 
-_形状表由协议包的 `/v1` 契约生成（C0-2）。_
+| procedure         | 方法与路径                  | scope     | 错误码 |
+| ----------------- | --------------------------- | --------- | ------ |
+| `me.streamTicket` | `POST /v1/me/stream/ticket` | `session` | —      |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
 <!-- rpc:end -->
 
@@ -61,7 +126,12 @@ _形状表由协议包的 `/v1` 契约生成（C0-2）。_
 
 <!-- rpc:begin contract=§9 -->
 
-_形状表由协议包的 `/v1` 契约生成（C0-2）。_
+| procedure       | 方法与路径                     | scope       | 错误码                               |
+| --------------- | ------------------------------ | ----------- | ------------------------------------ |
+| `billing.plan`  | `GET /v1/orgs/{orgId}/billing` | `org:admin` | `not_found`、`org_role_insufficient` |
+| `billing.usage` | `GET /v1/orgs/{orgId}/usage`   | `org:admin` | `not_found`、`org_role_insufficient` |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
 <!-- rpc:end -->
 
