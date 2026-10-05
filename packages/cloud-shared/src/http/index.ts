@@ -12,9 +12,13 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 
+import type { ErrorCode } from "@armadra/platform-protocol/errors";
+import { protocolHeaderValue } from "@armadra/platform-protocol";
+
 import type { ListenAddress } from "../config.ts";
 
-export const PROTOCOL_HEADER_VALUE = "1.0";
+/** `Armadra-Protocol` 头的值（协议包的 PROTOCOL_VERSION）。 */
+export const PROTOCOL_HEADER_VALUE = protocolHeaderValue();
 
 export function sendJson(
   res: ServerResponse,
@@ -32,8 +36,9 @@ export function sendJson(
   res.end(payload);
 }
 
+/** 线上错误形状；`code` 只能取协议包注册表里的码。 */
 export interface WireError {
-  code: string;
+  code: ErrorCode;
   message: string;
   requestId?: string;
   details?: unknown;

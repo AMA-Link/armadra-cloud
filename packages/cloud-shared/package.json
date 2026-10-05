@@ -19,6 +19,7 @@
     "test:integration": "vitest run --config vitest.integration.config.mts"
   },
   "dependencies": {
+    "@armadra/platform-protocol": "workspace:*",
     "postgres": "3.4.9",
     "redis": "5.12.1",
     "zod": "4.4.3"
