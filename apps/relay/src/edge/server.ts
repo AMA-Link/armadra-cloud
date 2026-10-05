@@ -87,6 +87,18 @@ function originOf(req: IncomingMessage): string | null {
   return typeof origin === "string" ? origin : null;
 }
 
+/** {@link Edge.disconnect} 的条件：都给时要同时满足。 */
+export interface EdgeConnectionFilter {
+  sourceId?: string;
+  /** 中继令牌的 `sub` 以它开头（访客：`guest:<linkId>:`）。 */
+  subjectPrefix?: string;
+}
+
+interface EdgeConnection {
+  sourceId: string;
+  subject: string;
+}
+
 export class Edge {
   private readonly wss = new WebSocketServer({
     noServer: true,
@@ -96,7 +108,7 @@ export class Edge {
   });
 
   private readonly options: EdgeOptions;
-  private readonly sockets = new Set<Duplex>();
+  private readonly sockets = new Map<Duplex, EdgeConnection>();
 
   constructor(options: EdgeOptions) {
     this.options = options;
@@ -215,7 +227,7 @@ export class Edge {
       socket.unpipe(stream);
       socket.resume();
     });
-    this.sockets.add(socket);
+    this.sockets.set(socket, { sourceId: target.sourceId, subject });
     socket.once("close", () => {
       this.sockets.delete(socket);
       stream.destroy();
@@ -224,8 +236,29 @@ export class Edge {
 
   /** 关闭时断开所有已升级的客户端连接（`server.close()` 不管升级后的 socket）。 */
   closeAll(): void {
-    for (const socket of this.sockets) socket.destroy();
+    for (const socket of this.sockets.keys()) socket.destroy();
     this.sockets.clear();
+  }
+
+  /** 断开匹配的已升级连接（撤销源 / 访客），答断开了几条。 */
+  disconnect(filter: EdgeConnectionFilter): number {
+    let count = 0;
+    for (const [socket, connection] of this.sockets) {
+      if (
+        filter.sourceId !== undefined &&
+        connection.sourceId !== filter.sourceId
+      )
+        continue;
+      if (
+        filter.subjectPrefix !== undefined &&
+        !connection.subject.startsWith(filter.subjectPrefix)
+      )
+        continue;
+      socket.destroy();
+      this.sockets.delete(socket);
+      count += 1;
+    }
+    return count;
   }
 
   /** 解析源 → 按 IP 限流 → 中继令牌 → 按账号限流 → 找隧道。 */

@@ -1,6 +1,7 @@
 // 镜像用的单文件：src/cli.ts → out/cli.js（ESM、node22、依赖全部打进来）。
+// 运行时按 import.meta.url 读的数据文件（常见口令表）同时拷到 out/。
 import { build } from "esbuild";
-import { rmSync } from "node:fs";
+import { copyFileSync, rmSync } from "node:fs";
 
 rmSync(new URL("../out", import.meta.url), { recursive: true, force: true });
 await build({
@@ -17,3 +18,7 @@ await build({
   },
   logLevel: "info",
 });
+copyFileSync(
+  new URL("../src/personal/common-passwords.txt", import.meta.url),
+  new URL("../out/common-passwords.txt", import.meta.url),
+);

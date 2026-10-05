@@ -20,6 +20,7 @@
   "dependencies": {
     "@armadra/cloud-shared": "workspace:*",
     "@armadra/platform-protocol": "workspace:*",
+    "acme-client": "5.4.0",
     "ws": "8.21.0",
     "zod": "4.4.3"
   },

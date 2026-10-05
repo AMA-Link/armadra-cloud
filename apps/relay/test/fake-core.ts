@@ -52,6 +52,8 @@ export interface FakeCoreOptions {
   sourceId?: string;
   sourceKey?: KeyObject;
   token?: () => string;
+  /** 连 `wss://` 时信任的 CA（personal 的自签 CA）。 */
+  ca?: string;
 }
 
 export interface Connected {
@@ -158,6 +160,7 @@ export class FakeCore {
   }> {
     const ws = new WebSocket(this.options.tunnelUrl, {
       perMessageDeflate: false,
+      ...(this.options.ca ? { ca: this.options.ca } : {}),
     });
     this.ws = ws;
     this.ready = undefined;

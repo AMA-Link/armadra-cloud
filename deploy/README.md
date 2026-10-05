@@ -37,21 +37,33 @@
 
 中继（`armadra-relay personal serve`，参数优先，其次环境变量）：
 
-| 参数 / 变量                                 | 必填 | 说明                                                |
-| ------------------------------------------- | ---- | --------------------------------------------------- |
-| `--data-dir` / `RELAY_DATA_DIR`             | 是   | 数据目录（权限 0700）                               |
-| `--host` / `RELAY_HOST`                     | 是   | 对外的 IP 或域名                                    |
-| `--port`                                    |      | 缺省 8443                                           |
-| `--tls` / `RELAY_TLS`                       |      | 缺省 `self-signed`；现阶段只支持 `plain`            |
-| `--listen` / `RELAY_LISTEN`                 |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`      |
-| `--metrics-listen` / `RELAY_METRICS_LISTEN` |      | `/metrics` 的单独监听（只绑内网地址），缺省不开     |
-| `RELAY_METRICS_TOKEN`                       |      | 设了则 `/metrics` 要 `Authorization: Bearer <令牌>` |
+| 参数 / 变量                                                   | 必填 | 说明                                                                     |
+| ------------------------------------------------------------- | ---- | ------------------------------------------------------------------------ |
+| `--data-dir` / `RELAY_DATA_DIR`                               | 是   | 数据目录（0700）：`state.json`、`tls/`、`acme/`                          |
+| `--host` / `RELAY_HOST`                                       | 是   | 对外的 IP 或域名（issuer 与证书 SAN）                                    |
+| `--port` / `RELAY_PORT`                                       |      | 对外端口，缺省 8443（443 时 issuer 省略端口）                            |
+| `--public-origin` / `RELAY_PUBLIC_ORIGIN`                     |      | 对外来源，缺省 `https://<host>:<port>`                                   |
+| `--tls` / `RELAY_TLS`                                         |      | `self-signed`（缺省）/ `acme` / `file` / `plain`（只允许回环监听）       |
+| `--tls-cert`、`--tls-key` / `RELAY_TLS_CERT`、`RELAY_TLS_KEY` |      | `--tls file` 的证书与私钥，变化时热加载                                  |
+| `--acme-email` / `RELAY_ACME_EMAIL`                           |      | `--tls acme` 必填                                                        |
+| `--acme-directory` / `RELAY_ACME_DIRECTORY`                   |      | 缺省 Let's Encrypt 生产目录                                              |
+| `--acme-ca-bundle` / `RELAY_ACME_CA_BUNDLE`                   |      | 信任 ACME 目录服务器的 PEM（测试 CA）                                    |
+| `--acme-http-listen` / `RELAY_ACME_HTTP_LISTEN`               |      | `http-01` 挑战监听，缺省 `0.0.0.0:80`                                    |
+| `--web-root` / `RELAY_WEB_ROOT`                               |      | Armadra `apps/web` 构建产物；镜像缺省 `/app/web`（构建参数 `WEB_IMAGE`） |
+| `--account` / `RELAY_PERSONAL_ACCOUNT`                        |      | 状态文件不存在时自动初始化的账号                                         |
+| `--password-file` / `RELAY_PERSONAL_PASSWORD_FILE`            |      | 自动初始化的口令文件（之后不再读取）                                     |
+| `--listen` / `RELAY_LISTEN`                                   |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`                           |
+| `--metrics-listen` / `RELAY_METRICS_LISTEN`                   |      | `/metrics` 的单独监听（只绑内网地址），缺省不开                          |
+| `RELAY_METRICS_TOKEN`                                         |      | 设了则 `/metrics` 要 `Authorization: Bearer <令牌>`                      |
+
+其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`）只读写状态文件，可以在 `serve` 运行时执行（`docker compose exec relay node /app/out/cli.js personal …`），改动一秒内生效。
 
 ## 端点
 
-- `GET /health`：进程存活，200 即活着（镜像的 `HEALTHCHECK` 用它）。
+- `GET /health`：进程存活，200 即活着（镜像的 `HEALTHCHECK` 经 `armadra-relay health` 打它，先 HTTPS 再明文）。
 - `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，saas relay 报 Redis，personal relay 报数据目录），任一不可达答 503。
 - 控制面的 `/v1/*` 与 `/.well-known/*` 业务路由现在是预留，答 501 `{ code: "not_implemented", message, requestId }`。
+- 个人中转另有 `/v1/*` 子集、`/.well-known/*`、`/ca.crt`、`/app/*` 与 `/j/<linkId>`（[契约](../docs/contracts/cloud-api.md) §10–§11）。
 
 ## 升级顺序
 

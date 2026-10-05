@@ -34,11 +34,17 @@ pnpm install
 不需要 PostgreSQL / Redis：
 
 ```sh
-pnpm relay:personal            # 从源码起个人中转：http://127.0.0.1:8102，数据目录 .data/personal
-curl http://127.0.0.1:8102/health
+pnpm relay:personal            # 从源码起个人中转：https://127.0.0.1:8102，自签 TLS，数据目录 .data/personal
+                               # 首次运行建账号 dev，口令写在 .data/personal/dev.env；启动日志打印 CA 指纹
+curl -k https://127.0.0.1:8102/health
+node apps/relay/src/cli.ts personal status --data-dir .data/personal
 ```
 
-容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/owlbay/armadra-relay:local .` 之后按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。现阶段有中继内核（隧道终端 `/t/v1`、`/s/<sourceId>/` 边缘、`/health`、可选 `--metrics-listen` 上的 `/metrics`）与 `--tls plain`；账号、签名钥、源注册与 TLS 在后续包落地，在那之前没有可用的令牌，隧道与边缘一律拒绝。
+Armadra 的页面产物（`apps/web/dist`）在 `ARMADRA_WEB_DIST` 或 `../Armadra/apps/web/dist` 时托管在 `/app` 与 `/j/<linkId>`。
+
+子命令：`personal init | serve | status | passwd | rotate-key | links list|revoke`（`armadra-relay personal --help`）。一个账号（地址 + 账号 + 口令），状态只有 `<data-dir>/state.json`（账号、口令哈希、签名钥、源 / 设备 / 链接登记，不存任何消息内容）；TLS 缺省自签 CA，可选 ACME 或文件证书。接口见[契约](docs/contracts/cloud-api.md) §10–§11。
+
+容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/owlbay/armadra-relay:local .`，之后 `docker run --rm ghcr.io/owlbay/armadra-relay:local personal --help`；部署按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。
 
 ## SaaS 本地开发
 
