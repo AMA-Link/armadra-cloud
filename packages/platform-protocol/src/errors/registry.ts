@@ -13,6 +13,8 @@ export const ERRORS = {
   rate_limited: { status: 429 },
   internal: { status: 500 },
   unavailable: { status: 503 },
+  /** 预留的接口（SaaS 服务端，总计划 §12.2）：路由在、实现未落地。 */
+  not_implemented: { status: 501 },
   // 账号
   email_taken: { status: 409 },
   credentials_invalid: { status: 401 },

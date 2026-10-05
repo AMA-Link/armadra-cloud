@@ -23,6 +23,9 @@
   "unavailable": {
     "status": 503
   },
+  "not_implemented": {
+    "status": 501
+  },
   "email_taken": {
     "status": 409
   },
