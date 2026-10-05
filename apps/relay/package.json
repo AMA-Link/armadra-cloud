@@ -1,0 +1,31 @@
+{
+  "name": "@armadra/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Armadra 中继：隧道终端与客户端边缘（saas / personal 两种模式）",
+  "bin": {
+    "armadra-relay": "./out/cli.js"
+  },
+  "files": [
+    "out"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node src/cli.ts saas serve",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@armadra/cloud-shared": "workspace:*",
+    "@armadra/platform-protocol": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}
