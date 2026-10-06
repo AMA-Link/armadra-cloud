@@ -122,6 +122,7 @@
 - 地址：saas 是 `https://<sourceId>.src.<域>/…`，路径原样；personal 是 `https://<中继>/s/<sourceId>/…`，中继剥掉 `/s/<sourceId>` 再转。路径与源的 Gateway 相同（含源自己的 `/health`）。
 - 转给源的头：保留 `Host`、`Authorization` 等；剥掉中继令牌、逐跳头与客户端带来的 `X-Forwarded-*` / `Forwarded` / `X-Real-IP`；加 `X-Forwarded-For: <客户端 IP>`、`X-Forwarded-Proto: https`。源应以隧道 `OPEN` 的 `remoteIp` / `clientOrigin` 为准。
 - CORS 预检（`OPTIONS` 且带 `Origin` 与 `Access-Control-Request-Method`）由中继自己回答，不验令牌、不进隧道、不开流，请求体丢弃；与普通请求共用按 IP 的限流。来源是原生 App（`capacitor://localhost`、`https://localhost`）或登记时发给源的 `trustedOrigins` 之一 → `204`，按 Origin 回显 `Access-Control-Allow-Origin`，带 `Vary: Origin`，不发 `Access-Control-Allow-Credentials`；`Allow-Methods` 为 `GET,POST,PUT,PATCH,DELETE,OPTIONS`，`Allow-Headers` 为 `authorization, content-type, x-armadra-csrf, armadra-relay-token`，`Max-Age` 600。其余来源 `403 forbidden`，不带 CORS 头。答案与源是否在线、是否登记无关（saas 模式暂未接入可信来源，只认原生 App）。不是预检的请求（包括缺 `Access-Control-Request-Method` 的 `OPTIONS`）照常要令牌；真请求的 CORS 头由源按它自己的可信来源回答。
+- 中继自己返回的错误答复（下表 HTTP 一列中源地址上的拒绝，含升级被拒与升级途中源离线的 503；不含预检的 `403 forbidden`）也按同一份名单补 CORS 头，让跨源页面读得到 `{ code, message }` 与 `Retry-After`：来源在名单里 → 按 Origin 回显 `Access-Control-Allow-Origin`，带 `Vary: Origin`，`Access-Control-Expose-Headers: retry-after`，不发 `Allow-Credentials`，不用 `*`；名单外或没有 `Origin` 不加任何 CORS 头。只加响应头，不改变任何判定；源自己返回的响应原样透传，CORS 头仍由源负责。
 - WebSocket：除 `armadra-relay.<jwt>` 外至少再带一个子协议（`armadra-ticket.<票>`），否则剥掉令牌后源选不到子协议，浏览器会拒绝这次握手。中继每 30 秒对客户端发 `ping`，60 秒收不到客户端任何字节即断开。
 - 拒绝：
 

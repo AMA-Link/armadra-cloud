@@ -69,3 +69,23 @@ export function preflightHeaders(origin: string): Record<string, string> {
     "cache-control": "no-store",
   };
 }
+
+/** 页面需要读的中继响应头（限流的重试等待）。 */
+export const EXPOSED_HEADERS = "retry-after";
+
+/**
+ * 中继自己返回的错误答复（401 / 403 / 429 / 503）的 CORS 头：来源在名单里才有，
+ * 按 Origin 回显、带 `Vary: Origin`、暴露 `retry-after`；名单外（或没有 Origin）不加。
+ * 只加头，不影响任何鉴权判定。
+ */
+export function errorCorsHeaders(
+  origin: string | null,
+  trusted: readonly string[],
+): Record<string, string> | undefined {
+  if (origin === null || !originAllowed(origin, trusted)) return undefined;
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-expose-headers": EXPOSED_HEADERS,
+    vary: "origin",
+  };
+}

@@ -629,6 +629,31 @@ async function main() {
         refused.headers["access-control-allow-origin"] === undefined,
         "名单外来源的预检不带 CORS 头",
       );
+      const noToken = await relay.http("GET", `${fresh.relayBaseUrl}/health`, {
+        headers: { origin: appOrigin },
+      });
+      expectEqual(noToken.status, 401, "不带中继令牌的跨源请求");
+      expectEqual(noToken.body?.code, "relay_token_invalid", "错误码");
+      expectEqual(
+        noToken.headers["access-control-allow-origin"],
+        appOrigin,
+        "中继自己的 401 也按 Origin 回显",
+      );
+      expectEqual(
+        noToken.headers["access-control-expose-headers"],
+        "retry-after",
+        "中继的错误答复暴露 retry-after",
+      );
+      const noTokenOutside = await relay.http(
+        "GET",
+        `${fresh.relayBaseUrl}/health`,
+        { headers: { origin: "https://evil.example" } },
+      );
+      expectEqual(noTokenOutside.status, 401, "名单外来源的同一请求");
+      expect(
+        noTokenOutside.headers["access-control-allow-origin"] === undefined,
+        "名单外来源的 401 不带 CORS 头",
+      );
       const login = await relay.http("POST", url, {
         body: { assertion: fresh.assertion },
         headers: { origin: appOrigin, "armadra-relay-token": fresh.relayToken },
@@ -654,7 +679,7 @@ async function main() {
         },
       );
       ok(workspaces, "GET /api/workspaces（https://localhost）");
-      return "预检 204、cloud/login 200";
+      return "预检 204、中继 401 带 CORS、cloud/login 200";
     },
   );
 

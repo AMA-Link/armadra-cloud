@@ -40,7 +40,12 @@ import { errorName, type RelayLog } from "../log.ts";
 import type { RelayMetrics } from "../metrics.ts";
 import { TunnelUnavailableError, type Tunnel } from "../tunnel/tunnel.ts";
 import type { Addressing, AddressTarget } from "./addressing.ts";
-import { isPreflight, originAllowed, preflightHeaders } from "./cors.ts";
+import {
+  errorCorsHeaders,
+  isPreflight,
+  originAllowed,
+  preflightHeaders,
+} from "./cors.ts";
 import {
   flatten,
   forwardRequestHeaders,
@@ -86,7 +91,13 @@ type Admission =
       subject: string;
       remoteIp: string;
     }
-  | { ok: false; code: ErrorCode; retryAfterMs?: number };
+  | {
+      ok: false;
+      code: ErrorCode;
+      retryAfterMs?: number;
+      /** 地址解析出的源（名单按源取；地址不匹配时没有）。 */
+      sourceId?: string;
+    };
 
 function remoteIpOf(req: IncomingMessage): string {
   return req.socket.remoteAddress ?? "";
@@ -134,6 +145,7 @@ export class Edge {
       this.options.metrics.edgeConnection(admission.code);
       sendRelayError(res, admission.code, {
         retryAfterMs: admission.retryAfterMs,
+        cors: this.errorCors(req, admission.sourceId),
       });
       return;
     }
@@ -141,7 +153,9 @@ export class Edge {
     const headers = forwardRequestHeaders(req.rawHeaders, { remoteIp });
     const stream = this.open(tunnel, "http", req, target, headers, remoteIp);
     if (!stream.ok) {
-      sendRelayError(res, stream.code);
+      sendRelayError(res, stream.code, {
+        cors: this.errorCors(req, target.sourceId),
+      });
       return;
     }
     this.options.metrics.edgeConnection("ok");
@@ -162,7 +176,10 @@ export class Edge {
       response.on("error", () => res.destroy());
     });
     upstream.on("error", (error) => {
-      if (!res.headersSent) sendRelayError(res, "source_offline");
+      if (!res.headersSent)
+        sendRelayError(res, "source_offline", {
+          cors: this.errorCors(req, target.sourceId),
+        });
       else res.destroy();
       this.options.log.debug("边缘流结束", {
         sourceId: target.sourceId,
@@ -188,7 +205,7 @@ export class Edge {
     const admission = await this.admit(req, token);
     if (!admission.ok) {
       this.options.metrics.edgeConnection(admission.code);
-      this.refuseUpgrade(req, socket, head, admission.code);
+      this.refuseUpgrade(req, socket, head, admission.code, admission.sourceId);
       return;
     }
     const { target, tunnel, subject, remoteIp } = admission;
@@ -199,7 +216,7 @@ export class Edge {
     );
     if (!concurrent.allowed) {
       this.options.metrics.edgeConnection("limit_reached");
-      this.refuseUpgrade(req, socket, head, "limit_reached");
+      this.refuseUpgrade(req, socket, head, "limit_reached", target.sourceId);
       return;
     }
     socket.once("close", () => {
@@ -212,7 +229,7 @@ export class Edge {
     });
     const opened = this.open(tunnel, "ws", req, target, headers, remoteIp);
     if (!opened.ok) {
-      this.refuseUpgrade(req, socket, head, opened.code);
+      this.refuseUpgrade(req, socket, head, opened.code, target.sourceId);
       return;
     }
     this.options.metrics.edgeConnection("ok");
@@ -226,7 +243,10 @@ export class Edge {
     const downstream = new WsDownstream(socket, {
       pingMs: this.options.wsPingMs ?? 30_000,
       idleMs: this.options.wsIdleMs ?? 60_000,
-      offlineResponse: rawErrorResponse("source_offline"),
+      offlineResponse: rawErrorResponse(
+        "source_offline",
+        this.errorCors(req, target.sourceId),
+      ),
     });
     stream.pipe(downstream);
     stream.on("error", () => {
@@ -257,13 +277,16 @@ export class Edge {
       host: req.headers.host,
     });
     if (!target) {
-      sendRelayError(res, "not_found");
+      sendRelayError(res, "not_found", { cors: this.errorCors(req) });
       return;
     }
     const byIp = await control.limits.hit("edge.connect.ip", remoteIpOf(req));
     if (!byIp.allowed) {
       this.options.metrics.edgeConnection("rate_limited");
-      sendRelayError(res, "rate_limited", { retryAfterMs: byIp.retryAfterMs });
+      sendRelayError(res, "rate_limited", {
+        retryAfterMs: byIp.retryAfterMs,
+        cors: this.errorCors(req, target.sourceId),
+      });
       return;
     }
     const origin = originOf(req) as string;
@@ -275,6 +298,18 @@ export class Edge {
     this.options.metrics.edgeConnection("preflight");
     res.writeHead(204, preflightHeaders(origin));
     res.end();
+  }
+
+  /** 错误答复的 CORS 头：名单与预检同一份（地址不匹配时只有原生 App 来源）。 */
+  private errorCors(
+    req: IncomingMessage,
+    sourceId?: string,
+  ): Record<string, string> | undefined {
+    const trusted =
+      sourceId === undefined
+        ? []
+        : (this.options.corsOrigins?.(sourceId) ?? []);
+    return errorCorsHeaders(originOf(req), trusted);
   }
 
   /** 关闭时断开所有已升级的客户端连接（`server.close()` 不管升级后的 socket）。 */
@@ -315,6 +350,7 @@ export class Edge {
       host: req.headers.host,
     });
     if (!target) return { ok: false, code: "not_found" };
+    const { sourceId } = target;
     const remoteIp = remoteIpOf(req);
     const byIp = await control.limits.hit("edge.connect.ip", remoteIp);
     if (!byIp.allowed)
@@ -322,9 +358,10 @@ export class Edge {
         ok: false,
         code: "rate_limited",
         retryAfterMs: byIp.retryAfterMs,
+        sourceId,
       };
     const verified = await verifyRelayToken(auth, token, target.sourceId);
-    if (!verified.ok) return { ok: false, code: verified.error };
+    if (!verified.ok) return { ok: false, code: verified.error, sourceId };
     const subject = verified.claims.sub;
     const byAccount = await control.limits.hit("edge.connect.acct", subject);
     if (!byAccount.allowed)
@@ -332,9 +369,10 @@ export class Edge {
         ok: false,
         code: "rate_limited",
         retryAfterMs: byAccount.retryAfterMs,
+        sourceId,
       };
     const tunnel = await lookup(target.sourceId);
-    if (!tunnel) return { ok: false, code: "source_offline" };
+    if (!tunnel) return { ok: false, code: "source_offline", sourceId };
     return { ok: true, target, tunnel, subject, remoteIp };
   }
 
@@ -380,13 +418,14 @@ export class Edge {
     socket: Duplex,
     head: Buffer,
     code: ErrorCode,
+    sourceId?: string,
   ): void {
     const closeCode = WS_CLOSE[code];
     const isWebSocket =
       (req.headers.upgrade ?? "").toLowerCase() === "websocket" &&
       typeof req.headers["sec-websocket-key"] === "string";
     if (closeCode === undefined || !isWebSocket || socket.destroyed) {
-      rejectUpgrade(socket, code);
+      rejectUpgrade(socket, code, this.errorCors(req, sourceId));
       return;
     }
     try {
@@ -394,7 +433,7 @@ export class Edge {
         ws.close(closeCode, code);
       });
     } catch {
-      rejectUpgrade(socket, code);
+      rejectUpgrade(socket, code, this.errorCors(req, sourceId));
     }
   }
 }

@@ -345,11 +345,177 @@ describe("CORS 预检", () => {
     const limited = await preflight(`${h.base}/api/x`, TRUSTED);
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBe("60");
-    expect(limited.headers.get("access-control-allow-origin")).toBeNull();
+    // 名单内来源的 429 也带 CORS 头，页面读得到 retry-after。
+    expect(limited.headers.get("access-control-allow-origin")).toBe(TRUSTED);
+    expect(limited.headers.get("access-control-expose-headers")).toBe(
+      "retry-after",
+    );
     // 与真请求共用同一个桶。
     expect(
       (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
     ).toBe(429);
+  });
+});
+
+describe("错误答复的 CORS", () => {
+  const TRUSTED = "https://app.example";
+  const OUTSIDER = "https://evil.example";
+  type Seen = {
+    status: number;
+    code: string;
+    headers: Headers;
+  };
+  const seen = async (url: string, init: RequestInit): Promise<Seen> => {
+    const response = await fetch(url, init);
+    const body = (await response.json()) as { code: string; message: string };
+    expect(Object.keys(body).sort()).toEqual(["code", "message"]);
+    return {
+      status: response.status,
+      code: body.code,
+      headers: response.headers,
+    };
+  };
+  const echoed = (answer: Seen, origin: string) => {
+    expect(answer.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(answer.headers.get("vary")?.toLowerCase()).toContain("origin");
+    expect(answer.headers.get("access-control-expose-headers")).toBe(
+      "retry-after",
+    );
+    expect(answer.headers.get("access-control-allow-credentials")).toBeNull();
+  };
+  const bare = (answer: Seen) => {
+    expect(answer.headers.get("access-control-allow-origin")).toBeNull();
+    expect(answer.headers.get("access-control-expose-headers")).toBeNull();
+  };
+
+  it("401 / 403 令牌类：名单内来源（可信、原生 App）回显并暴露 retry-after，名单外与无 Origin 不加", async () => {
+    const h = await harness({ corsOrigins: () => [TRUSTED] });
+    await connected(h);
+    const wrongSource = auth(
+      relayToken({ src: "fedcba9876543210fedcba9876543210" }),
+    );
+    for (const origin of [
+      TRUSTED,
+      "https://localhost",
+      "capacitor://localhost",
+    ]) {
+      const missing = await seen(`${h.base}/echo-request`, {
+        headers: { origin },
+      });
+      expect([missing.status, missing.code]).toEqual([
+        401,
+        "relay_token_invalid",
+      ]);
+      echoed(missing, origin);
+      const mismatch = await seen(`${h.base}/echo-request`, {
+        headers: { origin, ...wrongSource },
+      });
+      expect([mismatch.status, mismatch.code]).toEqual([
+        403,
+        "relay_source_mismatch",
+      ]);
+      echoed(mismatch, origin);
+    }
+    bare(
+      await seen(`${h.base}/echo-request`, { headers: { origin: OUTSIDER } }),
+    );
+    bare(await seen(`${h.base}/echo-request`, {}));
+    bare(
+      await seen(`${h.base}/echo-request`, {
+        headers: { origin: "null", ...wrongSource },
+      }),
+    );
+  });
+
+  it("503 source_offline：名单内来源带 CORS 头，名单外不带", async () => {
+    const h = await harness({ corsOrigins: () => [TRUSTED] });
+    const inside = await seen(`${h.base}/echo-request`, {
+      headers: { origin: TRUSTED, ...auth() },
+    });
+    expect([inside.status, inside.code]).toEqual([503, "source_offline"]);
+    echoed(inside, TRUSTED);
+    bare(
+      await seen(`${h.base}/echo-request`, {
+        headers: { origin: OUTSIDER, ...auth() },
+      }),
+    );
+  });
+
+  it("429 rate_limited：带 retry-after 且它被暴露；名单外只有 retry-after", async () => {
+    const h = await harness(
+      { corsOrigins: () => [TRUSTED] },
+      {
+        limits: {
+          "edge.connect.ip": { type: "rate", max: 1, windowMs: 60_000 },
+        },
+      },
+    );
+    await connected(h);
+    expect(
+      (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+    ).toBe(200);
+    const inside = await seen(`${h.base}/echo-request`, {
+      headers: { origin: TRUSTED, ...auth() },
+    });
+    expect([inside.status, inside.code]).toEqual([429, "rate_limited"]);
+    expect(inside.headers.get("retry-after")).toBe("60");
+    echoed(inside, TRUSTED);
+    const outside = await seen(`${h.base}/echo-request`, {
+      headers: { origin: OUTSIDER, ...auth() },
+    });
+    expect(outside.status).toBe(429);
+    expect(outside.headers.get("retry-after")).toBe("60");
+    bare(outside);
+  });
+
+  it("名单按源取：别的源的可信来源不算", async () => {
+    const OTHER = "fedcba9876543210fedcba9876543210";
+    const h = await harness({
+      corsOrigins: (sourceId) => (sourceId === SOURCE_ID ? [TRUSTED] : []),
+    });
+    const own = await seen(`${h.base}/echo-request`, {
+      headers: { origin: TRUSTED },
+    });
+    echoed(own, TRUSTED);
+    const other = await seen(`${h.relay.url}/s/${OTHER}/echo-request`, {
+      headers: { origin: TRUSTED },
+    });
+    expect([other.status, other.code]).toEqual([401, "relay_token_invalid"]);
+    bare(other);
+    echoed(
+      await seen(`${h.relay.url}/s/${OTHER}/echo-request`, {
+        headers: { origin: "https://localhost" },
+      }),
+      "https://localhost",
+    );
+  });
+
+  it("升级被拒的 HTTP 答复同样带名单内来源的头；鉴权判定不变", async () => {
+    const h = await harness({ corsOrigins: () => [TRUSTED] });
+    await connected(h);
+    const attempt = (origin: string) =>
+      new Promise<{ status: number; headers: Record<string, unknown> }>(
+        (resolve, reject) => {
+          const req = request(`${h.base}/api/events`, {
+            headers: { connection: "Upgrade", upgrade: "custom", origin },
+          });
+          req.on("response", (res) => {
+            res.resume();
+            resolve({ status: res.statusCode ?? 0, headers: res.headers });
+          });
+          req.on("upgrade", () => reject(new Error("不该升级")));
+          req.on("error", reject);
+          req.end();
+        },
+      );
+    const inside = await attempt(TRUSTED);
+    expect(inside.status).toBe(401);
+    expect(inside.headers["access-control-allow-origin"]).toBe(TRUSTED);
+    expect(inside.headers["access-control-expose-headers"]).toBe("retry-after");
+    expect(inside.headers.vary).toBe("origin");
+    const outside = await attempt(OUTSIDER);
+    expect(outside.status).toBe(401);
+    expect(outside.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
 

@@ -47,8 +47,15 @@ export function errorMessage(code: ErrorCode): string {
 export function sendRelayError(
   res: ServerResponse,
   code: ErrorCode,
-  options: { requestId?: string; retryAfterMs?: number } = {},
+  options: {
+    requestId?: string;
+    retryAfterMs?: number;
+    /** 名单内来源的 CORS 头（边缘算好），让跨源页面读得到错误码。 */
+    cors?: Record<string, string>;
+  } = {},
 ): void {
+  for (const [name, value] of Object.entries(options.cors ?? {}))
+    res.setHeader(name, value);
   if (options.retryAfterMs !== undefined)
     res.setHeader(
       "retry-after",
@@ -62,20 +69,31 @@ export function sendRelayError(
 }
 
 /** 原始 HTTP/1.1 错误响应的字节（升级请求被拒、或升级途中源下线时写给裸 socket）。 */
-export function rawErrorResponse(code: ErrorCode): Buffer {
+export function rawErrorResponse(
+  code: ErrorCode,
+  cors?: Record<string, string>,
+): Buffer {
   const status = errorStatus(code);
   const body = JSON.stringify({ code, message: errorMessage(code) });
   return Buffer.from(
     `HTTP/1.1 ${status} ${STATUS_CODES[status] ?? ""}\r\n` +
       "content-type: application/json; charset=utf-8\r\n" +
       `content-length: ${Buffer.byteLength(body)}\r\n` +
-      "cache-control: no-store\r\nconnection: close\r\n\r\n" +
+      "cache-control: no-store\r\nconnection: close\r\n" +
+      Object.entries(cors ?? {})
+        .map(([name, value]) => `${name}: ${value}\r\n`)
+        .join("") +
+      "\r\n" +
       body,
     "utf8",
   );
 }
 
-export function rejectUpgrade(socket: Duplex, code: ErrorCode): void {
+export function rejectUpgrade(
+  socket: Duplex,
+  code: ErrorCode,
+  cors?: Record<string, string>,
+): void {
   if (socket.destroyed) return;
-  socket.end(rawErrorResponse(code));
+  socket.end(rawErrorResponse(code, cors));
 }
