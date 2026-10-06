@@ -97,6 +97,7 @@
 | `links.get`    | `GET /v1/links/{linkId}`         | `anonymous`             | `link_invalid`                                                                          |
 | `links.accept` | `POST /v1/links/{linkId}/accept` | `session` / `anonymous` | `link_invalid`、`link_expired`、`link_exhausted`、`link_secret_invalid`、`rate_limited` |
 | `links.list`   | `GET /v1/links`                  | `owner` / `org:admin`   | —                                                                                       |
+| `links.update` | `PATCH /v1/links/{linkId}`       | `owner` / `org:admin`   | `not_found`                                                                             |
 | `links.revoke` | `DELETE /v1/links/{linkId}`      | `owner` / `org:admin`   | `not_found`                                                                             |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
@@ -170,14 +171,14 @@
 
 单人中转（`armadra-relay personal`）实现 `/v1/*` 的一个子集，形状与 saas 完全相同；不实现的路由（包括契约里的组织、计费、设备码、passkey、TOTP）答 `404 not_found`。`/v1/*` 与 `/.well-known/*` 允许任意来源跨源调用（只认 `Authorization` 头，不用 Cookie），登录类答案总是带 `refreshToken`。
 
-| procedure                                                                                        | 说明                                                                                                                                                         |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `platform.info`、`platform.jwks`                                                                 | `mode: "personal"`、`relay.addressing: "path"`、`capabilities: ["auth.password", "links.source-invite", "me.stream"]`；有页面产物时 `webApp = <issuer>/app/` |
-| `auth.login`、`auth.refresh`、`auth.logout`                                                      | `account` 是账号名；会话的 `accountId` 是 `acct:<账号名>`，`email` 为 `null`                                                                                 |
-| `me.get`、`me.sources`、`me.devices`、`me.deviceRevoke`、`me.streamTicket` + `GET /v1/me/stream` | 访客（`guest:<linkId>:<随机>`）只看到链接指向的那个源                                                                                                        |
-| `sources.registrationToken`、`sources.register`、`sources.heartbeatHint`                         | 注册令牌只有账号本人能要（访客答 `403 forbidden`）                                                                                                           |
-| `sources.list`、`sources.get`、`sources.revoke`、`sources.assertion`                             | `relayBaseUrl = <issuer>/s/<sourceId>`；撤销即断开隧道与经中继的 WS，`me/stream` 发 `sourceRevoked`                                                          |
-| `links.create`、`links.get`、`links.accept`、`links.list`、`links.revoke`                        | 只有 `source_invite`；`accept` 匿名；撤销即作废该链接的全部访客设备并断开其 WS                                                                               |
+| procedure                                                                                        | 说明                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform.info`、`platform.jwks`                                                                 | `mode: "personal"`、`relay.addressing: "path"`、`capabilities: ["auth.password", "links.source-invite", "links.update", "me.stream"]`；有页面产物时 `webApp = <issuer>/app/` |
+| `auth.login`、`auth.refresh`、`auth.logout`                                                      | `account` 是账号名；会话的 `accountId` 是 `acct:<账号名>`，`email` 为 `null`                                                                                                 |
+| `me.get`、`me.sources`、`me.devices`、`me.deviceRevoke`、`me.streamTicket` + `GET /v1/me/stream` | 访客（`guest:<linkId>:<随机>`）只看到链接指向的那个源                                                                                                                        |
+| `sources.registrationToken`、`sources.register`、`sources.heartbeatHint`                         | 注册令牌只有账号本人能要（访客答 `403 forbidden`）                                                                                                                           |
+| `sources.list`、`sources.get`、`sources.revoke`、`sources.assertion`                             | `relayBaseUrl = <issuer>/s/<sourceId>`；撤销即断开隧道与经中继的 WS，`me/stream` 发 `sourceRevoked`                                                                          |
+| `links.create`、`links.get`、`links.accept`、`links.list`、`links.update`、`links.revoke`        | 只有 `source_invite`；`accept` 匿名；`update` 只改备注（去首尾空白，已撤销的也能改）；撤销即作废该链接的全部访客设备并断开其 WS                                              |
 
 - 账号：一个；口令策略与 scrypt 参数取协议包 `identity-vectors`，策略码与 core 相同（`password_too_short` 等）。
 - 防暴力破解：按 IP 每分钟 20 次（`rate_limited`）；按账号连续 5 次失败锁 1 分钟、每次翻倍、15 分钟封顶、最后一次失败一小时后清零。锁定时答 `429 account_locked`，`details.retryAfterMs` 与 `Retry-After` 头给出剩余时间。

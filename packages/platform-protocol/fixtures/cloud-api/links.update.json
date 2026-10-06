@@ -1,0 +1,19 @@
+{
+  "input": {
+    "linkId": "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "label": "For Bob"
+  },
+  "output": {
+    "linkId": "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "kind": "source_invite",
+    "label": "For Bob",
+    "role": "editor",
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "url": "https://cloud.armadra.test/j/lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "uses": 1,
+    "maxUses": 5,
+    "expiresAtMs": 1760604800000,
+    "createdAtMs": 1760000000000,
+    "revokedAtMs": null
+  }
+}

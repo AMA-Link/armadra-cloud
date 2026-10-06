@@ -371,6 +371,10 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
   },
   "links.list": { input: { sourceId: SOURCE_ID }, output: { links: [link] } },
+  "links.update": {
+    input: { linkId: link.linkId, label: "For Bob" },
+    output: { ...link, label: "For Bob" },
+  },
   "links.revoke": { input: { linkId: link.linkId }, output: {} },
   "orgs.create": { input: { slug: "dev-org", name: "Dev Org" }, output: org },
   "orgs.get": { input: { orgId: ORG_ID }, output: org },

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
-import { base, SINCE_0_1 } from "../meta.ts";
+import { base, SINCE_0_1, SINCE_0_2 } from "../meta.ts";
 import {
   deviceInputSchema,
   linkKindSchema,
@@ -110,6 +110,13 @@ export const links = {
       }),
     )
     .output(z.object({ links: z.array(linkSummarySchema) })),
+  /** 改备注（`label`）；已撤销的链接也能改，别的字段不动。 */
+  update: base
+    .route({ method: "PATCH", path: "/v1/links/{linkId}" })
+    .meta({ scope: ["owner", "org:admin"], since: SINCE_0_2 })
+    .errors(errors.pick("not_found"))
+    .input(z.object({ linkId: z.string(), label: z.string().max(128) }))
+    .output(linkSummarySchema),
   revoke: base
     .route({ method: "DELETE", path: "/v1/links/{linkId}" })
     .meta({ scope: ["owner", "org:admin"], since: SINCE_0_1 })

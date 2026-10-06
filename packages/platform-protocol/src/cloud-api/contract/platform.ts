@@ -5,7 +5,7 @@ import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_1 } from "../meta.ts";
 import { empty, protocolVersionSchema } from "../schemas.ts";
 
-/** capabilities 只增不删。personal 报 `auth.password`、`auth.device-code`、`links.source-invite`、`me.stream`。 */
+/** capabilities 只增不删。personal 报 `auth.password`、`links.source-invite`、`links.update`、`me.stream`。 */
 export const PLATFORM_CAPABILITIES = [
   "auth.password",
   "auth.passkey",
@@ -15,6 +15,8 @@ export const PLATFORM_CAPABILITIES = [
   "orgs",
   "links.source-invite",
   "links.org-join",
+  /** `links.update`（改备注，0.2.0 起）。 */
+  "links.update",
   "sources.hosted",
   "billing",
   "me.stream",
