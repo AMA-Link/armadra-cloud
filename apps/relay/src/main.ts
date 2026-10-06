@@ -116,6 +116,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     wsPingMs: options.wsPingMs,
     wsIdleMs: options.wsIdleMs,
     corsOrigins: options.corsOrigins,
+    now: options.now,
   });
   const router = createRelayRouter({
     mode: options.mode,
