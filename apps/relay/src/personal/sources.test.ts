@@ -349,6 +349,50 @@ describe("分享链接与访客", () => {
   });
 });
 
+describe("改链接备注", () => {
+  it("只改 label（去首尾空白），秘密、次数与期限不动；撤销后仍可改；访客 forbidden，没有答 not_found", async () => {
+    const sources = createSources(h.context);
+    const links = createLinks(h.context, sources);
+    const created = links.create(owner, {
+      kind: "source_invite",
+      sourceId: SOURCE_ID,
+      invitationId: "inv_note",
+      label: "旧备注",
+      role: "viewer",
+      expiresAtMs: h.clock.now + 60 * 60_000,
+      maxUses: 3,
+    });
+    const before = links
+      .list(owner)
+      .find((row) => row.linkId === created.linkId);
+    const updated = links.update(owner, {
+      linkId: created.linkId,
+      label: "  新备注 ",
+    });
+    expect(updated).toEqual({ ...before, label: "新备注" });
+    expect(links.get(created.linkId).label).toBe("新备注");
+    const guest = await links.accept(
+      { linkId: created.linkId, secret: created.secret },
+      "203.0.113.20",
+    );
+    const caller = await createAuthenticator(h.context).authenticate(
+      `Bearer ${guest.guestSession.accessToken}`,
+    );
+    expect(
+      await codeOf(() =>
+        links.update(caller, { linkId: created.linkId, label: "x" }),
+      ),
+    ).toBe("forbidden");
+    expect(
+      await codeOf(() => links.update(owner, { linkId: "nope", label: "x" })),
+    ).toBe("not_found");
+    links.revoke(owner, created.linkId);
+    expect(
+      links.update(owner, { linkId: created.linkId, label: "" }),
+    ).toMatchObject({ label: "", revokedAtMs: h.clock.now });
+  });
+});
+
 describe("撤销源", () => {
   it("关隧道、断开客户端 WS、通知 me/stream；隧道令牌与中继令牌立即失效；之后 source_revoked", async () => {
     const sources = createSources(h.context);

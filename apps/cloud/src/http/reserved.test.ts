@@ -39,7 +39,7 @@ describe("预留路由表", () => {
     expect(RESERVED_ROUTES.map((route) => route.key)).toEqual(
       contract.filter((key) => !IMPLEMENTED.has(key)),
     );
-    expect(RESERVED_ROUTES).toHaveLength(51);
+    expect(RESERVED_ROUTES).toHaveLength(52);
     const routes = RESERVED_ROUTES.map(
       (route) => `${route.method} ${route.path}`,
     );

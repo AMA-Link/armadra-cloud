@@ -50,6 +50,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 export const PERSONAL_CAPABILITIES = [
   "auth.password",
   "links.source-invite",
+  "links.update",
   "me.stream",
 ] as const;
 
@@ -76,6 +77,7 @@ export const PERSONAL_PROCEDURES = [
   "links.get",
   "links.accept",
   "links.list",
+  "links.update",
   "links.revoke",
 ] as const;
 type PersonalProcedure = (typeof PERSONAL_PROCEDURES)[number];
@@ -315,6 +317,11 @@ export function createPersonalApi(
     "links.list": async ({ input, caller }) => ({
       links: links.list(await caller(), input.sourceId as string | undefined),
     }),
+    "links.update": async ({ input, caller }) =>
+      links.update(await caller(), {
+        linkId: input.linkId as string,
+        label: input.label as string,
+      }),
     "links.revoke": async ({ input, caller }) => {
       links.revoke(await caller(), input.linkId as string);
       return {};
