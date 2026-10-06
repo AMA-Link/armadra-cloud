@@ -67,9 +67,16 @@ pnpm repo:test         # tools/ 的自检
 pnpm test              # 全部单测
 pnpm test:integration  # 集成测试，需要 pnpm dev:up；见下
 pnpm images:build      # 本地构建两个镜像（不推送）
+pnpm e2e --mode personal  # 跨仓端到端：个人中转 + Armadra 服务器壳 + Node 客户端，需要 Docker，见下
 pnpm db:migrate        # 执行数据库迁移（读 .env.dev）
 pnpm protocol:pack     # 协议包打成 tgz（.data/pack/），核对内容，不发布
 ```
+
+## 跨仓端到端
+
+`pnpm e2e --mode personal`：用 `deploy/e2e/compose.yml` 起个人中转（本仓镜像）与 Armadra 服务器壳（不发布端口，只能经中继到达），脚本里的 Node 客户端走完登录、断言换会话、经中继的 HTTP / 事件流 / 终端 / 协作板、分享链接访客、撤销链接、源离线与撤销源，最后检查全部日志里没有秘密；跑完 `down -v`，结果写在 `.data/e2e/result.json`。
+
+服务器壳镜像取自 Armadra 主仓：`ARMADRA_REPO`（缺省 `../ai-coding-canvas`）与 `ARMADRA_REF`（缺省 `origin/main`，用 `git archive` 导出构建，不动主仓检出；`worktree` 则用目录现状）。`--skip-build` 复用已构建的 `armadra-relay:e2e` 与 `armadra-server:e2e`，`--server-image` 指定现成镜像，`--keep` 保留现场。夜间 `nightly.yml` 对 `deploy/compat.json` 的 min 镜像与 main 现构建各跑一次。
 
 ## 协议包
 

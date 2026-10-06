@@ -1,4 +1,4 @@
-# 夜间卫生：knip 报告与依赖审计。只读，不发布；跨仓端到端由 C0-3 接进来。
+# 夜间：卫生（knip 报告、依赖审计）与跨仓端到端（personal 模式）。只读，不发布。
 name: nightly
 
 on:
@@ -32,3 +32,50 @@ jobs:
         run: pnpm knip
       - name: 依赖审计（生产依赖，high 及以上失败）
         run: pnpm audit --prod --audit-level=high
+
+  e2e:
+    name: e2e-personal (${{ matrix.server }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # latest：Armadra 主仓 main 现构建；compat-min：deploy/compat.json 的 min 镜像。
+        server: [latest, compat-min]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 取 Armadra 主仓（构建 latest 用；需要在仓库密钥里配 ARMADRA_REPO_TOKEN，只读）
+        if: matrix.server == 'latest'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Owlbay/Armadra
+          ref: main
+          path: armadra
+          token: ${{ secrets.ARMADRA_REPO_TOKEN }}
+      - name: pnpm e2e --mode personal（服务器壳取 main 现构建）
+        if: matrix.server == 'latest'
+        env:
+          ARMADRA_REPO: ${{ github.workspace }}/armadra
+          ARMADRA_REF: worktree
+        run: pnpm e2e --mode personal --output e2e-out
+      - name: pnpm e2e --mode personal（服务器壳取 compat.min 镜像）
+        if: matrix.server == 'compat-min'
+        run: |
+          image="$(node -p "const c=require('./deploy/compat.json').armadraServer; c.image + ':' + c.min")"
+          docker pull "$image"
+          pnpm e2e --mode personal --server-image "$image" --output e2e-out
+      - name: 结果
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-personal-${{ matrix.server }}
+          path: e2e-out/result.json
+          if-no-files-found: ignore

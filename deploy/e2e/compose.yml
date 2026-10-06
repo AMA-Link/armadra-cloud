@@ -1,0 +1,47 @@
+# 跨仓端到端（scripts/e2e.mjs，personal 模式）：个人中转 + Armadra 服务器壳，同一个私网。
+# 由脚本带着项目名 armadra-e2e-<随机> 与环境变量起，跑完 `down -v`；不要手动 up。
+#
+#   E2E_RELAY_IMAGE / E2E_SERVER_IMAGE  脚本本地构建的两个镜像
+#   E2E_RELAY_PORT                      中继对外端口（容器内外同号，issuer 是 https://relay:<端口>）
+#   E2E_SECRETS_DIR                     脚本生成的临时目录，放中继账号口令文件
+#
+# 服务器壳不发布端口：客户端只能经中继到达它。中继只发布到 127.0.0.1，给宿主机上的
+# Node 客户端用（客户端把 relay 解析到 127.0.0.1）。
+name: armadra-e2e
+
+services:
+  relay:
+    image: ${E2E_RELAY_IMAGE:?}
+    command:
+      ["personal", "serve", "--host", "relay", "--port", "${E2E_RELAY_PORT:?}"]
+    environment:
+      RELAY_DATA_DIR: /data
+      RELAY_LOG_LEVEL: debug
+      RELAY_LISTEN: 0.0.0.0:${E2E_RELAY_PORT:?}
+      RELAY_PERSONAL_ACCOUNT: e2e
+      RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/relay_password
+    secrets:
+      - relay_password
+    ports:
+      - "127.0.0.1:${E2E_RELAY_PORT:?}:${E2E_RELAY_PORT:?}"
+    volumes:
+      - relay-data:/data
+
+  armadra-server:
+    image: ${E2E_SERVER_IMAGE:?}
+    environment:
+      ARMADRA_PUBLIC_ORIGIN: https://armadra-server:8443
+      ARMADRA_LOG: info
+    volumes:
+      - server-data:/data
+    depends_on:
+      relay:
+        condition: service_started
+
+secrets:
+  relay_password:
+    file: ${E2E_SECRETS_DIR:?}/relay_password
+
+volumes:
+  relay-data: {}
+  server-data: {}
