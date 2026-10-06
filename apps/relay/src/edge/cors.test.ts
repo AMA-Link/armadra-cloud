@@ -6,6 +6,7 @@ import {
   isPreflight,
   NATIVE_APP_ORIGINS,
   originAllowed,
+  errorCorsHeaders,
   PREFLIGHT_HEADERS,
   preflightHeaders,
 } from "./cors.ts";
@@ -57,5 +58,23 @@ describe("CORS 预检", () => {
       "x-armadra-csrf",
       "armadra-relay-token",
     ]);
+  });
+
+  it("错误答复：名单内回显 + Vary + 暴露 retry-after；名单外、无 Origin、* 都不加", () => {
+    expect(
+      errorCorsHeaders("https://app.example", ["https://app.example"]),
+    ).toEqual({
+      "access-control-allow-origin": "https://app.example",
+      "access-control-expose-headers": "retry-after",
+      vary: "origin",
+    });
+    expect(errorCorsHeaders("capacitor://localhost", [])).toMatchObject({
+      "access-control-allow-origin": "capacitor://localhost",
+    });
+    expect(
+      errorCorsHeaders("https://evil.example", ["https://app.example"]),
+    ).toBeUndefined();
+    expect(errorCorsHeaders(null, ["https://app.example"])).toBeUndefined();
+    expect(errorCorsHeaders("*", ["*"])).toBeUndefined();
   });
 });
