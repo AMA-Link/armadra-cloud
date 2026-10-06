@@ -133,6 +133,9 @@ describe("自签 CA", () => {
         req.end();
       });
       expect(body).toBe("ok");
+      // HTTPS 监听同样用长空闲 keep-alive（iOS WebKit 不重试被服务端关掉的连接）。
+      expect(server.server.keepAliveTimeout).toBe(75_000);
+      expect(server.server.headersTimeout).toBe(76_000);
       // 换证书（续期 / 热加载）：新连接拿到新证书，旧 CA 不再验得过。
       const other = selfSignedMaterial(join(root, "e2"), tlsNames("127.0.0.1"));
       server.setTls?.(other);
