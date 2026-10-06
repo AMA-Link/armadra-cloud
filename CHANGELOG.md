@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 新增 / Added
+
+- 媒体票（cloud-api §12）：客户端带中继令牌 `POST <源地址>/_relay/media-tickets` 换一张票，浏览器取 `<源地址>/_relay/m/<票>`，边缘按票把 GET / HEAD 转到源上签票时指定的路径；票绑源、单个路径与签票令牌，闲置 5 分钟或签出 30 分钟作废，路径与票不进日志。经中继的源上 `<video src>` 可以按 `Range` 直接播放。
+  Media tickets (cloud-api §12): a client holding a relay token calls `POST <source>/_relay/media-tickets` for a ticket, and the browser fetches `<source>/_relay/m/<ticket>`; the edge forwards GET / HEAD to the path fixed at issue time. Tickets are bound to the source, a single path and the issuing token, expire after 5 idle minutes or 30 minutes in total, and neither the path nor the ticket is logged. `<video src>` on relayed sources now plays directly with `Range`.
+
 ## 0.2.0（2026-10-07）
 
 ### 新增 / Added
