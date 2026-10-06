@@ -178,3 +178,21 @@ it("边缘限流额度：命令行 > 状态文件 > 缺省；登录与链接的�
   });
   expect(DEFAULT_LIMIT_RULES["link.accept.ip"].type).toBe("rate");
 });
+
+it("边缘缺省额度按真实使用：iOS 全部跨源多次预检、同出口 IP 多设备、终端节点多条 WS", () => {
+  const max = (kind: keyof typeof DEFAULT_LIMIT_RULES) =>
+    DEFAULT_LIMIT_RULES[kind].max;
+  expect(max("edge.preflight.ip")).toBe(1200);
+  expect(max("edge.connect.token")).toBe(1200);
+  expect(max("edge.connect.acct")).toBe(3600);
+  expect(DEFAULT_LIMIT_RULES["edge.concurrent.acct"]).toEqual({
+    type: "concurrent",
+    max: 256,
+  });
+  // 一个账号的全部令牌加起来至少容得下三台设备各跑满自己的令牌额度。
+  expect(max("edge.connect.acct")).toBeGreaterThanOrEqual(
+    3 * max("edge.connect.token"),
+  );
+  // 无令牌的请求仍然严格。
+  expect(max("edge.connect.ip")).toBe(60);
+});

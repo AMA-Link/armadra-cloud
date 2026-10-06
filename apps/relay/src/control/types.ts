@@ -93,17 +93,24 @@ export type LimitRule =
   | { type: "rate"; max: number; windowMs: number }
   | { type: "concurrent"; max: number };
 
-/** 缺省限流（中继设计 §3.1、§4、§6；平台设计 §17.3）。 */
+/**
+ * 缺省限流（中继设计 §3.1、§4、§6；平台设计 §17.3）。
+ *
+ * 额度按真实使用定：iOS App 的来源是 `capacitor://localhost`，对中继的请求全部跨源，
+ * WebKit 的预检缓存按「来源 + URL」记、最长 10 分钟，一块画布打开时每个不同的路径都要
+ * 先预检一次；同一出口 IP 后面常有几台设备共用。WebSocket 并发按终端节点规模给，与
+ * 隧道单源的流数上限（256）对齐。
+ */
 export const DEFAULT_LIMIT_RULES: Readonly<Record<LimitKind, LimitRule>> = {
   "tunnel.connect.src": { type: "rate", max: 10, windowMs: 60_000 },
   // 无令牌或令牌无效的请求（含 401 路径）：按来源 IP 严格限流，防撞库与扫描。
   "edge.connect.ip": { type: "rate", max: 60, windowMs: 60_000 },
   // CORS 预检：单独按 IP 计，突发不挤占已鉴权的请求。
-  "edge.preflight.ip": { type: "rate", max: 300, windowMs: 60_000 },
+  "edge.preflight.ip": { type: "rate", max: 1200, windowMs: 60_000 },
   // 带有效中继令牌的请求：按令牌（jti）、再按账号（sub）计数，不看 IP。
-  "edge.connect.token": { type: "rate", max: 600, windowMs: 60_000 },
-  "edge.connect.acct": { type: "rate", max: 1800, windowMs: 60_000 },
-  "edge.concurrent.acct": { type: "concurrent", max: 64 },
+  "edge.connect.token": { type: "rate", max: 1200, windowMs: 60_000 },
+  "edge.connect.acct": { type: "rate", max: 3600, windowMs: 60_000 },
+  "edge.concurrent.acct": { type: "concurrent", max: 256 },
   "login.ip": { type: "rate", max: 20, windowMs: 60_000 },
   "login.acct": { type: "rate", max: 20, windowMs: 60_000 },
   "link.accept.ip": { type: "rate", max: 20, windowMs: 60_000 },

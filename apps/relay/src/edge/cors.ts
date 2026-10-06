@@ -24,7 +24,11 @@ export const NATIVE_APP_ORIGINS: readonly string[] = [
 export const PREFLIGHT_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 /** core 隧道准入放行的头，加上中继令牌头。 */
 export const PREFLIGHT_HEADERS = `authorization, content-type, x-armadra-csrf, ${RELAY_TOKEN_HEADER}`;
-export const PREFLIGHT_MAX_AGE_S = "600";
+/**
+ * 预检缓存秒数：浏览器各自封顶（WebKit 10 分钟、Chromium 2 小时），给到 2 小时让
+ * 能缓存久的尽量少预检。
+ */
+export const PREFLIGHT_MAX_AGE_S = "7200";
 
 /** CORS 预检：`OPTIONS` + 单个 `Origin` + `Access-Control-Request-Method`。 */
 export function isPreflight(req: IncomingMessage): boolean {
