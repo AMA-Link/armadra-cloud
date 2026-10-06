@@ -582,6 +582,83 @@ async function main() {
   );
 
   await report.step(
+    "跨源客户端（Origin https://localhost）：预检由中继回答，经中继完成 cloud/login",
+    async () => {
+      const appOrigin = "https://localhost";
+      const fresh = ok(
+        await v1(
+          "POST",
+          `/v1/sources/${state.sourceId}/assertion`,
+          { device: { platform: "ios", name: "e2e-app" } },
+          state.relayAccess,
+        ),
+        "sources.assertion",
+      );
+      secret(fresh.assertion, "断言");
+      secret(fresh.relayToken, "中继令牌");
+      const url = `${fresh.relayBaseUrl}/api/identity/cloud/login`;
+      const preflight = (origin) =>
+        relay.http("OPTIONS", url, {
+          headers: {
+            origin,
+            "access-control-request-method": "POST",
+            "access-control-request-headers":
+              "armadra-relay-token, content-type",
+          },
+        });
+      const allowed = await preflight(appOrigin);
+      expectEqual(allowed.status, 204, "预检的状态码");
+      expectEqual(
+        allowed.headers["access-control-allow-origin"],
+        appOrigin,
+        "预检按 Origin 回显",
+      );
+      expectEqual(allowed.headers.vary, "origin", "预检带 Vary: Origin");
+      const allowHeaders = String(
+        allowed.headers["access-control-allow-headers"] ?? "",
+      ).split(", ");
+      expect(
+        ["armadra-relay-token", "content-type", "authorization"].every((name) =>
+          allowHeaders.includes(name),
+        ),
+        `预检放行的头：${allowHeaders.join("、")}`,
+      );
+      const refused = await preflight("https://evil.example");
+      expectEqual(refused.status, 403, "名单外来源的预检");
+      expect(
+        refused.headers["access-control-allow-origin"] === undefined,
+        "名单外来源的预检不带 CORS 头",
+      );
+      const login = await relay.http("POST", url, {
+        body: { assertion: fresh.assertion },
+        headers: { origin: appOrigin, "armadra-relay-token": fresh.relayToken },
+      });
+      const body = ok(login, "cloud/login（https://localhost）");
+      expectEqual(
+        login.headers["access-control-allow-origin"],
+        appOrigin,
+        "cloud/login 的 CORS 由 core 按来源回答",
+      );
+      expect(login.headers["set-cookie"] === undefined, "不发 Cookie");
+      const access = secret(body.session?.native?.accessToken, "core 访问令牌");
+      secret(body.session.native.refreshToken, "core 刷新令牌");
+      const workspaces = await relay.http(
+        "GET",
+        `${fresh.relayBaseUrl}/api/workspaces`,
+        {
+          headers: {
+            origin: appOrigin,
+            "armadra-relay-token": fresh.relayToken,
+            authorization: `Bearer ${access}`,
+          },
+        },
+      );
+      ok(workspaces, "GET /api/workspaces（https://localhost）");
+      return "预检 204、cloud/login 200";
+    },
+  );
+
+  await report.step(
     "经中继：终端收发 echo，shell 退出时事件流收到 terminal.exit",
     async () => {
       const events = await openWs(
