@@ -31,7 +31,7 @@ import {
 import { createState, readPasswordFile } from "./init.ts";
 import { LAST_SEEN_FLUSH_MS } from "./sessions.ts";
 import { Signer } from "./signer.ts";
-import { isRevokedJti } from "./sources.ts";
+import { isRevokedJti, trustedOriginsFor } from "./sources.ts";
 import { stateExists, StateStore, type State } from "./state.ts";
 import { createMeStream } from "./stream.ts";
 import {
@@ -176,6 +176,8 @@ export async function startPersonalRelay(
     listen: options.listen,
     control,
     addressing: pathAddressing(),
+    // 与登记时发给源的可信来源相同；所有源一样，答案不随某个源变。
+    corsOrigins: () => trustedOriginsFor(store.current),
     log,
     probes: {
       dataDir: () => access(options.dataDir, constants.R_OK | constants.W_OK),
