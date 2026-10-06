@@ -209,6 +209,150 @@ describe("HTTP 往返", () => {
   });
 });
 
+describe("CORS 预检", () => {
+  const TRUSTED = "https://app.example";
+  const preflight = (
+    url: string,
+    origin: string,
+    extra: Record<string, string> = {},
+  ) =>
+    fetch(url, {
+      method: "OPTIONS",
+      headers: {
+        origin,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "armadra-relay-token, content-type",
+        ...extra,
+      },
+    });
+
+  it("名单里的来源（原生 App、可信来源）不带令牌也答 204，按 Origin 回显；不进隧道", async () => {
+    const h = await harness({ corsOrigins: () => [TRUSTED] });
+    const core = await connected(h);
+    for (const origin of [
+      "https://localhost",
+      "capacitor://localhost",
+      TRUSTED,
+    ]) {
+      const answer = await preflight(
+        `${h.base}/api/identity/cloud/login`,
+        origin,
+      );
+      expect(answer.status).toBe(204);
+      expect(answer.headers.get("access-control-allow-origin")).toBe(origin);
+      expect(answer.headers.get("vary")).toBe("origin");
+      expect(answer.headers.get("access-control-allow-credentials")).toBeNull();
+      expect(answer.headers.get("access-control-allow-methods")).toBe(
+        "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+      );
+      expect(
+        answer.headers.get("access-control-allow-headers")?.split(", "),
+      ).toEqual(
+        expect.arrayContaining([
+          "armadra-relay-token",
+          "authorization",
+          "content-type",
+          "x-armadra-csrf",
+        ]),
+      );
+    }
+    expect(core.requests).toBe(0);
+    expect(h.relay.tunnels.counts().streams).toBe(0);
+    // 预检之后的真请求照常带令牌转进隧道。
+    const real = await fetch(`${h.base}/echo-request`, {
+      headers: { ...auth(), origin: "https://localhost" },
+    });
+    expect(real.status).toBe(200);
+    expect(core.requests).toBe(1);
+  });
+
+  it("答案与源在不在线、登没登记无关（借预检探不出源）", async () => {
+    const h = await harness({ corsOrigins: () => [TRUSTED] });
+    const offline = await preflight(`${h.base}/api/x`, TRUSTED);
+    const unknown = await preflight(
+      `${h.relay.url}/s/${"f".repeat(32)}/api/x`,
+      TRUSTED,
+    );
+    for (const answer of [offline, unknown]) {
+      expect(answer.status).toBe(204);
+      expect(answer.headers.get("access-control-allow-origin")).toBe(TRUSTED);
+    }
+    const badOffline = await preflight(
+      `${h.base}/api/x`,
+      "https://evil.example",
+    );
+    expect(badOffline.status).toBe(403);
+  });
+
+  it("名单外的来源答 403 forbidden，不带 CORS 头；没配名单时只认原生 App", async () => {
+    const h = await harness({ corsOrigins: () => [TRUSTED] });
+    const core = await connected(h);
+    for (const origin of [
+      "https://evil.example",
+      "https://app.example:8443",
+      "null",
+    ]) {
+      const answer = await preflight(`${h.base}/api/x`, origin);
+      expect(answer.status).toBe(403);
+      expect(answer.headers.get("access-control-allow-origin")).toBeNull();
+      expect(((await answer.json()) as { code: string }).code).toBe(
+        "forbidden",
+      );
+    }
+    expect(core.requests).toBe(0);
+    const bare = await harness();
+    expect((await preflight(`${bare.base}/api/x`, TRUSTED)).status).toBe(403);
+    expect(
+      (await preflight(`${bare.base}/api/x`, "https://localhost")).status,
+    ).toBe(204);
+  });
+
+  it("不是预检的请求仍要令牌：带来源的 POST、缺 Request-Method 的 OPTIONS 都 401", async () => {
+    const h = await harness({ corsOrigins: () => [TRUSTED] });
+    const core = await connected(h);
+    const post = await fetch(`${h.base}/echo`, {
+      method: "POST",
+      headers: { origin: TRUSTED },
+      body: MARKER,
+    });
+    expect(post.status).toBe(401);
+    expect(((await post.json()) as { code: string }).code).toBe(
+      "relay_token_invalid",
+    );
+    const options = await fetch(`${h.base}/echo-request`, {
+      method: "OPTIONS",
+      headers: { origin: TRUSTED },
+    });
+    expect(options.status).toBe(401);
+    const get = await fetch(`${h.base}/echo-request`, {
+      headers: { origin: "https://localhost" },
+    });
+    expect(get.status).toBe(401);
+    expect(core.requests).toBe(0);
+  });
+
+  it("预检也按 IP 限流：超了答 429 rate_limited 带 Retry-After", async () => {
+    const h = await harness(
+      { corsOrigins: () => [TRUSTED] },
+      {
+        limits: {
+          "edge.connect.ip": { type: "rate", max: 2, windowMs: 60_000 },
+        },
+      },
+    );
+    expect((await preflight(`${h.base}/api/x`, TRUSTED)).status).toBe(204);
+    expect((await preflight(`${h.base}/api/x`, TRUSTED)).status).toBe(204);
+    const limited = await preflight(`${h.base}/api/x`, TRUSTED);
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+    expect(limited.headers.get("access-control-allow-origin")).toBeNull();
+    // 与真请求共用同一个桶。
+    expect(
+      (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+    ).toBe(429);
+  });
+});
+
 describe("WebSocket", () => {
   function open(h: Harness, protocols: string[]) {
     const ws = new WebSocket(

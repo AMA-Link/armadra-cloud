@@ -79,12 +79,15 @@ export class FakeCore {
   /** 所有流发出的 DATA 字节（含已关闭的流）。 */
   bytesSent = 0;
   goaways: string[] = [];
+  /** 收到的 HTTP 请求数（预检不该进隧道）。 */
+  requests = 0;
   closeCode: number | undefined;
   readonly options: FakeCoreOptions;
 
   constructor(options: FakeCoreOptions) {
     this.options = options;
     this.http = createServer((req, res) => {
+      this.requests += 1;
       const url = new URL(req.url ?? "/", "http://core");
       if (url.pathname === "/echo-request") {
         const body = JSON.stringify({

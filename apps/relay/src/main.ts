@@ -59,6 +59,8 @@ export interface RelayOptions {
     socket: Duplex,
     head: Buffer,
   ) => boolean;
+  /** 源地址上 CORS 预检放行的来源（见 `edge/cors.ts`）；原生 App 的来源总是放行。 */
+  corsOrigins?: (sourceId: string) => readonly string[];
   /** 给了就监听 HTTPS（personal 的自签 CA / ACME / 文件证书）。 */
   tls?: TlsPair;
   now?: () => number;
@@ -113,6 +115,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     metrics,
     wsPingMs: options.wsPingMs,
     wsIdleMs: options.wsIdleMs,
+    corsOrigins: options.corsOrigins,
   });
   const router = createRelayRouter({
     mode: options.mode,
