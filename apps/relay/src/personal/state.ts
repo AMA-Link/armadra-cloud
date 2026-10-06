@@ -126,6 +126,8 @@ const linkSchema = z.object({
   revokedAtMs: nullableMs,
 });
 
+const rateLimitValue = z.number().int().min(1).max(1_000_000);
+
 export const stateSchema = z.object({
   version: z.literal(STATE_VERSION),
   /** 每次写入加一；用来判断别的进程是否改过文件。 */
@@ -140,6 +142,15 @@ export const stateSchema = z.object({
   settings: z.object({
     allowGuests: z.boolean(),
     trustedOrigins: z.array(z.string()),
+    /** 边缘限流额度（次 / 分钟），都可省略；命令行与环境变量优先于它。 */
+    rateLimits: z
+      .object({
+        anonymous: rateLimitValue.optional(),
+        preflight: rateLimitValue.optional(),
+        token: rateLimitValue.optional(),
+        account: rateLimitValue.optional(),
+      })
+      .optional(),
   }),
 });
 

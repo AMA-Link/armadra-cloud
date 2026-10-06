@@ -211,6 +211,42 @@ export interface PersonalServeOptions extends Common {
   metricsListen?: ListenAddress;
   /** 指标要求的 Bearer 令牌（`RELAY_METRICS_TOKEN`，只走环境变量）。 */
   metricsToken?: string;
+  /** 边缘限流额度（次 / 分钟）；没给的项取状态文件 `settings.rateLimits`，再取缺省。 */
+  rateLimits?: RateLimitOptions;
+}
+
+export interface RateLimitOptions {
+  /** 无令牌或令牌无效的请求，按 IP。 */
+  anonymous?: number;
+  /** CORS 预检，按 IP，单独的桶。 */
+  preflight?: number;
+  /** 带有效令牌的请求，按令牌。 */
+  token?: number;
+  /** 带有效令牌的请求，按账号（该账号全部令牌之和）。 */
+  account?: number;
+}
+
+const RATE_LIMIT_FLAGS = [
+  ["anonymous", "limit-anonymous", "RELAY_LIMIT_ANONYMOUS"],
+  ["preflight", "limit-preflight", "RELAY_LIMIT_PREFLIGHT"],
+  ["token", "limit-token", "RELAY_LIMIT_TOKEN"],
+  ["account", "limit-account", "RELAY_LIMIT_ACCOUNT"],
+] as const;
+
+function rateLimitsOf(
+  values: Map<string, string>,
+  env: Env,
+): RateLimitOptions | undefined {
+  const limits: RateLimitOptions = {};
+  for (const [key, flag, variable] of RATE_LIMIT_FLAGS) {
+    const text = values.get(flag) ?? env[variable];
+    if (text === undefined) continue;
+    const value = Number(text);
+    if (!Number.isInteger(value) || value < 1 || value > 1_000_000)
+      throw new UsageError(`--${flag} 要是 1 到 1000000 的整数：${text}`);
+    limits[key] = value;
+  }
+  return Object.keys(limits).length > 0 ? limits : undefined;
 }
 
 const SERVE_FLAGS = new Set([
@@ -231,6 +267,10 @@ const SERVE_FLAGS = new Set([
   "acme-directory",
   "acme-ca-bundle",
   "acme-http-listen",
+  "limit-anonymous",
+  "limit-preflight",
+  "limit-token",
+  "limit-account",
 ]);
 
 export function parsePersonalServe(
@@ -287,6 +327,7 @@ export function parsePersonalServe(
   const account = accountOf(values, env);
   const passwordFile = passwordFileOf(values, env, cwd);
   const webRoot = values.get("web-root") ?? env.RELAY_WEB_ROOT;
+  const rateLimits = rateLimitsOf(values, env);
   return {
     dataDir,
     host,
@@ -308,6 +349,7 @@ export function parsePersonalServe(
     ...(env.RELAY_METRICS_TOKEN
       ? { metricsToken: env.RELAY_METRICS_TOKEN }
       : {}),
+    ...(rateLimits ? { rateLimits } : {}),
   };
 }
 

@@ -12,6 +12,7 @@ import { access, mkdir } from "node:fs/promises";
 import { createLogger, type Logger } from "@armadra/cloud-shared/log";
 
 import { createMemoryControlPlane } from "../control/memory.ts";
+import type { LimitKind, LimitRule } from "../control/types.ts";
 import { pathAddressing } from "../edge/addressing.ts";
 import { errorName } from "../log.ts";
 import { startRelay, type RunningRelay } from "../main.ts";
@@ -40,7 +41,11 @@ import {
   tlsNames,
   type TlsManager,
 } from "./tls.ts";
-import { defaultIssuer, type PersonalServeOptions } from "./args.ts";
+import {
+  defaultIssuer,
+  type PersonalServeOptions,
+  type RateLimitOptions,
+} from "./args.ts";
 import { createWebPages, usableWebRoot } from "./web.ts";
 
 export interface RunningPersonalRelay {
@@ -87,6 +92,26 @@ async function openOrInit(
     return store;
   }
   return StateStore.open(options.dataDir);
+}
+
+/** 边缘限流：命令行 / 环境变量 > 状态文件 > 缺省；登录等防暴力破解的规则不在其中。 */
+export function edgeLimitRules(
+  ...sources: (RateLimitOptions | undefined)[]
+): Partial<Record<LimitKind, LimitRule>> {
+  const pick = (key: keyof RateLimitOptions) =>
+    sources.find((source) => source?.[key] !== undefined)?.[key];
+  const rules: Partial<Record<LimitKind, LimitRule>> = {};
+  for (const [key, kind] of [
+    ["anonymous", "edge.connect.ip"],
+    ["preflight", "edge.preflight.ip"],
+    ["token", "edge.connect.token"],
+    ["account", "edge.connect.acct"],
+  ] as const) {
+    const max = pick(key);
+    if (max !== undefined)
+      rules[kind] = { type: "rate", max, windowMs: 60_000 };
+  }
+  return rules;
 }
 
 export async function startPersonalRelay(
@@ -138,6 +163,10 @@ export async function startPersonalRelay(
     issuer,
     jwks: () => signer.jwks(),
     revoked: (jti) => isRevokedJti(store.current, jti, now()),
+    limits: edgeLimitRules(
+      options.rateLimits,
+      store.current.settings.rateLimits,
+    ),
     now,
   });
   const bus = createEventBus();

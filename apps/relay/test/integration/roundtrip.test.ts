@@ -331,15 +331,16 @@ describe("CORS 预检", () => {
     expect(core.requests).toBe(0);
   });
 
-  it("预检也按 IP 限流：超了答 429 rate_limited 带 Retry-After", async () => {
+  it("预检按 IP 限流（单独的桶）：超了答 429 rate_limited 带 Retry-After", async () => {
     const h = await harness(
       { corsOrigins: () => [TRUSTED] },
       {
         limits: {
-          "edge.connect.ip": { type: "rate", max: 2, windowMs: 60_000 },
+          "edge.preflight.ip": { type: "rate", max: 2, windowMs: 60_000 },
         },
       },
     );
+    await connected(h);
     expect((await preflight(`${h.base}/api/x`, TRUSTED)).status).toBe(204);
     expect((await preflight(`${h.base}/api/x`, TRUSTED)).status).toBe(204);
     const limited = await preflight(`${h.base}/api/x`, TRUSTED);
@@ -350,10 +351,12 @@ describe("CORS 预检", () => {
     expect(limited.headers.get("access-control-expose-headers")).toBe(
       "retry-after",
     );
-    // 与真请求共用同一个桶。
-    expect(
-      (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
-    ).toBe(429);
+    // 预检突发不影响已鉴权的请求，也不影响无令牌请求的 IP 桶。
+    for (let index = 0; index < 5; index += 1)
+      expect(
+        (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+      ).toBe(200);
+    expect((await fetch(`${h.base}/echo-request`)).status).toBe(401);
   });
 });
 
@@ -446,22 +449,23 @@ describe("错误答复的 CORS", () => {
       { corsOrigins: () => [TRUSTED] },
       {
         limits: {
-          "edge.connect.ip": { type: "rate", max: 1, windowMs: 60_000 },
+          "edge.connect.token": { type: "rate", max: 1, windowMs: 60_000 },
         },
       },
     );
     await connected(h);
+    const fixed = auth();
     expect(
-      (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+      (await fetch(`${h.base}/echo-request`, { headers: fixed })).status,
     ).toBe(200);
     const inside = await seen(`${h.base}/echo-request`, {
-      headers: { origin: TRUSTED, ...auth() },
+      headers: { origin: TRUSTED, ...fixed },
     });
     expect([inside.status, inside.code]).toEqual([429, "rate_limited"]);
     expect(inside.headers.get("retry-after")).toBe("60");
     echoed(inside, TRUSTED);
     const outside = await seen(`${h.base}/echo-request`, {
-      headers: { origin: OUTSIDER, ...auth() },
+      headers: { origin: OUTSIDER, ...fixed },
     });
     expect(outside.status).toBe(429);
     expect(outside.headers.get("retry-after")).toBe("60");
@@ -681,25 +685,105 @@ describe("限额", () => {
     }, 50);
   });
 
-  it("按 IP 限流 → 429 rate_limited 带 Retry-After", async () => {
+  it("有效令牌按令牌限流 → 429 rate_limited 带 Retry-After；别的令牌各自独立", async () => {
     const h = await harness(
       {},
       {
         limits: {
-          "edge.connect.ip": { type: "rate", max: 1, windowMs: 60_000 },
+          "edge.connect.token": { type: "rate", max: 1, windowMs: 60_000 },
         },
       },
     );
     await connected(h);
+    const fixed = auth();
     expect(
-      (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+      (await fetch(`${h.base}/echo-request`, { headers: fixed })).status,
     ).toBe(200);
-    const limited = await fetch(`${h.base}/echo-request`, { headers: auth() });
+    const limited = await fetch(`${h.base}/echo-request`, { headers: fixed });
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBe("60");
     expect(((await limited.json()) as { code: string }).code).toBe(
       "rate_limited",
     );
+    // 同一个 IP、另一个令牌：不受影响。
+    expect(
+      (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+    ).toBe(200);
+  });
+
+  it("同一 IP 下多个令牌各自计数，不被 IP 桶挡住", async () => {
+    const h = await harness(
+      {},
+      {
+        limits: {
+          "edge.connect.ip": { type: "rate", max: 1, windowMs: 60_000 },
+          "edge.connect.token": { type: "rate", max: 3, windowMs: 60_000 },
+        },
+      },
+    );
+    await connected(h);
+    const tokens = [auth(), auth()];
+    for (const headers of tokens)
+      for (let index = 0; index < 3; index += 1)
+        expect(
+          (await fetch(`${h.base}/echo-request`, { headers })).status,
+        ).toBe(200);
+    expect(
+      (await fetch(`${h.base}/echo-request`, { headers: tokens[0] })).status,
+    ).toBe(429);
+  });
+
+  it("按账号限流：同一账号的多个令牌共用", async () => {
+    const h = await harness(
+      {},
+      {
+        limits: {
+          "edge.connect.acct": { type: "rate", max: 2, windowMs: 60_000 },
+        },
+      },
+    );
+    await connected(h);
+    for (let index = 0; index < 2; index += 1)
+      expect(
+        (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+      ).toBe(200);
+    expect(
+      (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+    ).toBe(429);
+    expect(
+      (
+        await fetch(`${h.base}/echo-request`, {
+          headers: auth(relayToken({ sub: "acct_other" })),
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  it("无令牌与无效令牌仍按 IP 严格限流，不挤占有效令牌", async () => {
+    const h = await harness(
+      {},
+      {
+        limits: {
+          "edge.connect.ip": { type: "rate", max: 2, windowMs: 60_000 },
+        },
+      },
+    );
+    await connected(h);
+    expect((await fetch(`${h.base}/echo-request`)).status).toBe(401);
+    expect(
+      (
+        await fetch(`${h.base}/echo-request`, {
+          headers: { "armadra-relay-token": "garbage" },
+        })
+      ).status,
+    ).toBe(401);
+    const limited = await fetch(`${h.base}/echo-request`);
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+    // 带有效令牌的请求照常通过。
+    expect(
+      (await fetch(`${h.base}/echo-request`, { headers: auth() })).status,
+    ).toBe(200);
   });
 });
 

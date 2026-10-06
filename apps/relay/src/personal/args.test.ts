@@ -9,6 +9,26 @@ import {
   UsageError,
 } from "./args.ts";
 
+describe("parsePersonalServe 限流额度", () => {
+  const base = ["--data-dir", "d", "--host", "127.0.0.1"];
+  it("缺省不给；命令行优先于环境变量", () => {
+    expect(parsePersonalServe(base, {}, "/w").rateLimits).toBeUndefined();
+    expect(
+      parsePersonalServe(
+        [...base, "--limit-token", "900"],
+        { RELAY_LIMIT_TOKEN: "100", RELAY_LIMIT_PREFLIGHT: "50" },
+        "/w",
+      ).rateLimits,
+    ).toEqual({ token: 900, preflight: 50 });
+  });
+  it("不是正整数就拒绝", () => {
+    for (const bad of ["0", "-1", "1.5", "abc"])
+      expect(() =>
+        parsePersonalServe([...base, "--limit-anonymous", bad], {}, "/w"),
+      ).toThrow(UsageError);
+  });
+});
+
 describe("parsePersonalServe", () => {
   it("缺省：端口 8443、--tls self-signed；回环 host 只绑回环", () => {
     const options = parsePersonalServe(

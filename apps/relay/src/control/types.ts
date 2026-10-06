@@ -43,6 +43,8 @@ export type NodeCommand =
 export type LimitKind =
   | "tunnel.connect.src"
   | "edge.connect.ip"
+  | "edge.preflight.ip"
+  | "edge.connect.token"
   | "edge.connect.acct"
   | "edge.concurrent.acct"
   | "login.ip"
@@ -94,8 +96,13 @@ export type LimitRule =
 /** 缺省限流（中继设计 §3.1、§4、§6；平台设计 §17.3）。 */
 export const DEFAULT_LIMIT_RULES: Readonly<Record<LimitKind, LimitRule>> = {
   "tunnel.connect.src": { type: "rate", max: 10, windowMs: 60_000 },
-  "edge.connect.ip": { type: "rate", max: 200, windowMs: 60_000 },
-  "edge.connect.acct": { type: "rate", max: 120, windowMs: 60_000 },
+  // 无令牌或令牌无效的请求（含 401 路径）：按来源 IP 严格限流，防撞库与扫描。
+  "edge.connect.ip": { type: "rate", max: 60, windowMs: 60_000 },
+  // CORS 预检：单独按 IP 计，突发不挤占已鉴权的请求。
+  "edge.preflight.ip": { type: "rate", max: 300, windowMs: 60_000 },
+  // 带有效中继令牌的请求：按令牌（jti）、再按账号（sub）计数，不看 IP。
+  "edge.connect.token": { type: "rate", max: 600, windowMs: 60_000 },
+  "edge.connect.acct": { type: "rate", max: 1800, windowMs: 60_000 },
   "edge.concurrent.acct": { type: "concurrent", max: 64 },
   "login.ip": { type: "rate", max: 20, windowMs: 60_000 },
   "login.acct": { type: "rate", max: 20, windowMs: 60_000 },
