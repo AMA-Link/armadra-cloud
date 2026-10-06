@@ -985,3 +985,85 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 }
+
+describe("媒体票（cloud-api §12）", () => {
+  const issue = (h: Harness, path: string, token = relayToken()) =>
+    fetch(`${h.base}/_relay/media-tickets`, {
+      method: "POST",
+      headers: { ...auth(token), "content-type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+
+  it("带令牌签票，不带头按票取到源上那一条路径；Range 原样转过去", async () => {
+    const h = await harness();
+    await connected(h);
+    const issued = await issue(h, "/echo-request?media=1");
+    expect(issued.status).toBe(200);
+    const body = (await issued.json()) as {
+      ticket: string;
+      path: string;
+      expiresAt: string;
+    };
+    expect(body.path).toBe(`/_relay/m/${body.ticket}`);
+    expect(body.path).not.toContain("echo");
+    expect(Date.parse(body.expiresAt)).toBeGreaterThan(Date.now());
+
+    for (let round = 0; round < 2; round += 1) {
+      const response = await fetch(`${h.base}${body.path}`, {
+        headers: { range: "bytes=0-9" },
+      });
+      expect(response.status).toBe(200);
+      const echoed = (await response.json()) as {
+        method: string;
+        url: string;
+        headers: Record<string, string>;
+      };
+      expect(echoed.url).toBe("/echo-request?media=1");
+      expect(echoed.headers.range).toBe("bytes=0-9");
+      expect(echoed.headers["armadra-relay-token"]).toBeUndefined();
+    }
+    const head = await fetch(`${h.base}${body.path}`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+  });
+
+  it("没令牌不签；坏路径 400；不认识的票 404；只认 GET 与 HEAD", async () => {
+    const h = await harness();
+    await connected(h);
+    const anonymous = await fetch(`${h.base}/_relay/media-tickets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/echo-request" }),
+    });
+    expect(anonymous.status).toBe(401);
+    expect((await issue(h, "/_relay/m/x")).status).toBe(400);
+    expect((await issue(h, "relative")).status).toBe(400);
+    const unknown = await fetch(`${h.base}/_relay/m/${"A".repeat(43)}`);
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as { code: string }).code).toBe("not_found");
+    const { path } = (await (await issue(h, "/echo")).json()) as {
+      path: string;
+    };
+    const post = await fetch(`${h.base}${path}`, {
+      method: "POST",
+      body: MARKER,
+    });
+    expect(post.status).toBe(400);
+  });
+
+  it("票绑源：换个源地址兑不出来；签票令牌被撤销后作废", async () => {
+    const h = await harness();
+    await connected(h);
+    const jti = "media-revoke-jti";
+    const token = relayToken({ jti });
+    const { path } = (await (
+      await issue(h, "/echo-request", token)
+    ).json()) as {
+      path: string;
+    };
+    const other = `${h.relay.url}/s/${"f".repeat(32)}${path}`;
+    expect((await fetch(other)).status).toBe(404);
+    expect((await fetch(`${h.base}${path}`)).status).toBe(200);
+    await h.control.tokens.revoke(jti, Date.now() + 60_000);
+    expect((await fetch(`${h.base}${path}`)).status).toBe(404);
+  });
+});

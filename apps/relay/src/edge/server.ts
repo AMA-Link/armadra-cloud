@@ -54,6 +54,14 @@ import {
   serializeRequestHead,
   type HeaderPair,
 } from "./forward.ts";
+import {
+  isIssuePath,
+  MEDIA_ISSUE_BODY_MAX,
+  MEDIA_REDEEM_PREFIX,
+  MediaTickets,
+  mediaTargetPath,
+  redeemTicketOf,
+} from "./media-tickets.ts";
 import { WsDownstream } from "./ws-downstream.ts";
 
 export interface EdgeOptions {
@@ -72,6 +80,30 @@ export interface EdgeOptions {
   /** 对客户端 WS 的 ping 间隔与无响应断开时长（缺省 30 秒 / 60 秒）。 */
   wsPingMs?: number;
   wsIdleMs?: number;
+  /** 媒体票的时钟（测试用）。 */
+  now?: () => number;
+}
+
+/** 读一个小 JSON 体；超长、不是 JSON 答 `undefined`。 */
+async function readSmallJson(
+  req: IncomingMessage,
+  limit: number,
+): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > limit) {
+      req.resume();
+      return undefined;
+    }
+    chunks.push(chunk as Buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 const WS_CLOSE: Partial<Record<ErrorCode, number>> = {
@@ -89,6 +121,7 @@ type Admission =
       target: AddressTarget;
       tunnel: Tunnel;
       subject: string;
+      jti: string;
       remoteIp: string;
     }
   | {
@@ -130,9 +163,11 @@ export class Edge {
 
   private readonly options: EdgeOptions;
   private readonly sockets = new Map<Duplex, EdgeConnection>();
+  private readonly media: MediaTickets;
 
   constructor(options: EdgeOptions) {
     this.options = options;
+    this.media = new MediaTickets(options.now);
   }
 
   async handleRequest(
@@ -140,6 +175,17 @@ export class Edge {
     res: ServerResponse,
   ): Promise<void> {
     if (isPreflight(req)) return this.answerPreflight(req, res);
+    const addressed = this.options.addressing.resolve({
+      url: req.url ?? "/",
+      host: req.headers.host,
+    });
+    if (addressed?.path.startsWith(MEDIA_REDEEM_PREFIX))
+      return this.redeemMedia(
+        req,
+        res,
+        addressed,
+        redeemTicketOf(addressed.path),
+      );
     const admission = await this.admit(req, relayTokenFromHeaders(req.headers));
     if (!admission.ok) {
       this.options.metrics.edgeConnection(admission.code);
@@ -149,7 +195,25 @@ export class Edge {
       });
       return;
     }
-    const { target, tunnel, remoteIp } = admission;
+    if (isIssuePath(admission.target.path))
+      return this.issueMedia(req, res, admission);
+    this.forward(
+      req,
+      res,
+      admission.target,
+      admission.tunnel,
+      admission.remoteIp,
+    );
+  }
+
+  /** 把一个 HTTP 请求开流转给源，源的响应原样写回（`path` 是转给源的路径）。 */
+  private forward(
+    req: IncomingMessage,
+    res: ServerResponse,
+    target: AddressTarget,
+    tunnel: Tunnel,
+    remoteIp: string,
+  ): void {
     const headers = forwardRequestHeaders(req.rawHeaders, { remoteIp });
     const stream = this.open(tunnel, "http", req, target, headers, remoteIp);
     if (!stream.ok) {
@@ -263,6 +327,111 @@ export class Edge {
       this.sockets.delete(socket);
       stream.destroy();
     });
+  }
+
+  /**
+   * 签媒体票：令牌已验过（{@link admit}）。体 `{ path }`，答
+   * `{ ticket, path: "/_relay/m/<票>", expiresAt }`——`path` 相对源地址。
+   */
+  private async issueMedia(
+    req: IncomingMessage,
+    res: ServerResponse,
+    admission: Extract<Admission, { ok: true }>,
+  ): Promise<void> {
+    const cors = this.errorCors(req, admission.target.sourceId);
+    if (req.method !== "POST") {
+      req.resume();
+      sendRelayError(res, "bad_request", { cors });
+      return;
+    }
+    const body = await readSmallJson(req, MEDIA_ISSUE_BODY_MAX);
+    const path = mediaTargetPath(body);
+    if (path === null) {
+      sendRelayError(res, "bad_request", { cors });
+      return;
+    }
+    const issued = this.media.issue({
+      sourceId: admission.target.sourceId,
+      path,
+      subject: admission.subject,
+      jti: admission.jti,
+    });
+    this.options.metrics.edgeConnection("ok");
+    for (const [name, value] of Object.entries(cors ?? {}))
+      res.setHeader(name, value);
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    res.end(
+      JSON.stringify({
+        ticket: issued.ticket,
+        path: `${MEDIA_REDEEM_PREFIX}${issued.ticket}`,
+        expiresAt: new Date(issued.expiresAtMs).toISOString(),
+      }),
+    );
+  }
+
+  /**
+   * 兑媒体票：不要令牌，票就是凭据。票不认识、过期、换了源或签票令牌被撤销按 IP
+   * 严格限流后答 404；认得的按签票令牌与账号计数（与带头的请求同一组桶），再按票里
+   * 的路径转给源。只认 GET / HEAD。
+   */
+  private async redeemMedia(
+    req: IncomingMessage,
+    res: ServerResponse,
+    target: AddressTarget,
+    ticket: string | null,
+  ): Promise<void> {
+    const { control, lookup } = this.options;
+    const cors = this.errorCors(req, target.sourceId);
+    const remoteIp = remoteIpOf(req);
+    const refuse = async (code: ErrorCode): Promise<void> => {
+      req.resume();
+      this.options.metrics.edgeConnection(code);
+      sendRelayError(res, code, { cors });
+    };
+    if (req.method !== "GET" && req.method !== "HEAD")
+      return refuse("bad_request");
+    const grant = ticket === null ? undefined : this.media.use(ticket);
+    const revoked =
+      grant !== undefined && (await control.tokens.isRevoked(grant.jti));
+    if (revoked && ticket !== null) this.media.forget(ticket);
+    if (grant === undefined || revoked || grant.sourceId !== target.sourceId) {
+      const byIp = await control.limits.hit("edge.connect.ip", remoteIp);
+      if (!byIp.allowed) {
+        this.options.metrics.edgeConnection("rate_limited");
+        sendRelayError(res, "rate_limited", {
+          retryAfterMs: byIp.retryAfterMs,
+          cors,
+        });
+        return;
+      }
+      return refuse("not_found");
+    }
+    for (const [kind, key] of [
+      ["edge.connect.token", grant.jti],
+      ["edge.connect.acct", grant.subject],
+    ] as const) {
+      const hit = await control.limits.hit(kind, key);
+      if (!hit.allowed) {
+        this.options.metrics.edgeConnection("rate_limited");
+        sendRelayError(res, "rate_limited", {
+          retryAfterMs: hit.retryAfterMs,
+          cors,
+        });
+        return;
+      }
+    }
+    const tunnel = await lookup(grant.sourceId);
+    if (!tunnel) return refuse("source_offline");
+    this.forward(
+      req,
+      res,
+      { sourceId: grant.sourceId, path: grant.path },
+      tunnel,
+      remoteIp,
+    );
   }
 
   /** 预检：解析源 → 按 IP 限流（预检专用桶）→ 来源名单；不验令牌、不碰隧道，请求体丢掉。 */
@@ -382,7 +551,14 @@ export class Edge {
     }
     const tunnel = await lookup(target.sourceId);
     if (!tunnel) return { ok: false, code: "source_offline", sourceId };
-    return { ok: true, target, tunnel, subject, remoteIp };
+    return {
+      ok: true,
+      target,
+      tunnel,
+      subject,
+      jti: verified.claims.jti,
+      remoteIp,
+    };
   }
 
   private open(
