@@ -48,6 +48,8 @@ describe("CORS 预检", () => {
     const headers = preflightHeaders("https://localhost");
     expect(headers["access-control-allow-origin"]).toBe("https://localhost");
     expect(headers.vary).toBe("origin");
+    // 预检能缓存多久就缓存多久（浏览器各自封顶），iOS 全部跨源时少打几次预检。
+    expect(headers["access-control-max-age"]).toBe("7200");
     expect(headers["access-control-allow-credentials"]).toBeUndefined();
     expect(headers["access-control-allow-methods"]).toBe(
       "GET,POST,PUT,PATCH,DELETE,OPTIONS",

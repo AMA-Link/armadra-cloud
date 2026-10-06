@@ -7,6 +7,16 @@
 - 媒体票（cloud-api §12）：客户端带中继令牌 `POST <源地址>/_relay/media-tickets` 换一张票，浏览器取 `<源地址>/_relay/m/<票>`，边缘按票把 GET / HEAD 转到源上签票时指定的路径；票绑源、单个路径与签票令牌，闲置 5 分钟或签出 30 分钟作废，路径与票不进日志。经中继的源上 `<video src>` 可以按 `Range` 直接播放。
   Media tickets (cloud-api §12): a client holding a relay token calls `POST <source>/_relay/media-tickets` for a ticket, and the browser fetches `<source>/_relay/m/<ticket>`; the edge forwards GET / HEAD to the path fixed at issue time. Tickets are bound to the source, a single path and the issuing token, expire after 5 idle minutes or 30 minutes in total, and neither the path nor the ticket is logged. `<video src>` on relayed sources now plays directly with `Range`.
 
+### 修复 / Fixed
+
+- 中继与 cloud 的 HTTP 监听空闲 keep-alive 由 Node 缺省 5 秒改为 75 秒（请求头超时 76 秒、整条请求 5 分钟）：iPad / iOS 的 WebKit 复用刚被服务端关掉的连接发 POST 时不重试，偶发「这一轮没有完成」。
+  The relay and cloud HTTP listeners keep idle keep-alive connections for 75 s instead of Node's 5 s default (headers timeout 76 s, request timeout 5 min): WebKit on iPad / iOS does not retry a POST on a connection the server has just closed, which occasionally ended an agent turn.
+
+### 变更 / Changed
+
+- 边缘限流缺省额度放宽：CORS 预检按 IP 每分钟 1200（原 300），有效令牌 1200（原 600），同一账号 3600（原 1800），同一账号并发 WebSocket 256（原 64）；中继预检与控制面 `Access-Control-Max-Age` 由 600 改为 7200。
+  Relaxed default edge limits: CORS preflights 1200 per IP per minute (was 300), 1200 per relay token (was 600), 3600 per account (was 1800), 256 concurrent WebSockets per account (was 64); `Access-Control-Max-Age` on relay preflights and the control API goes from 600 to 7200.
+
 ## 0.2.0（2026-10-07）
 
 ### 新增 / Added
