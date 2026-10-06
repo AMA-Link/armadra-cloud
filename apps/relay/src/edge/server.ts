@@ -265,7 +265,7 @@ export class Edge {
     });
   }
 
-  /** 预检：解析源 → 按 IP 限流 → 来源名单；不验令牌、不碰隧道，请求体丢掉。 */
+  /** 预检：解析源 → 按 IP 限流（预检专用桶）→ 来源名单；不验令牌、不碰隧道，请求体丢掉。 */
   private async answerPreflight(
     req: IncomingMessage,
     res: ServerResponse,
@@ -280,7 +280,7 @@ export class Edge {
       sendRelayError(res, "not_found", { cors: this.errorCors(req) });
       return;
     }
-    const byIp = await control.limits.hit("edge.connect.ip", remoteIpOf(req));
+    const byIp = await control.limits.hit("edge.preflight.ip", remoteIpOf(req));
     if (!byIp.allowed) {
       this.options.metrics.edgeConnection("rate_limited");
       sendRelayError(res, "rate_limited", {
@@ -339,7 +339,7 @@ export class Edge {
     return count;
   }
 
-  /** 解析源 → 按 IP 限流 → 中继令牌 → 按账号限流 → 找隧道。 */
+  /** 解析源 → 中继令牌（无效按 IP 限流；有效按令牌与账号限流）→ 找隧道。 */
   private async admit(
     req: IncomingMessage,
     token: string | undefined,
@@ -352,25 +352,34 @@ export class Edge {
     if (!target) return { ok: false, code: "not_found" };
     const { sourceId } = target;
     const remoteIp = remoteIpOf(req);
-    const byIp = await control.limits.hit("edge.connect.ip", remoteIp);
-    if (!byIp.allowed)
-      return {
-        ok: false,
-        code: "rate_limited",
-        retryAfterMs: byIp.retryAfterMs,
-        sourceId,
-      };
     const verified = await verifyRelayToken(auth, token, target.sourceId);
-    if (!verified.ok) return { ok: false, code: verified.error, sourceId };
+    if (!verified.ok) {
+      // 无令牌 / 令牌无效 / 源不符：按 IP 严格限流（令牌校验是本地验签，先验后计）。
+      const byIp = await control.limits.hit("edge.connect.ip", remoteIp);
+      if (!byIp.allowed)
+        return {
+          ok: false,
+          code: "rate_limited",
+          retryAfterMs: byIp.retryAfterMs,
+          sourceId,
+        };
+      return { ok: false, code: verified.error, sourceId };
+    }
     const subject = verified.claims.sub;
-    const byAccount = await control.limits.hit("edge.connect.acct", subject);
-    if (!byAccount.allowed)
-      return {
-        ok: false,
-        code: "rate_limited",
-        retryAfterMs: byAccount.retryAfterMs,
-        sourceId,
-      };
+    // 有效令牌：先按令牌、再按账号计数；与 IP、预检的桶互不相干。
+    for (const [kind, key] of [
+      ["edge.connect.token", verified.claims.jti],
+      ["edge.connect.acct", subject],
+    ] as const) {
+      const hit = await control.limits.hit(kind, key);
+      if (!hit.allowed)
+        return {
+          ok: false,
+          code: "rate_limited",
+          retryAfterMs: hit.retryAfterMs,
+          sourceId,
+        };
+    }
     const tunnel = await lookup(target.sourceId);
     if (!tunnel) return { ok: false, code: "source_offline", sourceId };
     return { ok: true, target, tunnel, subject, remoteIp };

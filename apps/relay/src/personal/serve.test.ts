@@ -15,7 +15,8 @@ import { afterAll, expect, it } from "vitest";
 import { PASSWORD } from "../../test/personal.ts";
 import type { PersonalServeOptions } from "./args.ts";
 import { runRotateKey } from "./commands.ts";
-import { startPersonalRelay } from "./serve.ts";
+import { DEFAULT_LIMIT_RULES } from "../control/types.ts";
+import { edgeLimitRules, startPersonalRelay } from "./serve.ts";
 import { StateError, StateStore } from "./state.ts";
 
 const root = mkdtempSync(join(tmpdir(), "relay-personal-"));
@@ -145,3 +146,34 @@ it("运行中另一个进程轮换签名钥：一秒内 JWKS 就有新钥", asyn
     await relay.close();
   }
 }, 10_000);
+
+it("边缘限流额度：命令行 > 状态文件 > 缺省；登录与链接的限流不可配、不变", () => {
+  expect(edgeLimitRules(undefined, undefined)).toEqual({});
+  expect(edgeLimitRules({ token: 5 }, { token: 9, preflight: 7 })).toEqual({
+    "edge.connect.token": { type: "rate", max: 5, windowMs: 60_000 },
+    "edge.preflight.ip": { type: "rate", max: 7, windowMs: 60_000 },
+  });
+  const rules = edgeLimitRules({
+    anonymous: 1,
+    preflight: 1,
+    token: 1,
+    account: 1,
+  });
+  expect(Object.keys(rules).sort()).toEqual([
+    "edge.connect.acct",
+    "edge.connect.ip",
+    "edge.connect.token",
+    "edge.preflight.ip",
+  ]);
+  expect(DEFAULT_LIMIT_RULES["login.ip"]).toEqual({
+    type: "rate",
+    max: 20,
+    windowMs: 60_000,
+  });
+  expect(DEFAULT_LIMIT_RULES["login.acct"]).toEqual({
+    type: "rate",
+    max: 20,
+    windowMs: 60_000,
+  });
+  expect(DEFAULT_LIMIT_RULES["link.accept.ip"].type).toBe("rate");
+});
