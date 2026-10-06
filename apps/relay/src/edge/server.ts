@@ -7,6 +7,10 @@
  *   源的响应由 Node 解析后写回客户端（客户端侧保持 keep-alive；流上一条流一个请求）。
  * - WS：升级请求序列化进流，之后两个方向字节透传（`ws-downstream.ts` 只跟踪帧边界）。
  *
+ * CORS 预检（`OPTIONS` + `Origin` + `Access-Control-Request-Method`）由边缘自己回答，
+ * 不验令牌、不找隧道、不开流（见 `cors.ts`）：按 IP 限流后，来源在名单里答 204，不在答
+ * 403 `forbidden`（不带 CORS 头）。其余请求（含不是预检的 `OPTIONS`）照常要令牌。
+ *
  * 拒绝：地址不匹配 → 404（WS 也答 404，不升级）；之后的拒绝 HTTP 答 `{ code, message }`，
  * WS 先完成升级再以关闭码结束（浏览器读不到升级失败的状态码）：令牌 4401 / 4403、
  * 限流 4429、源离线 4404。
@@ -36,6 +40,7 @@ import { errorName, type RelayLog } from "../log.ts";
 import type { RelayMetrics } from "../metrics.ts";
 import { TunnelUnavailableError, type Tunnel } from "../tunnel/tunnel.ts";
 import type { Addressing, AddressTarget } from "./addressing.ts";
+import { isPreflight, originAllowed, preflightHeaders } from "./cors.ts";
 import {
   flatten,
   forwardRequestHeaders,
@@ -54,6 +59,11 @@ export interface EdgeOptions {
   lookup(sourceId: string): Promise<Tunnel | null>;
   log: RelayLog;
   metrics: RelayMetrics;
+  /**
+   * 预检放行的来源（原生 App 的两个来源总是放行，不用列）。答案不得随源在不在线、
+   * 登没登记而变，否则预检就成了探测源的手段。缺省空。
+   */
+  corsOrigins?: (sourceId: string) => readonly string[];
   /** 对客户端 WS 的 ping 间隔与无响应断开时长（缺省 30 秒 / 60 秒）。 */
   wsPingMs?: number;
   wsIdleMs?: number;
@@ -118,6 +128,7 @@ export class Edge {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
+    if (isPreflight(req)) return this.answerPreflight(req, res);
     const admission = await this.admit(req, relayTokenFromHeaders(req.headers));
     if (!admission.ok) {
       this.options.metrics.edgeConnection(admission.code);
@@ -232,6 +243,38 @@ export class Edge {
       this.sockets.delete(socket);
       stream.destroy();
     });
+  }
+
+  /** 预检：解析源 → 按 IP 限流 → 来源名单；不验令牌、不碰隧道，请求体丢掉。 */
+  private async answerPreflight(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    req.resume();
+    const { addressing, control, corsOrigins } = this.options;
+    const target = addressing.resolve({
+      url: req.url ?? "/",
+      host: req.headers.host,
+    });
+    if (!target) {
+      sendRelayError(res, "not_found");
+      return;
+    }
+    const byIp = await control.limits.hit("edge.connect.ip", remoteIpOf(req));
+    if (!byIp.allowed) {
+      this.options.metrics.edgeConnection("rate_limited");
+      sendRelayError(res, "rate_limited", { retryAfterMs: byIp.retryAfterMs });
+      return;
+    }
+    const origin = originOf(req) as string;
+    if (!originAllowed(origin, corsOrigins?.(target.sourceId) ?? [])) {
+      this.options.metrics.edgeConnection("forbidden");
+      sendRelayError(res, "forbidden");
+      return;
+    }
+    this.options.metrics.edgeConnection("preflight");
+    res.writeHead(204, preflightHeaders(origin));
+    res.end();
   }
 
   /** 关闭时断开所有已升级的客户端连接（`server.close()` 不管升级后的 socket）。 */

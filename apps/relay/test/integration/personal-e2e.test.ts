@@ -357,6 +357,29 @@ describe("个人中转端到端", () => {
       401,
     );
 
+    // CORS 预检不带令牌：原生 App 与登记时的可信来源（issuer）答 204，别的来源 403。
+    const preflight = (origin: string) =>
+      call("OPTIONS", `${relayBaseUrl}/api/identity/cloud/login`, {
+        headers: {
+          origin,
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "armadra-relay-token, content-type",
+        },
+      });
+    for (const origin of [
+      "https://localhost",
+      "capacitor://localhost",
+      issuer,
+    ]) {
+      const answer = await preflight(origin);
+      expect(answer.status).toBe(204);
+      expect(answer.headers["access-control-allow-origin"]).toBe(origin);
+      expect(answer.headers.vary).toBe("origin");
+    }
+    const refused = await preflight("https://evil.example");
+    expect(refused.status).toBe(403);
+    expect(refused.headers["access-control-allow-origin"]).toBeUndefined();
+
     ownerWs = openWs(`${relayBaseUrl}/ws`, [
       `armadra-relay.${relayToken}`,
       "armadra-ticket.core-ticket",
