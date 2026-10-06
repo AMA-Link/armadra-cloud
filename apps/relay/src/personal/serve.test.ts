@@ -18,6 +18,7 @@ import { runRotateKey } from "./commands.ts";
 import { DEFAULT_LIMIT_RULES } from "../control/types.ts";
 import { edgeLimitRules, startPersonalRelay } from "./serve.ts";
 import { StateError, StateStore } from "./state.ts";
+import { RELAY_VERSION } from "../version.ts";
 
 const root = mkdtempSync(join(tmpdir(), "relay-personal-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -50,7 +51,7 @@ it("首次自动初始化：数据目录 0700、状态文件在；/health 与 /r
       ok: true,
       mode: "personal",
       node: "127.0.0.1",
-      version: "0.1.0",
+      version: RELAY_VERSION,
       tunnels: 0,
       streams: 0,
     });
