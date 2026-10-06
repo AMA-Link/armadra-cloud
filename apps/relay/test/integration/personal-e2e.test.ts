@@ -473,6 +473,44 @@ describe("个人中转端到端", () => {
     await once(guestWs, "open");
   });
 
+  it("改备注：owner 经 PATCH 只改 label，落地信息跟着变；访客改不了", async () => {
+    const updated = output(
+      "links",
+      "update",
+      await call("PATCH", `${issuer}/v1/links/${linkId}`, {
+        body: { label: "  给设计组  " },
+        headers: bearer(ownerSession.accessToken),
+      }),
+    ) as { linkId: string; label: string; uses: number; revokedAtMs: unknown };
+    expect(updated).toMatchObject({
+      linkId,
+      label: "给设计组",
+      uses: 1,
+      revokedAtMs: null,
+    });
+    const landing = output(
+      "links",
+      "get",
+      await call("GET", `${issuer}/v1/links/${linkId}`),
+    ) as { label: string };
+    expect(landing.label).toBe("给设计组");
+    const byGuest = await call("PATCH", `${issuer}/v1/links/${linkId}`, {
+      body: { label: "x" },
+      headers: bearer(guest.guestSession.accessToken),
+    });
+    expect(errorCode(byGuest)).toBe("forbidden");
+    const missing = await call("PATCH", `${issuer}/v1/links/nope`, {
+      body: { label: "x" },
+      headers: bearer(ownerSession.accessToken),
+    });
+    expect(errorCode(missing)).toBe("not_found");
+    const tooLong = await call("PATCH", `${issuer}/v1/links/${linkId}`, {
+      body: { label: "x".repeat(129) },
+      headers: bearer(ownerSession.accessToken),
+    });
+    expect(errorCode(tooLong)).toBe("bad_request");
+  });
+
   it("撤销链接：访客 WS 断开，访客的中继令牌与会话立即失效，owner 不受影响", async () => {
     const revoked = await call("DELETE", `${issuer}/v1/links/${linkId}`, {
       headers: bearer(ownerSession.accessToken),

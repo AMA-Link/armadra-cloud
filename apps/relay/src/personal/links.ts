@@ -7,6 +7,7 @@
  * - `accept { secret }`：按 IP 限流（`link.accept.ip`，20 次 / 分钟）→ 链接在、未撤销 → 秘密
  *   比对 → 未过期、次数未满 → `uses++` → 建访客设备（`guest:<linkId>:<随机>`，30 天）→ 签
  *   带 `link` 声明的断言与中继令牌。
+ * - `update { label }`：只改备注（落地页与访客的源名用它）；已撤销的也能改，不动秘密、次数与期限。
  * - `revoke`：撤销链接与它名下的全部访客设备，断开访客经中继的 WS。
  */
 import type {
@@ -227,6 +228,20 @@ export function createLinks(context: PersonalContext, sources: Sources) {
     list(caller: Caller, sourceId?: string): LinkSummary[] {
       requireOwner(caller);
       return listLinks(context.store.current, sourceId);
+    },
+
+    update(caller: Caller, input: { linkId: string; label: string }) {
+      requireOwner(caller);
+      const label = input.label.trim();
+      const state = context.store.update((draft) => {
+        const link = draft.links.find((row) => row.linkId === input.linkId);
+        if (!link) throw new PersonalError("not_found");
+        link.label = label;
+        return draft;
+      });
+      const link = state.links.find((row) => row.linkId === input.linkId);
+      if (!link) throw new PersonalError("not_found");
+      return toSummary(state, link);
     },
 
     revoke(caller: Caller, linkId: string): void {
