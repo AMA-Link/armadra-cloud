@@ -1,0 +1,67 @@
+name: 功能建议 / Feature request
+description: 提出新能力或对现有行为的改进。 / Suggest a new capability or an improvement to existing behavior.
+title: "[Feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先查看 README、契约与已有 issue。当前先交付个人中转，SaaS 服务端只预留接口。描述要解决的问题，比直接给出方案更有帮助。
+        Please check the README, the contract and existing issues first. The personal relay ships first; the SaaS server side only reserves its interfaces. Describing the problem helps more than prescribing a solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题 / Problem
+      description: 你在做什么、卡在哪里、现在怎么绕过。 / What you are doing, where you get stuck, and how you work around it today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议的方案 / Proposed solution
+      description: 期望的行为、接口或部署方式。 / The behavior, interface or deployment you expect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案 / Alternatives considered
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及范围 / Area
+      multiple: true
+      options:
+        - 个人中转 / Personal relay
+        - 中继 SaaS 模式 / Relay SaaS mode
+        - 控制面 / Control plane (apps/cloud)
+        - 协议包 / Protocol package (@armadra/platform-protocol)
+        - 契约 / Contract (cloud-api.md)
+        - 部署与镜像 / Deployment and images
+        - 运维与监控 / Operations and metrics
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: protocol-change
+    attributes:
+      label: 是否需要改协议 / Requires a protocol change
+      description: 改帧、声明或 `/v1` 形状会影响 Armadra 客户端。 / Changing frames, claims or `/v1` shapes affects the Armadra client.
+      options:
+        - 不需要 / No
+        - 需要 / Yes
+        - 不确定 / Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: 参与 / Contribution
+      options:
+        - label: 我愿意提交实现这个功能的 PR。 / I am willing to open a PR for this.

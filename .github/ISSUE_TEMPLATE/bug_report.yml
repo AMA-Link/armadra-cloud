@@ -1,0 +1,122 @@
+name: 缺陷报告 / Bug report
+description: 报告与预期不符的行为。 / Report behavior that does not match what you expected.
+title: "[Bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告。请先搜索已有 issue，一个 issue 只写一个问题；中继连不上、部署起不来请用「中继 / 部署问题」表单。
+        **不要贴凭据**（口令、令牌、签名钥、`state.json`、`.env` 内容、配对码、Cookie）与**流正文、终端输出**；日志里出现域名、IP、账号或主机名请先打码。
+
+        Thanks for the report. Please search existing issues first and keep one problem per issue; use the "Relay / deployment" form when the relay cannot connect or a deployment does not start.
+        **Do not paste credentials** (passwords, tokens, signing keys, `state.json`, `.env` contents, pairing codes, cookies) or **stream bodies and terminal output**; redact domains, IPs, account names and host names in logs.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前确认 / Before submitting
+      options:
+        - label: 我已搜索过已有 issue，没有重复。 / I searched existing issues and this is not a duplicate.
+          required: true
+        - label: 我在最新发布版或 main 上复现过。 / I reproduced this on the latest release or on main.
+          required: true
+        - label: 下面的内容不含凭据、流正文与终端输出。 / The content below contains no credentials, stream bodies or terminal output.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: armadra-cloud 版本 / armadra-cloud version
+      description: "`armadra-relay version`、`armadra-cloud version` 或镜像标签；从源码运行请写提交号。 / Output of `armadra-relay version`, `armadra-cloud version` or the image tag; commit hash if running from source."
+      placeholder: 0.2.1 / 55d13d9
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: 组件 / Component
+      multiple: true
+      options:
+        - 中继 personal / Relay personal (armadra-relay personal)
+        - 中继 saas / Relay saas (armadra-relay saas)
+        - 控制面 / Control plane (armadra-cloud)
+        - 协议包 / Protocol package (@armadra/platform-protocol)
+        - 共享库 / Shared library (@armadra/cloud-shared)
+        - 工具与脚本 / Tools and scripts
+    validations:
+      required: true
+
+  - type: dropdown
+    id: run-mode
+    attributes:
+      label: 运行方式 / How you run it
+      multiple: true
+      options:
+        - compose（deploy/personal/compose.yml）
+        - compose（deploy/compose.yml）
+        - 容器镜像 / Container image (ghcr.io/owlbay/armadra-*)
+        - 从源码运行 / From source (pnpm relay:personal / pnpm dev)
+        - 跨仓端到端 / Cross-repo e2e (pnpm e2e)
+        - CI
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: 主机系统与架构 / Host OS and architecture
+      description: 从源码运行时附上 Node 与 pnpm 版本。 / Include Node and pnpm versions when running from source.
+      placeholder: Ubuntu 24.04 x64, Docker 28.1 / macOS 15.5 arm64, Node 22.18, pnpm 11.18.0
+    validations:
+      required: true
+
+  - type: input
+    id: armadra-version
+    attributes:
+      label: Armadra 客户端版本 / Armadra client version
+      description: 经中继连接的 Armadra 桌面、服务器壳或手机端的版本；不涉及可留空。 / Version of the Armadra desktop, server shell or mobile client connected through the relay; leave empty if not related.
+      placeholder: 0.2.4
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 从启动服务开始，尽量给出最少步骤；用到的参数与环境变量只写名字或打码后的值。 / Start from starting the service and keep the steps minimal; give flag and variable names, with values redacted.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为 / Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为 / Actual behavior
+      description: 包括返回的错误（`code` 与 `message`）与 HTTP 状态。 / Include any returned error (`code` and `message`) and the HTTP status.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: |
+        只贴相关的几行（error / warn），先删去凭据与令牌。
+        Paste only the relevant lines (error / warn), with credentials and tokens removed.
+      render: text
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他信息 / Additional context
+      description: 是否可稳定复现、最近一次正常的版本、反向代理或网络环境等。 / Reproducibility, last known good version, reverse proxy or network setup, etc.

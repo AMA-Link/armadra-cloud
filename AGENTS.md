@@ -28,6 +28,8 @@
 
 ## 按需阅读与验证
 
+- 提交信息、分支、PR 与 issue 规范见 [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md)。
+
 - 怎么跑见 [README](README.md)；文档索引在 [docs/README.md](docs/README.md)，新增文档要登记。
 - 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表与 `cloud-openapi.json` 由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
 - 协议包的黄金夹具与身份向量是生成物：改了帧、声明、契约或身份常量，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`node scripts/gen-vectors.mjs`），`pnpm protocol:check` 守住。
@@ -44,4 +46,6 @@
 - 正文 / 令牌 / 口令进入日志、持久化或响应：P0。
 - 令牌校验少了 `aud` / `exp` / `jti` 任一项、中继把流转给非令牌 `src` 的源：P0。
 - 接口形状改了而协议包 / `cloud-api.md` 没同步：P1。
-- 新增行为没有对应测试时指出缺口。
+- `personal` 模式引入 PostgreSQL / Redis 运行时依赖：P1；依赖没写精确版本或 `THIRD_PARTY_NOTICES.md` 未同步：P2。
+- 界面 / CLI 文案没进 i18n 或中英不同步：P2。
+- 新增行为没有对应测试时指出缺口；测试只改断言或重生成夹具去迁就实现时要说明理由是否成立。

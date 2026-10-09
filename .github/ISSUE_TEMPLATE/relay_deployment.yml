@@ -1,0 +1,133 @@
+name: 中继 / 部署问题 / Relay or deployment issue
+description: 中继起不来、Armadra 经中继连不上，或部署、升级、证书出问题。 / The relay does not start, Armadra cannot connect through it, or deployment, upgrade or certificates fail.
+title: "[Relay] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        当前先交付个人中转（`armadra-relay personal`），SaaS 服务端只预留接口，`/v1` 业务路由答 501 `not_implemented` 属于预期。
+        **不要贴凭据**：口令、令牌、签名钥、`state.json`、`dev.env`、`.env` 内容、TLS 私钥都不要贴；CA 指纹、域名与 IP 请打码。中继不记录流正文，也请不要贴终端输出或页面内容。
+
+        The personal relay (`armadra-relay personal`) ships first; the SaaS server side only reserves its interfaces, so `/v1` business routes answering 501 `not_implemented` is expected.
+        **Do not paste credentials**: no passwords, tokens, signing keys, `state.json`, `dev.env`, `.env` contents or TLS private keys; redact CA fingerprints, domains and IPs. The relay never records stream bodies, so please do not paste terminal output or page content either.
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 模式 / Mode
+      options:
+        - personal
+        - saas（预留，开发中 / reserved, in development）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 部署方式 / Deployment
+      options:
+        - compose（deploy/personal/compose.yml）
+        - compose（deploy/compose.yml）
+        - 容器镜像 / Container image (docker run)
+        - 从源码运行 / From source (pnpm relay:personal / pnpm dev)
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 中继版本 / Relay version
+      description: "`armadra-relay version` 的输出或镜像标签；从源码运行请写提交号。 / Output of `armadra-relay version` or the image tag; commit hash if running from source."
+      placeholder: 0.2.1 / ghcr.io/owlbay/armadra-relay:0.2.1 / 55d13d9
+    validations:
+      required: true
+
+  - type: input
+    id: protocol-version
+    attributes:
+      label: 协议版本 / Protocol version
+      description: 中继与客户端各自的协议 major.minor（见 `deploy/compat.json`），不确定写「不确定」。 / Protocol major.minor of the relay and the client (see `deploy/compat.json`); write "not sure" if unknown.
+      placeholder: 1.0
+    validations:
+      required: true
+
+  - type: input
+    id: armadra-version
+    attributes:
+      label: Armadra 客户端版本 / Armadra client version
+      description: 连接这个中继的 Armadra 桌面、服务器壳或手机端版本。 / Version of the Armadra desktop, server shell or mobile client connecting to this relay.
+      placeholder: 0.2.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tls
+    attributes:
+      label: TLS 方式 / TLS mode
+      options:
+        - self-signed
+        - acme
+        - file
+        - plain（只回环 / loopback only）
+        - 反向代理终结 / Terminated by a reverse proxy
+        - 不涉及 / Not related
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 出问题的环节 / Where it fails
+      multiple: true
+      options:
+        - 启动与初始化 / Start and init
+        - TLS 与证书 / TLS and certificates
+        - 登录与令牌 / Sign-in and tokens
+        - 源接入（隧道） / Source connection (tunnel)
+        - 经中继的 HTTP / HTTP through the relay
+        - 事件流、终端或协作板 / Event stream, terminal or board
+        - 分享链接与访客 / Share links and guests
+        - 媒体票 / Media tickets
+        - 托管页面（/app） / Hosted web app (/app)
+        - 额度与限流 / Limits and rate limiting
+        - 指标 / Metrics
+        - 升级与迁移 / Upgrade and migrations
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: input
+    id: host
+    attributes:
+      label: 主机与网络 / Host and network
+      description: 系统与架构、是否在反向代理或 NAT 之后、客户端所在网络。 / OS and architecture, whether behind a reverse proxy or NAT, and the client's network.
+      placeholder: Ubuntu 24.04 x64, Docker 28.1, behind nginx
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 启动命令与 compose 改动只写参数与变量名，值请打码。 / For start commands and compose changes, give flag and variable names with values redacted.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: 期望与实际 / Expected and actual
+      description: 包括返回的错误（`code` 与 `message`）与 HTTP 状态。 / Include any returned error (`code` and `message`) and the HTTP status.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: 只贴中继或控制面日志里相关的 error / warn 行，先删去凭据与令牌，域名与 IP 打码。 / Only relevant error / warn lines from the relay or control-plane log, with credentials and tokens removed and domains and IPs redacted.
+      render: text
