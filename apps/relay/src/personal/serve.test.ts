@@ -10,12 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createLogger } from "@armadra/cloud-shared/log";
+import { DEFAULT_LIMIT_RULES } from "@armadra/relay-kernel/control/types";
 import { afterAll, expect, it } from "vitest";
 
 import { PASSWORD } from "../../test/personal.ts";
 import type { PersonalServeOptions } from "./args.ts";
 import { runRotateKey } from "./commands.ts";
-import { DEFAULT_LIMIT_RULES } from "../control/types.ts";
 import { edgeLimitRules, startPersonalRelay } from "./serve.ts";
 import { StateError, StateStore } from "./state.ts";
 import { RELAY_VERSION } from "../version.ts";

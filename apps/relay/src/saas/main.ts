@@ -2,9 +2,9 @@
 import { listen, type RunningServer } from "@armadra/cloud-shared/http";
 import { createLogger } from "@armadra/cloud-shared/log";
 import { createRedis, pingRedis } from "@armadra/cloud-shared/redis";
+import { createRelayRouter } from "@armadra/relay-kernel/http/server";
 
 import type { SaasRelayConfig } from "../config.ts";
-import { createRelayRouter } from "../http/server.ts";
 import { RELAY_VERSION } from "../version.ts";
 
 export interface RunningRelay {

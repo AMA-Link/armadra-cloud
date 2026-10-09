@@ -5,11 +5,13 @@
  * 改口令、轮换密钥、撤销链接立即生效（撤销的访客 WS 会被断开）。输出只有账号名、id、时间、
  * 指纹这类元数据，不打印口令、令牌或私钥。
  */
-import { changePassword } from "./accounts.ts";
+import { changePassword } from "@armadra/control-core/accounts";
+import { listLinks, revokeLink } from "@armadra/control-core/links";
+import { rotateSigningKey } from "@armadra/control-core/signer";
+
 import { defaultIssuer, UsageError, type PersonalInitOptions } from "./args.ts";
+import { stateOnly } from "./context.ts";
 import { createState, obtainPassword, passwordUsageError } from "./init.ts";
-import { listLinks, revokeLinkIn } from "./links.ts";
-import { rotateSigningKey } from "./signer.ts";
 import { StateStore } from "./state.ts";
 import { existingCaFingerprint, selfSignedMaterial, tlsNames } from "./tls.ts";
 
@@ -88,7 +90,7 @@ export async function runPasswd(
   const password = await obtainPassword(passwordFile, true);
   try {
     await changePassword(
-      (fn) => store.update(fn),
+      stateOnly(store),
       store.current.account.name,
       password,
       Date.now(),
@@ -105,13 +107,12 @@ export function runRotateKey(dataDir: string, print: Print): void {
   print(`已启用新签名钥：${kid}`);
 }
 
-export function runLinksList(
+export async function runLinksList(
   dataDir: string,
   print: Print,
   nowMs = Date.now(),
-): void {
-  const state = StateStore.open(dataDir).current;
-  const links = listLinks(state);
+): Promise<void> {
+  const links = await listLinks(stateOnly(StateStore.open(dataDir)));
   if (links.length === 0) {
     print("没有链接");
     return;
@@ -133,15 +134,13 @@ export function runLinksList(
   }
 }
 
-export function runLinksRevoke(
+export async function runLinksRevoke(
   dataDir: string,
   linkId: string,
   print: Print,
-): void {
+): Promise<void> {
   const store = StateStore.open(dataDir);
-  const found = store.update((draft) =>
-    revokeLinkIn(draft, linkId, Date.now()),
-  );
-  if (!found) throw new UsageError(`没有这条有效链接：${linkId}`);
+  const found = await revokeLink(stateOnly(store), linkId, Date.now());
+  if (found === null) throw new UsageError(`没有这条有效链接：${linkId}`);
   print(`已撤销链接：${linkId}`);
 }

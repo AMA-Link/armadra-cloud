@@ -1,11 +1,23 @@
 import { readFileSync } from "node:fs";
 
+import { createAccounts } from "@armadra/control-core/accounts";
+import { ControlError } from "@armadra/control-core/errors";
+import { createLinks } from "@armadra/control-core/links";
+import {
+  createAuthenticator,
+  type Caller,
+} from "@armadra/control-core/sessions";
+import { rotateSigningKey } from "@armadra/control-core/signer";
+import { createSources } from "@armadra/control-core/sources";
 import {
   assertionClaimsSchema,
   relayTokenClaimsSchema,
   splitCompactJws,
   tunnelTokenClaimsSchema,
 } from "@armadra/platform-protocol/assertion";
+import { createAuthContext } from "@armadra/relay-kernel/auth/context";
+import { verifyRelayToken } from "@armadra/relay-kernel/auth/relay-token";
+import { verifyTunnelToken } from "@armadra/relay-kernel/auth/tunnel-token";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -19,15 +31,6 @@ import {
   sourceJws,
   type Harness,
 } from "../../test/personal.ts";
-import { createAuthContext } from "../auth/context.ts";
-import { verifyRelayToken } from "../auth/relay-token.ts";
-import { verifyTunnelToken } from "../auth/tunnel-token.ts";
-import { createAccounts } from "./accounts.ts";
-import { PersonalError } from "./context.ts";
-import { createLinks } from "./links.ts";
-import { createAuthenticator, type Caller } from "./sessions.ts";
-import { rotateSigningKey } from "./signer.ts";
-import { createSources } from "./sources.ts";
 
 let h: Harness;
 let owner: Caller;
@@ -47,7 +50,7 @@ const codeOf = async (run: () => unknown) => {
   try {
     await run();
   } catch (error) {
-    return error instanceof PersonalError ? error.code : String(error);
+    return error instanceof ControlError ? error.code : String(error);
   }
   return "ok";
 };
@@ -56,7 +59,7 @@ describe("源注册", () => {
   it("注册令牌一次性、10 分钟；过期或用过答 registration_token_invalid；只存哈希", async () => {
     const sources = createSources(h.context);
     const { registrationToken, expiresAtMs, issuer } =
-      sources.registrationToken(owner);
+      await sources.registrationToken(owner);
     expect(issuer).toBe(ISSUER);
     expect(expiresAtMs - h.clock.now).toBe(10 * 60_000);
     expect(readFileSync(`${h.dir}/data/state.json`, "utf8")).not.toContain(
@@ -79,7 +82,7 @@ describe("源注册", () => {
         sources.register(registerInput(registrationToken), "ip"),
       ),
     ).toBe("registration_token_invalid");
-    const late = sources.registrationToken(owner).registrationToken;
+    const late = (await sources.registrationToken(owner)).registrationToken;
     h.clock.now += 10 * 60_000 + 1;
     expect(
       await codeOf(() => sources.register(registerInput(late), "ip")),
@@ -90,11 +93,11 @@ describe("源注册", () => {
     const sources = createSources(h.context);
     const other = { ...SOURCE_PUBLIC_JWK, x: "A".repeat(43) };
     expect(
-      await codeOf(() =>
+      await codeOf(async () =>
         sources.register(
           {
             ...registerInput(
-              sources.registrationToken(owner).registrationToken,
+              (await sources.registrationToken(owner)).registrationToken,
             ),
             publicKey: other,
           },
@@ -103,11 +106,11 @@ describe("源注册", () => {
       ),
     ).toBe("source_taken");
     expect(
-      await codeOf(() =>
+      await codeOf(async () =>
         sources.register(
           {
             ...registerInput(
-              sources.registrationToken(owner).registrationToken,
+              (await sources.registrationToken(owner)).registrationToken,
             ),
             protocol: { major: 2, minor: 0 },
           },
@@ -117,7 +120,9 @@ describe("源注册", () => {
     ).toBe("protocol_unsupported");
     await sources.register(
       {
-        ...registerInput(sources.registrationToken(owner).registrationToken),
+        ...registerInput(
+          (await sources.registrationToken(owner)).registrationToken,
+        ),
         name: "改名",
       },
       "ip",
@@ -144,7 +149,7 @@ describe("源注册", () => {
 describe("源 JWS 换隧道令牌", () => {
   it("签名、aud、时间、重放都核；隧道令牌的 cnf 是登记的公钥，中继内核验得过", async () => {
     const sources = createSources(h.context);
-    const source = sources.authenticateSource(
+    const source = await sources.authenticateSource(
       `Source ${sourceJws(ISSUER, h.clock.now)}`,
     );
     const relay = sources.relayFor(source);
@@ -162,7 +167,7 @@ describe("源 JWS 换隧道令牌", () => {
     ).toBe(true);
 
     const replayed = sourceJws(ISSUER, h.clock.now);
-    sources.authenticateSource(`Source ${replayed}`);
+    await sources.authenticateSource(`Source ${replayed}`);
     for (const header of [
       `Source ${replayed}`,
       `Source ${sourceJws("https://other.example", h.clock.now)}`,
@@ -235,7 +240,7 @@ describe("分享链接与访客", () => {
     const sources = createSources(h.context);
     const links = createLinks(h.context, sources);
     const auth = createAuthenticator(h.context);
-    const created = links.create(owner, {
+    const created = await links.create(owner, {
       kind: "source_invite",
       sourceId: SOURCE_ID,
       invitationId: "inv_1",
@@ -249,7 +254,7 @@ describe("分享链接与访客", () => {
     expect(readFileSync(`${h.dir}/data/state.json`, "utf8")).not.toContain(
       created.secret,
     );
-    expect(links.get(created.linkId)).toMatchObject({
+    expect(await links.get(created.linkId)).toMatchObject({
       kind: "source_invite",
       sourceName: "改名",
       exhausted: false,
@@ -293,7 +298,7 @@ describe("分享链接与访客", () => {
     await accept(created.secret);
     expect(await codeOf(() => accept(created.secret))).toBe("link_exhausted");
 
-    links.revoke(owner, created.linkId);
+    await links.revoke(owner, created.linkId);
     expect(h.disconnects.at(-1)).toEqual({
       subjectPrefix: `guest:${created.linkId}:`,
     });
@@ -313,7 +318,7 @@ describe("分享链接与访客", () => {
   it("过期的链接答 link_expired；有效期超过 30 天或已过去答 bad_request", async () => {
     const sources = createSources(h.context);
     const links = createLinks(h.context, sources);
-    const short = links.create(owner, {
+    const short = await links.create(owner, {
       kind: "source_invite",
       sourceId: SOURCE_ID,
       invitationId: "inv_2",
@@ -353,7 +358,7 @@ describe("改链接备注", () => {
   it("只改 label（去首尾空白），秘密、次数与期限不动；撤销后仍可改；访客 forbidden，没有答 not_found", async () => {
     const sources = createSources(h.context);
     const links = createLinks(h.context, sources);
-    const created = links.create(owner, {
+    const created = await links.create(owner, {
       kind: "source_invite",
       sourceId: SOURCE_ID,
       invitationId: "inv_note",
@@ -362,15 +367,15 @@ describe("改链接备注", () => {
       expiresAtMs: h.clock.now + 60 * 60_000,
       maxUses: 3,
     });
-    const before = links
-      .list(owner)
-      .find((row) => row.linkId === created.linkId);
-    const updated = links.update(owner, {
+    const before = (await links.list(owner)).find(
+      (row) => row.linkId === created.linkId,
+    );
+    const updated = await links.update(owner, {
       linkId: created.linkId,
       label: "  新备注 ",
     });
     expect(updated).toEqual({ ...before, label: "新备注" });
-    expect(links.get(created.linkId).label).toBe("新备注");
+    expect((await links.get(created.linkId)).label).toBe("新备注");
     const guest = await links.accept(
       { linkId: created.linkId, secret: created.secret },
       "203.0.113.20",
@@ -386,9 +391,9 @@ describe("改链接备注", () => {
     expect(
       await codeOf(() => links.update(owner, { linkId: "nope", label: "x" })),
     ).toBe("not_found");
-    links.revoke(owner, created.linkId);
+    await links.revoke(owner, created.linkId);
     expect(
-      links.update(owner, { linkId: created.linkId, label: "" }),
+      await links.update(owner, { linkId: created.linkId, label: "" }),
     ).toMatchObject({ label: "", revokedAtMs: h.clock.now });
   });
 });
@@ -401,10 +406,12 @@ describe("撤销源", () => {
       commands.push(command),
     );
     const tunnel = sources.relayFor(
-      sources.authenticateSource(`Source ${sourceJws(ISSUER, h.clock.now)}`),
+      await sources.authenticateSource(
+        `Source ${sourceJws(ISSUER, h.clock.now)}`,
+      ),
     );
     const granted = await sources.assertion(owner, SOURCE_ID, undefined);
-    sources.revoke(owner, SOURCE_ID);
+    await sources.revoke(owner, SOURCE_ID);
     expect(commands).toEqual([{ type: "closeTunnel", sourceId: SOURCE_ID }]);
     expect(h.disconnects.at(-1)).toEqual({ sourceId: SOURCE_ID });
     expect(h.events.at(-1)).toEqual({

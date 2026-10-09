@@ -1,6 +1,17 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import {
+  changePassword,
+  createAccounts,
+  nextLockout,
+} from "@armadra/control-core/accounts";
+import { ControlError } from "@armadra/control-core/errors";
+import {
+  createAuthenticator,
+  refresh,
+  revokeDevice,
+} from "@armadra/control-core/sessions";
 import { sessionSchema } from "@armadra/platform-protocol/cloud-api";
 import {
   lockDurationMs,
@@ -16,14 +27,11 @@ import {
   personalHarness,
   type Harness,
 } from "../../test/personal.ts";
-import { changePassword, createAccounts, nextLockout } from "./accounts.ts";
-import { PersonalError } from "./context.ts";
 import {
   hashPassword,
   passwordViolation,
   verifyPassword,
 } from "./passwords.ts";
-import { createAuthenticator, refresh, revokeDevice } from "./sessions.ts";
 
 let h: Harness;
 beforeAll(async () => {
@@ -35,7 +43,7 @@ const codeOf = async (promise: Promise<unknown> | (() => unknown)) => {
   try {
     await (typeof promise === "function" ? promise() : promise);
   } catch (error) {
-    return error instanceof PersonalError ? error.code : String(error);
+    return error instanceof ControlError ? error.code : String(error);
   }
   return "ok";
 };
@@ -118,11 +126,11 @@ describe("锁定序列（THROTTLE）", () => {
       expect(await codeOf(login("wrong-password-123"))).toBe(
         "credentials_invalid",
       );
-    let locked: PersonalError | undefined;
+    let locked: ControlError | undefined;
     try {
       await login(PASSWORD);
     } catch (error) {
-      locked = error as PersonalError;
+      locked = error as ControlError;
     }
     expect(locked?.code).toBe("account_locked");
     expect(locked?.retryAfterMs).toBe(60_000);
@@ -189,7 +197,7 @@ describe("会话", () => {
       role: "owner",
       linkId: null,
     });
-    const second = refresh(h.context, first.refreshToken as string);
+    const second = await refresh(h.context, first.refreshToken as string);
     expect(second.refreshToken).not.toBe(first.refreshToken);
     expect(second.device.deviceId).toBe(first.device.deviceId);
     expect(
@@ -214,7 +222,7 @@ describe("会话", () => {
     const text = readFileSync(`${h.dir}/data/state.json`, "utf8");
     expect(text).not.toContain(session.refreshToken as string);
     expect(text).not.toContain(session.accessToken);
-    expect(revokeDevice(h.context, session.device.deviceId)).toBe(true);
+    expect(await revokeDevice(h.context, session.device.deviceId)).toBe(true);
     expect(
       await codeOf(auth.authenticate(`Bearer ${session.accessToken}`)),
     ).toBe("unauthenticated");
@@ -223,7 +231,7 @@ describe("会话", () => {
       "198.51.100.10",
     );
     await changePassword(
-      (fn) => h.context.store.update(fn),
+      h.context,
       "me",
       "saffron-glacier-meadow-77",
       h.clock.now,
@@ -239,12 +247,7 @@ describe("会话", () => {
         ),
       ),
     ).toBe("credentials_invalid");
-    await changePassword(
-      (fn) => h.context.store.update(fn),
-      "me",
-      PASSWORD,
-      h.clock.now,
-    );
+    await changePassword(h.context, "me", PASSWORD, h.clock.now);
   });
 
   it("访问令牌过期（15 分钟 + 5 分钟偏差）后 unauthenticated", async () => {
