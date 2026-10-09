@@ -6,6 +6,7 @@
  */
 import type { IncomingHttpHeaders } from "node:http";
 
+import { verifyJwt, type JwtFailure } from "@armadra/cloud-shared/jwt";
 import {
   RELAY_SUBPROTOCOL_PREFIX,
   RELAY_TOKEN_HEADER,
@@ -18,7 +19,6 @@ import {
 } from "@armadra/platform-protocol/assertion";
 
 import { jwtOptions, type AuthContext } from "./context.ts";
-import { verifyJwt, type JwtFailure } from "./jwt.ts";
 
 export type RelayTokenResult =
   | { ok: true; claims: RelayTokenClaims }
