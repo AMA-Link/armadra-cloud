@@ -9,6 +9,7 @@ pnpm-lock.yaml
 THIRD_PARTY_NOTICES.md
 # 生成文件（node tools/contract/generate.mjs）
 docs/contracts/cloud-openapi.json
-# 生成文件：黄金夹具与身份向量，字节由生成脚本决定
+# 生成文件：黄金夹具、schema 导出与身份向量，字节由生成脚本决定
 packages/platform-protocol/fixtures
+packages/platform-protocol/schema
 packages/platform-protocol/src/identity-vectors/vectors.json

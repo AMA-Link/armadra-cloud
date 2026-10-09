@@ -1,5 +1,5 @@
 // pnpm protocol:pack：构建协议包并 `pnpm pack` 成 tgz（默认放 .data/pack/），再核对
-// tarball 里有 ESM、类型声明与黄金夹具。只打包、不发布。
+// tarball 里有 ESM、类型声明、黄金夹具与 schema 导出。只打包、不发布。
 //
 //   node scripts/pack-protocol.mjs [--out <目录>]
 import { execFileSync } from "node:child_process";
@@ -56,6 +56,17 @@ const REQUIRED = [
   "package/fixtures/assertion/valid.jwt",
   "package/fixtures/cloud-api/auth.login.json",
   "package/fixtures/errors.json",
+  "package/schema/cloud-openapi.json",
+  "package/schema/errors.json",
+  "package/schema/constants.json",
+  "package/schema/assertion/assertion-claims.json",
+  "package/schema/assertion/relay-token-claims.json",
+  "package/schema/assertion/tunnel-token-claims.json",
+  "package/schema/tunnel/hello.json",
+  "package/schema/tunnel/challenge.json",
+  "package/schema/tunnel/auth.json",
+  "package/schema/tunnel/ready.json",
+  "package/schema/tunnel/reject.json",
 ];
 const missing = REQUIRED.filter((entry) => !entries.includes(entry));
 const stray = entries.filter((entry) =>

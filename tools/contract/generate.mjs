@@ -2,7 +2,8 @@
  * 从协议包的 `/v1` 契约生成两样东西：
  *
  * - docs/contracts/cloud-openapi.json：`@orpc/openapi` 生成的 OpenAPI 文档（错误体
- *   按本仓的线上形状 `{ code, message, requestId?, details? }` 描述）；
+ *   按本仓的线上形状 `{ code, message, requestId?, details? }` 描述）；同一份字节也写进
+ *   协议包的 schema 导出 packages/platform-protocol/schema/cloud-openapi.json，随包发布；
  * - docs/contracts/cloud-api.md 的生成块 `<!-- rpc:begin contract=§N -->` …
  *   `<!-- rpc:end -->`：每节一张「procedure / 方法与路径 / scope / 错误码」表。
  *
@@ -12,13 +13,15 @@
  * 读的是协议包的构建产物（`pnpm libs:build` 之后）。`@orpc/*` 只能出现在
  * tools/contract/ 这类门面里（AGENTS.md）。
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const CONTRACT_FILE = "docs/contracts/cloud-api.md";
 export const OPENAPI_FILE = "docs/contracts/cloud-openapi.json";
+export const SCHEMA_OPENAPI_FILE =
+  "packages/platform-protocol/schema/cloud-openapi.json";
 
 const BLOCK = /<!-- rpc:begin contract=(§\d+) -->\n([\s\S]*?)<!-- rpc:end -->/g;
 
@@ -112,6 +115,7 @@ async function main(argv) {
   const procedures = api.listProcedures(api.cloudContract);
   const contractPath = join(root, CONTRACT_FILE);
   const openapiPath = join(root, OPENAPI_FILE);
+  const schemaOpenapiPath = join(root, SCHEMA_OPENAPI_FILE);
   if (!existsSync(contractPath)) {
     console.error(`契约文件缺失：${CONTRACT_FILE}`);
     return 1;
@@ -139,13 +143,14 @@ async function main(argv) {
     api.cloudContract,
     manifest.version,
   );
-  const currentOpenApi = existsSync(openapiPath)
-    ? readFileSync(openapiPath, "utf8")
-    : "";
+  const read = (path) => (existsSync(path) ? readFileSync(path, "utf8") : "");
+  const currentOpenApi = read(openapiPath);
+  const currentSchemaOpenApi = read(schemaOpenapiPath);
   if (check) {
     const stale = [];
     if (nextMarkdown !== currentMarkdown) stale.push(CONTRACT_FILE);
     if (nextOpenApi !== currentOpenApi) stale.push(OPENAPI_FILE);
+    if (nextOpenApi !== currentSchemaOpenApi) stale.push(SCHEMA_OPENAPI_FILE);
     if (stale.length > 0) {
       console.error(
         `${stale.join("、")} 与契约不一致；运行 pnpm contract:generate。`,
@@ -159,7 +164,11 @@ async function main(argv) {
   }
   writeFileSync(contractPath, nextMarkdown);
   writeFileSync(openapiPath, nextOpenApi);
-  console.log(`已更新 ${CONTRACT_FILE} 与 ${OPENAPI_FILE}`);
+  mkdirSync(dirname(schemaOpenapiPath), { recursive: true });
+  writeFileSync(schemaOpenapiPath, nextOpenApi);
+  console.log(
+    `已更新 ${CONTRACT_FILE}、${OPENAPI_FILE} 与 ${SCHEMA_OPENAPI_FILE}`,
+  );
   return 0;
 }
 

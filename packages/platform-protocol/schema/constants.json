@@ -1,0 +1,146 @@
+{
+  "protocol": {
+    "major": 1,
+    "minor": 0
+  },
+  "paths": {
+    "tunnel": "/t/v1",
+    "internode": "/x/v1",
+    "platformWellKnown": "/.well-known/armadra-platform",
+    "jwksWellKnown": "/.well-known/jwks.json"
+  },
+  "headers": {
+    "protocol": "armadra-protocol",
+    "relayToken": "armadra-relay-token"
+  },
+  "subprotocols": {
+    "relay": "armadra-relay.",
+    "ticket": "armadra-ticket."
+  },
+  "tokens": {
+    "types": {
+      "access": "armadra-access",
+      "assertion": "armadra-assertion",
+      "relay": "armadra-relay",
+      "tunnel": "armadra-tunnel",
+      "source": "armadra-source"
+    },
+    "audiences": {
+      "access": "cloud",
+      "relay": "relay",
+      "tunnel": "relay-tunnel"
+    },
+    "claimsVersion": 1
+  },
+  "tunnel": {
+    "limits": {
+      "maxFrameBytes": 1048576,
+      "maxDataChunk": 65536,
+      "streamWindow": 262144,
+      "tunnelWindow": 8388608,
+      "maxStreams": 256,
+      "heartbeatMs": 20000,
+      "heartbeatMisses": 2,
+      "openHeadersMaxBytes": 32768,
+      "handshakeTimeoutMs": 10000,
+      "goawayGraceMs": 30000
+    },
+    "frameTypes": {
+      "open": 1,
+      "data": 2,
+      "end": 3,
+      "rst": 4,
+      "window": 5,
+      "ping": 6,
+      "pong": 7,
+      "goaway": 8
+    },
+    "rst": {
+      "ok": 0,
+      "protocol": 1,
+      "refused": 2,
+      "sourceGone": 3,
+      "internal": 4,
+      "flowControl": 5,
+      "clientGone": 6,
+      "timeout": 7
+    },
+    "close": {
+      "normal": 1000,
+      "goingAway": 1001,
+      "badFrame": 4400,
+      "unauthenticated": 4401,
+      "forbidden": 4403,
+      "sourceOffline": 4404,
+      "protocolUnsupported": 4409,
+      "frameTooLarge": 4413,
+      "limitReached": 4429,
+      "tunnelAuthFailed": 4490,
+      "tunnelReplaced": 4491,
+      "tunnelGoaway": 4492
+    }
+  },
+  "identity": {
+    "ASSERTION": {
+      "ttlMs": 300000,
+      "replayWindowMs": 600000,
+      "skewMs": 300000
+    },
+    "DEVICE_CODE": {
+      "ttlMs": 600000,
+      "intervalMs": 5000,
+      "userCodeAlphabet": "BCDFGHJKLMNPQRSTVWXZ",
+      "userCodeLength": 8
+    },
+    "PASSWORD_POLICY": {
+      "minLengthDefault": 12,
+      "minLengthFloor": 10,
+      "minLengthCeiling": 64,
+      "maxBytes": 1024,
+      "rejectCommon": true,
+      "rejectContainsName": true,
+      "minNameLength": 3
+    },
+    "REGISTRATION_TOKEN": {
+      "ttlMs": 600000
+    },
+    "RELAY_TOKEN": {
+      "ttlMs": 3600000
+    },
+    "SCRYPT": {
+      "cost": 32768,
+      "block": 8,
+      "parallel": 1,
+      "length": 32,
+      "saltBytes": 16
+    },
+    "SESSION": {
+      "accessTtlMs": 900000,
+      "refreshTtlMs": 2592000000,
+      "refreshLeadMs": 120000,
+      "wsTicketTtlMs": 30000
+    },
+    "SOURCE_JWS": {
+      "ttlMs": 60000
+    },
+    "THROTTLE": {
+      "lockThreshold": 5,
+      "lockBaseMs": 60000,
+      "lockMaxMs": 900000,
+      "failureWindowMs": 3600000,
+      "ipBucketCapacity": 20,
+      "ipBucketWindowMs": 60000
+    },
+    "TOKEN_HASH_KINDS": [
+      "bootstrap",
+      "access",
+      "refresh",
+      "csrf",
+      "reset"
+    ],
+    "TOKEN_HASH_PREFIX": "armadra/identity/v1/",
+    "TUNNEL_TOKEN": {
+      "ttlMs": 3600000
+    }
+  }
+}

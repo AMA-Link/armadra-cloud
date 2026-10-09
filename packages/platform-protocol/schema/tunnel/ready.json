@@ -1,0 +1,77 @@
+{
+  "$id": "tunnel/ready.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "ready"
+    },
+    "tunnelId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "maxStreams": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "streamWindow": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tunnelWindow": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "maxFrameBytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "maxStreams",
+        "streamWindow",
+        "tunnelWindow",
+        "maxFrameBytes"
+      ]
+    },
+    "heartbeatMs": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "protocol": {
+      "type": "object",
+      "properties": {
+        "major": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ]
+    }
+  },
+  "required": [
+    "type",
+    "tunnelId",
+    "limits",
+    "heartbeatMs",
+    "protocol"
+  ]
+}

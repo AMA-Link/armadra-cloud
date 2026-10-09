@@ -1,6 +1,6 @@
 {
   "name": "@armadra/platform-protocol",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "description": "Armadra 平台协议：隧道帧、断言声明、/v1 契约、错误码与身份参数",
   "type": "module",
   "license": "MIT",
@@ -42,18 +42,22 @@
     "./fixtures": {
       "types": "./dist/fixtures/index.d.ts",
       "default": "./dist/fixtures/index.js"
-    }
+    },
+    "./schema/*": "./schema/*"
   },
   "files": [
     "dist",
-    "fixtures"
+    "fixtures",
+    "schema"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "fixtures": "node scripts/gen-fixtures.ts",
-    "fixtures:check": "node scripts/gen-fixtures.ts --check"
+    "fixtures:check": "node scripts/gen-fixtures.ts --check",
+    "schema": "node scripts/gen-schema.ts",
+    "schema:check": "node scripts/gen-schema.ts --check"
   },
   "peerDependencies": {
     "zod": ">=4.0.0 <5"
