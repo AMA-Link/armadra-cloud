@@ -1,6 +1,6 @@
 {
   "name": "@armadra/cloud",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@armadra/cloud-shared": "workspace:*",
+    "@armadra/control-core": "workspace:*",
     "@armadra/platform-protocol": "workspace:*",
     "zod": "4.4.3"
   },
