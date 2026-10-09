@@ -9,15 +9,17 @@ Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`，以�
 
 ## 目录
 
-| 路径                         | 内容                                                       |
-| ---------------------------- | ---------------------------------------------------------- |
-| `apps/cloud`                 | 控制面（`armadra-cloud`）                                  |
-| `apps/relay`                 | 中继（`armadra-relay`）                                    |
-| `packages/platform-protocol` | 协议包：隧道帧、断言、`/v1` 契约、错误码、身份参数、夹具   |
-| `packages/cloud-shared`      | 内部共享：配置、日志、健康检查、HTTP、PostgreSQL 与 Redis  |
-| `deploy/`                    | compose 与部署说明（[deploy/README.md](deploy/README.md)） |
-| `docs/`                      | 契约与运维文档（[索引](docs/README.md)）                   |
-| `tools/`                     | 仓库校验、契约生成、工作流校验、第三方声明                 |
+| 路径                         | 内容                                                           |
+| ---------------------------- | -------------------------------------------------------------- |
+| `apps/cloud`                 | 控制面（`armadra-cloud`）                                      |
+| `apps/relay`                 | 中继（`armadra-relay`）                                        |
+| `packages/platform-protocol` | 协议包：隧道帧、断言、`/v1` 契约、错误码、身份参数、夹具       |
+| `packages/relay-kernel`      | 中继内核：隧道、边缘、限流、令牌校验（两种模式共用）           |
+| `packages/control-core`      | 控制核：存储端口、账号 / 会话 / 源 / 链接服务、`/v1` 路由      |
+| `packages/cloud-shared`      | 内部共享：配置、日志、健康检查、HTTP、JWS、PostgreSQL 与 Redis |
+| `deploy/`                    | compose 与部署说明（[deploy/README.md](deploy/README.md)）     |
+| `docs/`                      | 契约与运维文档（[索引](docs/README.md)）                       |
+| `tools/`                     | 仓库校验、契约生成、工作流校验、第三方声明                     |
 
 ## 准备
 

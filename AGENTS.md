@@ -3,11 +3,13 @@
 ## 代码边界
 
 - `apps/cloud` 是控制面，`apps/relay` 是中继；`apps/relay` 不得 import `apps/cloud`，两者只共享 `packages/*`。两个 app 都不得 import Armadra 仓的源码；与 Armadra 的全部往来只经 `@armadra/platform-protocol` 与容器镜像。
-- `@orpc/*` 只能出现在 `packages/platform-protocol/src/cloud-api/`、`apps/cloud/src/http/rpc.ts`、`apps/relay/src/personal/api.ts`、`tools/contract/`（ESLint `no-restricted-imports` 守）。
+- 共享内核两个包：`packages/relay-kernel`（隧道终端、多路复用与信用窗口、心跳、边缘转发、限流、clientIp、媒体票、令牌校验、`ControlPlane` 接口与内存实现）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 不 import `control-core`、不带 PostgreSQL / Redis；`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与 `relay-kernel`；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
+- `/v1/*` 的路由表只有 `control-core` 的 `createCloudRouter` 一份：personal 给处理器、其余答 404；cloud 未实现的统一答 501。
+- `@orpc/*` 只能出现在 `packages/platform-protocol/src/cloud-api/`、`packages/control-core/src/router.ts`、`tools/contract/`（ESLint `no-restricted-imports` 守）。
 - 协议包只含 zod schema、类型、纯编解码与常量，不 import `node:*`（`src/fixtures/` 例外，只在测试里用）。
 - 错误码只从 `@armadra/platform-protocol/errors` 取；线上形状 `{ code, message, requestId?, details? }`，JSON camelCase。
 - relay 不碰数据库；relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
-- `personal` 模式不得引入对 PostgreSQL / Redis 的运行时依赖（`control/memory.ts` 的 import 扫描测试守）。
+- `personal` 模式不得引入对 PostgreSQL / Redis 的运行时依赖（`apps/relay/src/boundaries.test.ts` 连同它装配的内核与控制核一起扫）。
 
 ## 范围与优先级
 
@@ -32,7 +34,7 @@
 
 - 怎么跑见 [README](README.md)；文档索引在 [docs/README.md](docs/README.md)，新增文档要登记。
 - 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表与 `cloud-openapi.json` 由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
-- 协议包的黄金夹具与身份向量是生成物：改了帧、声明、契约或身份常量，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`node scripts/gen-vectors.mjs`），`pnpm protocol:check` 守住。
+- 协议包的黄金夹具、schema 导出（`schema/`，JSON Schema、错误码表、常量与 OpenAPI）与身份向量是生成物：改了帧、声明、契约或身份常量，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`pnpm --filter @armadra/platform-protocol schema`、`pnpm contract:generate`、`node scripts/gen-vectors.mjs`），`pnpm protocol:check` 守住。
 - 验证：`pnpm check`、`pnpm repo:test`、`pnpm test`、`pnpm test:integration`（需 `pnpm dev:up`）、`pnpm images:build`。
 - 发布（npm、GHCR）、域名、证书、密钥都是对外操作，由维护者执行；本地绝不手动 `npm publish` / `docker push`。
 - 依赖写精确版本（无 `^`）；改生产依赖后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。

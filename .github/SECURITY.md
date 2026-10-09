@@ -31,9 +31,9 @@ Do not include real credentials, signing keys or `state.json`; use test accounts
 
 ## 范围 / Scope
 
-范围内：本仓库的中继（`apps/relay`，personal 与 saas 模式）、控制面（`apps/cloud`）、协议包（`packages/platform-protocol`）、共享库（`packages/cloud-shared`），以及 `deploy/` 下的参考部署与镜像构建。
+范围内：本仓库的中继（`apps/relay`，personal 与 saas 模式）、控制面（`apps/cloud`）、协议包（`packages/platform-protocol`）、中继内核与控制核（`packages/relay-kernel`、`packages/control-core`）、共享库（`packages/cloud-shared`），以及 `deploy/` 下的参考部署与镜像构建。
 
-In scope: the relay (`apps/relay`, personal and saas modes), the control plane (`apps/cloud`), the protocol package (`packages/platform-protocol`), the shared library (`packages/cloud-shared`), and the reference deployments and image builds under `deploy/`.
+In scope: the relay (`apps/relay`, personal and saas modes), the control plane (`apps/cloud`), the protocol package (`packages/platform-protocol`), the relay kernel and control core (`packages/relay-kernel`, `packages/control-core`), the shared library (`packages/cloud-shared`), and the reference deployments and image builds under `deploy/`.
 
 范围外：Armadra 客户端（桌面、服务器壳、网页、手机端）的问题请向 Armadra 仓库报告；PostgreSQL、Redis、反向代理、ACME 服务等第三方组件自身的问题请向对应项目报告；自行修改过的部署配置导致的暴露不在范围内。
 

@@ -200,7 +200,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §12 媒体票
 
-`<video src>`、`<audio src>`、`<img src>` 与 `<a href download>` 带不了 `Armadra-Relay-Token` 头，经中继的源上的媒体只能整份取回。媒体票让浏览器直接取：客户端用带头的请求在源地址下换一张票，浏览器再按票取，边缘把请求转到源上签票时指定的那一条路径。实现在 `apps/relay/src/edge/media-tickets.ts`，两种模式相同。
+`<video src>`、`<audio src>`、`<img src>` 与 `<a href download>` 带不了 `Armadra-Relay-Token` 头，经中继的源上的媒体只能整份取回。媒体票让浏览器直接取：客户端用带头的请求在源地址下换一张票，浏览器再按票取，边缘把请求转到源上签票时指定的那一条路径。实现在 `packages/relay-kernel/src/edge/media-tickets.ts`，两种模式相同。
 
 - **签票**：`POST <源地址>/_relay/media-tickets`，带有效中继令牌（与 §7 同一道校验与限流，源要在线），体 `{ "path": "/api/media/<core 票>" }`（不超过 4 KiB）。`path` 是转给源的路径：以 `/` 开头、不以 `//` 或 `/_relay/` 开头、不含 `.` / `..` 段、空白、控制字符、`#` 与 `\`，不超过 2048 字节，否则 `400 bad_request`。答 `200 { ticket, path: "/_relay/m/<票>", expiresAt }`，`path` 相对源地址，`Cache-Control: no-store`。这条路径由中继自己答，不进隧道。
 - **兑票**：`GET` / `HEAD <源地址>/_relay/m/<票>`，不要令牌。票不认识、过期、不是这个源或签票令牌已撤销 → 按 IP 严格限流后 `404 not_found`；其它方法 `400 bad_request`；认得的票按签票令牌的 `jti` 与账号 `sub` 计数（§7 同一组桶），源离线 `503 source_offline`。转给源的请求与 §7 的 HTTP 转发相同（剥逐跳头、加 `X-Forwarded-*`，`Range` 等原样），路径换成签票时的 `path`；源的响应原样透传。
