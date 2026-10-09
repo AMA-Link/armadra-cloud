@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题 / Security vulnerability
+    url: https://github.com/Owlbay/armadra-cloud/security/advisories/new
+    about: 请私下报告，不要写进 issue。见 SECURITY.md。 / Please report privately, not in an issue. See SECURITY.md.
+  - name: 文档索引 / Documentation index
+    url: https://github.com/Owlbay/armadra-cloud/blob/main/docs/README.md
+    about: 开 issue 前可以先查契约、部署说明与运维手册。 / Check the contract, deployment notes and runbooks before opening an issue.
