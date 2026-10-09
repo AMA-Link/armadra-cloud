@@ -15,6 +15,7 @@ import { createMemoryControlPlane } from "../control/memory.ts";
 import type { LimitKind, LimitRule } from "../control/types.ts";
 import { pathAddressing } from "../edge/addressing.ts";
 import { errorName } from "../log.ts";
+import { createClientIp, type ClientIp } from "../http/client-ip.ts";
 import { startRelay, type RunningRelay } from "../main.ts";
 import { RELAY_VERSION } from "../version.ts";
 import {
@@ -189,7 +190,18 @@ export async function startPersonalRelay(
     log.warn("页面产物目录没有 index.html，/app 答错误页", {
       webRoot: options.webRoot,
     });
+  const trustedProxy =
+    options.trustedProxy ?? store.current.settings.trustedProxy;
+  let clientIp: ClientIp;
+  try {
+    clientIp = createClientIp(trustedProxy);
+  } catch (error) {
+    throw new Error(
+      `trustedProxy 不合法：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const api = createPersonalApi(context, stream, {
+    clientIp,
     webApp: () => (webRoot ? `${signer.issuer}/app/` : null),
     onError: (error) => log.error("请求处理失败", { error: errorName(error) }),
   });
@@ -207,6 +219,7 @@ export async function startPersonalRelay(
     addressing: pathAddressing(),
     // 与登记时发给源的可信来源相同；所有源一样，答案不随某个源变。
     corsOrigins: () => trustedOriginsFor(store.current),
+    clientIp,
     log,
     probes: {
       dataDir: () => access(options.dataDir, constants.R_OK | constants.W_OK),

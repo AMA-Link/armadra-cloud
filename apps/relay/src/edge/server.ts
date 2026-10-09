@@ -39,6 +39,7 @@ import {
 import { errorName, type RelayLog } from "../log.ts";
 import type { RelayMetrics } from "../metrics.ts";
 import { TunnelUnavailableError, type Tunnel } from "../tunnel/tunnel.ts";
+import { createClientIp, type ClientIp } from "../http/client-ip.ts";
 import type { Addressing, AddressTarget } from "./addressing.ts";
 import {
   errorCorsHeaders,
@@ -80,6 +81,8 @@ export interface EdgeOptions {
   /** 对客户端 WS 的 ping 间隔与无响应断开时长（缺省 30 秒 / 60 秒）。 */
   wsPingMs?: number;
   wsIdleMs?: number;
+  /** 客户端 IP 的取法（受信代理见 `http/client-ip.ts`）；缺省用直连对端地址。 */
+  clientIp?: ClientIp;
   /** 媒体票的时钟（测试用）。 */
   now?: () => number;
 }
@@ -132,10 +135,6 @@ type Admission =
       sourceId?: string;
     };
 
-function remoteIpOf(req: IncomingMessage): string {
-  return req.socket.remoteAddress ?? "";
-}
-
 function originOf(req: IncomingMessage): string | null {
   const origin = req.headers.origin;
   return typeof origin === "string" ? origin : null;
@@ -164,10 +163,12 @@ export class Edge {
   private readonly options: EdgeOptions;
   private readonly sockets = new Map<Duplex, EdgeConnection>();
   private readonly media: MediaTickets;
+  private readonly clientIp: ClientIp;
 
   constructor(options: EdgeOptions) {
     this.options = options;
     this.media = new MediaTickets(options.now);
+    this.clientIp = options.clientIp ?? createClientIp();
   }
 
   async handleRequest(
@@ -385,7 +386,7 @@ export class Edge {
   ): Promise<void> {
     const { control, lookup } = this.options;
     const cors = this.errorCors(req, target.sourceId);
-    const remoteIp = remoteIpOf(req);
+    const remoteIp = this.clientIp(req);
     const refuse = async (code: ErrorCode): Promise<void> => {
       req.resume();
       this.options.metrics.edgeConnection(code);
@@ -449,7 +450,10 @@ export class Edge {
       sendRelayError(res, "not_found", { cors: this.errorCors(req) });
       return;
     }
-    const byIp = await control.limits.hit("edge.preflight.ip", remoteIpOf(req));
+    const byIp = await control.limits.hit(
+      "edge.preflight.ip",
+      this.clientIp(req),
+    );
     if (!byIp.allowed) {
       this.options.metrics.edgeConnection("rate_limited");
       sendRelayError(res, "rate_limited", {
@@ -520,7 +524,7 @@ export class Edge {
     });
     if (!target) return { ok: false, code: "not_found" };
     const { sourceId } = target;
-    const remoteIp = remoteIpOf(req);
+    const remoteIp = this.clientIp(req);
     const verified = await verifyRelayToken(auth, token, target.sourceId);
     if (!verified.ok) {
       // 无令牌 / 令牌无效 / 源不符：按 IP 严格限流（令牌校验是本地验签，先验后计）。

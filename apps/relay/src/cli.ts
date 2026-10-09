@@ -47,7 +47,10 @@ serve:
   --limit-anonymous N      无令牌或令牌无效的请求按 IP 每分钟上限（或 RELAY_LIMIT_ANONYMOUS），默认 60
   --limit-preflight N      预检按 IP 每分钟上限（或 RELAY_LIMIT_PREFLIGHT），默认 1200
   --limit-token N          有效令牌每分钟上限（或 RELAY_LIMIT_TOKEN），默认 1200
-  --limit-account N        同一账号全部令牌每分钟上限（或 RELAY_LIMIT_ACCOUNT），默认 3600`;
+  --limit-account N        同一账号全部令牌每分钟上限（或 RELAY_LIMIT_ACCOUNT），默认 3600
+  --trusted-proxy LIST     受信反向代理的 IP / CIDR，逗号分隔（或 RELAY_TRUSTED_PROXY），如 127.0.0.1/32,::1/128；
+                           直连对端在列表内才读 X-Forwarded-For / X-Real-IP 取客户端 IP，默认空（不信任任何代理）
+  --trusted-proxy-prefer H 先读哪个头：forwarded-for（默认）| real-ip（或 RELAY_TRUSTED_PROXY_PREFER）`;
 
 function onSignal(stop: () => Promise<void>): void {
   const handler = () => {

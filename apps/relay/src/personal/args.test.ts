@@ -243,3 +243,40 @@ it("isLoopback", () => {
     false,
   );
 });
+
+describe("parsePersonalServe 受信代理", () => {
+  const base = ["--data-dir", "d", "--host", "127.0.0.1"];
+  it("缺省不给（不信任任何代理）", () => {
+    expect(parsePersonalServe(base, {}, "/w").trustedProxy).toBeUndefined();
+  });
+  it("命令行优先于环境变量，逗号分隔", () => {
+    expect(
+      parsePersonalServe(
+        [
+          ...base,
+          "--trusted-proxy",
+          "127.0.0.1/32, ::1/128",
+          "--trusted-proxy-prefer",
+          "real-ip",
+        ],
+        { RELAY_TRUSTED_PROXY: "10.0.0.0/8" },
+        "/w",
+      ).trustedProxy,
+    ).toEqual({ proxies: ["127.0.0.1/32", "::1/128"], prefer: "real-ip" });
+    expect(
+      parsePersonalServe(base, { RELAY_TRUSTED_PROXY: "10.0.0.0/8" }, "/w")
+        .trustedProxy,
+    ).toEqual({ proxies: ["10.0.0.0/8"] });
+  });
+  it("不合法就拒绝", () => {
+    for (const extra of [
+      ["--trusted-proxy", "nope"],
+      ["--trusted-proxy", "10.0.0.0/40"],
+      ["--trusted-proxy", "127.0.0.1", "--trusted-proxy-prefer", "x"],
+      ["--trusted-proxy-prefer", "real-ip"],
+    ])
+      expect(() => parsePersonalServe([...base, ...extra], {}, "/w")).toThrow(
+        UsageError,
+      );
+  });
+});

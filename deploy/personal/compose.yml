@@ -9,6 +9,15 @@
 #   docker compose -f deploy/personal/compose.yml exec relay node /app/out/cli.js personal passwd --password-file /run/secrets/relay_password
 # 缺省自签 TLS（CA 在卷里，/ca.crt 可下载）。有域名时把 command 换成 --tls acme --acme-email <邮箱>
 # 并加映射 80:80；已有证书用 --tls file 与 RELAY_TLS_CERT / RELAY_TLS_KEY。
+# 放在反向代理（OpenResty / nginx / CDN）后面：中继只看到代理的地址，按 IP 的限流与登录锁定会变成全站一个桶。
+# 加 --trusted-proxy（或 RELAY_TRUSTED_PROXY）列出代理的 IP / CIDR，例如同机 OpenResty 用
+#   --trusted-proxy 127.0.0.1/32,::1/128
+# 只有直连对端在列表里才读 X-Forwarded-For（自右向左剔除受信跳数，取第一个不受信的地址）；
+# 其余对端发来的转发头一律忽略。前面还有 CDN 时，把 CDN 的出口网段也列进去，或让 OpenResty 用
+# real_ip 模块还原后写 X-Real-IP，再加 --trusted-proxy-prefer real-ip。代理要覆盖而不是追加客户端自带的头：
+#   proxy_set_header X-Forwarded-For $remote_addr;   # 直接面向公网时
+#   proxy_set_header X-Real-IP $remote_addr;
+# 也可写进 state.json 的 settings.trustedProxy: { "proxies": ["127.0.0.1/32"], "prefer": "forwarded-for" }；命令行优先。
 # 页面：把 Armadra apps/web 的构建产物挂到 /app/web（或用带页面的镜像），否则 /app 答错误页。
 name: armadra-relay-personal
 
