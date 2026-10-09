@@ -192,7 +192,7 @@ describe("文件证书", () => {
     const keyFile = join(dir, "key.pem");
     writeFileSync(certFile, first.cert);
     writeFileSync(keyFile, first.key);
-    const manager = fileManager(certFile, keyFile);
+    const manager = fileManager(certFile, keyFile, { pollMs: 100 });
     const changes: string[] = [];
     const stop = manager.start(
       (material) => changes.push(material.fingerprint),
@@ -201,7 +201,9 @@ describe("文件证书", () => {
     try {
       writeFileSync(keyFile, second.key);
       writeFileSync(certFile, second.cert);
-      await new Promise((resolve) => setTimeout(resolve, 3500));
+      const deadline = Date.now() + 8000;
+      while (changes.length === 0 && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 50));
       expect(changes).toEqual([second.fingerprint]);
       expect(manager.current().fingerprint).toBe(second.fingerprint);
     } finally {
