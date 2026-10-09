@@ -1,86 +1,74 @@
 /**
- * personal 控制面各模块共用的上下文与错误。
- *
- * `PersonalError` 只带注册表里的码；HTTP 层按码查状态码，`message` 是固定英文短句，
- * 界面按码取 i18n 文案。
+ * personal 的控制面装配：状态文件端口 + 签名钥 + 内存控制面（限流、在线、关隧道）+ 事件总线。
+ * 服务本身在 `@armadra/control-core`。
  */
-import type { MeStreamEvent } from "@armadra/platform-protocol/cloud-api";
-import type { ErrorCode } from "@armadra/platform-protocol/errors";
+import { createEventBus } from "@armadra/control-core/events";
+import {
+  DEFAULT_TENANT,
+  type ConnectionFilter,
+  type ControlContext,
+} from "@armadra/control-core/ports";
+import { isRevokedJti } from "@armadra/control-core/revocation";
+import { Signer } from "@armadra/control-core/signer";
+import type { MemoryControlPlane } from "@armadra/relay-kernel/control/memory";
 
-import type { MemoryControlPlane } from "../control/memory.ts";
-import type { EdgeConnectionFilter } from "../edge/server.ts";
-import type { Signer } from "./signer.ts";
+import { passwordViolation } from "./passwords.ts";
+import { createStatePorts, stateKeys } from "./ports.ts";
 import type { StateStore } from "./state.ts";
 
-export class PersonalError extends Error {
-  readonly code: ErrorCode;
-  readonly retryAfterMs?: number;
-  constructor(code: ErrorCode, options: { retryAfterMs?: number } = {}) {
-    super(code);
-    this.name = "PersonalError";
-    this.code = code;
-    if (options.retryAfterMs !== undefined)
-      this.retryAfterMs = Math.max(0, Math.ceil(options.retryAfterMs));
-  }
+export interface PersonalContext extends ControlContext {
+  store: StateStore;
+  control: MemoryControlPlane;
 }
 
-/** 给 `/v1/me/stream` 的事件（不含 ping / pong），带上它关心的源。 */
-export type PersonalEvent = Exclude<
-  MeStreamEvent,
-  { type: "ping" } | { type: "pong" }
->;
-
-export interface PersonalContext {
+export function createPersonalContext(input: {
   store: StateStore;
-  signer: Signer;
   control: MemoryControlPlane;
+  signer: Signer;
   now: () => number;
   /** 中继内核起来之后才有：断开撤销掉的客户端 WS。 */
-  disconnect: (filter: EdgeConnectionFilter) => void;
-  /** 进程内事件总线（`me/stream`）。给了 `audience` 就只发给那条链接的访客。 */
-  emit: (event: PersonalEvent, audience?: EventAudience) => void;
-  subscribe: (
-    fn: (event: PersonalEvent, audience?: EventAudience) => void,
-  ) => () => void;
-}
-
-export interface EventAudience {
-  linkId: string;
-}
-
-/** 进程内事件总线。 */
-export function createEventBus(): Pick<PersonalContext, "emit" | "subscribe"> {
-  const listeners = new Set<
-    (event: PersonalEvent, audience?: EventAudience) => void
-  >();
+  disconnect: (filter: ConnectionFilter) => void;
+}): PersonalContext {
+  const { store, control } = input;
   return {
-    emit(event, audience) {
-      for (const listener of [...listeners]) {
-        try {
-          listener(event, audience);
-        } catch {
-          // 一个订阅者出错不影响其它订阅者。
-        }
-      }
+    tenantId: DEFAULT_TENANT,
+    ports: createStatePorts(store),
+    signer: input.signer,
+    limits: control.limits,
+    presence: control.presence,
+    relay: {
+      route: (sourceId) => control.routes.get(sourceId),
+      closeTunnel: (sourceId) =>
+        control.command({ type: "closeTunnel", sourceId }),
+      disconnect: input.disconnect,
     },
-    subscribe(fn) {
-      listeners.add(fn);
-      return () => listeners.delete(fn);
-    },
+    passwordPolicy: passwordViolation,
+    now: input.now,
+    ...createEventBus(),
+    store,
+    control,
   };
 }
 
-/** `acct:<账号名>`：personal 唯一账号的 accountId。 */
-export function ownerSubject(name: string): string {
-  return `acct:${name}`;
+/** 签名钥读状态文件。 */
+export function stateSigner(store: StateStore, now: () => number): Signer {
+  return new Signer(stateKeys(store), now);
 }
 
-export function guestPrefix(linkId: string): string {
-  return `guest:${linkId}:`;
+/** 中继令牌 / 隧道令牌的撤销判断（按 `jti` 的形状查状态文件）。 */
+export function stateRevocation(
+  store: StateStore,
+  now: () => number,
+): (jti: string) => Promise<boolean> {
+  const context = { tenantId: DEFAULT_TENANT, ports: createStatePorts(store) };
+  return (jti) => isRevokedJti(context, jti, now());
 }
 
-/** `guest:<linkId>:<随机>` → linkId；不是访客答 null。 */
-export function guestLinkId(subject: string): string | null {
-  const match = /^guest:([0-9a-f]{16}):[0-9a-f]+$/.exec(subject);
-  return match?.[1] ?? null;
+/** CLI（不经 serve）用的最小装配：只有状态文件端口与口令策略。 */
+export function stateOnly(store: StateStore) {
+  return {
+    tenantId: DEFAULT_TENANT,
+    ports: createStatePorts(store),
+    passwordPolicy: passwordViolation,
+  };
 }

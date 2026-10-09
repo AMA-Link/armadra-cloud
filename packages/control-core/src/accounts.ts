@@ -1,7 +1,7 @@
 /**
- * 账号与登录（中继设计 §6.2，平台设计 §17.3）。只有一个账号。
+ * 账号与登录（中继设计 §6.2，平台设计 §17.3）。
  *
- * 登录：按 IP 限流（`login.ip`，20 次 / 分钟）→ 账号名相等 → 锁定检查 → scrypt 比对（定时
+ * 登录：按 IP 限流（`login.ip`，20 次 / 分钟）→ 按账号名找账号 → 锁定检查 → scrypt 比对（定时
  * 安全）→ 失败计数 / 锁定 → 成功清零 → 建设备 → 签会话。
  *
  * 锁定与 core `identity/throttle.ts` 同一算法（常量来自 identity-vectors 的 `THROTTLE`）：
@@ -18,25 +18,14 @@ import {
   THROTTLE,
 } from "@armadra/platform-protocol/identity-vectors";
 
-import {
-  ownerSubject,
-  PersonalError,
-  type PersonalContext,
-} from "./context.ts";
+import { ControlError } from "./errors.ts";
 import {
   burnPasswordCheck,
   hashPassword,
-  passwordViolation,
   verifyPassword,
 } from "./passwords.ts";
+import type { ControlContext, Lockout } from "./ports.ts";
 import { createDevice, sessionFor } from "./sessions.ts";
-import type { State } from "./state.ts";
-
-interface Lockout {
-  failures: number;
-  lockedUntilMs: number;
-  lastFailureAtMs: number;
-}
 
 /** 一次失败之后的计数与锁（纯函数）。 */
 export function nextLockout(previous: Lockout, nowMs: number): Lockout {
@@ -60,7 +49,7 @@ export interface LoginInput {
   device: DeviceInput;
 }
 
-export function createAccounts(context: PersonalContext) {
+export function createAccounts(context: ControlContext) {
   /** 不存在的账号名的失败计数，只在内存。 */
   const unknown = new Map<string, Lockout>();
 
@@ -76,73 +65,92 @@ export function createAccounts(context: PersonalContext) {
     };
     const wait = lockedFor(previous, nowMs);
     if (wait > 0)
-      throw new PersonalError("account_locked", { retryAfterMs: wait });
+      throw new ControlError("account_locked", { retryAfterMs: wait });
     await burnPasswordCheck(password);
     if (unknown.size >= MAX_UNKNOWN_NAMES) unknown.clear();
     unknown.set(name, nextLockout(previous, context.now()));
-    throw new PersonalError("credentials_invalid");
+    throw new ControlError("credentials_invalid");
   }
 
   return {
     async login(input: LoginInput, ip: string): Promise<Session> {
-      const byIp = await context.control.limits.hit("login.ip", ip);
+      const byIp = await context.limits.hit("login.ip", ip);
       if (!byIp.allowed)
-        throw new PersonalError("rate_limited", {
+        throw new ControlError("rate_limited", {
           retryAfterMs: byIp.retryAfterMs,
         });
-      const account = context.store.current.account;
-      if (input.account !== account.name)
+      const account = await context.ports.accounts.findByName(
+        context.tenantId,
+        input.account,
+      );
+      if (!account)
         return loginUnknown(input.account.slice(0, 128), input.password);
+      const { accountId } = account;
       const wait = lockedFor(account, context.now());
       if (wait > 0)
-        throw new PersonalError("account_locked", { retryAfterMs: wait });
+        throw new ControlError("account_locked", { retryAfterMs: wait });
       const ok = await verifyPassword(input.password, account.password);
       const nowMs = context.now();
       if (!ok) {
-        context.store.update((draft) => {
-          Object.assign(draft.account, nextLockout(draft.account, nowMs));
-        });
-        throw new PersonalError("credentials_invalid");
+        await context.ports.accounts.update(
+          context.tenantId,
+          accountId,
+          (draft) => {
+            if (draft) Object.assign(draft, nextLockout(draft, nowMs));
+          },
+        );
+        throw new ControlError("credentials_invalid");
       }
-      const created = context.store.update((draft) => {
-        if (draft.account.failures !== 0 || draft.account.lockedUntilMs !== 0) {
-          draft.account.failures = 0;
-          draft.account.lockedUntilMs = 0;
-        }
-        return createDevice(draft, {
-          subject: ownerSubject(draft.account.name),
-          device: input.device,
-          nowMs,
-        });
+      await context.ports.accounts.update(
+        context.tenantId,
+        accountId,
+        (draft) => {
+          if (draft && (draft.failures !== 0 || draft.lockedUntilMs !== 0)) {
+            draft.failures = 0;
+            draft.lockedUntilMs = 0;
+          }
+        },
+      );
+      const created = await createDevice(context, {
+        subject: accountId,
+        device: input.device,
+        nowMs,
       });
       return sessionFor(context, created.device, created.refreshToken);
     },
   };
 }
 
-/** 口令策略不过就抛（CLI 用；码与 core 同名）。 */
-export function checkPassword(password: string, name: string): void {
-  const rule = passwordViolation(password, [name]);
-  if (rule) throw new PersonalError(rule);
+/** 口令策略不过就抛（码与 core 同名）。 */
+export function checkPassword(
+  context: Pick<ControlContext, "passwordPolicy">,
+  password: string,
+  name: string,
+): void {
+  const rule = context.passwordPolicy(password, [name]);
+  if (rule) throw new ControlError(rule);
 }
 
 /** 改口令：重新派生、清锁、撤销账号本人的全部设备（访客不受影响，由链接管）。 */
 export async function changePassword(
-  update: (fn: (draft: State) => void) => void,
+  context: Pick<ControlContext, "tenantId" | "ports" | "passwordPolicy">,
   name: string,
   password: string,
   nowMs: number,
 ): Promise<void> {
-  checkPassword(password, name);
+  checkPassword(context, password, name);
   const record = await hashPassword(password);
-  update((draft) => {
-    draft.account.password = record;
-    draft.account.updatedAtMs = nowMs;
-    draft.account.failures = 0;
-    draft.account.lockedUntilMs = 0;
-    const subject = ownerSubject(draft.account.name);
-    for (const device of draft.devices)
-      if (device.subject === subject && device.revokedAtMs === null)
-        device.revokedAtMs = nowMs;
-  });
+  const account = await context.ports.accounts.findByName(
+    context.tenantId,
+    name,
+  );
+  const found =
+    account !== null &&
+    (await context.ports.accounts.resetPassword(
+      context.tenantId,
+      account.accountId,
+      record,
+      nowMs,
+    ));
+  if (!found) throw new ControlError("not_found");
 }

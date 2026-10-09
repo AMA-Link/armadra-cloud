@@ -1,0 +1,28 @@
+{
+  "name": "@armadra/relay-kernel",
+  "version": "0.2.3",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "中继内核：隧道终端、多路复用与信用窗口、心跳、边缘转发、限流、clientIp、媒体票与令牌校验（不含 CLI、不含 personal 控制面，不发布）",
+  "exports": {
+    "./*": "./src/*.ts",
+    "./testing/*": "./test/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@armadra/cloud-shared": "workspace:*",
+    "@armadra/platform-protocol": "workspace:*",
+    "ws": "8.21.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}

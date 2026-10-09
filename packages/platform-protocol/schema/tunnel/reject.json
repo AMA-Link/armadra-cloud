@@ -1,0 +1,31 @@
+{
+  "$id": "tunnel/reject.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "reject"
+    },
+    "code": {
+      "type": "string",
+      "enum": [
+        "protocol_unsupported",
+        "tunnel_token_invalid",
+        "tunnel_token_expired",
+        "signature_invalid",
+        "source_revoked",
+        "rate_limited",
+        "replaced"
+      ]
+    },
+    "message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "type",
+    "code",
+    "message"
+  ]
+}

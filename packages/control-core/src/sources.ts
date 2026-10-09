@@ -1,13 +1,6 @@
 /**
  * 源（中继设计 §6.4，平台设计 §17.3 / §17.5）：注册令牌、注册、源 JWS 换隧道令牌、源目录、
- * 撤销、访问断言 + 中继令牌。
- *
- * 撤销靠 `jti` 的形状即时生效、重启后仍然有效（{@link isRevokedJti}）：
- *
- * - 隧道令牌 `t.<sourceId>.<随机>`：源被撤销或不在登记里 → 撤销；
- * - 中继令牌 `r.<deviceId>.<sourceId>.<随机>`：设备被撤销 / 过期、源被撤销，或访客的链接被撤销
- *   → 撤销；
- * - 访问令牌 `a.<deviceId>.<随机>`：同设备（校验在 sessions.ts）。
+ * 撤销、访问断言 + 中继令牌。撤销判断见 `revocation.ts`。
  */
 import { createPublicKey, verify } from "node:crypto";
 
@@ -35,15 +28,15 @@ import {
 } from "@armadra/platform-protocol/identity-vectors";
 import { LIMITS } from "@armadra/platform-protocol/tunnel";
 
-import {
-  guestLinkId,
-  ownerSubject,
-  PersonalError,
-  type PersonalContext,
-} from "./context.ts";
-import { randomToken, secretHash, sameHex } from "./secrets.ts";
-import { isLiveDevice, type Caller } from "./sessions.ts";
-import type { DeviceRecord, SourceRecord, State } from "./state.ts";
+import { ControlError } from "./errors.ts";
+import type {
+  ControlContext,
+  DeviceRecord,
+  SourceRecord,
+  TenantSettings,
+} from "./ports.ts";
+import { randomToken, secretHash } from "./secrets.ts";
+import type { Caller } from "./sessions.ts";
 
 /** 同时有效的注册令牌上限。 */
 const MAX_REGISTRATION_TOKENS = 20;
@@ -57,68 +50,46 @@ export function tunnelUrl(issuer: string): string {
   return `${issuer.replace(/^http/, "ws")}/t/v1`;
 }
 
-/** 页面来源：issuer 本身（托管页面在同一来源的 `/app/`）。 */
-export function trustedOriginsFor(state: State): string[] {
-  return [...new Set([...state.settings.trustedOrigins, state.issuer])];
-}
-
-/** 按 `jti` 判断令牌是否已撤销（见文件头）。 */
-export function isRevokedJti(
-  state: State,
-  jti: string,
-  nowMs: number,
-): boolean {
-  const [kind, id, sourceId] = jti.split(".");
-  if (kind === "t") {
-    const source = state.sources.find((row) => row.sourceId === id);
-    return !source || source.revokedAtMs !== null;
-  }
-  if (kind === "r" || kind === "a") {
-    const device = state.devices.find((row) => row.deviceId === id);
-    if (!device || !isLiveDevice(device, nowMs)) return true;
-    if (kind === "r") {
-      const source = state.sources.find((row) => row.sourceId === sourceId);
-      if (!source || source.revokedAtMs !== null) return true;
-    }
-    const linkId = guestLinkId(device.subject);
-    if (linkId === null) return false;
-    const link = state.links.find((row) => row.linkId === linkId);
-    return !link || link.revokedAtMs !== null;
-  }
-  return false;
-}
-
-function liveSource(state: State, sourceId: string): SourceRecord | undefined {
-  return state.sources.find(
-    (row) => row.sourceId === sourceId && row.revokedAtMs === null,
-  );
-}
-
-/** 调用方能看到的源：owner → 全部未撤销的；访客 → 链接指向的那一个。 */
-function visibleSources(state: State, caller: Caller): SourceRecord[] {
-  if (caller.role === "owner")
-    return state.sources.filter((row) => row.revokedAtMs === null);
-  const link = state.links.find(
-    (row) => row.linkId === caller.linkId && row.revokedAtMs === null,
-  );
-  if (!link) return [];
-  const source = liveSource(state, link.sourceId);
-  return source ? [source] : [];
+/** 页面来源：设置里的可信来源 + issuer 本身（托管页面在同一来源的 `/app/`）。 */
+export function trustedOriginsOf(
+  settings: Pick<TenantSettings, "issuer" | "trustedOrigins">,
+): string[] {
+  return [...new Set([...settings.trustedOrigins, settings.issuer])];
 }
 
 export function requireOwner(caller: Caller): void {
-  if (caller.role !== "owner") throw new PersonalError("forbidden");
+  if (caller.role !== "owner") throw new ControlError("forbidden");
 }
 
-export function createSources(context: PersonalContext) {
+export function createSources(context: ControlContext) {
+  const { tenantId, ports } = context;
   const replay = new ReplayCache(2 * SOURCE_JWS.ttlMs + ASSERTION.skewMs);
 
+  async function liveSource(sourceId: string): Promise<SourceRecord | null> {
+    const source = await ports.sources.get(tenantId, sourceId);
+    return source && source.revokedAtMs === null ? source : null;
+  }
+
+  /** 调用方能看到的源：owner → 全部未撤销的；访客 → 链接指向的那一个。 */
+  async function visibleSources(caller: Caller): Promise<SourceRecord[]> {
+    if (caller.role === "owner")
+      return (await ports.sources.list(tenantId)).filter(
+        (row) => row.revokedAtMs === null,
+      );
+    const link = caller.linkId
+      ? await ports.links.get(tenantId, caller.linkId)
+      : null;
+    if (!link || link.revokedAtMs !== null) return [];
+    const source = await liveSource(link.sourceId);
+    return source ? [source] : [];
+  }
+
   async function summary(
-    state: State,
+    issuer: string,
     source: SourceRecord,
     caller: Caller,
   ): Promise<SourceSummary> {
-    const route = await context.control.routes.get(source.sourceId);
+    const route = await context.relay.route(source.sourceId);
     return {
       sourceId: source.sourceId,
       name: source.name,
@@ -127,7 +98,7 @@ export function createSources(context: PersonalContext) {
       lastSeenAtMs: route ? context.now() : source.lastSeenAtMs,
       owner: caller.role === "owner",
       via: caller.role === "owner" ? "owner" : "link",
-      relayOrigin: state.issuer,
+      relayOrigin: issuer,
       coreVersion: route?.coreVersion ?? source.coreVersion,
     };
   }
@@ -166,7 +137,7 @@ export function createSources(context: PersonalContext) {
         jtiPrefix: `r.${device.deviceId}.${source.sourceId}`,
       },
     );
-    const route = await context.control.routes.get(source.sourceId);
+    const route = await context.relay.route(source.sourceId);
     return {
       assertion: assertion.token,
       assertionExpiresAtMs: assertion.expiresAtMs,
@@ -181,22 +152,21 @@ export function createSources(context: PersonalContext) {
   return {
     grant,
 
-    registrationToken(caller: Caller) {
+    async registrationToken(caller: Caller) {
       requireOwner(caller);
       const nowMs = context.now();
       const token = randomToken(32);
       const expiresAtMs = nowMs + REGISTRATION_TOKEN.ttlMs;
-      context.store.update((draft) => {
-        draft.registrationTokens = draft.registrationTokens.filter(
-          (row) => row.expiresAtMs > nowMs,
-        );
-        if (draft.registrationTokens.length >= MAX_REGISTRATION_TOKENS)
-          throw new PersonalError("limit_reached");
-        draft.registrationTokens.push({
+      const added = await ports.registrations.add(
+        tenantId,
+        {
           tokenHash: secretHash("registration", token),
           expiresAtMs,
-        });
-      });
+          accountId: caller.subject,
+        },
+        { nowMs, max: MAX_REGISTRATION_TOKENS },
+      );
+      if (!added) throw new ControlError("limit_reached");
       return {
         registrationToken: token,
         expiresAtMs,
@@ -217,42 +187,31 @@ export function createSources(context: PersonalContext) {
       },
       ip: string,
     ) {
-      const limited = await context.control.limits.hit(
-        "login.ip",
-        `register:${ip}`,
-      );
+      const limited = await context.limits.hit("login.ip", `register:${ip}`);
       if (!limited.allowed)
-        throw new PersonalError("rate_limited", {
+        throw new ControlError("rate_limited", {
           retryAfterMs: limited.retryAfterMs,
         });
       const nowMs = context.now();
       const hash = secretHash("registration", input.registrationToken);
-      context.store.update((draft) => {
-        const index = draft.registrationTokens.findIndex(
-          (row) => row.expiresAtMs > nowMs && sameHex(row.tokenHash, hash),
-        );
-        if (index < 0) throw new PersonalError("registration_token_invalid");
-        // 一次性：先消耗，后面就算拒绝也不能再用。
-        draft.registrationTokens.splice(index, 1);
-      });
+      // 一次性：先消耗，后面就算拒绝也不能再用。
+      const consumed = await ports.registrations.consume(tenantId, hash, nowMs);
+      if (!consumed) throw new ControlError("registration_token_invalid");
       if (input.protocol.major !== PROTOCOL_VERSION.major)
-        throw new PersonalError("protocol_unsupported");
+        throw new ControlError("protocol_unsupported");
       const publicJwk = {
         kty: "OKP" as const,
         crv: "Ed25519" as const,
         x: input.publicKey.x,
       };
-      const state = context.store.update((draft) => {
-        const existing = draft.sources.find(
-          (row) => row.sourceId === input.sourceId,
-        );
+      await ports.sources.put(tenantId, input.sourceId, (existing) => {
         if (
           existing &&
           existing.revokedAtMs === null &&
           existing.publicJwk.x !== publicJwk.x
         )
-          throw new PersonalError("source_taken");
-        const record: SourceRecord = {
+          throw new ControlError("source_taken");
+        return {
           sourceId: input.sourceId,
           name: input.name,
           kind: input.kind,
@@ -267,42 +226,37 @@ export function createSources(context: PersonalContext) {
           revokedAtMs: null,
           trustedOrigins: existing?.trustedOrigins ?? [],
         };
-        draft.sources = draft.sources.filter(
-          (row) => row.sourceId !== input.sourceId,
-        );
-        draft.sources.push(record);
-        return draft;
       });
+      const settings = await ports.tenants.get(tenantId);
       return {
-        issuer: state.issuer,
-        jwksUrl: `${state.issuer}/.well-known/jwks.json`,
-        relayOrigins: [state.issuer],
-        trustedOrigins: trustedOriginsFor(state),
+        issuer: settings.issuer,
+        jwksUrl: `${settings.issuer}/.well-known/jwks.json`,
+        relayOrigins: [settings.issuer],
+        trustedOrigins: trustedOriginsOf(settings),
         sourceId: input.sourceId,
-        ownerAccountId: ownerSubject(state.account.name),
+        ownerAccountId: consumed.accountId,
       };
     },
 
     /** `Authorization: Source <jws>` → 已登记的源；失败 `unauthenticated` / `source_revoked`。 */
-    authenticateSource(header: string | undefined): SourceRecord {
+    async authenticateSource(
+      header: string | undefined,
+    ): Promise<SourceRecord> {
       const match = /^Source\s+(\S+)$/.exec(header ?? "");
-      if (!match?.[1]) throw new PersonalError("unauthenticated");
+      if (!match?.[1]) throw new ControlError("unauthenticated");
       let parts: ReturnType<typeof splitCompactJws>;
       try {
         parts = splitCompactJws(match[1]);
       } catch {
-        throw new PersonalError("unauthenticated");
+        throw new ControlError("unauthenticated");
       }
       if (
         parts.header.typ !== undefined &&
         parts.header.typ !== TOKEN_TYPES.source
       )
-        throw new PersonalError("unauthenticated");
-      const state = context.store.current;
-      const source = state.sources.find(
-        (row) => row.sourceId === parts.header.kid,
-      );
-      if (!source) throw new PersonalError("unauthenticated");
+        throw new ControlError("unauthenticated");
+      const source = await ports.sources.get(tenantId, parts.header.kid);
+      if (!source) throw new ControlError("unauthenticated");
       let valid = false;
       try {
         valid = verify(
@@ -314,21 +268,20 @@ export function createSources(context: PersonalContext) {
       } catch {
         valid = false;
       }
-      if (!valid) throw new PersonalError("unauthenticated");
-      if (source.revokedAtMs !== null)
-        throw new PersonalError("source_revoked");
+      if (!valid) throw new ControlError("unauthenticated");
+      if (source.revokedAtMs !== null) throw new ControlError("source_revoked");
       const claims = sourceJwsClaimsSchema.safeParse(parts.payload);
-      if (!claims.success) throw new PersonalError("unauthenticated");
+      if (!claims.success) throw new ControlError("unauthenticated");
       const nowMs = context.now();
       const { iss, aud, iat, exp, jti } = claims.data;
-      if (iss !== source.sourceId || aud !== state.issuer)
-        throw new PersonalError("unauthenticated");
+      if (iss !== source.sourceId || aud !== context.signer.issuer)
+        throw new ControlError("unauthenticated");
       if (checkTimes({ iat, exp }, { nowMs, expectedAud: aud }))
-        throw new PersonalError("unauthenticated");
+        throw new ControlError("unauthenticated");
       if ((exp - iat) * 1000 > 2 * SOURCE_JWS.ttlMs)
-        throw new PersonalError("unauthenticated");
+        throw new ControlError("unauthenticated");
       if (replay.seen(`${source.sourceId}:${jti}`, exp * 1000, nowMs))
-        throw new PersonalError("unauthenticated");
+        throw new ControlError("unauthenticated");
       return source;
     },
 
@@ -364,22 +317,22 @@ export function createSources(context: PersonalContext) {
     },
 
     async list(caller: Caller): Promise<SourceSummary[]> {
-      const state = context.store.current;
+      const issuer = (await ports.tenants.get(tenantId)).issuer;
       return Promise.all(
-        visibleSources(state, caller).map((source) =>
-          summary(state, source, caller),
+        (await visibleSources(caller)).map((source) =>
+          summary(issuer, source, caller),
         ),
       );
     },
 
     async get(caller: Caller, sourceId: string): Promise<SourceDetail> {
-      const state = context.store.current;
-      const source = visibleSources(state, caller).find(
+      const issuer = (await ports.tenants.get(tenantId)).issuer;
+      const source = (await visibleSources(caller)).find(
         (row) => row.sourceId === sourceId,
       );
-      if (!source) throw new PersonalError("not_found");
+      if (!source) throw new ControlError("not_found");
       return {
-        ...(await summary(state, source, caller)),
+        ...(await summary(issuer, source, caller)),
         trustedOrigins: [...source.trustedOrigins],
         capabilities: [...source.capabilities],
         registeredAtMs: source.registeredAtMs,
@@ -387,18 +340,16 @@ export function createSources(context: PersonalContext) {
     },
 
     /** 撤销：标记、关隧道、断开经中继的客户端 WS、通知 me/stream。 */
-    revoke(caller: Caller, sourceId: string): void {
+    async revoke(caller: Caller, sourceId: string): Promise<void> {
       requireOwner(caller);
       const nowMs = context.now();
-      context.store.update((draft) => {
-        const source = draft.sources.find(
-          (row) => row.sourceId === sourceId && row.revokedAtMs === null,
-        );
-        if (!source) throw new PersonalError("not_found");
+      await ports.sources.update(tenantId, sourceId, (source) => {
+        if (!source || source.revokedAtMs !== null)
+          throw new ControlError("not_found");
         source.revokedAtMs = nowMs;
       });
-      context.control.command({ type: "closeTunnel", sourceId });
-      context.disconnect({ sourceId });
+      context.relay.closeTunnel(sourceId);
+      context.relay.disconnect({ sourceId });
       context.emit({ type: "sourceRevoked", sourceId });
     },
 
@@ -407,27 +358,25 @@ export function createSources(context: PersonalContext) {
       sourceId: string,
       device: Pick<DeviceInput, "platform" | "name"> | undefined,
     ) {
-      const state = context.store.current;
-      const any = state.sources.find((row) => row.sourceId === sourceId);
+      const any = await ports.sources.get(tenantId, sourceId);
       if (any && any.revokedAtMs !== null)
-        throw new PersonalError("source_revoked");
-      const source = visibleSources(state, caller).find(
+        throw new ControlError("source_revoked");
+      const source = (await visibleSources(caller)).find(
         (row) => row.sourceId === sourceId,
       );
-      if (!source) throw new PersonalError("source_access_denied");
-      const record = state.devices.find(
-        (row) => row.deviceId === caller.deviceId,
-      );
-      if (!record) throw new PersonalError("unauthenticated");
+      if (!source) throw new ControlError("source_access_denied");
+      const record = await ports.devices.get(tenantId, caller.deviceId);
+      if (!record) throw new ControlError("unauthenticated");
       const link =
-        caller.role === "guest"
-          ? state.links.find((row) => row.linkId === caller.linkId)
-          : undefined;
+        caller.role === "guest" && caller.linkId
+          ? await ports.links.get(tenantId, caller.linkId)
+          : null;
+      const owner =
+        caller.role === "owner"
+          ? await ports.accounts.get(tenantId, caller.subject)
+          : null;
       return grant(source, record, {
-        name:
-          caller.role === "owner"
-            ? state.account.name
-            : link?.label || undefined,
+        name: caller.role === "owner" ? owner?.name : link?.label || undefined,
         ...(link
           ? { link: { linkId: link.linkId, invitationId: link.invitationId } }
           : {}),

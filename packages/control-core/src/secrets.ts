@@ -1,5 +1,5 @@
 /**
- * personal 的随机值与哈希。状态文件里只存哈希，明文只在签发那一刻返回一次。
+ * 控制面的随机值与哈希。存储里只存哈希，明文只在签发那一刻返回一次。
  *
  * - 刷新令牌：`sha256("armadra/identity/v1/refresh\0" + 值)`，与 core 的令牌哈希同一拼法
  *   （协议包 identity-vectors 的 `TOKEN_HASH_PREFIX`）。

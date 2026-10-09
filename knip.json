@@ -16,9 +16,15 @@
     "packages/cloud-shared": {
       "project": ["src/**/*.ts"]
     },
+    "packages/control-core": {
+      "project": ["src/**/*.ts"]
+    },
     "packages/platform-protocol": {
       "entry": ["scripts/build.mjs"],
       "project": ["src/**/*.ts"]
+    },
+    "packages/relay-kernel": {
+      "project": ["src/**/*.ts", "test/**/*.ts"]
     }
   }
 }

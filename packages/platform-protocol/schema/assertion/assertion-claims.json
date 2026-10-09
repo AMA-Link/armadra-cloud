@@ -1,0 +1,127 @@
+{
+  "$id": "assertion/assertion-claims.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "iss": {
+      "type": "string",
+      "minLength": 1
+    },
+    "iat": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "exp": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "nbf": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "jti": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128
+    },
+    "sub": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aud": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "ver": {
+      "type": "number",
+      "const": 1
+    },
+    "name": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "emailVerified": {
+      "type": "boolean"
+    },
+    "org": {
+      "type": "object",
+      "properties": {
+        "orgId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "admin",
+            "member"
+          ]
+        }
+      },
+      "required": [
+        "orgId",
+        "role"
+      ]
+    },
+    "link": {
+      "type": "object",
+      "properties": {
+        "linkId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "invitationId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "linkId",
+        "invitationId"
+      ]
+    },
+    "device": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android",
+            "desktop",
+            "browser",
+            "server"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId",
+        "platform",
+        "name"
+      ]
+    }
+  },
+  "required": [
+    "iss",
+    "iat",
+    "exp",
+    "jti",
+    "sub",
+    "aud",
+    "ver",
+    "device"
+  ]
+}

@@ -9,14 +9,21 @@
 import { constants, readFileSync } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
 
+import { createMeStreamCore } from "@armadra/control-core/me-stream";
+import { LAST_SEEN_FLUSH_MS } from "@armadra/control-core/sessions";
+import { trustedOriginsOf } from "@armadra/control-core/sources";
+import { guestPrefix } from "@armadra/control-core/subjects";
 import { createLogger, type Logger } from "@armadra/cloud-shared/log";
+import { createMemoryControlPlane } from "@armadra/relay-kernel/control/memory";
+import type { LimitKind, LimitRule } from "@armadra/relay-kernel/control/types";
+import { pathAddressing } from "@armadra/relay-kernel/edge/addressing";
+import {
+  createClientIp,
+  type ClientIp,
+} from "@armadra/relay-kernel/http/client-ip";
+import { errorName } from "@armadra/relay-kernel/log";
+import { startRelay, type RunningRelay } from "@armadra/relay-kernel/main";
 
-import { createMemoryControlPlane } from "../control/memory.ts";
-import type { LimitKind, LimitRule } from "../control/types.ts";
-import { pathAddressing } from "../edge/addressing.ts";
-import { errorName } from "../log.ts";
-import { createClientIp, type ClientIp } from "../http/client-ip.ts";
-import { startRelay, type RunningRelay } from "../main.ts";
 import { RELAY_VERSION } from "../version.ts";
 import {
   startAcme,
@@ -26,14 +33,11 @@ import {
 } from "./acme.ts";
 import { createPersonalApi } from "./api.ts";
 import {
-  createEventBus,
-  guestPrefix,
-  type PersonalContext,
+  createPersonalContext,
+  stateRevocation,
+  stateSigner,
 } from "./context.ts";
 import { createState, readPasswordFile } from "./init.ts";
-import { LAST_SEEN_FLUSH_MS } from "./sessions.ts";
-import { Signer } from "./signer.ts";
-import { isRevokedJti, trustedOriginsFor } from "./sources.ts";
 import { stateExists, StateStore, type State } from "./state.ts";
 import { createMeStream } from "./stream.ts";
 import {
@@ -158,33 +162,32 @@ export async function startPersonalRelay(
     tls = acme;
   }
 
-  const signer = new Signer(() => store.current, now);
+  const signer = stateSigner(store, now);
+  // 内核起来之前没有可断开的连接；之后指向它。
+  const relayRef: { current?: RunningRelay } = {};
   const control = createMemoryControlPlane({
     mode: "personal",
     issuer,
     jwks: () => signer.jwks(),
-    revoked: (jti) => isRevokedJti(store.current, jti, now()),
+    revoked: stateRevocation(store, now),
     limits: edgeLimitRules(
       options.rateLimits,
       store.current.settings.rateLimits,
     ),
     now,
   });
-  const bus = createEventBus();
-  // 内核起来之前没有可断开的连接；之后指向它。
-  const relayRef: { current?: RunningRelay } = {};
-  const context: PersonalContext = {
+  const context = createPersonalContext({
     store,
-    signer,
     control,
+    signer,
     now,
     disconnect: (filter) => relayRef.current?.disconnect(filter),
-    ...bus,
-  };
-  const stream = createMeStream(
-    context,
-    deps.streamPingMs ? { pingMs: deps.streamPingMs } : {},
-  );
+  });
+  const streamCore = createMeStreamCore(context);
+  const stream = createMeStream(streamCore, {
+    now,
+    ...(deps.streamPingMs ? { pingMs: deps.streamPingMs } : {}),
+  });
   const webRoot = usableWebRoot(options.webRoot);
   if (options.webRoot && !webRoot)
     log.warn("页面产物目录没有 index.html，/app 答错误页", {
@@ -200,7 +203,7 @@ export async function startPersonalRelay(
       `trustedProxy 不合法：${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const api = createPersonalApi(context, stream, {
+  const api = createPersonalApi(context, streamCore, {
     clientIp,
     webApp: () => (webRoot ? `${signer.issuer}/app/` : null),
     onError: (error) => log.error("请求处理失败", { error: errorName(error) }),
@@ -218,7 +221,11 @@ export async function startPersonalRelay(
     control,
     addressing: pathAddressing(),
     // 与登记时发给源的可信来源相同；所有源一样，答案不随某个源变。
-    corsOrigins: () => trustedOriginsFor(store.current),
+    corsOrigins: () =>
+      trustedOriginsOf({
+        issuer: store.current.issuer,
+        trustedOrigins: store.current.settings.trustedOrigins,
+      }),
     clientIp,
     log,
     probes: {
@@ -247,9 +254,9 @@ export async function startPersonalRelay(
         : {}),
     });
   });
-  const flush = () => {
+  const flush = async () => {
     try {
-      api.authenticator.flush();
+      await api.authenticator.flush();
       if (seenSources.size > 0) {
         const batch = new Map(seenSources);
         seenSources.clear();
@@ -266,7 +273,7 @@ export async function startPersonalRelay(
       log.warn("最近在线时间写入失败", { error: errorName(error) });
     }
   };
-  const flushTimer = setInterval(flush, LAST_SEEN_FLUSH_MS);
+  const flushTimer = setInterval(() => void flush(), LAST_SEEN_FLUSH_MS);
   flushTimer.unref();
 
   // 别的进程（passwd / rotate-key / links revoke）改了状态文件：撤销立即断开。
@@ -330,7 +337,7 @@ export async function startPersonalRelay(
         stopWatch();
         stopTls?.();
         offPresence();
-        flush();
+        await flush();
         stream.close();
         await relay.close(5_000);
         await acme?.close();

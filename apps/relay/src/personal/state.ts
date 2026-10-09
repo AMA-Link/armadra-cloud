@@ -28,14 +28,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
+import { randomHex } from "@armadra/control-core/secrets";
 import {
   devicePlatformSchema,
   ed25519PublicJwkSchema,
 } from "@armadra/platform-protocol/assertion";
 import { sourceKindSchema } from "@armadra/platform-protocol/cloud-api";
 import { z } from "zod";
-
-import { randomHex } from "./secrets.ts";
 
 export const STATE_VERSION = 1;
 export const STATE_FILE = "state.json";
@@ -161,13 +160,8 @@ export const stateSchema = z.object({
   }),
 });
 
+/** 各行与控制核端口的记录同形（`ports.ts` 两个方向都赋值，类型检查守住）。 */
 export type State = z.infer<typeof stateSchema>;
-export type AccountRecord = State["account"];
-export type SigningKeyRecord = State["signingKeys"][number];
-export type SourceRecord = State["sources"][number];
-export type DeviceRecord = State["devices"][number];
-export type LinkRecord = State["links"][number];
-export type PasswordRecord = z.infer<typeof passwordRecordSchema>;
 
 export type StateErrorCode =
   | "not_initialized"

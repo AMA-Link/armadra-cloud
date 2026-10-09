@@ -10,6 +10,16 @@ import { isErrorCode } from "@armadra/platform-protocol/errors";
 import { expect, it } from "vitest";
 
 const SRC = fileURLToPath(new URL("./", import.meta.url));
+/** 中继的线上错误由本 app 与它装配的内核、控制核一起产生。 */
+const ROOTS = [
+  SRC,
+  fileURLToPath(
+    new URL("../../../packages/relay-kernel/src/", import.meta.url),
+  ),
+  fileURLToPath(
+    new URL("../../../packages/control-core/src/", import.meta.url),
+  ),
+];
 
 function sources(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -22,7 +32,7 @@ function sources(directory: string): string[] {
 }
 
 const PATTERNS = [
-  /\b(?:PersonalError|sendRelayError|sendPersonalError|rejectUpgrade|rawErrorResponse)\(\s*(?:[\w.]+,\s*)?"([a-z_]+)"/g,
+  /\b(?:ControlError|sendRelayError|sendPersonalError|rejectUpgrade|rawErrorResponse)\(\s*(?:[\w.]+,\s*)?"([a-z_]+)"/g,
   /\bcode: "([a-z_]+)"/g,
   /\berror: "([a-z_]+)" as const/g,
 ];
@@ -30,7 +40,7 @@ const PATTERNS = [
 it("源码里写给线上的错误码都在协议包注册表里", () => {
   const found: string[] = [];
   const unknown: string[] = [];
-  for (const file of sources(SRC)) {
+  for (const file of ROOTS.flatMap(sources)) {
     const text = readFileSync(file, "utf8");
     for (const pattern of PATTERNS)
       for (const match of text.matchAll(pattern)) {

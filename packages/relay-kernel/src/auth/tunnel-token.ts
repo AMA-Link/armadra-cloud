@@ -5,6 +5,7 @@
  */
 import { createPublicKey, type KeyObject } from "node:crypto";
 
+import { verifyJwt, type JwtFailure } from "@armadra/cloud-shared/jwt";
 import {
   AUDIENCES,
   TOKEN_TYPES,
@@ -14,7 +15,6 @@ import {
 import type { TunnelRejectCode } from "@armadra/platform-protocol/tunnel";
 
 import { jwtOptions, type AuthContext } from "./context.ts";
-import { verifyJwt, type JwtFailure } from "./jwt.ts";
 
 export type TunnelTokenResult =
   | { ok: true; claims: TunnelTokenClaims; sourceKey: KeyObject }

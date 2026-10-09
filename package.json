@@ -1,6 +1,6 @@
 {
   "name": "armadra-cloud",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "repo:test": "node --test tools/*.test.mjs tools/ci/*.test.mjs tools/contract/*.test.mjs",
     "contract:check": "node tools/contract/generate.mjs --check",
     "contract:generate": "node tools/contract/generate.mjs",
-    "protocol:check": "pnpm --filter @armadra/platform-protocol fixtures:check && node scripts/gen-vectors.mjs --check",
+    "protocol:check": "pnpm --filter @armadra/platform-protocol fixtures:check && pnpm --filter @armadra/platform-protocol schema:check && node scripts/gen-vectors.mjs --check",
     "protocol:pack": "node scripts/pack-protocol.mjs",
     "ci:workflows": "node tools/ci/validate-workflows.mjs",
     "notices": "node tools/notices.mjs",

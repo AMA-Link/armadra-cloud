@@ -82,5 +82,42 @@
       "$comment": "接口层 oRPC 1.15.4 精确锁：只能写精确版本、不得预发布、全树同一版本。",
       "packages": "@orpc/*"
     }
+  ],
+  "packageDependencies": [
+    {
+      "$comment": "中继内核是 personal 与 saas 共用的数据面：不依赖控制核与 app，不带 SaaS 专有依赖（PostgreSQL / Redis），也不带 oRPC。",
+      "package": "packages/relay-kernel",
+      "forbid": [
+        "@armadra/control-core",
+        "@armadra/cloud",
+        "@armadra/relay",
+        "postgres",
+        "redis",
+        "@orpc/*"
+      ]
+    },
+    {
+      "$comment": "控制核只经端口读写状态、与传输无关：不依赖中继内核、app、存储客户端与 WebSocket。",
+      "package": "packages/control-core",
+      "forbid": [
+        "@armadra/relay-kernel",
+        "@armadra/cloud",
+        "@armadra/relay",
+        "postgres",
+        "redis",
+        "ws"
+      ]
+    },
+    {
+      "$comment": "协议包两仓共用、页面与手机直接用：不依赖本仓任何包。",
+      "package": "packages/platform-protocol",
+      "forbid": [
+        "@armadra/cloud-shared",
+        "@armadra/control-core",
+        "@armadra/relay-kernel",
+        "@armadra/cloud",
+        "@armadra/relay"
+      ]
+    }
   ]
 }

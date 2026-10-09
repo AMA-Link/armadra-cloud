@@ -18,6 +18,8 @@ See .github/CONTRIBUTING.md. Write "无 / None" for sections that do not apply i
 - [ ] relay（`apps/relay`）
 - [ ] cloud（`apps/cloud`）
 - [ ] 协议包 / protocol package（`packages/platform-protocol`）
+- [ ] 中继内核 / relay kernel（`packages/relay-kernel`）
+- [ ] 控制核 / control core（`packages/control-core`）
 - [ ] cloud-shared（`packages/cloud-shared`）
 - [ ] deploy / 镜像 / images（`deploy/`、`apps/*/Dockerfile`）
 - [ ] docs

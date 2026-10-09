@@ -1,5 +1,5 @@
 /**
- * personal 单测的装配：临时数据目录里的状态文件 + 签名钥 + 内存控制面 + 假时钟。
+ * personal 单测的装配：临时数据目录里的状态文件（控制核端口）+ 签名钥 + 内存控制面 + 假时钟。
  * 口令派生是真的 scrypt（每次约几十毫秒），所以一个文件里只建一次账号。
  */
 import { randomBytes } from "node:crypto";
@@ -7,20 +7,24 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ControlEvent } from "@armadra/control-core/events";
+import type { ConnectionFilter } from "@armadra/control-core/ports";
 import { TOKEN_TYPES } from "@armadra/platform-protocol/assertion";
 import { TEST_KEYS } from "@armadra/platform-protocol/fixtures";
-
-import { createMemoryControlPlane } from "../src/control/memory.ts";
-import type { EdgeConnectionFilter } from "../src/edge/server.ts";
+import { createMemoryControlPlane } from "@armadra/relay-kernel/control/memory";
 import {
-  createEventBus,
+  signJwt,
+  SOURCE_ID,
+  sourceKey,
+} from "@armadra/relay-kernel/testing/tokens";
+
+import {
+  createPersonalContext,
+  stateRevocation,
+  stateSigner,
   type PersonalContext,
-  type PersonalEvent,
 } from "../src/personal/context.ts";
 import { createState } from "../src/personal/init.ts";
-import { Signer } from "../src/personal/signer.ts";
-import { isRevokedJti } from "../src/personal/sources.ts";
-import { signJwt, SOURCE_ID, sourceKey } from "./tokens.ts";
 
 export const PASSWORD = "plover-quartz-lantern-41";
 export const ISSUER = "https://relay.test:8443";
@@ -29,8 +33,8 @@ export interface Harness {
   dir: string;
   context: PersonalContext;
   clock: { now: number };
-  events: PersonalEvent[];
-  disconnects: EdgeConnectionFilter[];
+  events: ControlEvent[];
+  disconnects: ConnectionFilter[];
   cleanup(): void;
 }
 
@@ -47,30 +51,29 @@ export async function personalHarness(
     issuer: ISSUER,
     nowMs: clock.now,
   });
-  const signer = new Signer(() => store.current, now);
+  const signer = stateSigner(store, now);
   const control = createMemoryControlPlane({
     issuer: ISSUER,
     jwks: () => signer.jwks(),
-    revoked: (jti) => isRevokedJti(store.current, jti, now()),
+    revoked: stateRevocation(store, now),
     now,
   });
-  const events: PersonalEvent[] = [];
-  const disconnects: EdgeConnectionFilter[] = [];
-  const bus = createEventBus();
-  bus.subscribe((event) => events.push(event));
+  const events: ControlEvent[] = [];
+  const disconnects: ConnectionFilter[] = [];
+  const context = createPersonalContext({
+    store,
+    control,
+    signer,
+    now,
+    disconnect: (filter) => disconnects.push(filter),
+  });
+  context.subscribe((event) => events.push(event));
   return {
     dir,
     clock,
     events,
     disconnects,
-    context: {
-      store,
-      signer,
-      control,
-      now,
-      disconnect: (filter) => disconnects.push(filter),
-      ...bus,
-    },
+    context,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
 }

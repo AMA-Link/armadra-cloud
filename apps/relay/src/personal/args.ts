@@ -13,7 +13,7 @@ import {
   createClientIp,
   parseProxyList,
   type TrustedProxyConfig,
-} from "../http/client-ip.ts";
+} from "@armadra/relay-kernel/http/client-ip";
 
 export const TLS_MODES = ["self-signed", "acme", "file", "plain"] as const;
 export type TlsMode = (typeof TLS_MODES)[number];

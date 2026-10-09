@@ -8,14 +8,16 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-import { checkPassword } from "./accounts.ts";
-import { PersonalError } from "./context.ts";
+import { checkPassword } from "@armadra/control-core/accounts";
+import { ControlError } from "@armadra/control-core/errors";
+import type { PasswordRule } from "@armadra/control-core/ports";
+import { generateSigningKey } from "@armadra/control-core/signer";
+
 import {
   hashPassword,
   PASSWORD_RULE_HINTS,
-  type PasswordRule,
+  passwordViolation,
 } from "./passwords.ts";
-import { generateSigningKey } from "./signer.ts";
 import { STATE_VERSION, StateStore, type State } from "./state.ts";
 import { UsageError } from "./args.ts";
 
@@ -65,7 +67,7 @@ export async function obtainPassword(
 
 /** 口令策略不过 → 带中文提示的 UsageError（CLI 用）。 */
 export function passwordUsageError(error: unknown): unknown {
-  if (error instanceof PersonalError && error.code in PASSWORD_RULE_HINTS)
+  if (error instanceof ControlError && error.code in PASSWORD_RULE_HINTS)
     return new UsageError(PASSWORD_RULE_HINTS[error.code as PasswordRule]);
   return error;
 }
@@ -78,7 +80,11 @@ export async function createState(input: {
   nowMs?: number;
 }): Promise<StateStore> {
   try {
-    checkPassword(input.password, input.account);
+    checkPassword(
+      { passwordPolicy: passwordViolation },
+      input.password,
+      input.account,
+    );
   } catch (error) {
     throw passwordUsageError(error);
   }

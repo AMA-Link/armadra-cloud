@@ -7,7 +7,13 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const ROOTS = ["apps/cloud/src", "apps/relay/src", "packages/cloud-shared/src"];
+const ROOTS = [
+  "apps/cloud/src",
+  "apps/relay/src",
+  "packages/cloud-shared/src",
+  "packages/control-core/src",
+  "packages/relay-kernel/src",
+];
 const registry = JSON.parse(
   readFileSync(
     join(root, "packages/platform-protocol/fixtures/errors.json"),

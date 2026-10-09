@@ -21,6 +21,7 @@ import {
   type MeStreamEvent,
 } from "@armadra/platform-protocol/cloud-api";
 import { wireErrorSchema } from "@armadra/platform-protocol/errors";
+import { FakeCore } from "@armadra/relay-kernel/testing/fake-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import type { z } from "zod";
@@ -29,7 +30,6 @@ import {
   startPersonalRelay,
   type RunningPersonalRelay,
 } from "../../src/personal/serve.ts";
-import { FakeCore } from "../fake-core.ts";
 import { PASSWORD, registerInput, SOURCE_ID, sourceJws } from "../personal.ts";
 
 const MARKER = "PAYLOAD-MARKER-e2e-91c";

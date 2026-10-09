@@ -1,16 +1,14 @@
 /**
  * 预留的 `/v1/*` 与 `/.well-known/*` 路由（平台落地总计划 §12.2：SaaS 服务端先只
- * 预留接口）。路由表直接取协议包的 `cloudContract`，统一答
- * 501 `{ code: "not_implemented", message, requestId }`；实现落地时把 procedure 加进
- * {@link IMPLEMENTED}，经 `http/rpc.ts`（oRPC 门面）挂上去。
+ * 预留接口）。路由表来自控制核的 `createCloudRouter`（与个人中转同一份），这里没有给任何
+ * 处理器，契约里的 procedure 全部是预留的，统一答
+ * 501 `{ code: "not_implemented", message, requestId }`；实现落地时把处理器交给路由工厂，
+ * 并把 procedure 从预留里拿掉。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { sendError } from "@armadra/cloud-shared/http";
-import {
-  cloudContract,
-  listProcedures,
-} from "@armadra/platform-protocol/cloud-api";
+import { createCloudRouter } from "@armadra/control-core/router";
 
 export interface ReservedRoute {
   /** 契约里的 procedure 名，例如 `auth.login`。 */
@@ -20,54 +18,31 @@ export interface ReservedRoute {
   path: string;
 }
 
-/** 已经实现、不走预留的 procedure。 */
+/** 已经实现、不走预留的 procedure（由外层路由直接答）。 */
 export const IMPLEMENTED = new Set(["platform.health"]);
 
+const router = createCloudRouter({}, { exclude: [...IMPLEMENTED] });
+
 /** 契约里除 {@link IMPLEMENTED} 之外的全部 procedure，按声明顺序。 */
-export const RESERVED_ROUTES: readonly ReservedRoute[] = listProcedures(
-  cloudContract,
-)
-  .filter((entry) => !IMPLEMENTED.has(entry.key))
-  .map(({ key, method, path }) => ({ key, method, path }));
+export const RESERVED_ROUTES: readonly ReservedRoute[] = router.reserved.map(
+  ({ key, method, path }) => ({ key, method, path }),
+);
 
 /** `/v1/me/stream` 的 WS 升级同样预留（C3-3）。 */
 export const RESERVED_UPGRADE_PATH = "/v1/me/stream";
-
-function compile(path: string): RegExp {
-  const pattern = path
-    .split("/")
-    .map((segment) =>
-      /^\{\w+\}$/.test(segment)
-        ? "[^/]+"
-        : segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-    )
-    .join("/");
-  return new RegExp(`^${pattern}$`);
-}
 
 export interface ReservedMatcher {
   match(method: string, pathname: string): ReservedRoute | null;
 }
 
-export function createReservedMatcher(
-  routes: readonly ReservedRoute[] = RESERVED_ROUTES,
-): ReservedMatcher {
-  const compiled = routes.map((route) => ({
-    route,
-    regex: compile(route.path),
-  }));
+export function createReservedMatcher(): ReservedMatcher {
   return {
     match(method, pathname) {
       // 静态段优先（`/v1/sources/me/relay` 先于 `/v1/sources/{sourceId}`），与契约路由器一致。
-      const hits = compiled.filter(
-        (entry) => entry.route.method === method && entry.regex.test(pathname),
-      );
-      hits.sort(
-        (left, right) =>
-          left.route.path.split("{").length -
-          right.route.path.split("{").length,
-      );
-      return hits[0]?.route ?? null;
+      const hit = router.match(method, pathname);
+      if (!hit) return null;
+      const { key, path } = hit.route;
+      return { key, method: hit.route.method, path };
     },
   };
 }

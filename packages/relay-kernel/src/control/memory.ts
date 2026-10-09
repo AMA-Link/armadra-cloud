@@ -18,7 +18,7 @@ import { DEFAULT_LIMIT_RULES } from "./types.ts";
 
 export interface MemoryControlPlaneOptions {
   issuer: string;
-  /** personal：签名钥的公钥集（`personal/signer.ts`）；测试：协议包的测试钥。 */
+  /** personal：签名钥的公钥集（控制核的 `Signer`）；测试：协议包的测试钥。 */
   jwks: () => JwkSet | Promise<JwkSet>;
   mode?: "saas" | "personal";
   now?: () => number;

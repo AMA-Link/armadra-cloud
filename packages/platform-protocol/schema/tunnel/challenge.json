@@ -1,0 +1,25 @@
+{
+  "$id": "tunnel/challenge.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "challenge"
+    },
+    "nonce2": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$"
+    },
+    "relayNode": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "type",
+    "nonce2",
+    "relayNode"
+  ]
+}

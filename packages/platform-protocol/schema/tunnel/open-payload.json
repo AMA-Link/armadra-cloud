@@ -1,0 +1,63 @@
+{
+  "$id": "tunnel/open-payload.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "http",
+        "ws"
+      ]
+    },
+    "method": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^\\/.*"
+    },
+    "headers": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "clientOrigin": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "remoteIp": {
+      "type": "string"
+    },
+    "relayNode": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "method",
+    "path",
+    "headers",
+    "clientOrigin",
+    "remoteIp",
+    "relayNode"
+  ]
+}

@@ -113,8 +113,9 @@ async function personal(
         const commands = await import("./personal/commands.ts");
         const options = args.parseLinks(rest, process.env);
         if (options.action === "list")
-          commands.runLinksList(options.dataDir, print);
-        else commands.runLinksRevoke(options.dataDir, options.linkId, print);
+          await commands.runLinksList(options.dataDir, print);
+        else
+          await commands.runLinksRevoke(options.dataDir, options.linkId, print);
         return 0;
       }
       default:
