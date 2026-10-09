@@ -28,7 +28,7 @@
 
 ## 按需阅读与验证
 
-- 提交信息、分支、PR 与 issue 规范见 [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md)。
+- 提交信息、分支、PR 与 issue 规范见 [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md)；接到需求先建或找到对应 Issue，按其中「需求流程」推进（Issue → 设计回填 → PR 关联 → 合并后收尾）。
 
 - 怎么跑见 [README](README.md)；文档索引在 [docs/README.md](docs/README.md)，新增文档要登记。
 - 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表与 `cloud-openapi.json` 由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
