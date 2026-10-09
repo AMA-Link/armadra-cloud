@@ -14,3 +14,14 @@ allowBuilds:
   esbuild: true
 
 storeDir: .pnpm-store
+
+# 安全告警修补，上游发版后去掉。
+overrides:
+  # GHSA-68fv-2mgg-jv7q：只在 vitest 开发链（magicast、postcss）。
+  source-map-js: 1.2.2
+  # GHSA-86w9-cpqp-85rv 暂无修复版：中继只用 acme-client 的 Client、axios 与 node:crypto 自建 CSR，
+  # 从不调 forge 旧接口；补丁删掉 forge 导出，这里把 node-forge 移出依赖树与 relay 单文件。
+  acme-client>node-forge: "-"
+
+patchedDependencies:
+  acme-client@5.4.0: patches/acme-client@5.4.0.patch

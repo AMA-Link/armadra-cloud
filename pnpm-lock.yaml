@@ -4,6 +4,13 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  source-map-js: 1.2.2
+  acme-client>node-forge: '-'
+
+patchedDependencies:
+  acme-client@5.4.0: 81656416973a885c6f191b75702d2d99d185d06fa3d0724c6a246f18e8cc9ca9
+
 importers:
 
   .:
@@ -89,7 +96,7 @@ importers:
         version: link:../../packages/platform-protocol
       acme-client:
         specifier: 5.4.0
-        version: 5.4.0(supports-color@7.2.0)
+        version: 5.4.0(patch_hash=81656416973a885c6f191b75702d2d99d185d06fa3d0724c6a246f18e8cc9ca9)(supports-color@7.2.0)
       ws:
         specifier: 8.21.0
         version: 8.21.0
@@ -1548,10 +1555,6 @@ packages:
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
 
-  node-forge@1.4.0:
-    resolution: {integrity: sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ==}
-    engines: {node: '>= 6.13.0'}
-
   obug@2.2.1:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
@@ -1681,8 +1684,8 @@ packages:
     resolution: {integrity: sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ==}
     engines: {node: '>= 18'}
 
-  source-map-js@1.2.1:
-    resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
+  source-map-js@1.2.2:
+    resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
 
   stackback@0.0.2:
@@ -2686,13 +2689,12 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
 
-  acme-client@5.4.0(supports-color@7.2.0):
+  acme-client@5.4.0(patch_hash=81656416973a885c6f191b75702d2d99d185d06fa3d0724c6a246f18e8cc9ca9)(supports-color@7.2.0):
     dependencies:
       '@peculiar/x509': 1.14.3
       asn1js: 3.0.10
       axios: 1.20.0(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
       debug: 4.4.3(supports-color@7.2.0)
-      node-forge: 1.4.0
     transitivePeerDependencies:
       - supports-color
 
@@ -3187,7 +3189,7 @@ snapshots:
     dependencies:
       '@babel/parser': 7.29.9
       '@babel/types': 7.29.8
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   make-dir@4.0.0:
     dependencies:
@@ -3214,8 +3216,6 @@ snapshots:
   nanoid@3.3.19: {}
 
   natural-compare@1.4.0: {}
-
-  node-forge@1.4.0: {}
 
   obug@2.2.1: {}
 
@@ -3304,7 +3304,7 @@ snapshots:
     dependencies:
       nanoid: 3.3.19
       picocolors: 1.1.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   postgres@3.4.9: {}
 
@@ -3376,7 +3376,7 @@ snapshots:
 
   smol-toml@1.9.0: {}
 
-  source-map-js@1.2.1: {}
+  source-map-js@1.2.2: {}
 
   stackback@0.0.2: {}
 

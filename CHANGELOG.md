@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 修复 / Fixed
+
+- 中继不再带 `node-forge`（GHSA-86w9-cpqp-85rv，上游暂无修复版）：给 `acme-client` 打补丁去掉从不调用的 forge 旧接口，依赖树、镜像与 `armadra-relay` 单文件都不再含它；ACME 签发仍走 `acme-client` 与 `node:crypto`，行为不变。
+  The relay no longer ships `node-forge` (GHSA-86w9-cpqp-85rv, no upstream fix yet): a patch to `acme-client` drops its unused legacy forge interface, so the dependency tree, images and the `armadra-relay` bundle no longer contain it; ACME issuance still uses `acme-client` and `node:crypto` with unchanged behavior.
+
 ## 0.2.1（2026-10-07）
 
 ### 新增 / Added

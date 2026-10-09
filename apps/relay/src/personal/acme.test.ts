@@ -2,6 +2,7 @@ import { createPrivateKey } from "node:crypto";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
@@ -147,5 +148,15 @@ describe("ACME（http-01）", () => {
       }),
     ).rejects.toThrow(TlsError);
     await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
+  });
+});
+
+describe("acme-client 依赖面", () => {
+  it("补丁去掉了 forge 旧接口，node-forge 不在依赖树里", async () => {
+    const acme = (await import("acme-client")) as Record<string, unknown>;
+    expect(typeof acme.Client).toBe("function");
+    expect(acme.forge).toBeUndefined();
+    const fromAcme = createRequire(import.meta.resolve("acme-client"));
+    expect(() => fromAcme.resolve("node-forge")).toThrow();
   });
 });

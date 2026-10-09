@@ -360,7 +360,12 @@ export function selfSignedManager(
   };
 }
 
-export function fileManager(certFile: string, keyFile: string): TlsManager {
+export function fileManager(
+  certFile: string,
+  keyFile: string,
+  options: { pollMs?: number } = {},
+): TlsManager {
+  const pollMs = options.pollMs ?? 2000;
   let material = fileMaterial(certFile, keyFile);
   return {
     current: () => material,
@@ -384,7 +389,9 @@ export function fileManager(certFile: string, keyFile: string): TlsManager {
       };
       // 轮询 stat 而不是 fs.watch：证书常被「写临时文件再改名」替换，inode 会变。
       for (const file of [certFile, keyFile])
-        watchFile(file, { interval: 2000, persistent: false }, reload);
+        watchFile(file, { interval: pollMs, persistent: false }, reload);
+      // watchFile 的基线 stat 是异步取的：构造之后、基线之前的替换不会触发，启动时补查一次。
+      reload();
       return () => {
         clearTimeout(pending);
         for (const file of [certFile, keyFile]) unwatchFile(file, reload);
