@@ -4,7 +4,7 @@ import {
 } from "@armadra/platform-protocol/cloud-api";
 import { expect, it } from "vitest";
 
-import { PERSONAL_CAPABILITIES, PERSONAL_PROCEDURES } from "./api.ts";
+import { PERSONAL_CAPABILITIES, PERSONAL_PROCEDURES } from "./procedures.ts";
 import { PLATFORM_CAPABILITIES } from "@armadra/platform-protocol/cloud-api";
 
 it("personal 实现的 procedure 都在契约里（拼错一个就会悄悄变成 404）", () => {

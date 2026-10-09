@@ -1,6 +1,6 @@
 /**
  * 会话（中继设计 §6.2）：访问令牌（EdDSA JWT，15 分钟，`aud: "cloud"`，`sid` = deviceId）
- * 与刷新令牌（30 天，`<deviceId>.<随机>`，状态文件只存哈希，每次刷新旋转）。
+ * 与刷新令牌（30 天，`<deviceId>.<随机>`，存储只存哈希，每次刷新旋转）。
  *
  * - 旧刷新令牌再来 = 重放 → 撤销整台设备，答 `session_revoked`。
  * - 访问令牌校验除了签名与声明，还要求 `sid` 指向的设备未撤销、未过期——登出 / 改口令 /
@@ -9,6 +9,7 @@
  */
 import { createPublicKey, type KeyObject } from "node:crypto";
 
+import { verifyJwt } from "@armadra/cloud-shared/jwt";
 import {
   accessClaimsSchema,
   AUDIENCES,
@@ -21,15 +22,10 @@ import type {
 } from "@armadra/platform-protocol/cloud-api";
 import { SESSION } from "@armadra/platform-protocol/identity-vectors";
 
-import { verifyJwt } from "../auth/jwt.ts";
-import {
-  guestLinkId,
-  ownerSubject,
-  PersonalError,
-  type PersonalContext,
-} from "./context.ts";
+import { ControlError } from "./errors.ts";
+import type { ControlContext, DeviceRecord } from "./ports.ts";
 import { randomHex, randomToken, refreshHash, sameHex } from "./secrets.ts";
-import type { DeviceRecord, State } from "./state.ts";
+import { guestLinkId } from "./subjects.ts";
 
 export const LAST_SEEN_FLUSH_MS = 5 * 60_000;
 
@@ -47,16 +43,25 @@ export function isLiveDevice(device: DeviceRecord, nowMs: number): boolean {
   return device.revokedAtMs === null && device.expiresAtMs > nowMs;
 }
 
-/** 在状态副本上建一台设备，答它与刷新令牌明文（只返回这一次）。 */
-export function createDevice(
-  draft: State,
+/** 早已失效、可以从存储里清掉的设备行（失效超过一个刷新令牌寿命）。 */
+export function isStaleDevice(device: DeviceRecord, nowMs: number): boolean {
+  return (
+    !isLiveDevice(device, nowMs) &&
+    Math.max(device.revokedAtMs ?? 0, device.expiresAtMs) <=
+      nowMs - SESSION.refreshTtlMs
+  );
+}
+
+/** 建一台设备，答它与刷新令牌明文（只返回这一次）。 */
+export async function createDevice(
+  context: Pick<ControlContext, "tenantId" | "ports">,
   input: {
     subject: string;
     device: Pick<DeviceInput, "platform" | "name">;
     nowMs: number;
     ttlMs?: number;
   },
-): { device: DeviceRecord; refreshToken: string } {
+): Promise<{ device: DeviceRecord; refreshToken: string }> {
   const deviceId = randomHex(16);
   const refreshToken = `${deviceId}.${randomToken(32)}`;
   const device: DeviceRecord = {
@@ -72,31 +77,34 @@ export function createDevice(
     revokedAtMs: null,
     lastSeenAtMs: input.nowMs,
   };
-  // 顺手清掉早已失效的设备行，状态文件不无限长。
-  draft.devices = draft.devices.filter(
-    (row) =>
-      isLiveDevice(row, input.nowMs) ||
-      Math.max(row.revokedAtMs ?? 0, row.expiresAtMs) >
-        input.nowMs - SESSION.refreshTtlMs,
+  await context.ports.devices.insert(
+    context.tenantId,
+    { ...device },
+    input.nowMs,
   );
-  draft.devices.push(device);
   return { device, refreshToken };
 }
 
-function displayNameOf(context: PersonalContext, subject: string): string {
-  const state = context.store.current;
-  if (subject === ownerSubject(state.account.name)) return state.account.name;
+/** 线上显示名：账号本人是账号名，访客是链接备注（没有就是 `guest`）。 */
+export async function displayNameOf(
+  context: Pick<ControlContext, "tenantId" | "ports">,
+  subject: string,
+): Promise<string> {
+  const account = await context.ports.accounts.get(context.tenantId, subject);
+  if (account) return account.name;
   const linkId = guestLinkId(subject);
-  const link = state.links.find((row) => row.linkId === linkId);
+  const link = linkId
+    ? await context.ports.links.get(context.tenantId, linkId)
+    : null;
   return link?.label || "guest";
 }
 
 /** 给一台设备签访问令牌，拼成线上的 `Session`。 */
-export function sessionFor(
-  context: PersonalContext,
+export async function sessionFor(
+  context: ControlContext,
   device: DeviceRecord,
   refreshToken: string,
-): Session {
+): Promise<Session> {
   const access = context.signer.sign(
     TOKEN_TYPES.access,
     { sub: device.subject, aud: AUDIENCES.access, sid: device.deviceId },
@@ -110,67 +118,73 @@ export function sessionFor(
     account: {
       accountId: device.subject,
       email: null,
-      displayName: displayNameOf(context, device.subject),
+      displayName: await displayNameOf(context, device.subject),
       emailVerified: false,
     },
     device: { deviceId: device.deviceId },
   };
 }
 
-export function refresh(
-  context: PersonalContext,
+export async function refresh(
+  context: ControlContext,
   refreshToken: string,
-): Session {
+): Promise<Session> {
   const deviceId = refreshToken.split(".")[0] ?? "";
   if (!/^[0-9a-f]{32}$/.test(deviceId))
-    throw new PersonalError("session_revoked");
+    throw new ControlError("session_revoked");
   const hash = refreshHash(refreshToken);
   const nowMs = context.now();
   type Outcome =
     | { error: "session_expired" | "session_revoked" }
     | { device: DeviceRecord; refreshToken: string };
-  const outcome = context.store.update((draft): Outcome => {
-    const device = draft.devices.find((row) => row.deviceId === deviceId);
-    if (!device || device.revokedAtMs !== null)
+  const outcome = await context.ports.devices.update(
+    context.tenantId,
+    deviceId,
+    (device): Outcome => {
+      if (!device || device.revokedAtMs !== null)
+        return { error: "session_revoked" };
+      if (device.expiresAtMs <= nowMs) return { error: "session_expired" };
+      if (sameHex(hash, device.refreshHash)) {
+        const next = `${device.deviceId}.${randomToken(32)}`;
+        device.previousRefreshHash = device.refreshHash;
+        device.refreshHash = refreshHash(next);
+        device.rotation += 1;
+        device.lastSeenAtMs = nowMs;
+        return { device: { ...device }, refreshToken: next };
+      }
+      if (
+        device.previousRefreshHash !== null &&
+        sameHex(hash, device.previousRefreshHash)
+      ) {
+        // 用过的令牌又来了：要么被偷，要么被重放。整台设备作废。
+        device.revokedAtMs = nowMs;
+        return { error: "session_revoked" };
+      }
       return { error: "session_revoked" };
-    if (device.expiresAtMs <= nowMs) return { error: "session_expired" };
-    if (sameHex(hash, device.refreshHash)) {
-      const next = `${device.deviceId}.${randomToken(32)}`;
-      device.previousRefreshHash = device.refreshHash;
-      device.refreshHash = refreshHash(next);
-      device.rotation += 1;
-      device.lastSeenAtMs = nowMs;
-      return { device: { ...device }, refreshToken: next };
-    }
-    if (
-      device.previousRefreshHash !== null &&
-      sameHex(hash, device.previousRefreshHash)
-    ) {
-      // 用过的令牌又来了：要么被偷，要么被重放。整台设备作废。
-      device.revokedAtMs = nowMs;
-      return { error: "session_revoked" };
-    }
-    return { error: "session_revoked" };
-  });
-  if ("error" in outcome) throw new PersonalError(outcome.error);
+    },
+  );
+  if ("error" in outcome) throw new ControlError(outcome.error);
   return sessionFor(context, outcome.device, outcome.refreshToken);
 }
 
-export function revokeDevice(
-  context: PersonalContext,
+export async function revokeDevice(
+  context: Pick<ControlContext, "tenantId" | "ports" | "now">,
   deviceId: string,
-): boolean {
+): Promise<boolean> {
   const nowMs = context.now();
-  const revoked = context.store.update((draft) => {
-    const device = draft.devices.find((row) => row.deviceId === deviceId);
-    if (!device || device.revokedAtMs !== null) return null;
-    device.revokedAtMs = nowMs;
-    return device.subject;
-  });
+  const revoked = await context.ports.devices.update(
+    context.tenantId,
+    deviceId,
+    (device) => {
+      if (!device || device.revokedAtMs !== null) return null;
+      device.revokedAtMs = nowMs;
+      return device.subject;
+    },
+  );
   return revoked !== null;
 }
 
-function keyLookup(context: PersonalContext) {
+function keyLookup(context: ControlContext) {
   const cache = new Map<string, KeyObject>();
   return async (kid: string): Promise<KeyObject | null> => {
     const jwk = context.signer.jwks().keys.find((key) => key.kid === kid);
@@ -192,17 +206,17 @@ export interface Authenticator {
   authenticate(header: string | undefined): Promise<Caller>;
   /** 记一次「最近使用」（内存，批量落盘）。 */
   touch(deviceId: string): void;
-  /** 把累计的 `lastSeenAtMs` 写进状态文件。 */
-  flush(): void;
+  /** 把累计的 `lastSeenAtMs` 写进存储。 */
+  flush(): Promise<void>;
 }
 
-export function createAuthenticator(context: PersonalContext): Authenticator {
+export function createAuthenticator(context: ControlContext): Authenticator {
   const key = keyLookup(context);
   const seen = new Map<string, number>();
   return {
     async authenticate(header) {
       const match = /^Bearer\s+(\S+)$/i.exec(header ?? "");
-      if (!match?.[1]) throw new PersonalError("unauthenticated");
+      if (!match?.[1]) throw new ControlError("unauthenticated");
       const nowMs = context.now();
       const result = await verifyJwt(match[1], {
         typ: TOKEN_TYPES.access,
@@ -213,19 +227,25 @@ export function createAuthenticator(context: PersonalContext): Authenticator {
         key,
         isRevoked: async () => false,
       });
-      if (!result.ok) throw new PersonalError("unauthenticated");
+      if (!result.ok) throw new ControlError("unauthenticated");
       const claims = result.claims;
-      const state = context.store.current;
-      const device = state.devices.find((row) => row.deviceId === claims.sid);
+      const device = await context.ports.devices.get(
+        context.tenantId,
+        claims.sid,
+      );
       if (
         !device ||
         device.subject !== claims.sub ||
         !isLiveDevice(device, nowMs)
       )
-        throw new PersonalError("unauthenticated");
-      const owner = claims.sub === ownerSubject(state.account.name);
+        throw new ControlError("unauthenticated");
+      const account = await context.ports.accounts.get(
+        context.tenantId,
+        claims.sub,
+      );
+      const owner = account !== null;
       const linkId = owner ? null : guestLinkId(claims.sub);
-      if (!owner && linkId === null) throw new PersonalError("unauthenticated");
+      if (!owner && linkId === null) throw new ControlError("unauthenticated");
       seen.set(device.deviceId, nowMs);
       return {
         subject: claims.sub,
@@ -237,17 +257,11 @@ export function createAuthenticator(context: PersonalContext): Authenticator {
     touch(deviceId) {
       seen.set(deviceId, context.now());
     },
-    flush() {
+    async flush() {
       if (seen.size === 0) return;
       const batch = new Map(seen);
       seen.clear();
-      context.store.update((draft) => {
-        for (const device of draft.devices) {
-          const at = batch.get(device.deviceId);
-          if (at !== undefined && (device.lastSeenAtMs ?? 0) < at)
-            device.lastSeenAtMs = at;
-        }
-      });
+      await context.ports.devices.touch(context.tenantId, batch);
     },
   };
 }

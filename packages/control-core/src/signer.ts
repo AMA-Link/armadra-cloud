@@ -5,7 +5,7 @@
  * - 签发用最新的那把未退役钥；
  * - `rotate-key` 追加新钥，旧钥 `retiredAtMs = now + 1h`（最长令牌寿命），期间旧令牌仍验得过。
  *
- * 时间声明是整数秒。私钥只在状态文件里（0600），不进日志与响应。
+ * 时间声明是整数秒。私钥只在 {@link KeyStore} 背后（personal：状态文件，0600），不进日志与响应。
  */
 import {
   createPrivateKey,
@@ -27,8 +27,8 @@ import {
   TUNNEL_TOKEN,
 } from "@armadra/platform-protocol/identity-vectors";
 
+import type { KeyStore, SigningKeyRecord } from "./ports.ts";
 import { randomHex } from "./secrets.ts";
-import type { SigningKeyRecord, State } from "./state.ts";
 
 /** 旧钥退役的宽限：最长令牌寿命（中继令牌、隧道令牌都是 1 小时）。 */
 export const KEY_RETIRE_GRACE_MS = Math.max(
@@ -70,8 +70,11 @@ export function nextKid(keys: readonly SigningKeyRecord[]): string {
   return `k${max + 1}`;
 }
 
-/** 在状态副本上轮换：追加新钥，其余未退役的钥定在 `now + 宽限` 退役。答新 kid。 */
-export function rotateSigningKey(draft: State, nowMs: number): string {
+/** 在副本上轮换：追加新钥，其余未退役的钥定在 `now + 宽限` 退役。答新 kid。 */
+export function rotateSigningKey(
+  draft: { signingKeys: SigningKeyRecord[] },
+  nowMs: number,
+): string {
   const kid = nextKid(draft.signingKeys);
   for (const key of draft.signingKeys) {
     if (
@@ -100,23 +103,24 @@ export interface SignedToken {
 
 export class Signer {
   private readonly keys = new Map<string, KeyObject>();
-  private readonly state: () => State;
+  private readonly store: KeyStore;
   private readonly now: () => number;
 
-  constructor(state: () => State, now: () => number = Date.now) {
-    this.state = state;
+  constructor(store: KeyStore, now: () => number = Date.now) {
+    this.store = store;
     this.now = now;
   }
 
   get issuer(): string {
-    return this.state().issuer;
+    return this.store.issuer();
   }
 
   jwks(): JwkSet {
     const at = this.now();
     return {
-      keys: this.state()
-        .signingKeys.filter((key) => live(key, at))
+      keys: this.store
+        .signingKeys()
+        .filter((key) => live(key, at))
         .map((key) => ({ ...key.publicJwk }) as Ed25519PublicJwk),
     };
   }
@@ -160,13 +164,15 @@ export class Signer {
 
   private current(): SigningKeyRecord {
     const at = this.now();
-    const candidates = this.state().signingKeys.filter(
-      (key) => key.retiredAtMs === null && key.activeFromMs <= at + 1000,
-    );
+    const candidates = this.store
+      .signingKeys()
+      .filter(
+        (key) => key.retiredAtMs === null && key.activeFromMs <= at + 1000,
+      );
     const pool =
       candidates.length > 0
         ? candidates
-        : this.state().signingKeys.filter((key) => live(key, at));
+        : this.store.signingKeys().filter((key) => live(key, at));
     const newest = pool.reduce<SigningKeyRecord | undefined>(
       (best, key) =>
         best === undefined || key.activeFromMs >= best.activeFromMs

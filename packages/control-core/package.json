@@ -1,0 +1,26 @@
+{
+  "name": "@armadra/control-core",
+  "version": "0.2.3",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "控制面核心：存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务与 createCloudRouter（个人中转与 SaaS 共用，不发布）",
+  "exports": {
+    "./*": "./src/*.ts",
+    "./testing/*": "./src/testing/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@armadra/cloud-shared": "workspace:*",
+    "@armadra/platform-protocol": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}
