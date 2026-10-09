@@ -24,7 +24,7 @@ feat(platform-protocol): 加 links.update，夹具、契约生成块与 OpenAPI 
 docs(contract): cloud-api §12 媒体票
 ```
 
-- 类型 / Types：`feat`、`fix`、`docs`、`test`、`refactor`、`perf`、`chore`、`ci`、`release`。
+- 类型 / Types：`feat`、`fix`、`docs`、`test`、`refactor`、`perf`、`build`、`chore`、`ci`、`release`、`revert`。
 - 范围 / Scopes：模块或目录名，例如 `relay`、`cloud`、`platform-protocol`、`cloud-shared`、`contract`、`deploy`、`e2e`、`changelog`；跨两处用逗号，例如 `test(relay,e2e)`。 / A module or directory name; join two with a comma.
 - 一个模块连同它的测试一个提交；不要在提交信息里加生成说明或自动署名。 / One commit per module together with its tests; no generated notes or automatic trailers.
 
