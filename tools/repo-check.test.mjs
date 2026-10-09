@@ -56,6 +56,7 @@ test("导出的规则名与实现一一对应", () => {
     "links",
     "migrations",
     "naming",
+    "package-dependencies",
     "pinned-versions",
     "root-allowlist",
   ]);
@@ -387,6 +388,49 @@ test("pinned-versions：本仓库的规则在现状上通过", () => {
   assert.ok(rules.pinnedVersions.some((rule) => rule.packages === "@orpc/*"));
   assert.deepEqual(
     checkRepository({ root, rules, only: ["pinned-versions"] }),
+    [],
+  );
+});
+
+test("package-dependencies：清单里出现被禁止的依赖（名字或 scope 简写）就报告", () => {
+  const rules = {
+    packageDependencies: [
+      { package: "packages/kernel", forbid: ["redis", "@armadra/core-*"] },
+      { package: "packages/missing", forbid: ["x"] },
+    ],
+  };
+  const root = repo({
+    "packages/kernel/package.json": JSON.stringify({
+      dependencies: { ws: "8.21.0", redis: "5.12.1" },
+      devDependencies: { "@armadra/core-x": "workspace:*" },
+    }),
+  });
+  assert.deepEqual(
+    run(
+      root,
+      rules,
+      ["package-dependencies"],
+      ["packages/kernel/package.json"],
+    ),
+    [
+      "packages/kernel 不得依赖 redis（dependencies，规则 redis）",
+      "packages/kernel 不得依赖 @armadra/core-x（devDependencies，规则 @armadra/core-*）",
+      "包边界规则指向的清单不存在：packages/missing/package.json",
+    ],
+  );
+  assert.deepEqual(run(root, {}, ["package-dependencies"], []), []);
+});
+
+test("package-dependencies：本仓库的规则在现状上通过", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const rules = JSON.parse(readFileSync(join(root, "repo.rules.json"), "utf8"));
+  assert.ok(
+    rules.packageDependencies.some(
+      (rule) => rule.package === "packages/relay-kernel",
+    ),
+  );
+  assert.deepEqual(
+    checkRepository({ root, rules, only: ["package-dependencies"] }),
     [],
   );
 });

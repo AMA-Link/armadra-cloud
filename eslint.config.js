@@ -31,7 +31,7 @@ const JS = ["**/*.{js,mjs,cjs}"];
 const orpcPattern = {
   group: ["@orpc/*"],
   message:
-    "@orpc/* 只能出现在 packages/platform-protocol/src/cloud-api/、apps/cloud/src/http/rpc.ts、apps/relay/src/personal/api.ts、tools/contract/。",
+    "@orpc/* 只能出现在 packages/platform-protocol/src/cloud-api/、packages/control-core/src/router.ts、tools/contract/。",
 };
 
 /** 与 Armadra 的往来只经协议包与容器镜像，不 import 它的源码。 */
@@ -63,6 +63,63 @@ const relayPatterns = [
   {
     group: ["postgres", "@armadra/cloud-shared/db"],
     message: "relay 不碰数据库。",
+  },
+];
+
+/** 中继内核（personal 与 saas 共用的数据面）：不 import 控制核，不带 SaaS 专有依赖。 */
+const kernelPatterns = [
+  {
+    group: ["@armadra/control-core", "@armadra/control-core/*"],
+    message:
+      "relay-kernel 不得 import control-core；控制面经 ControlPlane 接口接进来。",
+  },
+  {
+    group: ["@armadra/relay", "@armadra/relay/*"],
+    message: "包不得 import app。",
+  },
+  {
+    group: ["redis", "@armadra/cloud-shared/redis"],
+    message:
+      "relay-kernel 不带 SaaS 专有依赖：Redis 实现放在 apps/relay 的 saas 装配里。",
+  },
+];
+
+/** 控制核只经端口读写状态，且与传输无关。 */
+const controlCorePatterns = [
+  {
+    group: [
+      "postgres",
+      "redis",
+      "@armadra/cloud-shared/db",
+      "@armadra/cloud-shared/redis",
+    ],
+    message:
+      "control-core 只经端口读写状态；PostgreSQL / Redis 实现放在 app 的适配器里。",
+  },
+  {
+    regex: "^node:fs(/promises)?$",
+    message: "control-core 只经端口读写状态，不碰文件系统。",
+  },
+  {
+    group: [
+      "ws",
+      "node:http",
+      "node:https",
+      "node:net",
+      "@armadra/cloud-shared/http",
+    ],
+    message: "control-core 与传输无关：HTTP / WebSocket 外壳在 app 里。",
+  },
+  {
+    group: [
+      "@armadra/relay-kernel",
+      "@armadra/relay-kernel/*",
+      "@armadra/relay",
+      "@armadra/relay/*",
+      "@armadra/cloud",
+      "@armadra/cloud/*",
+    ],
+    message: "control-core 不 import 中继内核与 app。",
   },
 ];
 
@@ -118,6 +175,24 @@ export default tseslint.config(
     rules: restrictImports(orpcPattern, armadraSourcePattern, ...relayPatterns),
   },
   {
+    files: ["packages/relay-kernel/**/*.ts"],
+    rules: restrictImports(
+      orpcPattern,
+      armadraSourcePattern,
+      ...relayPatterns,
+      ...kernelPatterns,
+    ),
+  },
+  {
+    files: ["packages/control-core/src/**/*.ts"],
+    ignores: ["packages/control-core/src/**/*.test.ts"],
+    rules: restrictImports(
+      orpcPattern,
+      armadraSourcePattern,
+      ...controlCorePatterns,
+    ),
+  },
+  {
     files: ["packages/platform-protocol/src/**/*.ts"],
     ignores: ["packages/platform-protocol/src/fixtures/**"],
     rules: restrictImports(
@@ -131,12 +206,12 @@ export default tseslint.config(
     rules: restrictImports(armadraSourcePattern, nodeBuiltinPattern),
   },
   {
-    files: ["apps/cloud/src/http/rpc.ts", "tools/contract/**"],
+    files: ["tools/contract/**"],
     rules: restrictImports(armadraSourcePattern),
   },
   {
-    files: ["apps/relay/src/personal/api.ts"],
-    rules: restrictImports(armadraSourcePattern, ...relayPatterns),
+    files: ["packages/control-core/src/router.ts"],
+    rules: restrictImports(armadraSourcePattern, ...controlCorePatterns),
   },
 
   prettier,

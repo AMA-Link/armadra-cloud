@@ -66,6 +66,9 @@ importers:
       '@armadra/cloud-shared':
         specifier: workspace:*
         version: link:../../packages/cloud-shared
+      '@armadra/control-core':
+        specifier: workspace:*
+        version: link:../../packages/control-core
       '@armadra/platform-protocol':
         specifier: workspace:*
         version: link:../../packages/platform-protocol
@@ -91,9 +94,15 @@ importers:
       '@armadra/cloud-shared':
         specifier: workspace:*
         version: link:../../packages/cloud-shared
+      '@armadra/control-core':
+        specifier: workspace:*
+        version: link:../../packages/control-core
       '@armadra/platform-protocol':
         specifier: workspace:*
         version: link:../../packages/platform-protocol
+      '@armadra/relay-kernel':
+        specifier: workspace:*
+        version: link:../../packages/relay-kernel
       acme-client:
         specifier: 5.4.0
         version: 5.4.0(patch_hash=81656416973a885c6f191b75702d2d99d185d06fa3d0724c6a246f18e8cc9ca9)(supports-color@7.2.0)
@@ -145,6 +154,28 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@types/node@24.3.0)(@vitest/coverage-v8@4.1.11)(vite@8.3.1(@types/node@24.3.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
+  packages/control-core:
+    dependencies:
+      '@armadra/cloud-shared':
+        specifier: workspace:*
+        version: link:../cloud-shared
+      '@armadra/platform-protocol':
+        specifier: workspace:*
+        version: link:../platform-protocol
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 24.3.0
+        version: 24.3.0
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@types/node@24.3.0)(@vitest/coverage-v8@4.1.11)(vite@8.3.1(@types/node@24.3.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+
   packages/platform-protocol:
     dependencies:
       '@orpc/contract':
@@ -163,6 +194,34 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+
+  packages/relay-kernel:
+    dependencies:
+      '@armadra/cloud-shared':
+        specifier: workspace:*
+        version: link:../cloud-shared
+      '@armadra/platform-protocol':
+        specifier: workspace:*
+        version: link:../platform-protocol
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 24.3.0
+        version: 24.3.0
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@types/node@24.3.0)(@vitest/coverage-v8@4.1.11)(vite@8.3.1(@types/node@24.3.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
 packages:
 

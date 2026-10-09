@@ -19,6 +19,7 @@ export const RULES = [
   "file-size",
   "migrations",
   "pinned-versions",
+  "package-dependencies",
 ];
 
 // ------------------------------------------------------------------ helpers
@@ -430,6 +431,39 @@ function checkPinnedVersions(context, problems) {
   }
 }
 
+// --------------------------------------------------- package-dependencies
+
+/**
+ * 包边界（清单层）：`packageDependencies` 的每一项给一个包目录与它不得声明的依赖
+ * （名字或 `@scope/*` 简写），在依赖、开发依赖、对等与可选依赖里都不许出现。
+ * 源码层的 import 由各包的边界测试与 ESLint 守，这里守住「依赖本身就不该进来」。
+ */
+function checkPackageDependencies(context, problems) {
+  const tracked = new Set(context.files);
+  for (const rule of context.rules.packageDependencies ?? []) {
+    const path = `${rule.package}/package.json`;
+    const text = tracked.has(path) ? readIfPresent(context.root, path) : null;
+    if (text === null) {
+      problems.push(`包边界规则指向的清单不存在：${path}`);
+      continue;
+    }
+    const manifest = JSON.parse(text);
+    const forbidden = (rule.forbid ?? []).map((pattern) => ({
+      pattern,
+      matcher: packageGlob(pattern),
+    }));
+    for (const field of DEPENDENCY_FIELDS) {
+      for (const name of Object.keys(manifest[field] ?? {})) {
+        const hit = forbidden.find(({ matcher }) => matcher.test(name));
+        if (hit)
+          problems.push(
+            `${rule.package} 不得依赖 ${name}（${field}，规则 ${hit.pattern}）`,
+          );
+      }
+    }
+  }
+}
+
 const CHECKS = {
   "docs-index": checkDocsIndex,
   links: checkLinks,
@@ -439,6 +473,7 @@ const CHECKS = {
   "file-size": checkFileSize,
   migrations: checkMigrations,
   "pinned-versions": checkPinnedVersions,
+  "package-dependencies": checkPackageDependencies,
 };
 
 /** 对一个仓库根跑规则，返回问题列表；空列表表示通过。 */
