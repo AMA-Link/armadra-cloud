@@ -151,6 +151,13 @@ export const stateSchema = z.object({
         account: rateLimitValue.optional(),
       })
       .optional(),
+    /** 受信代理（见 `http/client-ip.ts`）；命令行与环境变量优先于它。缺省不信任任何代理。 */
+    trustedProxy: z
+      .object({
+        proxies: z.array(z.string().min(1).max(64)).max(64),
+        prefer: z.enum(["forwarded-for", "real-ip"]).optional(),
+      })
+      .optional(),
   }),
 });
 

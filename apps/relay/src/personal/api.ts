@@ -30,6 +30,7 @@ import {
 import { errorStatus, type ErrorCode } from "@armadra/platform-protocol/errors";
 import type { z } from "zod";
 
+import { createClientIp, type ClientIp } from "../http/client-ip.ts";
 import { errorMessage } from "../http/errors.ts";
 import { createAccounts } from "./accounts.ts";
 import { PersonalError, type PersonalContext } from "./context.ts";
@@ -185,10 +186,6 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-function remoteIp(req: IncomingMessage): string {
-  return req.socket.remoteAddress ?? "";
-}
-
 export interface PersonalApi {
   /** `extra` 钩子：认领 `/v1/*`、`/.well-known/*`。 */
   handle(req: IncomingMessage, res: ServerResponse): boolean;
@@ -200,10 +197,13 @@ export function createPersonalApi(
   stream: MeStream,
   options: {
     webApp: () => string | null;
+    /** 客户端 IP 的取法；缺省直连对端地址。 */
+    clientIp?: ClientIp;
     /** 处理器意外出错时记一笔（只给错误类名）。 */
     onError?: (error: unknown) => void;
   },
 ): PersonalApi {
+  const clientIp = options.clientIp ?? createClientIp();
   const authenticator = createAuthenticator(context);
   const accounts = createAccounts(context);
   const sources = createSources(context);
@@ -389,7 +389,7 @@ export function createPersonalApi(
     };
     const output = await hit.route.handler({
       input: parsed.data as Record<string, unknown>,
-      ip: remoteIp(req),
+      ip: clientIp(req),
       req,
       caller,
     });

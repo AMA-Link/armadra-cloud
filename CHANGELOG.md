@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### 新增 / Added
+
+- 个人中转支持受信代理：`--trusted-proxy 127.0.0.1/32,::1/128`（或 `RELAY_TRUSTED_PROXY`、状态文件 `settings.trustedProxy`），`--trusted-proxy-prefer forwarded-for|real-ip` 选先读的头。只有直连对端在列表内才读 `X-Forwarded-For`（自右向左剔除受信跳数）或 `X-Real-IP`，其余对端的转发头一律忽略；限流、登录锁定、转给源的客户端 IP 与 WebSocket 升级都走同一个 `clientIp`。缺省为空，行为不变。放在 OpenResty / CDN 后面时按 IP 的限流不再是全站一个桶。
+  Personal relay supports trusted proxies: `--trusted-proxy 127.0.0.1/32,::1/128` (or `RELAY_TRUSTED_PROXY`, state file `settings.trustedProxy`), with `--trusted-proxy-prefer forwarded-for|real-ip`. Forwarding headers are read only when the direct peer is in the list (`X-Forwarded-For` is walked right to left past trusted hops) and ignored from any other peer; rate limits, login lockout, the client IP forwarded to sources and WebSocket upgrades all use one `clientIp`. Empty by default, so behavior is unchanged. Per-IP limits no longer collapse into one site-wide bucket behind OpenResty / a CDN.
+
 ### 修复 / Fixed
 
 - 中继不再带 `node-forge`（GHSA-86w9-cpqp-85rv，上游暂无修复版）：给 `acme-client` 打补丁去掉从不调用的 forge 旧接口，依赖树、镜像与 `armadra-relay` 单文件都不再含它；ACME 签发仍走 `acme-client` 与 `node:crypto`，行为不变。

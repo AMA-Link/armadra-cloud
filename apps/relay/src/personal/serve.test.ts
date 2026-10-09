@@ -196,3 +196,73 @@ it("边缘缺省额度按真实使用：iOS 全部跨源多次预检、同出口
   // 无令牌的请求仍然严格。
   expect(max("edge.connect.ip")).toBe(60);
 });
+
+/** 预检打到不存在的源也会先过 `edge.preflight.ip`：限额 2，第 3 次起 429。 */
+async function preflights(url: string, forwardedFor?: string) {
+  const out: number[] = [];
+  for (let i = 0; i < 3; i += 1) {
+    const response = await fetch(
+      `${url}/s/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x`,
+      {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://a.example",
+          "access-control-request-method": "GET",
+          ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}),
+        },
+      },
+    );
+    out.push(response.status);
+    await response.arrayBuffer();
+  }
+  return out;
+}
+
+it("受信代理：回环对端在列表内时按 XFF 的客户端 IP 分桶；未配置时 XFF 无效", async () => {
+  const trusted = await startPersonalRelay(
+    {
+      ...base,
+      dataDir: join(root, "tp1"),
+      rateLimits: { preflight: 2 },
+      trustedProxy: { proxies: ["127.0.0.1/32", "::1/128"] },
+    },
+    quiet,
+  );
+  try {
+    const a = await preflights(trusted.url, "198.51.100.1");
+    const b = await preflights(trusted.url, "198.51.100.2");
+    expect(a[2]).toBe(429);
+    expect(b[0]).not.toBe(429); // 另一个客户端有自己的桶
+    expect(a.slice(0, 2)).not.toContain(429);
+  } finally {
+    await trusted.close();
+  }
+
+  const plain = await startPersonalRelay(
+    { ...base, dataDir: join(root, "tp2"), rateLimits: { preflight: 2 } },
+    quiet,
+  );
+  try {
+    await preflights(plain.url, "198.51.100.1");
+    // 没配置：换一个 XFF 也是同一个桶（伪造不能绕过限流）
+    expect((await preflights(plain.url, "198.51.100.2"))[0]).toBe(429);
+  } finally {
+    await plain.close();
+  }
+
+  const elsewhere = await startPersonalRelay(
+    {
+      ...base,
+      dataDir: join(root, "tp3"),
+      rateLimits: { preflight: 2 },
+      trustedProxy: { proxies: ["10.9.9.9/32"] },
+    },
+    quiet,
+  );
+  try {
+    await preflights(elsewhere.url, "198.51.100.1");
+    expect((await preflights(elsewhere.url, "198.51.100.2"))[0]).toBe(429);
+  } finally {
+    await elsewhere.close();
+  }
+});

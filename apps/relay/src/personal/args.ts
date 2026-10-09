@@ -9,6 +9,12 @@ import {
 } from "@armadra/cloud-shared/config";
 import { resolve } from "node:path";
 
+import {
+  createClientIp,
+  parseProxyList,
+  type TrustedProxyConfig,
+} from "../http/client-ip.ts";
+
 export const TLS_MODES = ["self-signed", "acme", "file", "plain"] as const;
 export type TlsMode = (typeof TLS_MODES)[number];
 
@@ -213,6 +219,8 @@ export interface PersonalServeOptions extends Common {
   metricsToken?: string;
   /** 边缘限流额度（次 / 分钟）；没给的项取状态文件 `settings.rateLimits`，再取缺省。 */
   rateLimits?: RateLimitOptions;
+  /** 受信代理（`--trusted-proxy` / `RELAY_TRUSTED_PROXY`）；没给取状态文件 `settings.trustedProxy`。 */
+  trustedProxy?: TrustedProxyConfig;
 }
 
 export interface RateLimitOptions {
@@ -249,6 +257,39 @@ function rateLimitsOf(
   return Object.keys(limits).length > 0 ? limits : undefined;
 }
 
+function trustedProxyOf(
+  values: Map<string, string>,
+  env: Env,
+): TrustedProxyConfig | undefined {
+  const text = values.get("trusted-proxy") ?? env.RELAY_TRUSTED_PROXY;
+  const preferText =
+    values.get("trusted-proxy-prefer") ?? env.RELAY_TRUSTED_PROXY_PREFER;
+  if (
+    preferText !== undefined &&
+    preferText !== "forwarded-for" &&
+    preferText !== "real-ip"
+  )
+    throw new UsageError(
+      `--trusted-proxy-prefer 只能是 forwarded-for 或 real-ip：${preferText}`,
+    );
+  if (text === undefined) {
+    if (preferText !== undefined)
+      throw new UsageError(
+        "--trusted-proxy-prefer 要和 --trusted-proxy 一起给",
+      );
+    return undefined;
+  }
+  const proxies = parseProxyList(text);
+  try {
+    createClientIp({ proxies });
+  } catch (error) {
+    throw new UsageError(
+      `--trusted-proxy ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return { proxies, ...(preferText ? { prefer: preferText } : {}) };
+}
+
 const SERVE_FLAGS = new Set([
   "data-dir",
   "host",
@@ -271,6 +312,8 @@ const SERVE_FLAGS = new Set([
   "limit-preflight",
   "limit-token",
   "limit-account",
+  "trusted-proxy",
+  "trusted-proxy-prefer",
 ]);
 
 export function parsePersonalServe(
@@ -328,6 +371,7 @@ export function parsePersonalServe(
   const passwordFile = passwordFileOf(values, env, cwd);
   const webRoot = values.get("web-root") ?? env.RELAY_WEB_ROOT;
   const rateLimits = rateLimitsOf(values, env);
+  const trustedProxy = trustedProxyOf(values, env);
   return {
     dataDir,
     host,
@@ -350,6 +394,7 @@ export function parsePersonalServe(
       ? { metricsToken: env.RELAY_METRICS_TOKEN }
       : {}),
     ...(rateLimits ? { rateLimits } : {}),
+    ...(trustedProxy ? { trustedProxy } : {}),
   };
 }
 

@@ -19,6 +19,7 @@ import { LIMITS } from "@armadra/platform-protocol/tunnel";
 import { createAuthContext } from "./auth/context.ts";
 import type { ControlPlane } from "./control/types.ts";
 import type { Addressing } from "./edge/addressing.ts";
+import type { ClientIp } from "./http/client-ip.ts";
 import { Edge, type EdgeConnectionFilter } from "./edge/server.ts";
 import { sendRelayError } from "./http/errors.ts";
 import {
@@ -61,6 +62,8 @@ export interface RelayOptions {
   ) => boolean;
   /** 源地址上 CORS 预检放行的来源（见 `edge/cors.ts`）；原生 App 的来源总是放行。 */
   corsOrigins?: (sourceId: string) => readonly string[];
+  /** 客户端 IP 的取法；缺省直连对端地址（不信任任何代理）。 */
+  clientIp?: ClientIp;
   /** 给了就监听 HTTPS（personal 的自签 CA / ACME / 文件证书）。 */
   tls?: TlsPair;
   now?: () => number;
@@ -116,6 +119,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     wsPingMs: options.wsPingMs,
     wsIdleMs: options.wsIdleMs,
     corsOrigins: options.corsOrigins,
+    clientIp: options.clientIp,
     now: options.now,
   });
   const router = createRelayRouter({
