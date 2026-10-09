@@ -14,3 +14,8 @@ allowBuilds:
   esbuild: true
 
 storeDir: .pnpm-store
+
+# 安全告警修补，上游发版后去掉。
+overrides:
+  # GHSA-68fv-2mgg-jv7q：只在 vitest 开发链（magicast、postcss）。
+  source-map-js: 1.2.2
