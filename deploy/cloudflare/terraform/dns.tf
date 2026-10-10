@@ -22,8 +22,8 @@ variable "enable_saas_wildcard" {
 
 locals {
   origin_records = var.origin_ipv4 == null ? {} : {
-    "app"      = { proxied = false, comment = "SaaS 控制面（M1 在 49，灰云）" }
-    "status"   = { proxied = var.status_proxied, comment = "状态页（49）" }
+    "app"    = { proxied = false, comment = "SaaS 控制面（M1 在 49，灰云）" }
+    "status" = { proxied = var.status_proxied, comment = "状态页（49）" }
   }
 }
 
