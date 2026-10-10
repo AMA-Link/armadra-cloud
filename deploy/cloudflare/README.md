@@ -1,6 +1,6 @@
 # Cloudflare Workers 上的个人中转
 
-`relay.armadra.com` 是唯一的环境（没有 staging，也没有 49 服务器上的中继）：wrangler 项目在 [apps/relay-workers](../../apps/relay-workers/)（[wrangler.jsonc](../../apps/relay-workers/wrangler.jsonc)），运行时在 [packages/relay-runtime-workers](../../packages/relay-runtime-workers/)。线上形状与 Node 中继相同（契约 [cloud-api §7–§12、§17](../../docs/contracts/cloud-api.md)），唯一差别是隧道节点地址带 `?src=<sourceId>`。
+`relay.armadra.com` 是唯一的环境（没有 staging，49 服务器不承载任何 Armadra 服务）：wrangler 项目在 [apps/relay-workers](../../apps/relay-workers/)（[wrangler.jsonc](../../apps/relay-workers/wrangler.jsonc)），运行时在 [packages/relay-runtime-workers](../../packages/relay-runtime-workers/)。线上形状与 Node 中继相同（契约 [cloud-api §7–§12、§17](../../docs/contracts/cloud-api.md)），唯一差别是隧道节点地址带 `?src=<sourceId>`。
 
 部署、录 secret、改 DNS 都是对外操作，由维护者在本机执行；仓库里的脚本与测试只在本地 workerd 上跑，不连 Cloudflare 账号。日常运维（初始化、心跳、配额、回滚、排障）见[运维手册](../../docs/runbooks/relay-on-cloudflare.md)；区域规则、人机挑战、预算告警与拉闸见[防护手册](../../docs/runbooks/cloudflare-protection.md)。
 

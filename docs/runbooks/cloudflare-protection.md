@@ -55,7 +55,7 @@ Workers 中继：
 
    ```sh
    terraform init
-   terraform plan -var origin_ipv4=<控制面服务器的公网 IPv4>        # 不给 origin_ipv4 就不建 app / status 记录
+   terraform plan -var origin_ipv4=<控制面服务器的公网 IPv4>        # 缺省不建 app / status 记录；控制面部署位置待定（Render 或 Cloudflare），定了再给
    terraform apply -var origin_ipv4=<控制面服务器的公网 IPv4>
    ```
 
