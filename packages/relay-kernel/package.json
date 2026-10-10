@@ -1,10 +1,10 @@
 {
   "name": "@armadra/relay-kernel",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "中继内核：隧道终端、多路复用与信用窗口、心跳、边缘转发、限流、clientIp、媒体票与令牌校验（不含 CLI、不含 personal 控制面，不发布）",
+  "description": "中继内核（运行时无关）：隧道帧流与信用窗口、握手、心跳、隧道表、边缘判定（地址、限流、令牌、CORS、媒体票、只读门）、HTTP/1.1 与 WebSocket 帧编解码、ControlPlane 与内存实现（不含 node:http / node:net / node:stream / ws，不含 CLI，不发布）",
   "exports": {
     "./*": "./src/*.ts",
     "./testing/*": "./test/*.ts"
@@ -16,12 +16,10 @@
   "dependencies": {
     "@armadra/cloud-shared": "workspace:*",
     "@armadra/platform-protocol": "workspace:*",
-    "ws": "8.21.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.3.0",
-    "@types/ws": "8.18.1",
     "typescript": "5.9.2",
     "vitest": "4.1.11"
   }

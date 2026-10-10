@@ -1,4 +1,4 @@
-/** 单测用的隧道传输：记下发出的帧，不碰网络。 */
+/** 单测用的隧道传输：记下发出的帧，不碰网络。流缺省是 Web Streams 版，运行时测试可换。 */
 import {
   decodeFrame,
   encodeFrame,
@@ -6,11 +6,13 @@ import {
   type Frame,
 } from "@armadra/platform-protocol/tunnel";
 
+import type { StreamEndpoint, StreamFactory } from "../src/tunnel/stream.ts";
 import {
   Tunnel,
   type TunnelHooks,
   type TunnelLimitsConfig,
 } from "../src/tunnel/tunnel.ts";
+import { webStreams, type WebTunnelStream } from "../src/tunnel/web-stream.ts";
 
 export class FakeTransport {
   readonly sent: Uint8Array[] = [];
@@ -48,18 +50,20 @@ export const TEST_LIMITS: TunnelLimitsConfig = {
   goawayGraceMs: LIMITS.goawayGraceMs,
 };
 
-export function fakeTunnel(
+export function fakeTunnel<S extends StreamEndpoint = WebTunnelStream>(
   limits: Partial<TunnelLimitsConfig> = {},
   hooks: TunnelHooks = {},
+  streams: StreamFactory<S> = webStreams as unknown as StreamFactory<S>,
 ) {
   const transport = new FakeTransport();
-  const tunnel = new Tunnel(
+  const tunnel = new Tunnel<S>(
     "fedcba9876543210fedcba9876543210",
     "0123456789abcdef0123456789abcdef",
     "0.2.0",
     transport,
     { ...TEST_LIMITS, ...limits },
     hooks,
+    streams,
   );
   const feed = (frame: Frame) => tunnel.receive(encodeFrame(frame));
   return { tunnel, transport, feed };

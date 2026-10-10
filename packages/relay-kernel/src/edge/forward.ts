@@ -1,6 +1,7 @@
 /**
  * 边缘到隧道的请求头处理（中继设计 §3.4）。`OPEN` 只带元数据；`DATA` 里是完整的
  * HTTP/1.1 字节，由源（core）用 Node 自己的 HTTP 解析器解析——中继不理解业务语义。
+ * 请求与响应的字节编解码在 `http1/`。
  *
  * 转发的头：保留原顺序与大小写、保留 `Host`；剥掉中继令牌（`Armadra-Relay-Token`、
  * `armadra-relay.*` 子协议）与逐跳头；`X-Forwarded-For` 设为客户端 IP、
@@ -10,6 +11,12 @@
 import { RELAY_TOKEN_HEADER } from "@armadra/platform-protocol";
 
 export type HeaderPair = [string, string];
+
+/**
+ * 按小写名取值的请求头（Node 的 `IncomingHttpHeaders` 与之结构相同；Workers 由
+ * `Headers` 构造）。同名多行时 Node 已用 `, ` 合并，只有 `set-cookie` 是数组。
+ */
+export type HeaderBag = Readonly<Record<string, string | string[] | undefined>>;
 
 /** 请求方向不转的头（小写）。`connection` / `upgrade` 在 WS 升级时保留。 */
 const DROP_REQUEST = new Set([
@@ -90,7 +97,11 @@ export function forwardResponseHeaders(
   );
 }
 
-/** 请求行 + 头（WS 升级直接写进流；HTTP 由 `http.request` 自己序列化，格式相同）。 */
+/**
+ * 请求行 + 头（WS 升级直接写进流；Node 的 HTTP 请求由 `http.request` 自己序列化，格式相同）。
+ * 头值是 HTTP 解析器给的 latin1 字符串，按 latin1 写回，字节原样。`Buffer` 是全局对象
+ * （Node 与 Workers 的 `nodejs_compat` 都有），不经 import。
+ */
 export function serializeRequestHead(
   method: string,
   path: string,
@@ -101,10 +112,12 @@ export function serializeRequestHead(
   return Buffer.from(`${head}\r\n`, "latin1");
 }
 
+const encoder = new TextEncoder();
+
 /** OPEN 载荷 headers 的 UTF-8 总字节（协议上限 `openHeadersMaxBytes`）。 */
 export function headersBytes(headers: readonly HeaderPair[]): number {
   let total = 0;
   for (const [name, value] of headers)
-    total += Buffer.byteLength(name) + Buffer.byteLength(value);
+    total += encoder.encode(name).length + encoder.encode(value).length;
   return total;
 }

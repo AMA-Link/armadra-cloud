@@ -6,8 +6,10 @@
  *   └──── 心跳连续 heartbeatMisses 次未答 / 协议错误 / 对端断开 ────▶ closed
  * ```
  *
- * 传输层抽象成 {@link TunnelTransport}（生产里是 `ws` 的 WebSocket），所以本类可以在
- * 单测里用假传输与假时钟驱动。只有中继发 `OPEN`；对端发来的 `OPEN` 答 `RST protocol`。
+ * 传输层抽象成 {@link TunnelTransport}（Node 里是 `ws` 的 WebSocket），流由运行时给的
+ * {@link StreamFactory} 造（Node 是 `stream.Duplex`，缺省是 Web Streams 的
+ * {@link WebTunnelStream}），所以本类不碰任何运行时 API，单测里用假传输与假时钟驱动。
+ * 只有中继发 `OPEN`；对端发来的 `OPEN` 答 `RST protocol`。
  */
 import {
   CLOSE,
@@ -20,7 +22,13 @@ import {
   type OpenPayload,
 } from "@armadra/platform-protocol/tunnel";
 
-import { CreditPool, TunnelStream, type StreamHost } from "./stream.ts";
+import {
+  CreditPool,
+  type StreamEndpoint,
+  type StreamFactory,
+  type StreamHost,
+} from "./stream.ts";
+import { webStreams, type WebTunnelStream } from "./web-stream.ts";
 
 export interface TunnelTransport {
   send(bytes: Uint8Array): void;
@@ -69,10 +77,10 @@ export class TunnelUnavailableError extends Error {
   }
 }
 
-export class Tunnel {
+export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
   state: TunnelState = "open";
   replaced = false;
-  private readonly streams = new Map<number, TunnelStream>();
+  private readonly streams = new Map<number, S>();
   private nextStreamId = 1;
   private readonly sendPool: CreditPool;
   private recvRemaining: number;
@@ -82,7 +90,8 @@ export class Tunnel {
   private graceTimer: ReturnType<typeof setTimeout> | undefined;
   private goawayCode: number = CLOSE.tunnelGoaway;
   private readonly closedWaiters: (() => void)[] = [];
-  private readonly host: StreamHost;
+  private readonly host: StreamHost<S>;
+  private readonly streamFactory: StreamFactory<S>;
   readonly tunnelId: string;
   readonly sourceId: string;
   readonly coreVersion: string;
@@ -97,6 +106,7 @@ export class Tunnel {
     transport: TunnelTransport,
     limits: TunnelLimitsConfig,
     hooks: TunnelHooks = {},
+    streamFactory: StreamFactory<S> = webStreams as unknown as StreamFactory<S>,
   ) {
     this.tunnelId = tunnelId;
     this.sourceId = sourceId;
@@ -104,6 +114,7 @@ export class Tunnel {
     this.transport = transport;
     this.limits = limits;
     this.hooks = hooks;
+    this.streamFactory = streamFactory;
     this.sendPool = new CreditPool(limits.tunnelWindow);
     this.recvRemaining = limits.tunnelWindow;
     this.host = {
@@ -129,14 +140,14 @@ export class Tunnel {
   }
 
   /** 为一条边缘连接开流：发 OPEN。草稿态、满流时抛 {@link TunnelUnavailableError}。 */
-  openStream(open: OpenPayload): TunnelStream {
+  openStream(open: OpenPayload): S {
     if (this.state !== "open") throw new TunnelUnavailableError(this.state);
     if (this.streams.size >= this.limits.maxStreams)
       throw new TunnelUnavailableError("max_streams");
     const streamId = this.nextStreamId;
     this.nextStreamId += 1;
     this.send({ type: "open", streamId, open });
-    const stream = new TunnelStream(streamId, this.host, {
+    const stream = this.streamFactory(streamId, this.host, {
       streamWindow: this.limits.streamWindow,
       maxDataChunk: this.limits.maxDataChunk,
     });
@@ -293,7 +304,7 @@ export class Tunnel {
     this.close(CLOSE.badFrame, "flow_control");
   }
 
-  private release(stream: TunnelStream): void {
+  private release(stream: S): void {
     if (this.streams.get(stream.streamId) === stream)
       this.streams.delete(stream.streamId);
     this.closeIfDrained();
