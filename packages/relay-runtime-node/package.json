@@ -1,0 +1,28 @@
+{
+  "name": "@armadra/relay-runtime-node",
+  "version": "0.3.2",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "中继的 Node 运行时：ws 隧道终端、边缘的 HTTP / WebSocket 字节进出、clientIp、HTTP 分派与 startRelay（装配 relay-kernel，不发布）",
+  "exports": {
+    "./*": "./src/*.ts",
+    "./testing/*": "./test/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@armadra/cloud-shared": "workspace:*",
+    "@armadra/platform-protocol": "workspace:*",
+    "@armadra/relay-kernel": "workspace:*",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}
