@@ -239,6 +239,13 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     output: { recoveryCodes: ["abcde-fghij", "klmno-pqrst"] },
   },
   "auth.totpDisable": { input: { code: "123456" }, output: { disabled: true } },
+  "auth.changePassword": {
+    input: {
+      password: "correct horse battery staple",
+      newPassword: "another long passphrase here",
+    },
+    output: { session },
+  },
   "auth.recoveryCodesRotate": {
     input: { code: "123456" },
     output: { recoveryCodes: ["uvwxy-zabcd"] },

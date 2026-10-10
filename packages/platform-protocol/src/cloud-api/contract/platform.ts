@@ -10,7 +10,7 @@ import {
   protocolVersionSchema,
 } from "../schemas.ts";
 
-/** capabilities 只增不删。personal 报 `auth.password`、`links.source-invite`、`links.update`、`links.scope`、`me.stream`。 */
+/** capabilities 只增不删。personal 报 `auth.password`、`auth.password-change`、`links.source-invite`、`links.update`、`links.scope`、`me.stream`。 */
 export const PLATFORM_CAPABILITIES = [
   "auth.password",
   "auth.passkey",
@@ -29,6 +29,8 @@ export const PLATFORM_CAPABILITIES = [
   "me.stream",
   /** 认 Turnstile 挑战令牌（cloud-api §16，0.3.5 起）；要求哪些 procedure 带看 `platform.info.challenge`。 */
   "challenge.turnstile",
+  /** `auth.changePassword`（会话 + 旧口令改口令，cloud-api §18，0.3.10 起）。 */
+  "auth.password-change",
 ] as const;
 
 export const platformModeSchema = z.enum(["saas", "personal"]);

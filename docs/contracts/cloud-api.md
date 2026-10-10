@@ -174,14 +174,14 @@
 
 单人中转（`armadra-relay personal`）实现 `/v1/*` 的一个子集，形状与 saas 完全相同；不实现的路由（包括契约里的组织、计费、设备码、passkey、TOTP）答 `404 not_found`。`/v1/*` 与 `/.well-known/*` 允许任意来源跨源调用（只认 `Authorization` 头，不用 Cookie），登录类答案总是带 `refreshToken`。
 
-| procedure                                                                                        | 说明                                                                                                                                                                                                       |
-| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `platform.info`、`platform.jwks`                                                                 | `mode: "personal"`、`relay.addressing: "path"`、`capabilities: ["auth.password", "links.source-invite", "links.update", "links.scope", "me.stream"]`；有页面产物时 `webApp = <issuer>/app/`；`name` 见 §15 |
-| `auth.login`、`auth.refresh`、`auth.logout`                                                      | `account` 是账号名；会话的 `accountId` 是 `acct:<账号名>`，`email` 为 `null`                                                                                                                               |
-| `me.get`、`me.sources`、`me.devices`、`me.deviceRevoke`、`me.streamTicket` + `GET /v1/me/stream` | 访客（`guest:<linkId>:<随机>`）只看到链接指向的那个源                                                                                                                                                      |
-| `sources.registrationToken`、`sources.register`、`sources.heartbeatHint`                         | 注册令牌只有账号本人能要（访客答 `403 forbidden`）                                                                                                                                                         |
-| `sources.list`、`sources.get`、`sources.revoke`、`sources.assertion`                             | `relayBaseUrl = <issuer>/s/<sourceId>`；撤销即断开隧道与经中继的 WS，`me/stream` 发 `sourceRevoked`                                                                                                        |
-| `links.create`、`links.get`、`links.accept`、`links.list`、`links.update`、`links.revoke`        | 只有 `source_invite`；`create` 收 `scope`（§14）；`accept` 匿名；`update` 只改备注（去首尾空白，已撤销的也能改）；撤销即作废该链接的全部访客设备并断开其 WS                                                |
+| procedure                                                                                        | 说明                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform.info`、`platform.jwks`                                                                 | `mode: "personal"`、`relay.addressing: "path"`、`capabilities: ["auth.password", "auth.password-change", "links.source-invite", "links.update", "links.scope", "me.stream"]`；有页面产物时 `webApp = <issuer>/app/`；`name` 见 §15 |
+| `auth.login`、`auth.refresh`、`auth.logout`、`auth.changePassword`                               | `account` 是账号名；会话的 `accountId` 是 `acct:<账号名>`，`email` 为 `null`；改口令见 §18                                                                                                                                         |
+| `me.get`、`me.sources`、`me.devices`、`me.deviceRevoke`、`me.streamTicket` + `GET /v1/me/stream` | 访客（`guest:<linkId>:<随机>`）只看到链接指向的那个源                                                                                                                                                                              |
+| `sources.registrationToken`、`sources.register`、`sources.heartbeatHint`                         | 注册令牌只有账号本人能要（访客答 `403 forbidden`）                                                                                                                                                                                 |
+| `sources.list`、`sources.get`、`sources.revoke`、`sources.assertion`                             | `relayBaseUrl = <issuer>/s/<sourceId>`；撤销即断开隧道与经中继的 WS，`me/stream` 发 `sourceRevoked`                                                                                                                                |
+| `links.create`、`links.get`、`links.accept`、`links.list`、`links.update`、`links.revoke`        | 只有 `source_invite`；`create` 收 `scope`（§14）；`accept` 匿名；`update` 只改备注（去首尾空白，已撤销的也能改）；撤销即作废该链接的全部访客设备并断开其 WS                                                                        |
 
 - 账号：一个；口令策略与 scrypt 参数取协议包 `identity-vectors`，策略码与 core 相同（`password_too_short` 等）。
 - 防暴力破解：按 IP 每分钟 20 次（`rate_limited`）；按账号连续 5 次失败锁 1 分钟、每次翻倍、15 分钟封顶、最后一次失败一小时后清零。锁定时答 `429 account_locked`，`details.retryAfterMs` 与 `Retry-After` 头给出剩余时间。
@@ -253,7 +253,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 协议 1.2（协议包 0.3.5 定形状，0.3.6 起个人中转实现校验）。服务端可以要求登录、接受分享链接之前先过一道人机挑战（Cloudflare Turnstile）。在服务端报出 `platform.info.challenge` 之前，客户端带不带 `challenge` 行为都不变。
 
-- **服务端声明**：`platform.info.challenge = { provider: "turnstile", siteKey, scope }`，`scope` 是要求挑战的 procedure（`auth.login`、`links.accept`），`siteKey` 不是秘密；同时 `capabilities` 含 `challenge.turnstile`。不报 `challenge` = 不要求。
+- **服务端声明**：`platform.info.challenge = { provider: "turnstile", siteKey, scope }`，`scope` 是要求挑战的 procedure（`auth.login`、`links.accept`，0.3.10 起还有 `auth.changePassword`，见 §18），`siteKey` 不是秘密；同时 `capabilities` 含 `challenge.turnstile`。不报 `challenge` = 不要求。
 - **请求**：`auth.login` 与 `links.accept` 的输入多一个可选的 `challenge: { provider: "turnstile", token }`（`token` 1–2048 字符），是页面或手机里挑战组件交回的一次性令牌（有效 300 秒、只能用一次）。原生 App 在中继托管的同源挑战页里取令牌。
 - **答复**：`scope` 列了这条 procedure 而请求没带 → `400 challenge_required`；令牌无效、过期、用过或提供方不认 → `400 challenge_invalid`。挑战先于口令校验与按账号的锁定计数，挑战失败不计入登录失败次数；按 IP 的限流照常先计。
 - **core 作为客户端**（`sources.mount` 经 `links.accept`）没有挑战组件：personal 缺省只对 `auth.login` 要求，`links.accept` 由链接自带的 128 位秘密与按 IP 限流保护。
@@ -272,6 +272,25 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 | procedure            | 方法与路径                             | scope        | 错误码                         |
 | -------------------- | -------------------------------------- | ------------ | ------------------------------ |
 | `relay.nodePresence` | `POST /v1/relay/nodes/{node}/presence` | `relay-node` | `unauthenticated`、`forbidden` |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
+
+<!-- rpc:end -->
+
+## §18 改口令
+
+协议包 0.3.10（协议仍是 1.2）。服务端报能力 `auth.password-change` 才有这条；不报的中继答 `404 not_found`，客户端不要提供入口。
+
+- **请求**：`POST /v1/auth/password`，`Authorization: Bearer <accessToken>`（账号本人；访客答 `403 forbidden`），体 `{ password, newPassword, challenge? }`——`password` 是旧口令。
+- **次序**：按 IP 限流（与 `auth.login` 同一个桶，`rate_limited`）→ 挑战（`platform.info.challenge.scope` 含 `auth.changePassword` 才要，action `armadra-password`，规则同 §16）→ 锁定检查（`account_locked`）→ 新口令策略（与注册、初始化同一套，`password_too_short` 等）→ 比对旧口令（不对答 `401 credentials_invalid`，计入与登录同一个锁定计数）。
+- **成功**：换口令记录、清锁，并在同一个写入里撤销账号本人除当前设备以外的全部设备（它们的访问令牌与刷新令牌即时失效；访客设备不受影响，由链接管）；当前设备的刷新令牌也换新（旧的作废、不当作重放），答 `{ session }`——当前设备的新会话，客户端用它替换保存的刷新令牌。
+- **运维**：Node 中继的 `personal passwd` 走同一个实现，但不留设备（全部重新登录）；Workers 中继由 `apps/relay-workers/scripts/rotate-password.sh` 在运维本机调这条接口，新口令只打印在运维终端。口令、令牌不进日志、存储与响应。
+
+<!-- rpc:begin contract=§18 -->
+
+| procedure             | 方法与路径               | scope     | 错误码                                                                                                                                                                                                                           |
+| --------------------- | ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.changePassword` | `POST /v1/auth/password` | `session` | `credentials_invalid`、`account_locked`、`rate_limited`、`forbidden`、`challenge_required`、`challenge_invalid`、`password_too_short`、`password_too_long`、`password_too_common`、`password_contains_name`、`password_breached` |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 

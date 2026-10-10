@@ -20,8 +20,12 @@ export const empty = z.object({});
 
 /** 挑战的提供方（cloud-api §16，0.3.5 起）。 */
 export const challengeProviderSchema = z.enum(["turnstile"]);
-/** 要挑战的 procedure（`platform.info.challenge.scope`）。 */
-export const challengeScopeSchema = z.enum(["auth.login", "links.accept"]);
+/** 要挑战的 procedure（`platform.info.challenge.scope`；`auth.changePassword` 0.3.10 起，cloud-api §18）。 */
+export const challengeScopeSchema = z.enum([
+  "auth.login",
+  "links.accept",
+  "auth.changePassword",
+]);
 
 /**
  * 请求里带的挑战令牌（`auth.login` / `links.accept` 的可选 `challenge`，0.3.5 起）：页面或
