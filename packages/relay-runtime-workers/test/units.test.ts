@@ -182,7 +182,7 @@ describe("闸的归类", () => {
 });
 
 describe("媒体票（DO 存储版）", () => {
-  it("存的是票的哈希；闲置 5 分钟或签出 30 分钟作废；一分钟内重复用不写存储；清扫", async () => {
+  it("存储里只有票的派生哈希与密文；闲置 5 分钟或签出 30 分钟作废；清扫", async () => {
     const stub = env.SOURCE.get(env.SOURCE.idFromName("tickets-unit"));
     await runInDurableObject(stub, (_instance, state) => {
       let now = 1_000_000;
@@ -195,11 +195,12 @@ describe("媒体票（DO 存储版）", () => {
       };
       const { ticket, expiresAtMs } = tickets.issue(grant);
       expect(expiresAtMs).toBe(now + 5 * 60_000);
-      const keys = [...state.storage.kv.list({ prefix: "mt:" })].map(
-        ([key]) => key,
-      );
-      expect(keys).toHaveLength(1);
-      expect(keys[0]).not.toContain(ticket);
+      const stored = [...state.storage.kv.list({ prefix: "mt:" })];
+      expect(stored).toHaveLength(1);
+      // 存储里既没有票、也没有签票时的路径与令牌标识。
+      const dump = JSON.stringify(stored);
+      for (const part of [ticket, "/media", "acct:o", '"j"'])
+        expect(dump).not.toContain(part);
       now += 4 * 60_000;
       expect(tickets.use(ticket)).toEqual(grant);
       now += 4 * 60_000;

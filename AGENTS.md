@@ -8,7 +8,7 @@
 - `@orpc/*` 只能出现在 `packages/platform-protocol/src/cloud-api/`、`packages/control-core/src/router.ts`、`tools/contract/`（ESLint `no-restricted-imports` 守）。
 - 协议包只含 zod schema、类型、纯编解码与常量，不 import `node:*`（`src/fixtures/` 例外，只在测试里用）。
 - 错误码只从 `@armadra/platform-protocol/errors` 取；线上形状 `{ code, message, requestId?, details? }`，JSON camelCase。
-- relay 不碰 PostgreSQL；personal 的状态只在数据目录（`state.json` 或 `node:sqlite` 的 `relay.db`，经 `packages/control-store-sqlite`）；Workers 中继的状态只在 `ControlDO` 的 DO SQLite（同一份迁移与账本，签名私钥用 `RELAY_MASTER_KEY` 包裹）与 `SourceDO` 的 WS 附件 / 同步 KV（媒体票存哈希）。relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
+- relay 不碰 PostgreSQL；personal 的状态只在数据目录（`state.json` 或 `node:sqlite` 的 `relay.db`，经 `packages/control-store-sqlite`）；Workers 中继的状态只在 `ControlDO` 的 DO SQLite（同一份迁移与账本，签名私钥用 `RELAY_MASTER_KEY` 包裹）与 `SourceDO` 的 WS 附件 / 同步 KV（媒体票只存派生哈希与用票本身派生的密钥封起来的密文）。relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
 - `personal` 模式不得引入对 PostgreSQL / Redis 的运行时依赖（`apps/relay/src/boundaries.test.ts` 连同它装配的内核与控制核一起扫）。
 
 ## 范围与优先级
