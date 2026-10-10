@@ -79,3 +79,92 @@ jobs:
           name: e2e-personal-${{ matrix.server }}
           path: e2e-out/result.json
           if-no-files-found: ignore
+
+  # Workers 中继（本地 workerd，`wrangler dev --local`，不连 Cloudflare 账号）对假 core：
+  # 只依赖本仓，不要 Armadra 主仓。
+  e2e-workers:
+    name: e2e-personal-workers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm libs:build
+      - name: pnpm e2e --mode personal-workers
+        run: pnpm e2e --mode personal-workers --output e2e-out
+      - name: 结果
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-personal-workers
+          path: e2e-out/result.json
+          if-no-files-found: ignore
+
+  # 真 Armadra core 对本地 workerd 的 Workers 中继（平台计划 V4）：Armadra 主仓的
+  # tools/probes/personal-roundtrip.mjs --workerd，走登记、隧道、浏览器开画布、终端、
+  # 分享链接（含只读范围）、媒体票 Range、撤销。要 Armadra 主仓的只读检出
+  # （ARMADRA_REPO_TOKEN）；没配时只说明并跳过，不算失败。
+  e2e-workers-armadra:
+    name: e2e-personal-workers (Armadra core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 有没有 Armadra 主仓的只读令牌
+        id: token
+        env:
+          ARMADRA_REPO_TOKEN: ${{ secrets.ARMADRA_REPO_TOKEN }}
+        run: |
+          if [ -n "$ARMADRA_REPO_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::没有配置 ARMADRA_REPO_TOKEN，跳过 Armadra core 对 workerd 的端到端（需要 Armadra 主仓的只读检出）"
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          path: cloud
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          repository: Owlbay/Armadra
+          ref: main
+          path: armadra
+          token: ${{ secrets.ARMADRA_REPO_TOKEN }}
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: 装依赖并构建（cloud 与 Armadra 各自）
+        if: steps.token.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tmux
+          (cd cloud && pnpm install --frozen-lockfile && pnpm libs:build)
+          (cd armadra && pnpm install --frozen-lockfile && pnpm libs:build \
+            && pnpm --filter @armadra/web build && pnpm --filter @armadra/desktop build)
+      - name: personal-roundtrip --workerd
+        if: steps.token.outputs.present == 'true'
+        env:
+          ARMADRA_DEV_STACK_CLOUD_SRC: ${{ github.workspace }}/cloud
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node armadra/tools/probes/personal-roundtrip.mjs --workerd "$GITHUB_WORKSPACE/e2e-out/workers-roundtrip"
+      - name: 结果
+        if: always() && steps.token.outputs.present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-personal-workers-armadra
+          path: e2e-out/workers-roundtrip/result.json
+          if-no-files-found: ignore

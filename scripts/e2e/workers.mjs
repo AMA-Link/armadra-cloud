@@ -8,6 +8,9 @@
 //   5. 撤销源：隧道 4492、客户端 WS 断开、旧中继令牌 401；
 //   6. 中继日志里查不到任何秘密。
 //
+// 真 core 的那一半（登记、隧道、画布、终端、分享链接含只读范围、媒体票 Range、撤销）在
+// Armadra 仓的 `tools/probes/personal-roundtrip.mjs --workerd`，夜间作业 e2e-workers-armadra 跑。
+//
 // 与 `--mode personal` 的差别：服务器壳（真 core）对 workerd 的场景要 TLS 与容器可达的 issuer，
 // 留给 Workers 探针批次；这里覆盖中继这一侧的线上行为。
 import { spawn } from "node:child_process";
@@ -200,6 +203,23 @@ export async function runWorkersE2e({ root, report }) {
       return relay.origin;
     });
     const { origin } = relay;
+
+    await report.step("平台信息与公钥集：/.well-known、/health", async () => {
+      const info = await api(origin, "/.well-known/armadra-platform");
+      expectEqual(info.status, 200, "/.well-known/armadra-platform");
+      expectEqual(info.json?.mode, "personal", "mode");
+      expectEqual(info.json?.issuer, origin, "issuer 与探测地址一致");
+      const jwks = await api(origin, "/.well-known/jwks.json");
+      expectEqual(jwks.status, 200, "/.well-known/jwks.json");
+      expect(
+        Array.isArray(jwks.json?.keys) &&
+          jwks.json.keys.length > 0 &&
+          jwks.json.keys.every((key) => key.d === undefined),
+        "公钥集有公钥且不含私钥分量",
+      );
+      const health = await api(origin, "/health");
+      expect(!health.headers.has("set-cookie"), "/health 不种 Cookie");
+    });
 
     let session;
     await report.step("账号口令登录；错口令被拒", async () => {
