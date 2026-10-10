@@ -9,6 +9,8 @@ import {
   AUDIENCES,
   checkTimes,
   ReplayCache,
+  SCOPE_READ_ONLY,
+  scopeClaims,
   sourceJwsClaimsSchema,
   splitCompactJws,
   TOKEN_TYPES,
@@ -16,6 +18,7 @@ import {
 } from "@armadra/platform-protocol/assertion";
 import type {
   DeviceInput,
+  LinkScope,
   SourceDetail,
   SourceSummary,
 } from "@armadra/platform-protocol/cloud-api";
@@ -103,7 +106,10 @@ export function createSources(context: ControlContext) {
     };
   }
 
-  /** 签断言 + 中继令牌（owner 或访客，已核过可见性）。 */
+  /**
+   * 签断言 + 中继令牌（owner 或访客，已核过可见性）。`scope`（链接的分享范围）→ 断言 `scp`；
+   * 只读 → 中继令牌 `ro: true`。没有范围时两者都不出现（与 0.2.x 签出的字节同形）。
+   */
   async function grant(
     source: SourceRecord,
     device: DeviceRecord,
@@ -111,9 +117,12 @@ export function createSources(context: ControlContext) {
       name?: string;
       link?: { linkId: string; invitationId: string };
       device?: Pick<DeviceInput, "platform" | "name">;
+      scope?: LinkScope;
     },
   ) {
     const issuer = context.signer.issuer;
+    const scp = scopeClaims(extra.scope);
+    const readOnly = scp.includes(SCOPE_READ_ONLY);
     const assertion = context.signer.sign(
       TOKEN_TYPES.assertion,
       {
@@ -121,6 +130,7 @@ export function createSources(context: ControlContext) {
         aud: source.sourceId,
         ...(extra.name ? { name: extra.name } : {}),
         ...(extra.link ? { link: extra.link } : {}),
+        ...(scp.length > 0 ? { scp } : {}),
         device: {
           deviceId: device.deviceId,
           platform: extra.device?.platform ?? device.platform,
@@ -131,7 +141,12 @@ export function createSources(context: ControlContext) {
     );
     const relay = context.signer.sign(
       TOKEN_TYPES.relay,
-      { sub: device.subject, aud: AUDIENCES.relay, src: source.sourceId },
+      {
+        sub: device.subject,
+        aud: AUDIENCES.relay,
+        src: source.sourceId,
+        ...(readOnly ? { ro: true } : {}),
+      },
       {
         ttlMs: RELAY_TOKEN.ttlMs,
         jtiPrefix: `r.${device.deviceId}.${source.sourceId}`,
@@ -380,6 +395,7 @@ export function createSources(context: ControlContext) {
         ...(link
           ? { link: { linkId: link.linkId, invitationId: link.invitationId } }
           : {}),
+        ...(link?.scope ? { scope: link.scope } : {}),
         ...(device ? { device } : {}),
       });
     },

@@ -14,7 +14,10 @@ import type {
   DevicePlatform,
   Ed25519PublicJwk,
 } from "@armadra/platform-protocol/assertion";
-import type { sourceKindSchema } from "@armadra/platform-protocol/cloud-api";
+import type {
+  LinkScope,
+  sourceKindSchema,
+} from "@armadra/platform-protocol/cloud-api";
 import type { z } from "zod";
 
 import type { EventBus } from "./events.ts";
@@ -108,6 +111,8 @@ export interface LinkRecord {
   createdAtMs: number;
   expiresAtMs: number;
   revokedAtMs: number | null;
+  /** 分享范围（0.3.0 起）；整台时不出现。已规范化（见 `links.ts` 的 `normalizeLinkScope`）。 */
+  scope?: LinkScope;
 }
 
 /** 租户级设置。 */

@@ -9,9 +9,12 @@
  *   带 `link` 声明的断言与中继令牌。
  * - `update { label }`：只改备注（落地页与访客的源名用它）；已撤销的也能改，不动秘密、次数与期限。
  * - `revoke`：撤销链接与它名下的全部访客设备，断开访客经中继的 WS。
+ * - `scope`（0.3.0 起，SaaS 设计 §3.3 (b)）：工作空间 / 会话 / 只读。访客的断言带 `scp`，
+ *   只读时中继令牌带 `ro: true`（边缘只放行安全方法与身份域）。缺省 = 整台、按角色（旧行为）。
  */
 import type {
   DeviceInput,
+  LinkScope,
   LinkSummary,
 } from "@armadra/platform-protocol/cloud-api";
 import { SESSION } from "@armadra/platform-protocol/identity-vectors";
@@ -26,6 +29,26 @@ import { guestPrefix } from "./subjects.ts";
 /** 链接最长有效期：30 天（与访客的刷新令牌同寿）。 */
 export const LINK_MAX_TTL_MS = SESSION.refreshTtlMs;
 
+/**
+ * 规范化分享范围：空的答 undefined（整台）；`sessionId` 要有 `workspaceId`；会话范围总是只读，
+ * 显式 `readOnly: false` 答 `bad_request`；`readOnly: false` 等同缺省，不存。
+ */
+export function normalizeLinkScope(
+  scope: LinkScope | undefined,
+): LinkScope | undefined {
+  if (!scope) return undefined;
+  const { workspaceId, sessionId, readOnly } = scope;
+  if (sessionId !== undefined) {
+    if (workspaceId === undefined || readOnly === false)
+      throw new ControlError("bad_request");
+    return { workspaceId, sessionId, readOnly: true };
+  }
+  const out: LinkScope = {};
+  if (workspaceId !== undefined) out.workspaceId = workspaceId;
+  if (readOnly === true) out.readOnly = true;
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
 export function linkUrl(issuer: string, linkId: string): string {
   return `${issuer}/j/${linkId}`;
 }
@@ -37,6 +60,7 @@ function toSummary(issuer: string, link: LinkRecord): LinkSummary {
     label: link.label,
     role: link.role,
     sourceId: link.sourceId,
+    ...(link.scope ? { scope: { ...link.scope } } : {}),
     url: linkUrl(issuer, link.linkId),
     uses: link.uses,
     maxUses: link.maxUses,
@@ -91,11 +115,13 @@ export function createLinks(context: ControlContext, sources: Sources) {
             role: string;
             expiresAtMs: number;
             maxUses?: number;
+            scope?: LinkScope;
           }
         | { kind: "org_join" },
     ) {
       requireOwner(caller);
       if (input.kind !== "source_invite") throw new ControlError("bad_request");
+      const scope = normalizeLinkScope(input.scope);
       const nowMs = context.now();
       if (
         input.expiresAtMs <= nowMs ||
@@ -120,6 +146,7 @@ export function createLinks(context: ControlContext, sources: Sources) {
         createdAtMs: nowMs,
         expiresAtMs: input.expiresAtMs,
         revokedAtMs: null,
+        ...(scope ? { scope } : {}),
       });
       return {
         linkId,
@@ -142,6 +169,7 @@ export function createLinks(context: ControlContext, sources: Sources) {
         label: link.label,
         role: link.role,
         sourceName: source.name,
+        ...(link.scope ? { scope: { ...link.scope } } : {}),
         expiresAtMs: link.expiresAtMs,
         exhausted: link.maxUses !== null && link.uses >= link.maxUses,
         requiresAccount: false,
@@ -200,6 +228,7 @@ export function createLinks(context: ControlContext, sources: Sources) {
       const granted = await sources.grant(source, created.device, {
         name: link.label || undefined,
         link: { linkId: link.linkId, invitationId: link.invitationId },
+        ...(link.scope ? { scope: link.scope } : {}),
       });
       context.emit({
         type: "linkUsed",

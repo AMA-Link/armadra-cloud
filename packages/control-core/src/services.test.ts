@@ -39,6 +39,12 @@ function account(name: string, accountId: string): AccountRecord {
   };
 }
 
+/** 令牌的载荷（只拆不验，验签由 relay-kernel / core 负责）。 */
+const payloadOf = (token: string | undefined): Record<string, unknown> =>
+  JSON.parse(
+    Buffer.from((token ?? "").split(".")[1] ?? "", "base64url").toString(),
+  ) as Record<string, unknown>;
+
 const codeOf = async (run: () => unknown) => {
   try {
     await run();
@@ -212,6 +218,133 @@ describe("源、链接与撤销", () => {
         ),
       ),
     ).toBe("unauthenticated");
+  });
+
+  it("分享范围：访客断言带 scp、只读时中继令牌带 ro；links.get / list 报范围；sources.assertion 沿用", async () => {
+    const h = memoryHarness();
+    const owner = await ownerOf(h);
+    const { sources } = await registered(h, owner);
+    const links = createLinks(h.context, sources);
+    const base = {
+      kind: "source_invite" as const,
+      sourceId: SOURCE_ID,
+      invitationId: "inv",
+      label: "",
+      role: "viewer",
+      expiresAtMs: h.clock.now + 60_000,
+    };
+    const scoped = await links.create(owner, {
+      ...base,
+      scope: { workspaceId: "ws_01", readOnly: true },
+    });
+    expect((await links.get(scoped.linkId)).scope).toEqual({
+      workspaceId: "ws_01",
+      readOnly: true,
+    });
+    const accepted = await links.accept(
+      { linkId: scoped.linkId, secret: scoped.secret },
+      "ip",
+    );
+    expect(payloadOf(accepted.assertion).scp).toEqual(["ws:ws_01", "ro"]);
+    expect(payloadOf(accepted.relayToken).ro).toBe(true);
+    const guest = await createAuthenticator(h.context).authenticate(
+      `Bearer ${accepted.guestSession.accessToken}`,
+    );
+    const again = await sources.assertion(guest, SOURCE_ID, undefined);
+    expect(payloadOf(again.assertion).scp).toEqual(["ws:ws_01", "ro"]);
+    expect(payloadOf(again.relayToken).ro).toBe(true);
+
+    const session = await links.create(owner, {
+      ...base,
+      scope: { workspaceId: "ws_01", sessionId: "sess_01" },
+    });
+    const viaSession = await links.accept(
+      { linkId: session.linkId, secret: session.secret },
+      "ip",
+    );
+    expect(payloadOf(viaSession.assertion).scp).toEqual([
+      "ws:ws_01",
+      "sess:sess_01",
+      "ro",
+    ]);
+    const listed = await links.list(owner);
+    expect(listed.map((row) => row.scope)).toEqual([
+      { workspaceId: "ws_01", readOnly: true },
+      { workspaceId: "ws_01", sessionId: "sess_01", readOnly: true },
+    ]);
+
+    // owner 的断言与令牌没有范围。
+    const mine = await sources.assertion(owner, SOURCE_ID, undefined);
+    expect(payloadOf(mine.assertion).scp).toBeUndefined();
+    expect(payloadOf(mine.relayToken).ro).toBeUndefined();
+  });
+
+  it("缺省 scope = 旧行为：断言没有 scp、中继令牌没有 ro，摘要没有 scope；可写的工作空间范围不带 ro", async () => {
+    const h = memoryHarness();
+    const owner = await ownerOf(h);
+    const { sources } = await registered(h, owner);
+    const links = createLinks(h.context, sources);
+    const base = {
+      kind: "source_invite" as const,
+      sourceId: SOURCE_ID,
+      invitationId: "inv",
+      label: "",
+      role: "editor",
+      expiresAtMs: h.clock.now + 60_000,
+    };
+    for (const scope of [undefined, {}, { readOnly: false }]) {
+      const created = await links.create(owner, { ...base, scope });
+      expect((await links.get(created.linkId)).scope).toBeUndefined();
+      const accepted = await links.accept(
+        { linkId: created.linkId, secret: created.secret },
+        "ip",
+      );
+      const assertion = payloadOf(accepted.assertion);
+      expect("scp" in assertion).toBe(false);
+      expect("role" in assertion).toBe(false);
+      expect("ro" in payloadOf(accepted.relayToken)).toBe(false);
+    }
+    const writable = await links.create(owner, {
+      ...base,
+      scope: { workspaceId: "ws_02", readOnly: false },
+    });
+    const accepted = await links.accept(
+      { linkId: writable.linkId, secret: writable.secret },
+      "ip",
+    );
+    expect(payloadOf(accepted.assertion).scp).toEqual(["ws:ws_02"]);
+    expect("ro" in payloadOf(accepted.relayToken)).toBe(false);
+    expect((await links.list(owner)).at(-1)?.scope).toEqual({
+      workspaceId: "ws_02",
+    });
+  });
+
+  it("会话范围要工作空间、不能可写：bad_request", async () => {
+    const h = memoryHarness();
+    const owner = await ownerOf(h);
+    const { sources } = await registered(h, owner);
+    const links = createLinks(h.context, sources);
+    const base = {
+      kind: "source_invite" as const,
+      sourceId: SOURCE_ID,
+      invitationId: "inv",
+      label: "",
+      role: "viewer",
+      expiresAtMs: h.clock.now + 60_000,
+    };
+    expect(
+      await codeOf(() =>
+        links.create(owner, { ...base, scope: { sessionId: "s" } }),
+      ),
+    ).toBe("bad_request");
+    expect(
+      await codeOf(() =>
+        links.create(owner, {
+          ...base,
+          scope: { workspaceId: "w", sessionId: "s", readOnly: false },
+        }),
+      ),
+    ).toBe("bad_request");
   });
 
   it("撤销源：关隧道、断开、发事件", async () => {
