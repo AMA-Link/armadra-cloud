@@ -179,9 +179,9 @@ if [ -n "$ACCESS" ]; then
 fi
 unset ACCESS
 
-OUT=/dev/tty
-{ : >"$OUT"; } 2>/dev/null || OUT=/dev/stdout
-cat >"$OUT" <<EOF
+# 新口令只写到终端（/dev/tty）；没有终端时写到标准输出。
+if { exec 3>/dev/tty; } 2>/dev/null; then :; else exec 3>&1; fi
+cat >&3 <<EOF
 
 >>> 新口令（只显示这一次，现在就存进密码管理器）：
     地址：$ORIGIN
@@ -189,4 +189,5 @@ cat >"$OUT" <<EOF
     口令：$NEW
 
 EOF
+exec 3>&-
 unset NEW
