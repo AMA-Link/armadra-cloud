@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 新增 / Added
+
+- 服务端名称（cloud-api §15，协议包 0.3.1，cloud 各包同版本，协议仍是 1.1）：`platform.info`（`/.well-known/armadra-platform`）多一个可选的 `name`，客户端添加服务时用它作缺省显示名。个人中转依次取 `--name`、`RELAY_NAME`、状态文件 `settings.displayName`，缺省 `--host`；SaaS 预留同一字段。旧客户端忽略它，旧状态文件照常读。
+  Server name (cloud-api §15, protocol package 0.3.1, all cloud packages in lockstep, protocol still 1.1): `platform.info` (`/.well-known/armadra-platform`) gains an optional `name` that clients use as the default label when adding the service. The personal relay takes `--name`, then `RELAY_NAME`, then `settings.displayName` in the state file, falling back to `--host`; SaaS reserves the same field. Older clients ignore it and older state files still load.
+
 ## 0.3.0（2026-10-10）
 
 ### 新增 / Added
