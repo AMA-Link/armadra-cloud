@@ -15,11 +15,16 @@
  * WS 先完成升级再以关闭码结束（浏览器读不到升级失败的状态码）：令牌 4401 / 4403、
  * 限流 4429、源离线 4404。
  *
+ * 只读中继令牌（`ro: true`，协议 1.1）：只放行安全方法与身份域路径（协议包
+ * `isReadOnlyAllowed`），其余 HTTP 答 403 `forbidden`、WS 以 4403 关闭；媒体票的签票与兑票
+ * 是读，照常放行。纵深防御，core 仍按自己的授予判定。
+ *
  * 不解析正文、不缓存、不记路径与头。
  */
 import { request, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 
+import { isReadOnlyAllowed } from "@armadra/platform-protocol/assertion";
 import type { ErrorCode } from "@armadra/platform-protocol/errors";
 import { CLOSE, LIMITS } from "@armadra/platform-protocol/tunnel";
 import { WebSocketServer } from "ws";
@@ -112,6 +117,7 @@ async function readSmallJson(
 const WS_CLOSE: Partial<Record<ErrorCode, number>> = {
   relay_token_invalid: CLOSE.unauthenticated,
   relay_source_mismatch: CLOSE.forbidden,
+  forbidden: CLOSE.forbidden,
   rate_limited: CLOSE.limitReached,
   limit_reached: CLOSE.limitReached,
   source_offline: CLOSE.sourceOffline,
@@ -126,6 +132,8 @@ type Admission =
       subject: string;
       jti: string;
       remoteIp: string;
+      /** 中继令牌带 `ro: true`。 */
+      readOnly: boolean;
     }
   | {
       ok: false;
@@ -198,6 +206,14 @@ export class Edge {
     }
     if (isIssuePath(admission.target.path))
       return this.issueMedia(req, res, admission);
+    if (this.readOnlyRefused(req, admission)) {
+      req.resume();
+      this.options.metrics.edgeConnection("forbidden");
+      sendRelayError(res, "forbidden", {
+        cors: this.errorCors(req, admission.target.sourceId),
+      });
+      return;
+    }
     this.forward(
       req,
       res,
@@ -273,6 +289,17 @@ export class Edge {
       this.refuseUpgrade(req, socket, head, admission.code, admission.sourceId);
       return;
     }
+    if (this.readOnlyRefused(req, admission)) {
+      this.options.metrics.edgeConnection("forbidden");
+      this.refuseUpgrade(
+        req,
+        socket,
+        head,
+        "forbidden",
+        admission.target.sourceId,
+      );
+      return;
+    }
     const { target, tunnel, subject, remoteIp } = admission;
     const { control } = this.options;
     const concurrent = await control.limits.hit(
@@ -328,6 +355,17 @@ export class Edge {
       this.sockets.delete(socket);
       stream.destroy();
     });
+  }
+
+  /** 只读令牌下不放行的请求（方法不安全且不在身份域）。 */
+  private readOnlyRefused(
+    req: IncomingMessage,
+    admission: Extract<Admission, { ok: true }>,
+  ): boolean {
+    return (
+      admission.readOnly &&
+      !isReadOnlyAllowed(req.method ?? "GET", admission.target.path)
+    );
   }
 
   /**
@@ -562,6 +600,7 @@ export class Edge {
       subject,
       jti: verified.claims.jti,
       remoteIp,
+      readOnly: verified.claims.ro === true,
     };
   }
 
