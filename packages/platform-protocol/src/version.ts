@@ -5,8 +5,10 @@
  * - 1.0（协议包 0.1–0.2）；
  * - 1.1（0.3.0）：断言 `scp` / `role` / `team`，中继令牌 `org` / `ro`，隧道令牌 `org`，
  *   `links.create` 的 `scope`。都是可选的新声明，缺省 = 1.0 的行为。
+ * - 1.2（0.3.5）：挑战令牌（`auth.login` / `links.accept` 的 `challenge`、`platform.info.challenge`，
+ *   cloud-api §16）；中继节点地址可带 query、节点回报 `relay.nodePresence`（§17）。都是可选的新字段。
  */
-export const PROTOCOL_VERSION = { major: 1, minor: 1 } as const;
+export const PROTOCOL_VERSION = { major: 1, minor: 2 } as const;
 
 /** 隧道路径；major 变化时同时升为 `/t/v2`。 */
 export const TUNNEL_PATH = "/t/v1";

@@ -110,6 +110,20 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
         relay: { addressing: "path" },
         webApp: null,
       },
+      // 0.3.5 起：要求挑战（Workers 个人中转开了 Turnstile）。
+      {
+        mode: "personal",
+        issuer: RELAY_ORIGIN,
+        protocol: { major: 1, minor: 2 },
+        capabilities: ["auth.password", "me.stream", "challenge.turnstile"],
+        relay: { addressing: "path" },
+        webApp: `${RELAY_ORIGIN}/app/`,
+        challenge: {
+          provider: "turnstile",
+          siteKey: "test-site-key",
+          scope: ["auth.login"],
+        },
+      },
     ],
   },
   "platform.jwks": {
@@ -376,7 +390,12 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
   },
   "links.accept": {
-    input: { linkId: link.linkId, secret: "test-link-secret", device },
+    input: {
+      linkId: link.linkId,
+      secret: "test-link-secret",
+      device,
+      challenge: { provider: "turnstile", token: "test-challenge-token" },
+    },
     output: {
       sourceId: SOURCE_ID,
       relayOrigin: RELAY_ORIGIN,
@@ -436,5 +455,27 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       period: "2025-10",
       usage: [{ metric: "relay.bytes", value: 1024, limit: null }],
     },
+  },
+  "relay.nodePresence": {
+    input: {
+      node: "cf",
+      ttlMs: 120_000,
+      events: [
+        {
+          type: "sourceOnline",
+          sourceId: SOURCE_ID,
+          tunnelId: "fedcba9876543210fedcba9876543210",
+          coreVersion: "0.2.0",
+          atMs: NOW,
+        },
+        {
+          type: "sourceOffline",
+          sourceId: SOURCE_ID,
+          tunnelId: "0123456789abcdef0123456789abcdef",
+          atMs: NOW - 1_000,
+        },
+      ],
+    },
+    output: { accepted: 2 },
   },
 };

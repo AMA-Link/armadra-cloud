@@ -5,6 +5,10 @@
     "device": {
       "platform": "desktop",
       "name": "Dev laptop"
+    },
+    "challenge": {
+      "provider": "turnstile",
+      "token": "test-challenge-token"
     }
   },
   "output": {

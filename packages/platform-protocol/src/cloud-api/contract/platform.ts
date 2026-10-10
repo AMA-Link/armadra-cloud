@@ -3,7 +3,12 @@ import { z } from "zod";
 import { jwkSetSchema } from "../../assertion/claims.ts";
 import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_1 } from "../meta.ts";
-import { empty, protocolVersionSchema } from "../schemas.ts";
+import {
+  challengeProviderSchema,
+  challengeScopeSchema,
+  empty,
+  protocolVersionSchema,
+} from "../schemas.ts";
 
 /** capabilities 只增不删。personal 报 `auth.password`、`links.source-invite`、`links.update`、`links.scope`、`me.stream`。 */
 export const PLATFORM_CAPABILITIES = [
@@ -22,12 +27,24 @@ export const PLATFORM_CAPABILITIES = [
   "sources.hosted",
   "billing",
   "me.stream",
+  /** 认 Turnstile 挑战令牌（cloud-api §16，0.3.5 起）；要求哪些 procedure 带看 `platform.info.challenge`。 */
+  "challenge.turnstile",
 ] as const;
 
 export const platformModeSchema = z.enum(["saas", "personal"]);
 
 /** 服务端名称的上限（与 core 源表 `label` 相同）。 */
 export const PLATFORM_NAME_MAX = 128;
+
+/**
+ * 服务端要求的挑战（cloud-api §16，0.3.5 起）：`scope` 里的 procedure 必须带 `challenge`
+ * 令牌；`siteKey` 不是秘密，页面与手机拿它渲染挑战组件。不报 = 不要求。
+ */
+export const platformChallengeSchema = z.object({
+  provider: challengeProviderSchema,
+  siteKey: z.string().min(1).max(256),
+  scope: z.array(challengeScopeSchema).min(1),
+});
 
 export const platformInfoSchema = z.object({
   mode: platformModeSchema,
@@ -42,6 +59,8 @@ export const platformInfoSchema = z.object({
   capabilities: z.array(z.string()),
   relay: z.object({ addressing: z.enum(["subdomain", "path"]) }),
   webApp: z.url().nullable(),
+  /** 要求挑战时才有（0.3.5 起）；旧客户端忽略它，此时服务端答 `challenge_required`。 */
+  challenge: platformChallengeSchema.optional(),
 });
 
 export const platformHealthSchema = z.object({

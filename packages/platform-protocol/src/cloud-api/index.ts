@@ -14,6 +14,7 @@ import { links } from "./contract/links.ts";
 import { me } from "./contract/me.ts";
 import { orgs } from "./contract/orgs.ts";
 import { platform } from "./contract/platform.ts";
+import { relay } from "./contract/relay.ts";
 import { sources } from "./contract/sources.ts";
 import type { CloudMeta } from "./meta.ts";
 
@@ -25,6 +26,7 @@ export const cloudContract = {
   links,
   orgs,
   billing,
+  relay,
 };
 export type CloudContract = typeof cloudContract;
 
@@ -38,6 +40,7 @@ export const CONTRACT_SECTIONS: Record<string, string> = {
   sources: "§4",
   links: "§5",
   billing: "§9",
+  relay: "§17",
 };
 
 export function sectionOf(key: string): string {
@@ -101,10 +104,16 @@ export { meDeviceSchema } from "./contract/me.ts";
 export {
   PLATFORM_CAPABILITIES,
   PLATFORM_NAME_MAX,
+  platformChallengeSchema,
   platformHealthSchema,
   platformInfoSchema,
   platformModeSchema,
 } from "./contract/platform.ts";
+export {
+  relayNodeIdSchema,
+  relayPresenceEventSchema,
+  type RelayPresenceEvent,
+} from "./contract/relay.ts";
 export {
   relayNodeSchema,
   sourceAccessSchema,
