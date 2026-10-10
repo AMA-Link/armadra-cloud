@@ -204,6 +204,11 @@ export class WsFrameDecoder {
     };
   }
 
+  /** 没有半帧、也没有没收完的分片消息（运行时据此判断能不能让对象休眠）。 */
+  get idle(): boolean {
+    return this.buffered.length === 0 && this.fragmentBinary === null;
+  }
+
   feed(chunk: Uint8Array): WsEvent[] {
     this.buffered =
       this.buffered.length === 0
