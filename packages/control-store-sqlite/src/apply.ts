@@ -17,7 +17,7 @@ import {
 import type { SqlDatabase } from "./db.ts";
 import { SqliteStoreError } from "./errors.ts";
 
-const decoder = new TextDecoder("utf-8", { fatal: true });
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
 
 /** 一个迁移文件（`0001_init.sql` + 字节）→ 账本要的记录；不是迁移文件名答 null。 */
 export function migrationFile(
