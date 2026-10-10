@@ -8,6 +8,7 @@
  * 账号（口令过 identity-vectors 策略、scrypt 哈希）与第一把签名钥；之后这两个 secret 就该删掉。
  */
 import { checkPassword } from "@armadra/control-core/accounts";
+import type { ChallengeGate } from "@armadra/control-core/challenge";
 import { ControlError } from "@armadra/control-core/errors";
 import { createEventBus } from "@armadra/control-core/events";
 import {
@@ -80,6 +81,8 @@ export interface PersonalInput {
   hasAssets: () => boolean;
   now: () => number;
   onError: (error: unknown) => void;
+  /** 人机挑战（配置了 secret 与站点密钥才有，cloud-api §16）。 */
+  challenge?: ChallengeGate;
 }
 
 /** 库里有租户时同步装配（构造函数里还原 me-stream 也走这里）；没有答 null。 */
@@ -150,6 +153,7 @@ export function openPersonal(input: PersonalInput): PersonalControl | null {
     passwordPolicy: passwordViolation,
     now,
     tunnelUrl: (sourceId) => tunnelNodeUrl(config.issuer, sourceId),
+    ...(input.challenge ? { challenge: input.challenge } : {}),
     ...createEventBus(),
   };
   const stream = createMeStreamCore(context);

@@ -2,6 +2,11 @@
  * Worker 的绑定与配置（`wrangler.jsonc` 的 `vars`、secret 与绑定）。配置一次读齐、校验，坏了
  * 整个 Worker 答 503 `unavailable`（不带配置内容）。secret 的值只在这里经过，不进日志与响应。
  */
+import {
+  parseChallengeScope,
+  type ChallengeScope,
+} from "@armadra/control-core/challenge";
+
 import type { ControlDO } from "./control-do.ts";
 import type { SourceDO } from "./source-do.ts";
 
@@ -31,6 +36,10 @@ export interface RelayEnv {
   /** saas：源地址的域（`<sourceId>.src.<域>`）；不给就用路径寻址 `/s/<id>/`。 */
   RELAY_DOMAIN?: string;
   RELAY_LOG_LEVEL?: string;
+  /** Turnstile 站点密钥（不是秘密，`platform.info.challenge.siteKey`，cloud-api §16）。 */
+  RELAY_TURNSTILE_SITE_KEY?: string;
+  /** 要挑战的 procedure，逗号分隔：`auth.login`（缺省）、`links.accept`。 */
+  RELAY_CHALLENGE_SCOPE?: string;
   // ------------------------------------------------------------ secret
   /** 签名私钥的主密钥：64 位十六进制（32 字节），personal 必需。 */
   RELAY_MASTER_KEY?: string;
@@ -41,6 +50,8 @@ export interface RelayEnv {
   RELAY_PERSONAL_PASSWORD?: string;
   /** saas：节点令牌（`relay.nodePresence`）。 */
   RELAY_NODE_TOKEN?: string;
+  /** Turnstile secret：录了才要求挑战（还要配 `RELAY_TURNSTILE_SITE_KEY`）。 */
+  RELAY_TURNSTILE_SECRET?: string;
   // ------------------------------------------------------------ 绑定
   SOURCE: DurableObjectNamespace<SourceDO>;
   CONTROL: DurableObjectNamespace<ControlDO>;
@@ -73,6 +84,8 @@ export interface RelayConfig {
   cloudIssuer: string | null;
   domain: string | null;
   logLevel: "debug" | "info" | "warn" | "error";
+  /** 人机挑战（录了 `RELAY_TURNSTILE_SECRET` 才有）；secret 本身不进配置。 */
+  challenge: { siteKey: string; scope: ChallengeScope[] } | null;
 }
 
 export class ConfigError extends Error {
@@ -153,6 +166,7 @@ export function readConfig(env: RelayEnv): RelayConfig {
   const domain = env.RELAY_DOMAIN?.trim().toLowerCase() || null;
   if (domain !== null && !/^[a-z0-9.-]+$/.test(domain))
     throw new ConfigError("RELAY_DOMAIN 不是域名");
+  const challenge = challengeOf(env);
   const trustedOrigins = (env.RELAY_TRUSTED_ORIGINS ?? "")
     .split(",")
     .map((item) => item.trim())
@@ -202,7 +216,36 @@ export function readConfig(env: RelayEnv): RelayConfig {
     cloudIssuer,
     domain,
     logLevel: level as RelayConfig["logLevel"],
+    challenge,
   };
+}
+
+/**
+ * 挑战配置：录了 secret 才要求；录了 secret 却没给站点密钥是配错（客户端渲染不了组件、谁也登录
+ * 不上），整个 Worker 答 503，比悄悄不要求更容易发现。
+ */
+function challengeOf(env: RelayEnv): RelayConfig["challenge"] {
+  const secret = env.RELAY_TURNSTILE_SECRET?.trim() ?? "";
+  const siteKey = env.RELAY_TURNSTILE_SITE_KEY?.trim() ?? "";
+  if (secret === "") return null;
+  if (siteKey === "")
+    throw new ConfigError(
+      "录了 RELAY_TURNSTILE_SECRET 却没配 RELAY_TURNSTILE_SITE_KEY",
+    );
+  if (siteKey.length > 256)
+    throw new ConfigError("RELAY_TURNSTILE_SITE_KEY 太长");
+  let scope: ChallengeScope[] = ["auth.login"];
+  const text = env.RELAY_CHALLENGE_SCOPE?.trim() ?? "";
+  if (text !== "") {
+    try {
+      scope = parseChallengeScope(text);
+    } catch {
+      throw new ConfigError(
+        "RELAY_CHALLENGE_SCOPE 只能是 auth.login、links.accept",
+      );
+    }
+  }
+  return { siteKey, scope };
 }
 
 /** 隧道节点地址（cloud-api §17）：issuer 的 `wss://…/t/v1?src=<sourceId>`。 */
