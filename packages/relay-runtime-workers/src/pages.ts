@@ -11,9 +11,10 @@
 import {
   hashedAsset,
   PAGE_BASE_HEADERS,
-  PAGE_CSP,
+  pageCsp,
   pickLocale,
   renderPage,
+  type PageChallenge,
   type PageKind,
 } from "@armadra/cloud-shared/pages";
 
@@ -52,7 +53,12 @@ function ownPage(
 }
 
 /** 静态产物的响应加上与 Node 中继相同的头。 */
-function decorate(response: Response, path: string): Response {
+function decorate(
+  response: Response,
+  path: string,
+  challenge: PageChallenge | undefined,
+  pagePath: string,
+): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(PAGE_BASE_HEADERS))
     headers.set(name, value);
@@ -68,7 +74,8 @@ function decorate(response: Response, path: string): Response {
         ? "public, max-age=31536000, immutable"
         : "no-cache",
   );
-  if (isHtml) headers.set("content-security-policy", PAGE_CSP);
+  if (isHtml)
+    headers.set("content-security-policy", pageCsp(pagePath, challenge));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -80,6 +87,7 @@ async function asset(
   assets: Fetcher,
   request: Request,
   path: string,
+  challenge: PageChallenge | undefined,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   url.pathname = path;
@@ -96,17 +104,18 @@ async function asset(
     const location = response.headers.get("location");
     if (location) {
       const next = new URL(location, url).pathname;
-      if (next !== path) return asset(assets, request, next);
+      if (next !== path) return asset(assets, request, next, challenge);
     }
     return null;
   }
-  return decorate(response, path);
+  return decorate(response, path, challenge, new URL(request.url).pathname);
 }
 
 /** 托管页面与根下的产物文件；不归这里答 null。 */
 export async function servePages(
   request: Request,
   assets: Fetcher | undefined,
+  challenge?: PageChallenge,
 ): Promise<Response | null> {
   if (request.method !== "GET" && request.method !== "HEAD") return null;
   const path = new URL(request.url).pathname;
@@ -116,7 +125,7 @@ export async function servePages(
       headers: { ...PAGE_BASE_HEADERS, location: "/app/" },
     });
   const index = async () =>
-    assets ? await asset(assets, request, "/index.html") : null;
+    assets ? await asset(assets, request, "/index.html", challenge) : null;
   const link = LINK_PATH.exec(path);
   if (link?.[1])
     return (await index()) ?? ownPage(request, 200, "join", link[1]);
@@ -124,11 +133,11 @@ export async function servePages(
     if (!assets) return ownPage(request, 503, "unavailable");
     const relative = path.slice("/app".length);
     if (relative !== "/" && !relative.endsWith("/")) {
-      const file = await asset(assets, request, relative);
+      const file = await asset(assets, request, relative, challenge);
       if (file) return file;
     }
     return (await index()) ?? ownPage(request, 503, "unavailable");
   }
   if (!assets || path.endsWith("/")) return null;
-  return asset(assets, request, path);
+  return asset(assets, request, path, challenge);
 }

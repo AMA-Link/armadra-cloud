@@ -25,6 +25,7 @@ const webRoot = join(root, "dist");
 const LINK = "0123456789abcdef";
 let withRoot: RunningServer;
 let withoutRoot: RunningServer;
+let withChallenge: RunningServer;
 
 beforeAll(async () => {
   mkdirSync(join(webRoot, "assets"), { recursive: true });
@@ -50,6 +51,16 @@ beforeAll(async () => {
       createWebPages({ webRoot: usableWebRoot(webRoot), caPem: () => "PEM" }),
     ),
   );
+  withChallenge = await listen(
+    { host: "127.0.0.1", port: 0 },
+    serve(
+      createWebPages({
+        webRoot: usableWebRoot(webRoot),
+        caPem: () => undefined,
+        challenge: () => ({ embedOrigins: ["https://relay.test"] }),
+      }),
+    ),
+  );
   withoutRoot = await listen(
     { host: "127.0.0.1", port: 0 },
     serve(
@@ -63,6 +74,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await withRoot.close();
   await withoutRoot.close();
+  await withChallenge.close();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -146,5 +158,30 @@ describe("没有页面产物", () => {
     expect(pickLocale("en-GB,en")).toBe("en");
     expect(pickLocale("zh-CN,zh;q=0.9")).toBe("zh-CN");
     expect(pickLocale(undefined)).toBe("zh-CN");
+  });
+});
+
+describe("开了 Turnstile", () => {
+  it("/app/* 的 CSP 放行 Turnstile；只有 /app/challenge 可被受信来源内嵌", async () => {
+    const challenge = await fetch(`${withChallenge.url}/app/challenge`);
+    const csp = challenge.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain(
+      "script-src 'self' https://challenges.cloudflare.com",
+    );
+    expect(csp).toContain(
+      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* https://relay.test",
+    );
+    await challenge.arrayBuffer();
+    const other = await fetch(`${withChallenge.url}/app/board/1`);
+    expect(other.headers.get("content-security-policy")).toContain(
+      "frame-ancestors 'none'",
+    );
+    await other.arrayBuffer();
+  });
+
+  it("没开：/app/challenge 的头与其他页相同", async () => {
+    const response = await fetch(`${withRoot.url}/app/challenge`);
+    expect(response.headers.get("content-security-policy")).toBe(PAGE_CSP);
+    await response.arrayBuffer();
   });
 });

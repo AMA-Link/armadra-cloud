@@ -25,6 +25,54 @@ export const PAGE_CSP = [
   "form-action 'none'",
 ].join("; ");
 
+/** Turnstile 组件的来源（script-src、frame-src、connect-src 的最小集合，见 Cloudflare Turnstile 文档 “Content Security Policy”）。 */
+export const TURNSTILE_ORIGIN = "https://challenges.cloudflare.com";
+
+/** 客户端（桌面壳、移动壳、本地开发）内嵌挑战页时的固定受信来源。 */
+export const CHALLENGE_EMBED_ORIGINS = [
+  "https://localhost",
+  "capacitor://localhost",
+  "http://localhost",
+  "http://localhost:*",
+];
+
+export interface PageChallenge {
+  /** 配置里的额外受信来源（Node：状态文件 trustedOrigins；Workers：RELAY_TRUSTED_ORIGINS）。 */
+  embedOrigins?: readonly string[];
+}
+
+/** `/app/challenge`（含子路径）：唯一允许被客户端内嵌的托管页路径。 */
+export function isChallengePath(path: string): boolean {
+  return path === "/app/challenge" || path.startsWith("/app/challenge/");
+}
+
+/**
+ * 托管页（`index.html`）的 CSP。没配 Turnstile（`challenge` 缺省）原样是 `PAGE_CSP`；配了就为
+ * Turnstile 放行 `challenges.cloudflare.com`，且只有 `/app/challenge` 的 `frame-ancestors`
+ * 列出受信来源（固定的客户端来源、中继自身与额外来源，不用通配），其余路径仍是 `'none'`。
+ */
+export function pageCsp(path: string, challenge?: PageChallenge): string {
+  if (!challenge) return PAGE_CSP;
+  const ancestors = ["'self'", ...CHALLENGE_EMBED_ORIGINS];
+  for (const origin of challenge.embedOrigins ?? [])
+    if (/^[a-z][a-z0-9+.-]*:\/\/[^\s;,'"*]+$/i.test(origin))
+      ancestors.push(origin);
+  return PAGE_CSP.split("; ")
+    .map((directive) => {
+      if (directive.startsWith("connect-src "))
+        return `${directive} ${TURNSTILE_ORIGIN}`;
+      if (directive.startsWith("frame-src "))
+        return `${directive} ${TURNSTILE_ORIGIN}`;
+      if (directive.startsWith("frame-ancestors "))
+        return isChallengePath(path)
+          ? `frame-ancestors ${[...new Set(ancestors)].join(" ")}`
+          : directive;
+      return directive;
+    })
+    .concat(`script-src 'self' ${TURNSTILE_ORIGIN}`)
+    .join("; ");
+}
+
 const CONTENT_TYPES = new Map<string, string>([
   [".html", "text/html; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],

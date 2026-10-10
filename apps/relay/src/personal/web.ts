@@ -22,8 +22,10 @@ import {
   hashedAsset,
   PAGE_BASE_HEADERS as BASE_HEADERS,
   PAGE_CSP,
+  pageCsp,
   pickLocale,
   renderPage,
+  type PageChallenge,
 } from "@armadra/cloud-shared/pages";
 
 export {
@@ -64,6 +66,8 @@ export interface WebPagesOptions {
   webRoot: string | null;
   /** `/ca.crt` 发的 PEM（自签模式的 CA）；没有答 undefined。 */
   caPem: () => string | undefined;
+  /** 开了 Turnstile 才给：页面 CSP 放行 Turnstile，`/app/challenge` 可被客户端内嵌。 */
+  challenge?: () => PageChallenge;
 }
 
 export interface WebPages {
@@ -112,6 +116,7 @@ export function createWebPages(options: WebPagesOptions): WebPages {
     req: IncomingMessage,
     res: ServerResponse,
     file: string,
+    path = "/",
   ): void {
     const isHtml = extname(file).toLowerCase() === ".html";
     const name = file.split(sep).pop() ?? "";
@@ -125,7 +130,9 @@ export function createWebPages(options: WebPagesOptions): WebPages {
         : hashedAsset(name)
           ? "public, max-age=31536000, immutable"
           : "no-cache",
-      ...(isHtml ? { "content-security-policy": PAGE_CSP } : {}),
+      ...(isHtml
+        ? { "content-security-policy": pageCsp(path, options.challenge?.()) }
+        : {}),
     });
     if (req.method === "HEAD") {
       res.end();
@@ -136,8 +143,12 @@ export function createWebPages(options: WebPagesOptions): WebPages {
     stream.pipe(res);
   }
 
-  function index(req: IncomingMessage, res: ServerResponse): void {
-    serveFile(req, res, join(root as string, "index.html"));
+  function index(
+    req: IncomingMessage,
+    res: ServerResponse,
+    path: string,
+  ): void {
+    serveFile(req, res, join(root as string, "index.html"), path);
   }
 
   async function route(
@@ -165,7 +176,7 @@ export function createWebPages(options: WebPagesOptions): WebPages {
     }
     const link = LINK_PATH.exec(path);
     if (link?.[1]) {
-      if (root) index(req, res);
+      if (root) index(req, res, path);
       else sendPage(req, res, 200, "join", link[1]);
       return true;
     }
@@ -175,8 +186,8 @@ export function createWebPages(options: WebPagesOptions): WebPages {
         return true;
       }
       const file = await locate(path.slice("/app/".length));
-      if (file) serveFile(req, res, file);
-      else index(req, res);
+      if (file) serveFile(req, res, file, path);
+      else index(req, res, path);
       return true;
     }
     if (!root || path.endsWith("/")) return false;

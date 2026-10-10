@@ -320,3 +320,39 @@ describe("没有页面产物", () => {
     ).toBeNull();
   });
 });
+
+describe("托管页的 CSP（Turnstile）", () => {
+  const assets = {
+    fetch: async () =>
+      new Response("<title>Armadra</title>", {
+        headers: { "content-type": "text/html" },
+      }),
+  } as unknown as Fetcher;
+  const csp = async (path: string, challenge?: { embedOrigins: string[] }) =>
+    (
+      await servePages(
+        new Request(`https://relay.armadra.test${path}`),
+        assets,
+        challenge,
+      )
+    )?.headers.get("content-security-policy");
+
+  it("没配 Turnstile：头不变，/app/challenge 不可内嵌", async () => {
+    const plain = await csp("/app/");
+    expect(plain).not.toContain("challenges.cloudflare.com");
+    expect(plain).toContain("frame-ancestors 'none'");
+    expect(await csp("/app/challenge")).toBe(plain);
+  });
+
+  it("配了：放行 Turnstile；只有 /app/challenge 列出受信来源", async () => {
+    const challenge = { embedOrigins: ["https://relay.armadra.test"] };
+    const page = await csp("/app/challenge", challenge);
+    expect(page).toContain(
+      "script-src 'self' https://challenges.cloudflare.com",
+    );
+    expect(page).toContain(
+      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* https://relay.armadra.test",
+    );
+    expect(await csp("/app/x", challenge)).toContain("frame-ancestors 'none'");
+  });
+});

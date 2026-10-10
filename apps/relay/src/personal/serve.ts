@@ -289,6 +289,16 @@ async function startServing(
   const web = createWebPages({
     webRoot,
     caPem: () => tls?.current().anchor,
+    ...(options.challenge
+      ? {
+          challenge: () => ({
+            embedOrigins: trustedOriginsOf({
+              issuer: store.issuer(),
+              trustedOrigins: store.settings().trustedOrigins,
+            }),
+          }),
+        }
+      : {}),
   });
 
   const relay = await startRelay({
