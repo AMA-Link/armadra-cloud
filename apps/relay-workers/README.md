@@ -11,14 +11,14 @@ pnpm e2e --mode personal-workers              # 本地 workerd 上的端到端
 
 本地 `dev` 的 secret 写在 `apps/relay-workers/.dev.vars`（已在 `.gitignore`，不提交），名字与线上相同：
 
-| 名字                      | 说明                                                                           |
-| ------------------------- | ------------------------------------------------------------------------------ |
-| `RELAY_MASTER_KEY`        | 必填，64 位十六进制                                                            |
-| `RELAY_PERSONAL_ACCOUNT`  | 首次初始化的账号名                                                             |
-| `RELAY_PERSONAL_PASSWORD` | 首次初始化的口令                                                               |
-| `RELAY_METRICS_TOKEN`     | 可选，`/metrics` 的 Bearer 令牌                                                |
-| `RELAY_NODE_TOKEN`        | 只有 `RELAY_MODE=saas`：节点回报（cloud-api §17）的令牌                        |
-| `RELAY_TURNSTILE_SECRET`  | 可选，人机挑战（cloud-api §16）；录了才要求，要先配 `RELAY_TURNSTILE_SITE_KEY` |
+| 名字                      | 说明                                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `RELAY_MASTER_KEY`        | 必填，64 位十六进制                                                                                                             |
+| `RELAY_PERSONAL_ACCOUNT`  | 首次初始化的账号名                                                                                                              |
+| `RELAY_PERSONAL_PASSWORD` | 首次初始化的口令                                                                                                                |
+| `RELAY_METRICS_TOKEN`     | 可选，`/metrics` 的 Bearer 令牌                                                                                                 |
+| `RELAY_NODE_TOKEN`        | 只有 `RELAY_MODE=saas`：节点回报（cloud-api §17）的令牌                                                                         |
+| `RELAY_TURNSTILE_SECRET`  | 可选，人机挑战（cloud-api §16）；录了才要求，要先配 `RELAY_TURNSTILE_SITE_KEY`；主机名白名单在 vars `RELAY_TURNSTILE_HOSTNAMES` |
 
 维护页 Worker（拉闸用，[docs/runbooks/cloudflare-protection.md](../../docs/runbooks/cloudflare-protection.md)）在 [wrangler.maintenance.jsonc](wrangler.maintenance.jsonc)，入口 [src/maintenance.ts](src/maintenance.ts)。
 

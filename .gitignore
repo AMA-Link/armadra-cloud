@@ -26,3 +26,6 @@ coverage/
 
 *.log
 deploy/personal/relay_password.txt
+# Workers 中继：构建产物（scripts/build.mjs 生成），只保留 .assetsignore
+apps/relay-workers/assets/*
+!apps/relay-workers/assets/.assetsignore

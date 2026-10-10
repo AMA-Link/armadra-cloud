@@ -38,7 +38,10 @@ export function createWorkersTurnstileVerifier(options: {
       } catch {
         body = null;
       }
-      return readSiteverify(response.status, body);
+      return readSiteverify(response.status, body, {
+        action: input.action,
+        hostnames: input.hostnames,
+      });
     },
   };
 }

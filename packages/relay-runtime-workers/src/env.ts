@@ -3,6 +3,7 @@
  * 整个 Worker 答 503 `unavailable`（不带配置内容）。secret 的值只在这里经过，不进日志与响应。
  */
 import {
+  parseChallengeHostnames,
   parseChallengeScope,
   type ChallengeScope,
 } from "@armadra/control-core/challenge";
@@ -38,6 +39,8 @@ export interface RelayEnv {
   RELAY_LOG_LEVEL?: string;
   /** Turnstile 站点密钥（不是秘密，`platform.info.challenge.siteKey`，cloud-api §16）。 */
   RELAY_TURNSTILE_SITE_KEY?: string;
+  /** Turnstile 答复里 `hostname` 的允许列表，逗号分隔；空 = 拒绝一切；https 的 issuer 下不得含本机地址。 */
+  RELAY_TURNSTILE_HOSTNAMES?: string;
   /** 要挑战的 procedure，逗号分隔：`auth.login`（缺省）、`links.accept`。 */
   RELAY_CHALLENGE_SCOPE?: string;
   // ------------------------------------------------------------ secret
@@ -85,7 +88,11 @@ export interface RelayConfig {
   domain: string | null;
   logLevel: "debug" | "info" | "warn" | "error";
   /** 人机挑战（录了 `RELAY_TURNSTILE_SECRET` 才有）；secret 本身不进配置。 */
-  challenge: { siteKey: string; scope: ChallengeScope[] } | null;
+  challenge: {
+    siteKey: string;
+    scope: ChallengeScope[];
+    hostnames: string[];
+  } | null;
 }
 
 export class ConfigError extends Error {
@@ -166,7 +173,7 @@ export function readConfig(env: RelayEnv): RelayConfig {
   const domain = env.RELAY_DOMAIN?.trim().toLowerCase() || null;
   if (domain !== null && !/^[a-z0-9.-]+$/.test(domain))
     throw new ConfigError("RELAY_DOMAIN 不是域名");
-  const challenge = challengeOf(env);
+  const challenge = challengeOf(env, issuer);
   const trustedOrigins = (env.RELAY_TRUSTED_ORIGINS ?? "")
     .split(",")
     .map((item) => item.trim())
@@ -224,7 +231,7 @@ export function readConfig(env: RelayEnv): RelayConfig {
  * 挑战配置：录了 secret 才要求；录了 secret 却没给站点密钥是配错（客户端渲染不了组件、谁也登录
  * 不上），整个 Worker 答 503，比悄悄不要求更容易发现。
  */
-function challengeOf(env: RelayEnv): RelayConfig["challenge"] {
+function challengeOf(env: RelayEnv, issuer: string): RelayConfig["challenge"] {
   const secret = env.RELAY_TURNSTILE_SECRET?.trim() ?? "";
   const siteKey = env.RELAY_TURNSTILE_SITE_KEY?.trim() ?? "";
   if (secret === "") return null;
@@ -245,7 +252,17 @@ function challengeOf(env: RelayEnv): RelayConfig["challenge"] {
       );
     }
   }
-  return { siteKey, scope };
+  let hostnames: string[];
+  try {
+    hostnames = parseChallengeHostnames(env.RELAY_TURNSTILE_HOSTNAMES ?? "", {
+      allowLocal: !issuer.startsWith("https://"),
+    });
+  } catch (error) {
+    throw new ConfigError(
+      `RELAY_TURNSTILE_HOSTNAMES：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return { siteKey, scope, hostnames };
 }
 
 /** 隧道节点地址（cloud-api §17）：issuer 的 `wss://…/t/v1?src=<sourceId>`。 */
