@@ -44,8 +44,8 @@ describe("配置", () => {
       { RELAY_HEARTBEAT_MS: "2e4" },
       { RELAY_ISSUER: "https://relay.armadra.test/path" },
       { RELAY_ISSUER: undefined },
-      { MODE: "team" },
-      { MODE: "saas" },
+      { RELAY_MODE: "team" },
+      { RELAY_MODE: "saas" },
       { RELAY_CONTROL_LOCATION: "mars" },
       { RELAY_TRUSTED_ORIGINS: "not a url" },
     ])
@@ -55,7 +55,7 @@ describe("配置", () => {
     expect(
       readConfig({
         ...base,
-        MODE: "saas",
+        RELAY_MODE: "saas",
         RELAY_CLOUD_ISSUER: "https://app.armadra.test",
         RELAY_DOMAIN: "Armadra.com",
       }),
@@ -224,7 +224,7 @@ describe("saas 的外部往来", () => {
   afterEach(() => vi.restoreAllMocks());
   const config = readConfig({
     ...base,
-    MODE: "saas",
+    RELAY_MODE: "saas",
     RELAY_CLOUD_ISSUER: "https://app.armadra.test",
   });
   const event = {

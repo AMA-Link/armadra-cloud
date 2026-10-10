@@ -92,6 +92,9 @@ export class ControlDO extends DurableObject<RelayEnv> {
   private initializing: Promise<PersonalControl> | null = null;
   private readonly meSockets = new Map<WebSocket, MeSocket>();
   private lastFlushMs = Date.now();
+  /** 托管页面的产物在不在（第一次装配前探一次）。 */
+  private assetsReady = false;
+  private assetsProbed = false;
   private warnedSecrets = false;
 
   constructor(ctx: DurableObjectState, env: RelayEnv) {
@@ -138,7 +141,7 @@ export class ControlDO extends DurableObject<RelayEnv> {
       config: this.config as RelayConfig,
       wrap: this.wrap as KeyWrap,
       sources: this.sources(),
-      hasAssets: this.env.ASSETS !== undefined,
+      hasAssets: () => this.assetsReady,
       now: Date.now,
       onError: (error) =>
         this.log.error("请求处理失败", { error: errorName(error) }),
@@ -168,9 +171,25 @@ export class ControlDO extends DurableObject<RelayEnv> {
   }
 
   /** 装配；第一次且库里没有租户时用 secret 初始化。 */
+  /** 产物里有 `index.html` 才报 `webApp`（与 Node 中继相同）。 */
+  private async probeAssets(): Promise<void> {
+    if (this.assetsProbed || !this.env.ASSETS || !this.config) return;
+    this.assetsProbed = true;
+    try {
+      const response = await this.env.ASSETS.fetch(
+        new Request(`${this.config.issuer}/index.html`),
+      );
+      this.assetsReady = response.ok;
+      await response.body?.cancel();
+    } catch {
+      this.assetsReady = false;
+    }
+  }
+
   private async personal(): Promise<PersonalControl | Unavailable> {
     const blocked = this.blocked();
     if (blocked) return blocked;
+    await this.probeAssets();
     if (this.personalControl) return this.personalControl;
     try {
       const opened = openPersonal(this.input());

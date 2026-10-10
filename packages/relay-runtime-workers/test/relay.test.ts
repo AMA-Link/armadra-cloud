@@ -136,6 +136,11 @@ describe("HTTP 转发（续）", () => {
     expect(core.openStreams).toBe(0);
   });
 
+  it("中继这一侧的 END 等响应收全才发（源不允许半关闭也不截断响应）", async () => {
+    expect(core.requests.length).toBeGreaterThan(3);
+    expect(core.endedBeforeResponse).toBe(0);
+  });
+
   it("源的响应不合法：重置流，答 502 bad_gateway", async () => {
     const response = await viaRelay(source.sourceId, "/bad", {
       token: relayToken,

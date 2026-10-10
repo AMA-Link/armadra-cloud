@@ -76,7 +76,8 @@ export interface PersonalInput {
   config: RelayConfig;
   wrap: KeyWrap;
   sources: SourceObjects;
-  hasAssets: boolean;
+  /** 托管页面的产物在不在（`/index.html` 取得到）。 */
+  hasAssets: () => boolean;
   now: () => number;
   onError: (error: unknown) => void;
 }
@@ -153,7 +154,7 @@ export function openPersonal(input: PersonalInput): PersonalControl | null {
   };
   const stream = createMeStreamCore(context);
   const api = createWorkersApi(context, stream, {
-    webApp: () => (input.hasAssets ? `${config.issuer}/app/` : null),
+    webApp: () => (input.hasAssets() ? `${config.issuer}/app/` : null),
     name: () =>
       config.name ??
       readTenant(db, tenantId)?.displayName ??

@@ -6,8 +6,8 @@ import type { ControlDO } from "./control-do.ts";
 import type { SourceDO } from "./source-do.ts";
 
 export interface RelayEnv {
-  /** `personal`（缺省）或 `saas`。 */
-  MODE?: string;
+  /** `personal`（缺省）或 `saas`（不叫 `MODE`：本地工具链常把它设成 `test` / `development`）。 */
+  RELAY_MODE?: string;
   /** 对外地址（personal 的 issuer，也是 `/app/` 与隧道节点的地址），如 `https://relay.armadra.com`。 */
   RELAY_ISSUER?: string;
   /** 服务端名称（`platform.info.name`）；缺省取租户设置，再缺省取 issuer 的主机名。 */
@@ -134,9 +134,9 @@ export function originOf(value: string, name: string): string {
 }
 
 export function readConfig(env: RelayEnv): RelayConfig {
-  const mode = (env.MODE ?? "personal").trim() as RelayMode;
+  const mode = (env.RELAY_MODE ?? "personal").trim() as RelayMode;
   if (mode !== "personal" && mode !== "saas")
-    throw new ConfigError("MODE 只能是 personal 或 saas");
+    throw new ConfigError("RELAY_MODE 只能是 personal 或 saas");
   if (!env.RELAY_ISSUER) throw new ConfigError("缺少 RELAY_ISSUER");
   const issuer = originOf(env.RELAY_ISSUER, "RELAY_ISSUER");
   const cloudIssuer = env.RELAY_CLOUD_ISSUER

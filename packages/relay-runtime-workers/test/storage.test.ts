@@ -131,7 +131,7 @@ describe("初始化的前置条件", () => {
       config: null as never,
       wrap: masterKeyWrap(env.RELAY_MASTER_KEY),
       sources: null as never,
-      hasAssets: false,
+      hasAssets: () => false,
       now: Date.now,
       onError: () => {},
     };

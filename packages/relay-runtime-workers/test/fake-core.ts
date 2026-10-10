@@ -145,6 +145,7 @@ class RequestReader {
 
 interface CoreStream {
   core: StreamCore<CoreStream>;
+  remoteEnded: boolean;
   streamId: number;
   open: OpenPayload;
   reader: RequestReader;
@@ -162,6 +163,8 @@ export class FakeCore {
   readonly opens: OpenPayload[] = [];
   /** 中继代客户端答的 pong 次数。 */
   pongsFromRelay = 0;
+  /** 响应写完之前就收到中继 END 的次数（源不允许半关闭时会截断响应，应为 0）。 */
+  endedBeforeResponse = 0;
   private readonly streams = new Map<number, CoreStream>();
   private sendPool = new CreditPool(0);
   private recvUnacked = 0;
@@ -357,7 +360,9 @@ export class FakeCore {
           this.onBytes(stream, chunk);
           return true;
         },
-        eof: () => {},
+        eof: () => {
+          stream.remoteEnded = true;
+        },
         reset: () => core.destroy(6),
       },
     );
@@ -381,6 +386,8 @@ export class FakeCore {
   }
 
   private async finish(stream: CoreStream): Promise<void> {
+    if (stream.remoteEnded && stream.open.kind === "http")
+      this.endedBeforeResponse += 1;
     await new Promise<void>((resolve) => stream.core.finish(resolve));
   }
 

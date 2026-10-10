@@ -6,6 +6,7 @@
  * - 请求头：`forwardRequestHeaders`（剥令牌与逐跳头、`X-Forwarded-*`、`connection: close`），再剥掉
  *   Cloudflare 自己加的 `cf-*` / `cdn-loop` / `true-client-ip`（客户端 IP 已在 `OPEN.remoteIp`）。
  * - 请求体：有合法 `Content-Length` 就按长度写，否则 `chunked`；按流信用背压，不预读整个体。
+ *   我们这一侧的 END 等响应收全才发（源不一定允许半关闭）。
  * - 响应：头解析出来才答 `Response`；之前流被重置答 503 `source_offline`，响应不合法重置流答 502
  *   `bad_gateway`。`HEAD` 与 `204` / `304` 没有体；有 `Content-Length` 的体经 `FixedLengthStream`，
  *   客户端照样拿到长度（`<video>` 的 `Range` 播放要它）。
@@ -139,6 +140,7 @@ export function readResponse(
             if (noBody && !event.upgrade) {
               finished = true;
               controller?.close();
+              void endpoint.finish().catch(() => {});
             }
             break;
           }
@@ -153,6 +155,9 @@ export function readResponse(
               finished = true;
               controller?.close();
             }
+            // 响应收全了才结束我们这一侧：源若不允许半关闭（Node 的 http.Server），先发 END
+            // 会让它提前关掉还没写完的响应。与 Node 中继的 http.request 行为一致。
+            void endpoint.finish().catch(() => {});
             break;
           case "upgraded":
             upgraded.push(event.bytes);
@@ -228,23 +233,24 @@ export function toResponse(parsed: ParsedResponse): Response {
   });
 }
 
-/** 请求体按定界写进流，写完发 END；出错（客户端上传中断）就重置流。 */
+/**
+ * 请求体按定界写进流（不发 END：请求的结束由定界说明，END 等响应收全再发）；出错（客户端
+ * 上传中断）就重置流。
+ */
 async function pumpBody(
   endpoint: TunnelEndpoint,
   body: ReadableStream<Uint8Array> | null,
   chunked: boolean,
 ): Promise<void> {
-  if (body) {
-    const reader = body.getReader();
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value.length === 0) continue;
-      await endpoint.write(chunked ? encodeChunk(value) : value);
-    }
-    if (chunked) await endpoint.write(LAST_CHUNK);
+  if (!body) return;
+  const reader = body.getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (value.length === 0) continue;
+    await endpoint.write(chunked ? encodeChunk(value) : value);
   }
-  await endpoint.finish();
+  if (chunked) await endpoint.write(LAST_CHUNK);
 }
 
 export interface HttpForwardInput {
