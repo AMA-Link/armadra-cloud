@@ -33,7 +33,10 @@ import {
   devicePlatformSchema,
   ed25519PublicJwkSchema,
 } from "@armadra/platform-protocol/assertion";
-import { sourceKindSchema } from "@armadra/platform-protocol/cloud-api";
+import {
+  linkScopeSchema,
+  sourceKindSchema,
+} from "@armadra/platform-protocol/cloud-api";
 import { z } from "zod";
 
 export const STATE_VERSION = 1;
@@ -123,6 +126,8 @@ const linkSchema = z.object({
   createdAtMs: z.number().int(),
   expiresAtMs: z.number().int(),
   revokedAtMs: nullableMs,
+  /** 分享范围（0.3.0 起）；整台时不写。旧文件没有这个键，照常读。 */
+  scope: linkScopeSchema.optional(),
 });
 
 const rateLimitValue = z.number().int().min(1).max(1_000_000);
