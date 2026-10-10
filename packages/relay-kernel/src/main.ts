@@ -1,85 +1,18 @@
 /**
- * 中继内核装配（中继设计 §1）：控制面 → 令牌校验 → 隧道终端 + 边缘 → HTTP 服务器
- * （+ 可选的指标监听）。两种模式都走这里，差别只在调用方给的 `control`、`addressing`
- * 与 `extra` / `extraUpgrade`（personal 的 `/v1`、`/v1/me/stream`、托管页面）。
+ * 中继内核装配（中继设计 §1）中与运行时无关的一段：控制面 → 令牌校验 → 指标 → 隧道表。
+ * 运行时在外面接监听、WebSocket 与边缘的字节进出（Node：`@armadra/relay-runtime-node`
+ * 的 `startRelay`）。两种模式都走这里，差别只在调用方给的 `control`。
  */
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
-
-import type { ListenAddress } from "@armadra/cloud-shared/config";
-import type { Probe } from "@armadra/cloud-shared/health";
-import {
-  listen,
-  type RunningServer,
-  type TlsPair,
-} from "@armadra/cloud-shared/http";
 import type { Logger } from "@armadra/cloud-shared/log";
 import { LIMITS } from "@armadra/platform-protocol/tunnel";
 
-import { createAuthContext } from "./auth/context.ts";
+import { createAuthContext, type AuthContext } from "./auth/context.ts";
 import type { ControlPlane } from "./control/types.ts";
-import type { Addressing } from "./edge/addressing.ts";
-import type { ClientIp } from "./http/client-ip.ts";
-import { Edge, type EdgeConnectionFilter } from "./edge/server.ts";
-import { sendRelayError } from "./http/errors.ts";
-import {
-  createMetricsHandler,
-  createRelayRouter,
-  dispatchUpgrade,
-} from "./http/server.ts";
-import { errorName, relayLog } from "./log.ts";
+import { relayLog, type RelayLog } from "./log.ts";
 import { RelayMetrics } from "./metrics.ts";
-import { TunnelServer } from "./tunnel/server.ts";
+import { TunnelHub } from "./tunnel/hub.ts";
+import type { StreamEndpoint, StreamFactory } from "./tunnel/stream.ts";
 import type { TunnelLimitsConfig } from "./tunnel/tunnel.ts";
-
-export interface RelayOptions {
-  mode: "saas" | "personal";
-  nodeId: string;
-  version: string;
-  listen: ListenAddress;
-  control: ControlPlane;
-  addressing: Addressing;
-  log: Logger;
-  probes?: Record<string, Probe>;
-  /** 指标单独监听（`RELAY_METRICS_LISTEN`）；不给就不开。 */
-  metricsListen?: ListenAddress;
-  metricsToken?: string;
-  /** 覆盖协议包 LIMITS（测试用小窗口、短心跳）。 */
-  limits?: Partial<TunnelLimitsConfig>;
-  handshakeTimeoutMs?: number;
-  routeTtlMs?: number;
-  wsPingMs?: number;
-  wsIdleMs?: number;
-  /** 关闭时给隧道的排空时间（缺省 LIMITS.goawayGraceMs）。 */
-  shutdownGraceMs?: number;
-  /** 模式自己的路由（personal `/v1` 等）：认领了返回 true。 */
-  extra?: (req: IncomingMessage, res: ServerResponse) => boolean;
-  /** 模式自己的 WS 升级（personal `/v1/me/stream`）：认领了返回 true。 */
-  extraUpgrade?: (
-    req: IncomingMessage,
-    socket: Duplex,
-    head: Buffer,
-  ) => boolean;
-  /** 源地址上 CORS 预检放行的来源（见 `edge/cors.ts`）；原生 App 的来源总是放行。 */
-  corsOrigins?: (sourceId: string) => readonly string[];
-  /** 客户端 IP 的取法；缺省直连对端地址（不信任任何代理）。 */
-  clientIp?: ClientIp;
-  /** 给了就监听 HTTPS（personal 的自签 CA / ACME / 文件证书）。 */
-  tls?: TlsPair;
-  now?: () => number;
-}
-
-export interface RunningRelay {
-  url: string;
-  metricsUrl?: string;
-  tunnels: TunnelServer;
-  metrics: RelayMetrics;
-  /** 换证书（叶证书续期、文件热加载）；明文监听上是空操作。 */
-  setTls(tls: TlsPair): void;
-  /** 断开匹配的客户端 WS（撤销源、撤销访客时用）；HTTP 请求逐个验令牌，不需要断。 */
-  disconnect(filter: EdgeConnectionFilter): number;
-  close(graceMs?: number): Promise<void>;
-}
 
 export const DEFAULT_TUNNEL_LIMITS: TunnelLimitsConfig = {
   maxStreams: LIMITS.maxStreams,
@@ -91,14 +24,35 @@ export const DEFAULT_TUNNEL_LIMITS: TunnelLimitsConfig = {
   goawayGraceMs: LIMITS.goawayGraceMs,
 };
 
-export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
+export interface RelayCoreOptions<S extends StreamEndpoint> {
+  nodeId: string;
+  control: ControlPlane;
+  log: Logger;
+  /** 覆盖协议包 LIMITS（测试用小窗口、短心跳）。 */
+  limits?: Partial<TunnelLimitsConfig>;
+  handshakeTimeoutMs?: number;
+  routeTtlMs?: number;
+  /** 每条隧道流的运行时适配。 */
+  streams: StreamFactory<S>;
+  now?: () => number;
+}
+
+export interface RelayCore<S extends StreamEndpoint> {
+  /** 只写白名单字段的中继日志。 */
+  log: RelayLog;
+  auth: AuthContext;
+  metrics: RelayMetrics;
+  tunnels: TunnelHub<S>;
+}
+
+export function createRelayCore<S extends StreamEndpoint>(
+  options: RelayCoreOptions<S>,
+): RelayCore<S> {
   const log = relayLog(options.log);
   const auth = createAuthContext(options.control, options.now);
   // 指标的读数回调到隧道表（闭包里引用，调用时已建好）。
-  const counts = (): { tunnels: number; streams: number } =>
-    tunnelServer.counts();
-  const metrics: RelayMetrics = new RelayMetrics(counts);
-  const tunnelServer: TunnelServer = new TunnelServer({
+  const metrics: RelayMetrics = new RelayMetrics(() => tunnels.counts());
+  const tunnels: TunnelHub<S> = new TunnelHub({
     control: options.control,
     auth,
     nodeId: options.nodeId,
@@ -107,92 +61,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     routeTtlMs: options.routeTtlMs,
     log,
     metrics,
+    streams: options.streams,
   });
-  const edge = new Edge({
-    nodeId: options.nodeId,
-    addressing: options.addressing,
-    auth,
-    control: options.control,
-    lookup: (sourceId) => tunnelServer.lookup(sourceId),
-    log,
-    metrics,
-    wsPingMs: options.wsPingMs,
-    wsIdleMs: options.wsIdleMs,
-    corsOrigins: options.corsOrigins,
-    clientIp: options.clientIp,
-    now: options.now,
-  });
-  const router = createRelayRouter({
-    mode: options.mode,
-    nodeId: options.nodeId,
-    version: options.version,
-    probes: options.probes ?? {},
-    counts,
-    log: options.log,
-    fallback: options.extra,
-  });
-  const addressed = (req: IncomingMessage) =>
-    options.addressing.resolve({
-      url: req.url ?? "/",
-      host: req.headers.host,
-    }) !== null;
-  const server: RunningServer = await listen(
-    options.listen,
-    (req, res) => {
-      if (!addressed(req)) return router.handle(req, res);
-      return edge.handleRequest(req, res).catch((error: unknown) => {
-        log.error("边缘请求异常", { error: errorName(error) });
-        if (!res.headersSent) sendRelayError(res, "internal");
-        else res.destroy();
-      });
-    },
-    options.tls ? { tls: options.tls } : {},
-  );
-  server.server.on(
-    "upgrade",
-    dispatchUpgrade({
-      addressed,
-      extra: options.extraUpgrade,
-      tunnel: (req, socket, head) =>
-        tunnelServer.handleUpgrade(req, socket, head),
-      edge: (req, socket, head) => {
-        edge.handleUpgrade(req, socket, head).catch((error: unknown) => {
-          log.error("边缘升级异常", { error: errorName(error) });
-          socket.destroy();
-        });
-      },
-    }),
-  );
-  let metricsServer: RunningServer | undefined;
-  if (options.metricsListen) {
-    try {
-      metricsServer = await listen(
-        options.metricsListen,
-        createMetricsHandler(() => metrics.render(), options.metricsToken),
-      );
-    } catch (error) {
-      await server.close();
-      throw error;
-    }
-  }
-  let closing: Promise<void> | undefined;
-  return {
-    url: server.url,
-    metricsUrl: metricsServer?.url,
-    tunnels: tunnelServer,
-    metrics,
-    setTls(tls) {
-      server.setTls?.(tls);
-    },
-    disconnect: (filter) => edge.disconnect(filter),
-    close(graceMs = options.shutdownGraceMs ?? LIMITS.goawayGraceMs) {
-      closing ??= (async () => {
-        await tunnelServer.shutdown(graceMs);
-        edge.closeAll();
-        await server.close();
-        await metricsServer?.close();
-      })();
-      return closing;
-    },
-  };
+  return { log, auth, metrics, tunnels };
 }

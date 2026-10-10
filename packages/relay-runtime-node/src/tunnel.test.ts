@@ -2,8 +2,11 @@ import { FIXED_NOW_MS, readFixture } from "@armadra/platform-protocol/fixtures";
 import { CLOSE, RST } from "@armadra/platform-protocol/tunnel";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fakeTunnel, OPEN } from "../../test/fake-transport.ts";
-import { TunnelUnavailableError, type TunnelCloseInfo } from "./tunnel.ts";
+import { fakeTunnel, OPEN } from "../test/fake-transport.ts";
+import {
+  TunnelUnavailableError,
+  type TunnelCloseInfo,
+} from "@armadra/relay-kernel/tunnel/tunnel";
 
 afterEach(() => {
   vi.useRealTimers();

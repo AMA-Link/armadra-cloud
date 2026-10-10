@@ -13,7 +13,7 @@ import { openDatabase } from "@armadra/control-store-sqlite/open";
 import {
   createClientIp,
   parseProxyList,
-} from "@armadra/relay-kernel/http/client-ip";
+} from "@armadra/relay-runtime-node/client-ip";
 import { SCRYPT } from "@armadra/platform-protocol/identity-vectors";
 
 import { ACME_DIR } from "./acme.ts";

@@ -2,7 +2,7 @@ import { listen, type RunningServer } from "@armadra/cloud-shared/http";
 import { createLogger } from "@armadra/cloud-shared/log";
 import { afterEach, expect, it } from "vitest";
 
-import { createRelayRouter } from "./server.ts";
+import { createRelayRouter } from "./dispatch.ts";
 
 let running: RunningServer | undefined;
 afterEach(async () => {

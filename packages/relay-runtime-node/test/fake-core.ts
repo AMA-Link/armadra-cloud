@@ -31,16 +31,12 @@ import {
 } from "@armadra/platform-protocol/tunnel";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
-import {
-  CreditPool,
-  TunnelStream,
-  type StreamHost,
-} from "../src/tunnel/stream.ts";
+import { CreditPool, TunnelStream, type StreamHost } from "../src/stream.ts";
 import {
   sourceKey as defaultSourceKey,
   SOURCE_ID,
   tunnelToken,
-} from "./tokens.ts";
+} from "@armadra/relay-kernel/testing/tokens";
 
 export function bigByte(index: number): number {
   return (index * 31 + 7) & 0xff;

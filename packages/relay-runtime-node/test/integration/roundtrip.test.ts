@@ -13,19 +13,20 @@ import { CLOSE } from "@armadra/platform-protocol/tunnel";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
-import { pathAddressing } from "../../src/edge/addressing.ts";
-import {
-  startRelay,
-  type RelayOptions,
-  type RunningRelay,
-} from "../../src/main.ts";
-import { bigByte, FakeCore } from "../fake-core.ts";
+import { pathAddressing } from "@armadra/relay-kernel/edge/addressing";
 import {
   relayToken,
   SOURCE_ID,
   testControlPlane,
   tunnelToken,
-} from "../tokens.ts";
+} from "@armadra/relay-kernel/testing/tokens";
+
+import {
+  startRelay,
+  type RelayOptions,
+  type RunningRelay,
+} from "../../src/start-relay.ts";
+import { bigByte, FakeCore } from "../fake-core.ts";
 
 const MARKER = "PAYLOAD-MARKER-7f3a";
 

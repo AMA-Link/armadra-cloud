@@ -1,0 +1,418 @@
+{
+  "$comment": "HTTP/1.1 线上字节（隧道流里 core 写回的响应、中继写进去的请求）。体写成 text（UTF-8）、hex 或 { length, fill }；error 是本仓实现的分类，其他实现只要求报错。",
+  "responses": [
+    {
+      "name": "content-length",
+      "method": "GET",
+      "expect": {
+        "version": "1.1",
+        "status": 200,
+        "statusText": "OK",
+        "headers": [
+          [
+            "Content-Type",
+            "text/plain; charset=utf-8"
+          ],
+          [
+            "Content-Length",
+            "5"
+          ],
+          [
+            "Set-Cookie",
+            "a=1"
+          ],
+          [
+            "set-cookie",
+            "b=2"
+          ]
+        ],
+        "body": {
+          "text": "hello"
+        },
+        "upgrade": false,
+        "needsEof": false
+      },
+      "file": "http1/response-content-length.bin"
+    },
+    {
+      "name": "chunked",
+      "method": "GET",
+      "expect": {
+        "version": "1.1",
+        "status": 200,
+        "statusText": "OK",
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "transfer-encoding",
+            "chunked"
+          ]
+        ],
+        "body": {
+          "text": "{\"ok\":true,\"items\":[]}"
+        },
+        "upgrade": false,
+        "needsEof": false
+      },
+      "file": "http1/response-chunked.bin"
+    },
+    {
+      "name": "close-delimited",
+      "method": "GET",
+      "expect": {
+        "version": "1.0",
+        "status": 200,
+        "statusText": "OK",
+        "headers": [
+          [
+            "content-type",
+            "text/event-stream"
+          ]
+        ],
+        "body": {
+          "text": "data: 1\n\ndata: 2\n\n"
+        },
+        "upgrade": false,
+        "needsEof": true
+      },
+      "file": "http1/response-close-delimited.bin"
+    },
+    {
+      "name": "head",
+      "method": "HEAD",
+      "expect": {
+        "version": "1.1",
+        "status": 200,
+        "statusText": "OK",
+        "headers": [
+          [
+            "content-length",
+            "1048576"
+          ]
+        ],
+        "body": {
+          "text": ""
+        },
+        "upgrade": false,
+        "needsEof": false
+      },
+      "file": "http1/response-head.bin"
+    },
+    {
+      "name": "no-content",
+      "method": "DELETE",
+      "expect": {
+        "version": "1.1",
+        "status": 204,
+        "statusText": "No Content",
+        "headers": [
+          [
+            "x-request-id",
+            "r1"
+          ]
+        ],
+        "body": {
+          "text": ""
+        },
+        "upgrade": false,
+        "needsEof": false
+      },
+      "file": "http1/response-no-content.bin"
+    },
+    {
+      "name": "not-modified",
+      "method": "GET",
+      "expect": {
+        "version": "1.1",
+        "status": 304,
+        "statusText": "Not Modified",
+        "headers": [
+          [
+            "etag",
+            "\"v1\""
+          ],
+          [
+            "content-length",
+            "42"
+          ]
+        ],
+        "body": {
+          "text": ""
+        },
+        "upgrade": false,
+        "needsEof": false
+      },
+      "file": "http1/response-not-modified.bin"
+    },
+    {
+      "name": "continue-then-ok",
+      "method": "POST",
+      "expect": {
+        "version": "1.1",
+        "status": 201,
+        "statusText": "Created",
+        "headers": [
+          [
+            "content-length",
+            "2"
+          ]
+        ],
+        "body": {
+          "text": "{}"
+        },
+        "upgrade": false,
+        "needsEof": false
+      },
+      "file": "http1/response-continue-then-ok.bin"
+    },
+    {
+      "name": "switching-protocols",
+      "method": "GET",
+      "expect": {
+        "version": "1.1",
+        "status": 101,
+        "statusText": "Switching Protocols",
+        "headers": [
+          [
+            "Upgrade",
+            "websocket"
+          ],
+          [
+            "Connection",
+            "Upgrade"
+          ],
+          [
+            "Sec-WebSocket-Accept",
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+          ],
+          [
+            "Sec-WebSocket-Protocol",
+            "armadra-ticket.test-ticket"
+          ]
+        ],
+        "body": {
+          "text": ""
+        },
+        "upgrade": true,
+        "upgraded": {
+          "hex": "810548656c6c6f"
+        },
+        "needsEof": false
+      },
+      "file": "http1/response-switching-protocols.bin"
+    },
+    {
+      "name": "empty-reason-latin1",
+      "method": "GET",
+      "expect": {
+        "version": "1.1",
+        "status": 200,
+        "statusText": "",
+        "headers": [
+          [
+            "content-disposition",
+            "attachment; filename=été.txt"
+          ],
+          [
+            "content-length",
+            "0"
+          ]
+        ],
+        "body": {
+          "text": ""
+        },
+        "upgrade": false,
+        "needsEof": false
+      },
+      "file": "http1/response-empty-reason-latin1.bin"
+    },
+    {
+      "name": "large-body",
+      "method": "GET",
+      "expect": {
+        "version": "1.1",
+        "status": 206,
+        "statusText": "Partial Content",
+        "headers": [
+          [
+            "content-range",
+            "bytes 0-65535/1000000"
+          ],
+          [
+            "content-length",
+            "65536"
+          ]
+        ],
+        "body": {
+          "length": 65536,
+          "fill": 7
+        },
+        "upgrade": false,
+        "needsEof": false
+      },
+      "file": "http1/response-large-body.bin"
+    },
+    {
+      "name": "bad-status-line",
+      "method": "GET",
+      "error": "bad_status_line",
+      "file": "http1/response-bad-status-line.bin"
+    },
+    {
+      "name": "bad-version",
+      "method": "GET",
+      "error": "bad_status_line",
+      "file": "http1/response-bad-version.bin"
+    },
+    {
+      "name": "space-before-colon",
+      "method": "GET",
+      "error": "bad_header",
+      "file": "http1/response-space-before-colon.bin"
+    },
+    {
+      "name": "obs-fold",
+      "method": "GET",
+      "error": "bad_header",
+      "file": "http1/response-obs-fold.bin"
+    },
+    {
+      "name": "length-and-chunked",
+      "method": "GET",
+      "error": "bad_transfer_encoding",
+      "file": "http1/response-length-and-chunked.bin"
+    },
+    {
+      "name": "conflicting-lengths",
+      "method": "GET",
+      "error": "bad_content_length",
+      "file": "http1/response-conflicting-lengths.bin"
+    },
+    {
+      "name": "negative-length",
+      "method": "GET",
+      "error": "bad_content_length",
+      "file": "http1/response-negative-length.bin"
+    },
+    {
+      "name": "bad-chunk-size",
+      "method": "GET",
+      "error": "bad_chunk",
+      "file": "http1/response-bad-chunk-size.bin"
+    },
+    {
+      "name": "chunk-missing-crlf",
+      "method": "GET",
+      "error": "bad_chunk",
+      "file": "http1/response-chunk-missing-crlf.bin"
+    },
+    {
+      "name": "head-too-large",
+      "method": "GET",
+      "error": "head_too_large",
+      "file": "http1/response-head-too-large.bin"
+    },
+    {
+      "name": "truncated-length",
+      "method": "GET",
+      "error": "truncated",
+      "errorAtEof": true,
+      "file": "http1/response-truncated-length.bin"
+    },
+    {
+      "name": "truncated-chunked",
+      "method": "GET",
+      "error": "truncated",
+      "errorAtEof": true,
+      "file": "http1/response-truncated-chunked.bin"
+    },
+    {
+      "name": "truncated-head",
+      "method": "GET",
+      "error": "truncated",
+      "errorAtEof": true,
+      "file": "http1/response-truncated-head.bin"
+    }
+  ],
+  "requests": [
+    {
+      "name": "get",
+      "method": "GET",
+      "path": "/api/workspaces?limit=10",
+      "headers": [
+        [
+          "host",
+          "relay.armadra.test"
+        ],
+        [
+          "x-forwarded-for",
+          "203.0.113.7"
+        ],
+        [
+          "x-forwarded-proto",
+          "https"
+        ],
+        [
+          "connection",
+          "close"
+        ]
+      ],
+      "framing": "none",
+      "chunks": [],
+      "file": "http1/request-get.bin"
+    },
+    {
+      "name": "post-length",
+      "method": "POST",
+      "path": "/api/echo",
+      "headers": [
+        [
+          "host",
+          "relay.armadra.test"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "content-length",
+          "13"
+        ],
+        [
+          "connection",
+          "close"
+        ]
+      ],
+      "framing": "length",
+      "chunks": [
+        "{\"a\":",
+        "1234567}"
+      ],
+      "file": "http1/request-post-length.bin"
+    },
+    {
+      "name": "post-chunked",
+      "method": "POST",
+      "path": "/api/upload",
+      "headers": [
+        [
+          "host",
+          "relay.armadra.test"
+        ],
+        [
+          "connection",
+          "close"
+        ]
+      ],
+      "framing": "chunked",
+      "chunks": [
+        "hello, ",
+        "world! this chunk is longer"
+      ],
+      "file": "http1/request-post-chunked.bin"
+    }
+  ]
+}

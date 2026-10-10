@@ -10,9 +10,9 @@
  * 不发 `allow-credentials`），带 `Vary: Origin`；方法与头取 core 放行的那几个，
  * 外加中继令牌头。名单 = 登记时发给源的可信来源 ∪ 原生 App 的两个来源。
  */
-import type { IncomingMessage } from "node:http";
-
 import { RELAY_TOKEN_HEADER } from "@armadra/platform-protocol";
+
+import type { HeaderBag } from "./forward.ts";
 
 /** 原生 App 的 WebView 来源（iOS / Android），与 core 的名单相同。 */
 export const NATIVE_APP_ORIGINS: readonly string[] = [
@@ -31,7 +31,10 @@ export const PREFLIGHT_HEADERS = `authorization, content-type, x-armadra-csrf, $
 export const PREFLIGHT_MAX_AGE_S = "7200";
 
 /** CORS 预检：`OPTIONS` + 单个 `Origin` + `Access-Control-Request-Method`。 */
-export function isPreflight(req: IncomingMessage): boolean {
+export function isPreflight(req: {
+  method?: string;
+  headers: HeaderBag;
+}): boolean {
   return (
     req.method === "OPTIONS" &&
     typeof req.headers.origin === "string" &&

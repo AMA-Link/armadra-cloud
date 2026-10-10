@@ -67,3 +67,66 @@ it("内核清单不依赖控制核与 SaaS 专有的包", () => {
     ),
   ).toEqual([]);
 });
+
+/**
+ * 运行时无关（CF 设计 §2.9、§2.10）：Workers 上也要能跑，所以只许 `node:crypto` /
+ * `node:buffer`（`nodejs_compat` 原生支持）；`ws`、`node:http` / `net` / `stream` / `fs` 等
+ * 与 cloud-shared 的 HTTP 外壳都在 `@armadra/relay-runtime-node`。
+ */
+const NODE_ONLY = [
+  imports("node:(?!crypto[\"']|buffer[\"'])[^\"']+"),
+  imports(
+    "(?!node:)(?:http|https|net|tls|stream|fs|os|child_process|dgram|cluster|worker_threads)(?:/[^\"']*)?",
+  ),
+  imports("ws"),
+  imports("@armadra/cloud-shared/http"),
+  imports("@armadra/relay-runtime-node(?:/[^\"']*)?"),
+];
+
+it("内核源码与运行时无关：除 node:crypto / node:buffer 外不 import node:*，不 import ws 与 HTTP 外壳", () => {
+  const files = sources(SRC);
+  const offenders = files.flatMap((file) => {
+    const text = readFileSync(file, "utf8");
+    return NODE_ONLY.filter((pattern) => pattern.test(text)).map(
+      (pattern) => `${relative(SRC, file)}: ${pattern}`,
+    );
+  });
+  expect(offenders).toEqual([]);
+  // 自检：规则认得出要拦的写法、放过允许的写法。
+  const blocked = [
+    'import { request } from "node:http";',
+    'import type { Duplex } from "node:stream";',
+    'import { WebSocketServer } from "ws";',
+    'const fs = await import("node:fs");',
+    'import { listen } from "@armadra/cloud-shared/http";',
+  ];
+  for (const line of blocked)
+    expect(
+      NODE_ONLY.some((pattern) => pattern.test(line)),
+      line,
+    ).toBe(true);
+  for (const line of [
+    'import { randomBytes } from "node:crypto";',
+    'import { Buffer } from "node:buffer";',
+    'import { verifyJwt } from "@armadra/cloud-shared/jwt";',
+  ])
+    expect(
+      NODE_ONLY.some((pattern) => pattern.test(line)),
+      line,
+    ).toBe(false);
+});
+
+it("内核清单不依赖 ws 与 Node 运行时包", () => {
+  const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")) as Record<
+    string,
+    Record<string, string> | undefined
+  >;
+  const names = ["dependencies", "devDependencies", "peerDependencies"].flatMap(
+    (field) => Object.keys(manifest[field] ?? {}),
+  );
+  expect(
+    names.filter((name) =>
+      ["ws", "@types/ws", "@armadra/relay-runtime-node"].includes(name),
+    ),
+  ).toEqual([]);
+});

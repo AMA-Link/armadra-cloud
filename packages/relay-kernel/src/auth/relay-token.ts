@@ -4,8 +4,6 @@
  * 最后 `src === sourceId`。缺 / 坏 → `relay_token_invalid`（401）；`src` 不符 →
  * `relay_source_mismatch`（403）。
  */
-import type { IncomingHttpHeaders } from "node:http";
-
 import { verifyJwt, type JwtFailure } from "@armadra/cloud-shared/jwt";
 import {
   RELAY_SUBPROTOCOL_PREFIX,
@@ -18,6 +16,7 @@ import {
   type RelayTokenClaims,
 } from "@armadra/platform-protocol/assertion";
 
+import type { HeaderBag } from "../edge/forward.ts";
 import { jwtOptions, type AuthContext } from "./context.ts";
 
 export type RelayTokenResult =
@@ -53,9 +52,7 @@ export async function verifyRelayToken(
 }
 
 /** HTTP：取 `Armadra-Relay-Token` 头（只认一个值）。 */
-export function relayTokenFromHeaders(
-  headers: IncomingHttpHeaders,
-): string | undefined {
+export function relayTokenFromHeaders(headers: HeaderBag): string | undefined {
   const value = headers[RELAY_TOKEN_HEADER];
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }

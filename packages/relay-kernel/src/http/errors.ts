@@ -1,12 +1,10 @@
 /**
- * 中继的错误输出：`{ code, message, requestId? }`，状态码查协议包注册表；code 只能是
+ * 中继的错误答复：`{ code, message, requestId? }`，状态码查协议包注册表；code 只能是
  * 注册表里的码。message 是固定的英文短句——界面按 code 取 i18n 文案，不展示 message。
+ *
+ * 这里只有与运行时无关的部分（文案、状态行、裸 HTTP/1.1 字节）；写进 Node
+ * `ServerResponse` / 裸 socket 的在 `@armadra/relay-runtime-node` 的 `errors.ts`。
  */
-import type { Duplex } from "node:stream";
-import type { ServerResponse } from "node:http";
-import { STATUS_CODES } from "node:http";
-
-import { sendError } from "@armadra/cloud-shared/http";
 import { errorStatus, type ErrorCode } from "@armadra/platform-protocol/errors";
 
 const MESSAGES: Partial<Record<ErrorCode, string>> = {
@@ -17,6 +15,7 @@ const MESSAGES: Partial<Record<ErrorCode, string>> = {
   relay_source_mismatch: "Relay token is for another source",
   source_offline: "Source is offline",
   limit_reached: "Too many concurrent streams",
+  bad_gateway: "Source sent an invalid response",
   bad_request: "Bad request",
   internal: "Internal error",
   forbidden: "Forbidden",
@@ -44,56 +43,56 @@ export function errorMessage(code: ErrorCode): string {
   return MESSAGES[code] ?? code;
 }
 
-export function sendRelayError(
-  res: ServerResponse,
-  code: ErrorCode,
-  options: {
-    requestId?: string;
-    retryAfterMs?: number;
-    /** 名单内来源的 CORS 头（边缘算好），让跨源页面读得到错误码。 */
-    cors?: Record<string, string>;
-  } = {},
-): void {
-  for (const [name, value] of Object.entries(options.cors ?? {}))
-    res.setHeader(name, value);
-  if (options.retryAfterMs !== undefined)
-    res.setHeader(
-      "retry-after",
-      String(Math.max(1, Math.ceil(options.retryAfterMs / 1000))),
-    );
-  sendError(res, errorStatus(code), {
-    code,
-    message: errorMessage(code),
-    ...(options.requestId ? { requestId: options.requestId } : {}),
-  });
+/**
+ * 状态行的原因短语（与 Node `http.STATUS_CODES` 逐字相同，覆盖注册表与边缘用到的状态码；
+ * 单测对着 Node 的表核对）。不认识的答空串。
+ */
+const STATUS_TEXT: Readonly<Record<number, string>> = {
+  101: "Switching Protocols",
+  200: "OK",
+  204: "No Content",
+  400: "Bad Request",
+  401: "Unauthorized",
+  403: "Forbidden",
+  404: "Not Found",
+  409: "Conflict",
+  410: "Gone",
+  426: "Upgrade Required",
+  428: "Precondition Required",
+  429: "Too Many Requests",
+  500: "Internal Server Error",
+  501: "Not Implemented",
+  502: "Bad Gateway",
+  503: "Service Unavailable",
+};
+
+export function statusText(status: number): string {
+  return STATUS_TEXT[status] ?? "";
 }
 
-/** 原始 HTTP/1.1 错误响应的字节（升级请求被拒、或升级途中源下线时写给裸 socket）。 */
+const encoder = new TextEncoder();
+
+/** 原始 HTTP/1.1 错误响应的字节（升级请求被拒、或升级途中源下线时写给裸连接）。 */
 export function rawErrorResponse(
   code: ErrorCode,
   cors?: Record<string, string>,
-): Buffer {
+): Uint8Array {
   const status = errorStatus(code);
-  const body = JSON.stringify({ code, message: errorMessage(code) });
-  return Buffer.from(
-    `HTTP/1.1 ${status} ${STATUS_CODES[status] ?? ""}\r\n` +
+  const body = encoder.encode(
+    JSON.stringify({ code, message: errorMessage(code) }),
+  );
+  const head = encoder.encode(
+    `HTTP/1.1 ${status} ${statusText(status)}\r\n` +
       "content-type: application/json; charset=utf-8\r\n" +
-      `content-length: ${Buffer.byteLength(body)}\r\n` +
+      `content-length: ${body.length}\r\n` +
       "cache-control: no-store\r\nconnection: close\r\n" +
       Object.entries(cors ?? {})
         .map(([name, value]) => `${name}: ${value}\r\n`)
         .join("") +
-      "\r\n" +
-      body,
-    "utf8",
+      "\r\n",
   );
-}
-
-export function rejectUpgrade(
-  socket: Duplex,
-  code: ErrorCode,
-  cors?: Record<string, string>,
-): void {
-  if (socket.destroyed) return;
-  socket.end(rawErrorResponse(code, cors));
+  const out = new Uint8Array(head.length + body.length);
+  out.set(head, 0);
+  out.set(body, head.length);
+  return out;
 }

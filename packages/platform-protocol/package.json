@@ -1,6 +1,6 @@
 {
   "name": "@armadra/platform-protocol",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Armadra 平台协议：隧道帧、断言声明、/v1 契约、错误码与身份参数",
   "type": "module",
   "license": "MIT",

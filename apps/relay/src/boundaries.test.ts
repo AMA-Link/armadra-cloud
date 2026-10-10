@@ -1,8 +1,8 @@
 /**
  * 代码边界（AGENTS.md）：relay 不 import 控制面、不碰数据库；personal 模式不引入
  * PostgreSQL / Redis 的运行时依赖；cli 只按需 import 各模式。ESLint 也守前两条；
- * 这里扫源码文本，连动态 import 一起拦。personal 装配用到的中继内核与控制核一起扫
- * （两个包自己的边界在各自的 `boundaries.test.ts`）。
+ * 这里扫源码文本，连动态 import 一起拦。personal 装配用到的中继内核、Node 运行时与控制核
+ * 一起扫（各包自己的边界在各自的 `boundaries.test.ts`）。
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -11,9 +11,10 @@ import { expect, it } from "vitest";
 
 const SRC = fileURLToPath(new URL("./", import.meta.url));
 const PACKAGES = fileURLToPath(new URL("../../../packages/", import.meta.url));
-/** personal 装配依赖的包：内核（`main.ts` 在这里）、控制核与 SQLite 存储。 */
+/** personal 装配依赖的包：内核（`main.ts` 在这里）、Node 运行时（`start-relay.ts`）、控制核与 SQLite 存储。 */
 const LINKED = [
   "relay-kernel/src",
+  "relay-runtime-node/src",
   "control-core/src",
   "control-store-sqlite/src",
   "control-store-sql/src",

@@ -31,7 +31,7 @@ import { errorStatus, type ErrorCode } from "@armadra/platform-protocol/errors";
 import {
   createClientIp,
   type ClientIp,
-} from "@armadra/relay-kernel/http/client-ip";
+} from "@armadra/relay-runtime-node/client-ip";
 import { errorMessage } from "@armadra/relay-kernel/http/errors";
 
 import type { PersonalContext } from "./context.ts";

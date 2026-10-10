@@ -1,22 +1,22 @@
 /**
- * `TunnelStream`：一条隧道流的 `stream.Duplex` 适配（中继设计 §3.3、协议包 §3.3）。
+ * 一条隧道流的信用与队列（中继设计 §3.3、协议包 §3.3），与运行时无关：只用 `Uint8Array`，
+ * 不碰 `node:stream` 与 Web Streams。运行时各自在外面包一层（Node 的 `stream.Duplex` 在
+ * `@armadra/relay-runtime-node` 的 `stream.ts`；Web Streams 版在 `web-stream.ts`）。
  *
  * 写（本端 → 对端）：按 `maxDataChunk` 切块，每块同时扣「流信用」与「隧道信用」，
- * 任一不足就挂起 `_write` 的回调，直到 `WINDOW` 补回——背压经 Duplex 的写水位传给
- * 上游 `pipe`。可用信用比一块小时发能发的那部分（DATA 永远不超过当前信用）。
+ * 任一不足就挂起这次写的回调，直到 `WINDOW` 补回——背压经适配层传给上游。可用信用比
+ * 一块小时发能发的那部分（DATA 永远不超过当前信用）。
  *
- * 读（对端 → 本端）：`DATA` 先进本地队列，`_read` 被调时才 `push` 给消费者；交出去的
- * 字节累计 ≥ 窗口一半时发 `WINDOW(streamId, 已消费)`，隧道级的消费由宿主同样补回
- * （`WINDOW(0, …)`）。对端发得比授予的信用多 → `receiveData` 答 false，宿主发 `RST 5`
- * 并以 4400 关隧道。
+ * 读（对端 → 本端）：`DATA` 先进本地队列，适配层要（{@link StreamCore.read}）才交给
+ * 消费者；交出去的字节累计 ≥ 窗口一半时发 `WINDOW(streamId, 已消费)`，隧道级的消费由
+ * 宿主同样补回（`WINDOW(0, …)`）。对端发得比授予的信用多 → `receiveData` 答 false，宿主
+ * 发 `RST 5` 并以 4400 关隧道。
  *
- * 关闭：收 `END` → `push(null)`；本地 `end()` → 发 `END`；收 `RST` → `destroy(错误)`；
- * 本地 `destroy()` → 发 `RST`（无错误时 `clientGone`）。两端都 `END` 后从流表摘掉。
+ * 关闭：收 `END` → 交出 EOF；本地结束 → 发 `END`；收 `RST` → 适配层销毁自己；本地销毁 →
+ * 发 `RST`（无错误时 `clientGone`）。两端都 `END` 后从流表摘掉。
  *
  * 本类对角色无感：中继与测试里的假 core 都能用（只有中继发 `OPEN`）。
  */
-import { Duplex } from "node:stream";
-
 import { RST, type Frame } from "@armadra/platform-protocol/tunnel";
 
 export class StreamResetError extends Error {
@@ -26,6 +26,12 @@ export class StreamResetError extends Error {
     this.rstCode = rstCode;
     this.name = "StreamResetError";
   }
+}
+
+/** 本地销毁时发给对端的 RST 码：对端重置原样、其他错误 `internal`、无错误 `clientGone`。 */
+export function resetCodeFor(error: unknown): number {
+  if (error instanceof StreamResetError) return error.rstCode;
+  return error ? RST.internal : RST.clientGone;
 }
 
 /** 隧道级发送信用：所有流共享；不够时登记等待者，`add` 时挨个叫醒。 */
@@ -65,14 +71,15 @@ export class CreditPool {
   }
 }
 
-export interface StreamHost {
+/** 隧道交给每条流的宿主。`S` 是流在流表里的对象（运行时的适配层）。 */
+export interface StreamHost<S = unknown> {
   sendFrame(frame: Frame): void;
   /** 隧道级发送信用。 */
   readonly sendCredit: CreditPool;
   /** 本端交给消费者的字节数（隧道级补信用用）。 */
   consumed(bytes: number): void;
   /** 流不再需要留在流表里（两端都 END，或 RST）。可能被调多次。 */
-  closed(stream: TunnelStream): void;
+  closed(stream: S): void;
 }
 
 export interface StreamOptions {
@@ -80,20 +87,47 @@ export interface StreamOptions {
   maxDataChunk: number;
 }
 
-interface PendingWrite {
-  chunk: Buffer;
-  offset: number;
-  callback: (error?: Error | null) => void;
+/** 隧道对一条流的要求：流号与四个收帧入口。 */
+export interface StreamEndpoint {
+  readonly streamId: number;
+  /** 收到 DATA；超出授予的信用答 false（流控违规）。 */
+  receiveData(bytes: Uint8Array): boolean;
+  receiveEnd(): void;
+  receiveRst(code: number): void;
+  receiveWindow(credit: number): void;
 }
 
-export class TunnelStream extends Duplex {
+/** 运行时给隧道的「造一条流」：Node 造 `Duplex`，Web 造 {@link WebTunnelStream}。 */
+export type StreamFactory<S extends StreamEndpoint> = (
+  streamId: number,
+  host: StreamHost<S>,
+  options: StreamOptions,
+) => S;
+
+/** 适配层：接住交出来的字节、EOF 与对端重置。 */
+export interface StreamSink {
+  /** 交出一块；答 false 表示消费者暂时不要了（等下一次 {@link StreamCore.read}）。 */
+  push(chunk: Uint8Array): boolean;
+  /** 对端 END 且队列已交完。 */
+  eof(): void;
+  /** 对端 RST（或隧道关闭）：适配层销毁自己，并最终调 {@link StreamCore.destroy}。 */
+  reset(error: StreamResetError): void;
+}
+
+interface PendingWrite {
+  chunk: Uint8Array;
+  offset: number;
+  callback: () => void;
+}
+
+export class StreamCore<S = unknown> {
   /** 本端还能发的流信用。 */
   private sendCredit: number;
   /** 授予对端、对端还没用掉的信用。 */
   private recvRemaining: number;
   /** 已交给消费者、还没用 WINDOW 补回去的字节。 */
   private unacked = 0;
-  private readonly queue: Buffer[] = [];
+  private readonly queue: Uint8Array[] = [];
   private wantsRead = false;
   private pending: PendingWrite | null = null;
   private remoteEnded = false;
@@ -101,25 +135,35 @@ export class TunnelStream extends Duplex {
   private localEnded = false;
   private peerReset = false;
   private released = false;
+  /** 本地已销毁（或因对端重置而销毁）。 */
+  destroyed = false;
   /** 对端 → 本端、本端 → 对端的载荷字节数（只计数，不留内容）。 */
   bytesIn = 0;
   bytesOut = 0;
   readonly streamId: number;
-  private readonly host: StreamHost;
+  private readonly host: StreamHost<S>;
   private readonly options: StreamOptions;
+  private readonly owner: S;
+  private readonly sink: StreamSink;
 
-  constructor(streamId: number, host: StreamHost, options: StreamOptions) {
-    super({ allowHalfOpen: true });
+  constructor(
+    streamId: number,
+    host: StreamHost<S>,
+    options: StreamOptions,
+    owner: S,
+    sink: StreamSink,
+  ) {
     this.streamId = streamId;
     this.host = host;
     this.options = options;
+    this.owner = owner;
+    this.sink = sink;
     this.sendCredit = options.streamWindow;
     this.recvRemaining = options.streamWindow;
   }
 
   // ------------------------------------------------------------ 来自对端的帧
 
-  /** 收到 DATA；超出授予的信用答 false（流控违规）。 */
   receiveData(bytes: Uint8Array): boolean {
     if (bytes.length > this.recvRemaining) return false;
     this.recvRemaining -= bytes.length;
@@ -129,7 +173,7 @@ export class TunnelStream extends Duplex {
       this.host.consumed(bytes.length);
       return true;
     }
-    this.queue.push(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length));
+    this.queue.push(bytes);
     this.drain();
     return true;
   }
@@ -143,7 +187,7 @@ export class TunnelStream extends Duplex {
 
   receiveRst(code: number): void {
     this.peerReset = true;
-    this.destroy(new StreamResetError(code));
+    this.sink.reset(new StreamResetError(code));
   }
 
   receiveWindow(credit: number): void {
@@ -151,22 +195,23 @@ export class TunnelStream extends Duplex {
     this.pump();
   }
 
-  // ------------------------------------------------------------ Readable
+  // ------------------------------------------------------------ 读
 
-  override _read(): void {
+  /** 消费者要数据了：把队列里的交出去，直到它说够了。 */
+  read(): void {
     this.wantsRead = true;
     this.drain();
   }
 
   private drain(): void {
     while (this.wantsRead && this.queue.length > 0) {
-      const chunk = this.queue.shift() as Buffer;
+      const chunk = this.queue.shift() as Uint8Array;
       this.acknowledge(chunk.length);
-      if (!this.push(chunk)) this.wantsRead = false;
+      if (!this.sink.push(chunk)) this.wantsRead = false;
     }
     if (this.queue.length === 0 && this.remoteEnded && !this.eofPushed) {
       this.eofPushed = true;
-      this.push(null);
+      this.sink.eof();
     }
   }
 
@@ -182,13 +227,10 @@ export class TunnelStream extends Duplex {
     }
   }
 
-  // ------------------------------------------------------------ Writable
+  // ------------------------------------------------------------ 写
 
-  override _write(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
+  /** 写一块（同一时刻只有一块在途）；全部发出后调 `callback`。销毁后不再回调。 */
+  write(chunk: Uint8Array, callback: () => void): void {
     this.pending = { chunk, offset: 0, callback };
     this.pump();
   }
@@ -221,7 +263,8 @@ export class TunnelStream extends Duplex {
     pending.callback();
   };
 
-  override _final(callback: (error?: Error | null) => void): void {
+  /** 本端写完：发 END（对端已重置则不发），`callback` 之后若两端都结束就摘掉。 */
+  finish(callback: () => void): void {
     if (!this.peerReset) {
       this.localEnded = true;
       this.host.sendFrame({ type: "end", streamId: this.streamId });
@@ -230,27 +273,21 @@ export class TunnelStream extends Duplex {
     this.maybeRelease();
   }
 
-  override _destroy(
-    error: Error | null,
-    callback: (error?: Error | null) => void,
-  ): void {
+  /**
+   * 本地销毁：没被对端重置、也没两端都结束时发 `RST code`；队列里还没交出去的字节把
+   * 隧道级信用还回去。只生效一次。
+   */
+  destroy(code: number): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.host.sendCredit.cancel(this.pump);
     this.pending = null;
-    if (!this.peerReset && !(this.localEnded && this.remoteEnded)) {
-      const code =
-        error instanceof StreamResetError
-          ? error.rstCode
-          : error
-            ? RST.internal
-            : RST.clientGone;
+    if (!this.peerReset && !(this.localEnded && this.remoteEnded))
       this.host.sendFrame({ type: "rst", streamId: this.streamId, code });
-    }
-    // 队列里还没交出去的字节也要把隧道级信用还回去。
     const dropped = this.queue.reduce((sum, chunk) => sum + chunk.length, 0);
     this.queue.length = 0;
     if (dropped > 0) this.host.consumed(dropped);
     this.release();
-    callback(error);
   }
 
   private maybeRelease(): void {
@@ -260,27 +297,6 @@ export class TunnelStream extends Duplex {
   private release(): void {
     if (this.released) return;
     this.released = true;
-    this.host.closed(this);
-  }
-
-  // ------------------------------------------------------------ net.Socket 兼容
-
-  // `http.Server.emit("connection")`、`http.request({ createConnection })` 与 `ws`
-  // 会调用这些方法；隧道流没有 TCP 选项可设，全部是空操作。
-  setNoDelay(): this {
-    return this;
-  }
-  setKeepAlive(): this {
-    return this;
-  }
-  setTimeout(_ms: number, callback?: () => void): this {
-    if (callback) this.once("timeout", callback);
-    return this;
-  }
-  ref(): this {
-    return this;
-  }
-  unref(): this {
-    return this;
+    this.host.closed(this.owner);
   }
 }

@@ -19,7 +19,7 @@ import {
   type MeStreamEvent,
 } from "@armadra/platform-protocol/cloud-api";
 import { CLOSE } from "@armadra/platform-protocol/tunnel";
-import { rejectUpgrade } from "@armadra/relay-kernel/http/errors";
+import { rejectUpgrade } from "@armadra/relay-runtime-node/errors";
 import { WebSocketServer, type WebSocket } from "ws";
 
 export interface MeStream {

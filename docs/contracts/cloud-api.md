@@ -126,7 +126,7 @@
 - 边缘限流分层（均答 `429 rate_limited` 并带 `Retry-After`）：带有效中继令牌的请求先按令牌 `jti`（缺省每分钟 1200 次）、再按账号 `sub`（缺省 3600 次）计数，不看 IP；无令牌、令牌无效或 `src` 不符的请求（含 401 路径）按 IP 严格限流（缺省每分钟 60 次）；预检另按 IP 一个桶；同一账号同时开着的 WebSocket 缺省最多 256 条（不可配），满了答 `429 limit_reached`。令牌校验是本地验签，先验后计。personal 的额度可由 `serve` 参数、环境变量或状态文件 `settings.rateLimits` 配置（见 deploy/README.md）；登录（按 IP 每分钟 20 次）与账号锁定不可配、不变。
 - HTTP 监听（中继、cloud）的空闲 keep-alive 为 75 秒，请求头超时 76 秒，整条请求的接收上限 5 分钟（升级后的 WebSocket 不受它管）。空闲上限要比客户端连接池长：WebKit 复用一条刚被服务端关掉的连接发 `POST` 时不重试，直接报加载失败。
 - 中继自己返回的错误答复（下表 HTTP 一列中源地址上的拒绝，含升级被拒与升级途中源离线的 503；不含预检的 `403 forbidden`）也按同一份名单补 CORS 头，让跨源页面读得到 `{ code, message }` 与 `Retry-After`：来源在名单里 → 按 Origin 回显 `Access-Control-Allow-Origin`，带 `Vary: Origin`，`Access-Control-Expose-Headers: retry-after`，不发 `Allow-Credentials`，不用 `*`；名单外或没有 `Origin` 不加任何 CORS 头。只加响应头，不改变任何判定；源自己返回的响应原样透传，CORS 头仍由源负责。
-- WebSocket：除 `armadra-relay.<jwt>` 外至少再带一个子协议（`armadra-ticket.<票>`），否则剥掉令牌后源选不到子协议，浏览器会拒绝这次握手。中继每 30 秒对客户端发 `ping`，60 秒收不到客户端任何字节即断开。
+- WebSocket：除 `armadra-relay.<jwt>` 外至少再带一个子协议（`armadra-ticket.<票>`），否则剥掉令牌后源选不到子协议，浏览器会拒绝这次握手。中继维持连接活性（ping 由中继或它前面的边缘网络发出，浏览器自动应答）；客户端 120 秒内没有任何字节可能被断开。Node 中继每 30 秒发 `ping`、60 秒无字节即断开。
 - 拒绝：
 
   | 情形                   | HTTP                        | WebSocket（先完成升级再关闭） |
@@ -140,6 +140,8 @@
   | 隧道流数已满 / 并发 WS | 429 `limit_reached`         | 4429                          |
 
   已建立的 WebSocket 在源下线时以 4404 结束（帧中间则直接断开）；升级途中源下线答 503 `source_offline`。
+
+  源的 HTTP 响应不合法（状态行、头、定界或分块错）时，自己解析响应的中继重置这条流并答 502 `bad_gateway`（协议包 0.3.4 登记）；Node 中继由 Node 的 HTTP 解析器处理，仍答 503 `source_offline`。
 
 ## §8 隧道 `t/v1`
 

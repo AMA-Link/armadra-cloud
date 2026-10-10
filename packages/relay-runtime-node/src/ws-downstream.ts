@@ -2,7 +2,7 @@
  * WS 升级之后「源 → 客户端」方向的写出端（中继设计 §3.2、§4.5）。
  *
  * 中继对 WS 是字节透传：不解压、不改帧。但有两件事要在帧边界上做，所以这里只跟踪
- * 帧头（长度），从不看载荷：
+ * 帧头（长度，内核 `ws/frames.ts` 的 {@link FrameBoundaryTracker}），从不看载荷：
  *
  * - 对客户端每 `pingMs` 插一个 `ping` 帧（浏览器自动回 `pong`）；`idleMs` 内客户端
  *   一个字节都没发来就断开。客户端回的 `pong` 原样流到源，源的 WS 实现会忽略不请自来的
@@ -16,71 +16,13 @@ import type { Duplex } from "node:stream";
 import { Writable } from "node:stream";
 
 import { CLOSE } from "@armadra/platform-protocol/tunnel";
+import {
+  closeFrame,
+  FrameBoundaryTracker,
+  PING_FRAME,
+} from "@armadra/relay-kernel/ws/frames";
 
 const HEAD_LIMIT = 64 * 1024;
-const PING_FRAME = Buffer.from([0x89, 0x00]);
-
-export function closeFrame(code: number, reason: string): Buffer {
-  const text = Buffer.from(reason, "utf8");
-  const frame = Buffer.alloc(4 + text.length);
-  frame[0] = 0x88;
-  frame[1] = 2 + text.length;
-  frame.writeUInt16BE(code, 2);
-  text.copy(frame, 4);
-  return frame;
-}
-
-/** 只读帧头、数出帧边界的跟踪器。 */
-export class FrameBoundaryTracker {
-  private header: number[] = [];
-  private headerNeed = 2;
-  private remaining = 0;
-
-  get atBoundary(): boolean {
-    return this.header.length === 0 && this.remaining === 0;
-  }
-
-  /** 吃一段字节，返回这段里每个帧结束的位置（相对本段的偏移）。 */
-  feed(chunk: Uint8Array): number[] {
-    const boundaries: number[] = [];
-    let index = 0;
-    while (index < chunk.length) {
-      if (this.remaining > 0) {
-        const take = Math.min(this.remaining, chunk.length - index);
-        index += take;
-        this.remaining -= take;
-        if (this.remaining === 0) boundaries.push(index);
-        continue;
-      }
-      this.header.push(chunk[index] as number);
-      index += 1;
-      if (this.header.length === 2) {
-        const second = this.header[1] as number;
-        const length7 = second & 0x7f;
-        this.headerNeed =
-          2 +
-          (length7 === 126 ? 2 : length7 === 127 ? 8 : 0) +
-          (second & 0x80 ? 4 : 0);
-      }
-      if (this.header.length >= 2 && this.header.length === this.headerNeed) {
-        const payload = this.payloadLength();
-        this.header = [];
-        this.headerNeed = 2;
-        this.remaining = payload;
-        if (payload === 0) boundaries.push(index);
-      }
-    }
-    return boundaries;
-  }
-
-  private payloadLength(): number {
-    const length7 = (this.header[1] as number) & 0x7f;
-    if (length7 < 126) return length7;
-    const bytes = Buffer.from(this.header);
-    if (length7 === 126) return bytes.readUInt16BE(2);
-    return bytes.readUInt32BE(2) * 2 ** 32 + bytes.readUInt32BE(6);
-  }
-}
 
 export interface WsDownstreamOptions {
   pingMs: number;
@@ -95,7 +37,7 @@ export class WsDownstream extends Writable {
   private headLength = 0;
   private wrote = false;
   private readonly tracker = new FrameBoundaryTracker();
-  private pending: Buffer | null = null;
+  private pending: Uint8Array | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
   private lastClientMs = Date.now();
   private readonly socket: Duplex;
@@ -118,7 +60,7 @@ export class WsDownstream extends Writable {
     _encoding: BufferEncoding,
     callback: (error?: Error | null) => void,
   ): void {
-    const pieces: Buffer[] = [];
+    const pieces: Uint8Array[] = [];
     if (this.phase === "head") {
       this.head.push(chunk);
       this.headLength += chunk.length;
@@ -173,14 +115,14 @@ export class WsDownstream extends Writable {
   }
 
   /** 在下一个帧边界插入一个控制帧。 */
-  inject(frame: Buffer): void {
+  inject(frame: Uint8Array): void {
     if (this.phase !== "frames") return;
     if (this.tracker.atBoundary) this.writeOut([frame], () => {});
     else this.pending = frame;
   }
 
   private writeOut(
-    pieces: Buffer[],
+    pieces: Uint8Array[],
     callback: (error?: Error | null) => void,
   ): void {
     const parts = pieces.filter((piece) => piece.length > 0);

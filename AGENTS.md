@@ -3,7 +3,7 @@
 ## 代码边界
 
 - `apps/cloud` 是控制面，`apps/relay` 是中继；`apps/relay` 不得 import `apps/cloud`，两者只共享 `packages/*`。两个 app 都不得 import Armadra 仓的源码；与 Armadra 的全部往来只经 `@armadra/platform-protocol` 与容器镜像。
-- 共享内核两个包：`packages/relay-kernel`（隧道终端、多路复用与信用窗口、心跳、边缘转发、限流、clientIp、媒体票、令牌校验、`ControlPlane` 接口与内存实现）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 不 import `control-core`、不带 PostgreSQL / Redis；`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与 `relay-kernel`；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
+- 共享内核两个包：`packages/relay-kernel`（隧道帧流与信用窗口、握手、心跳、隧道表、边缘判定、限流、媒体票、令牌校验、HTTP/1.1 与 WebSocket 帧编解码、`ControlPlane` 接口与内存实现）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 运行时无关（Node 与 Workers 共用）：源码只许 `node:crypto` / `node:buffer`，不 import `ws`、`node:http` / `net` / `stream` / `fs` 与 `control-core`，不带 PostgreSQL / Redis；Node 专有部分（`ws` 隧道终端、边缘的字节进出、clientIp、HTTP 分派、`startRelay`）在 `packages/relay-runtime-node`。`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与中继内核；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
 - `/v1/*` 的路由表只有 `control-core` 的 `createCloudRouter` 一份：personal 给处理器、其余答 404；cloud 未实现的统一答 501。
 - `@orpc/*` 只能出现在 `packages/platform-protocol/src/cloud-api/`、`packages/control-core/src/router.ts`、`tools/contract/`（ESLint `no-restricted-imports` 守）。
 - 协议包只含 zod schema、类型、纯编解码与常量，不 import `node:*`（`src/fixtures/` 例外，只在测试里用）。

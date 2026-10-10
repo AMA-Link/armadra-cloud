@@ -14,7 +14,7 @@ import {
   createClientIp,
   parseProxyList,
   type TrustedProxyConfig,
-} from "@armadra/relay-kernel/http/client-ip";
+} from "@armadra/relay-runtime-node/client-ip";
 
 import { STORE_KINDS, type StoreKind } from "./store-types.ts";
 

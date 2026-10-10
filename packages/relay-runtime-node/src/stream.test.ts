@@ -7,7 +7,7 @@ import {
 import { decodeFrame, LIMITS, RST } from "@armadra/platform-protocol/tunnel";
 import { describe, expect, it } from "vitest";
 
-import { fakeTunnel, OPEN } from "../../test/fake-transport.ts";
+import { fakeTunnel, OPEN } from "../test/fake-transport.ts";
 import { StreamResetError } from "./stream.ts";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));

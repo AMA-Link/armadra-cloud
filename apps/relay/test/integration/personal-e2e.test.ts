@@ -31,7 +31,7 @@ import {
   type MeStreamEvent,
 } from "@armadra/platform-protocol/cloud-api";
 import { wireErrorSchema } from "@armadra/platform-protocol/errors";
-import { FakeCore } from "@armadra/relay-kernel/testing/fake-core";
+import { FakeCore } from "@armadra/relay-runtime-node/testing/fake-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import type { z } from "zod";
