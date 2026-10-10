@@ -163,6 +163,96 @@ it("init → status → passwd → rotate-key → links：只打印元数据，�
   expect(revoke.status).toBe(64);
 });
 
+it("新装缺省 SQLite：migrate 往返、backup、doctor；损坏的库拒绝启动；不打实验特性警告", () => {
+  const dir = tempDir();
+  const data = join(dir, "data");
+  const init = run(
+    "personal",
+    "init",
+    "--data-dir",
+    data,
+    "--account",
+    "me",
+    "--host",
+    "127.0.0.1",
+    "--tls",
+    "plain",
+    "--password-file",
+    passwordFile(dir),
+  );
+  expect(init.status).toBe(0);
+  expect(init.stdout).toContain("存储：SQLite");
+  expect(init.stderr).toBe("");
+  const status = run("personal", "status", "--data-dir", data);
+  expect(status.stdout).toContain("存储：SQLite");
+  expect(status.stderr).toBe("");
+
+  const toFile = run("personal", "migrate", "--data-dir", data, "--to", "file");
+  expect(toFile.status).toBe(0);
+  expect(toFile.stdout).toContain("已迁移到状态文件");
+  expect(run("personal", "status", "--data-dir", data).stdout).toContain(
+    "存储：状态文件",
+  );
+  expect(
+    run("personal", "migrate", "--data-dir", data, "--to", "file").status,
+  ).toBe(64);
+  const toSqlite = run(
+    "personal",
+    "migrate",
+    "--data-dir",
+    data,
+    "--to",
+    "sqlite",
+  );
+  expect(toSqlite.status).toBe(0);
+  expect(run("personal", "status", "--data-dir", data).stdout).toContain(
+    "存储：SQLite",
+  );
+  expect(run("personal", "migrate", "--data-dir", data).status).toBe(64);
+
+  const backup = run(
+    "personal",
+    "backup",
+    "--data-dir",
+    data,
+    "--out",
+    join(dir, "backup.db"),
+  );
+  expect(backup.status).toBe(0);
+  expect(backup.stdout).toContain("已备份");
+
+  const doctor = run(
+    "personal",
+    "doctor",
+    "--data-dir",
+    data,
+    "--listen",
+    "127.0.0.1:8443",
+    "--tls",
+    "plain",
+  );
+  expect(doctor.stdout).toContain("通过  数据库完整性：ok");
+  expect(doctor.stdout).toMatch(/检查完成：通过 \d+，警告 1，失败 0/);
+  expect(doctor.status).toBe(0);
+  const exposed = run(
+    "personal",
+    "doctor",
+    "--data-dir",
+    data,
+    "--listen",
+    "0.0.0.0:8443",
+    "--tls",
+    "plain",
+  );
+  expect(exposed.status).toBe(1);
+  expect(exposed.stdout).toContain("失败  监听地址");
+
+  writeFileSync(join(data, "relay.db"), "not a database".repeat(64));
+  const broken = run("personal", "status", "--data-dir", data);
+  expect(broken.status).toBe(1);
+  expect(broken.stderr).toContain("拒绝启动");
+});
+
 it("saas serve 缺配置以 64 退出，消息只列变量名", () => {
   const result = run("saas", "serve");
   expect(result.status).toBe(64);

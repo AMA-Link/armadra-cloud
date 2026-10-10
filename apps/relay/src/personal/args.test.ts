@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   defaultIssuer,
   isLoopback,
+  parseBackup,
   parseLinks,
+  parseMigrate,
+  parsePersonalDoctor,
   parsePersonalInit,
   parsePersonalServe,
   UsageError,
@@ -300,5 +303,63 @@ describe("parsePersonalServe 服务端名称", () => {
       expect(() =>
         parsePersonalServe([...base, "--name", value], {}, "/w"),
       ).toThrow(UsageError);
+  });
+});
+
+describe("存储参数", () => {
+  const serve = ["--data-dir", "d", "--host", "relay.example"];
+  it("--store：缺省不给（按数据目录定）；命令行优先于 RELAY_STORE；只认 sqlite | file", () => {
+    expect(parsePersonalServe(serve, {}).store).toBeUndefined();
+    expect(parsePersonalServe(serve, { RELAY_STORE: "file" }).store).toBe(
+      "file",
+    );
+    expect(
+      parsePersonalServe([...serve, "--store", "sqlite"], {
+        RELAY_STORE: "file",
+      }).store,
+    ).toBe("sqlite");
+    expect(() => parsePersonalServe([...serve, "--store", "pg"], {})).toThrow(
+      "--store 只能是 file | sqlite",
+    );
+    expect(
+      parsePersonalInit([...serve, "--account", "me", "--store", "file"], {})
+        .store,
+    ).toBe("file");
+  });
+
+  it("migrate --to 必填且只认 sqlite | file；backup 要 --out", () => {
+    expect(
+      parseMigrate(["--data-dir", "d", "--to", "sqlite"], {}, "/w"),
+    ).toEqual({ dataDir: "/w/d", to: "sqlite" });
+    expect(() => parseMigrate(["--data-dir", "d"], {})).toThrow("--to");
+    expect(() => parseMigrate(["--data-dir", "d", "--to", "pg"], {})).toThrow(
+      "--to 只能是",
+    );
+    expect(parseBackup(["--data-dir", "d", "--out", "b.db"], {}, "/w")).toEqual(
+      { dataDir: "/w/d", out: "/w/b.db" },
+    );
+    expect(() => parseBackup(["--data-dir", "d"], {})).toThrow("--out");
+  });
+
+  it("doctor 收 serve 的同名参数与环境变量；明文公网不在这里拒绝", () => {
+    expect(
+      parsePersonalDoctor(["--data-dir", "d", "--tls", "plain"], {}, "/w"),
+    ).toEqual({
+      dataDir: "/w/d",
+      listen: { host: "0.0.0.0", port: 8443 },
+      tls: "plain",
+    });
+    expect(
+      parsePersonalDoctor(["--data-dir", "d"], {
+        RELAY_HOST: "127.0.0.1",
+        RELAY_TRUSTED_PROXY: "127.0.0.1/32",
+        RELAY_PERSONAL_PASSWORD_FILE: "/run/pw",
+      }),
+    ).toMatchObject({
+      listen: { host: "127.0.0.1", port: 8443 },
+      tls: "self-signed",
+      trustedProxy: "127.0.0.1/32",
+      passwordFile: "/run/pw",
+    });
   });
 });

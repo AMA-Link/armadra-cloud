@@ -11,7 +11,8 @@ import { RELAY_VERSION } from "./version.ts";
 
 export const USAGE = `用法: armadra-relay <模式> <子命令> [选项]
 
-  personal init|serve|status|passwd|rotate-key|links   单人中转，不带数据库
+  personal init|serve|status|passwd|rotate-key|links|migrate|backup|doctor
+                                                       单人中转，不带外部数据库
   saas serve                                           多租户中继（配置走 RELAY_* 环境变量）
   health                                               探活本机 /health（镜像的 HEALTHCHECK 用）
   version                                              打印版本
@@ -20,15 +21,19 @@ personal --help 列出 personal 的子命令与选项。`;
 
 export const PERSONAL_USAGE = `用法: armadra-relay personal <子命令> [选项]
 
-  init         建账号与签名钥：--data-dir --account [--password-file F] --host [--port] [--tls]
+  init         建账号与签名钥：--data-dir --account [--password-file F] --host [--port] [--tls] [--store S]
   serve        起个人中转
-  status       打印账号、源、链接与 CA 指纹：--data-dir
+  status       打印存储、账号、源、链接与 CA 指纹：--data-dir
   passwd       改口令并让账号的全部设备重新登录：--data-dir [--password-file F]
   rotate-key   启用新签名钥，旧钥一小时后退役：--data-dir
   links        list | revoke <linkId>：--data-dir
+  migrate      换存储（先停 serve），原文件改名留作回退：--data-dir --to sqlite|file
+  backup       在线备份存储到一个新文件：--data-dir --out F
+  doctor       检查权限、存储完整性、监听地址、受信代理与口令：--data-dir，其余同 serve
 
 serve:
   --data-dir DIR           数据目录（或 RELAY_DATA_DIR）
+  --store S                sqlite | file（或 RELAY_STORE）；默认按数据目录里已有的，新装 sqlite
   --host HOST              对外的 IP 或域名（或 RELAY_HOST）
   --port PORT              端口，默认 8443
   --public-origin URL      对外来源（或 RELAY_PUBLIC_ORIGIN），默认 https://<host>:<port>
@@ -79,6 +84,9 @@ async function personal(
   const args = await import("./personal/args.ts");
   const { StateError } = await import("./personal/state.ts");
   const { TlsError } = await import("./personal/tls.ts");
+  const { SqliteStoreError } = await import(
+    "@armadra/control-store-sqlite/errors"
+  );
   try {
     switch (command) {
       case "serve": {
@@ -96,7 +104,10 @@ async function personal(
       }
       case "status": {
         const { runStatus } = await import("./personal/commands.ts");
-        runStatus(args.parseDataDirOnly(rest, process.env).dataDir, print);
+        await runStatus(
+          args.parseDataDirOnly(rest, process.env).dataDir,
+          print,
+        );
         return 0;
       }
       case "passwd": {
@@ -107,7 +118,10 @@ async function personal(
       }
       case "rotate-key": {
         const { runRotateKey } = await import("./personal/commands.ts");
-        runRotateKey(args.parseDataDirOnly(rest, process.env).dataDir, print);
+        await runRotateKey(
+          args.parseDataDirOnly(rest, process.env).dataDir,
+          print,
+        );
         return 0;
       }
       case "links": {
@@ -118,6 +132,22 @@ async function personal(
         else
           await commands.runLinksRevoke(options.dataDir, options.linkId, print);
         return 0;
+      }
+      case "migrate": {
+        const { runMigrate } = await import("./personal/migrate.ts");
+        const options = args.parseMigrate(rest, process.env);
+        runMigrate(options.dataDir, options.to, print);
+        return 0;
+      }
+      case "backup": {
+        const { runBackup } = await import("./personal/migrate.ts");
+        const options = args.parseBackup(rest, process.env);
+        await runBackup(options.dataDir, options.out, print);
+        return 0;
+      }
+      case "doctor": {
+        const { runDoctor } = await import("./personal/doctor.ts");
+        return runDoctor(args.parsePersonalDoctor(rest, process.env), print);
       }
       default:
         console.error(`未知子命令：personal ${command}\n\n${PERSONAL_USAGE}`);
@@ -134,7 +164,7 @@ async function personal(
         ? CONFIG_EXIT_CODE
         : 1;
     }
-    if (error instanceof TlsError) {
+    if (error instanceof TlsError || error instanceof SqliteStoreError) {
       console.error(error.message);
       return 1;
     }

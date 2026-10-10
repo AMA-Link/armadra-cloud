@@ -11,10 +11,13 @@ import { expect, it } from "vitest";
 
 const SRC = fileURLToPath(new URL("./", import.meta.url));
 const PACKAGES = fileURLToPath(new URL("../../../packages/", import.meta.url));
-/** personal 装配依赖的两个包：内核（`main.ts` 在这里）与控制核。 */
-const LINKED = ["relay-kernel/src", "control-core/src"].map((path) =>
-  join(PACKAGES, path),
-);
+/** personal 装配依赖的包：内核（`main.ts` 在这里）、控制核与 SQLite 存储。 */
+const LINKED = [
+  "relay-kernel/src",
+  "control-core/src",
+  "control-store-sqlite/src",
+  "control-store-sql/src",
+].map((path) => join(PACKAGES, path));
 
 function sources(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
