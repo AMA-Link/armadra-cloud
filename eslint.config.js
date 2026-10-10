@@ -50,7 +50,7 @@ const armadraSourcePattern = {
     "不得 import Armadra 仓的源码；只经 @armadra/platform-protocol 与容器镜像往来。",
 };
 
-/** relay 不得 import apps/cloud，也不碰数据库。 */
+/** relay 不得 import apps/cloud，也不直接碰数据库驱动（`--store postgres` 经 control-store-postgres，按需动态 import）。 */
 const relayPatterns = [
   {
     group: ["@armadra/cloud", "@armadra/cloud/*"],
@@ -62,7 +62,59 @@ const relayPatterns = [
   },
   {
     group: ["postgres", "@armadra/cloud-shared/db"],
-    message: "relay 不碰数据库。",
+    message:
+      "relay 不直接碰数据库驱动：--store postgres 经 @armadra/control-store-postgres，--control postgres 在 relay-runtime-node 的 control/postgres.ts。",
+  },
+];
+
+/** 多节点控制面的两个实现：只有它们碰存储客户端（装配方按需动态 import）。 */
+const clusterControlPatterns = (allow) =>
+  [
+    ...relayPatterns.filter((pattern) => !pattern.group?.includes("postgres")),
+    {
+      regex: "^(postgres|redis)$",
+      message: "存储驱动只经 @armadra/cloud-shared 的封装。",
+    },
+    ...kernelPatterns.filter((pattern) => !pattern.group?.includes("redis")),
+  ].concat(
+    allow === "db"
+      ? [
+          {
+            group: ["@armadra/cloud-shared/redis"],
+            message: "control/postgres.ts 不带 Redis。",
+          },
+        ]
+      : [
+          {
+            group: ["@armadra/cloud-shared/db"],
+            message: "control/redis.ts 不带 PostgreSQL。",
+          },
+        ],
+  );
+
+/** PostgreSQL 存储只实现控制核的端口。 */
+const controlStorePostgresPatterns = [
+  {
+    group: [
+      "redis",
+      "ws",
+      "@armadra/cloud-shared/redis",
+      "@armadra/cloud-shared/http",
+      "@armadra/control-store-sqlite",
+      "@armadra/control-store-sqlite/*",
+      "@armadra/relay-kernel",
+      "@armadra/relay-kernel/*",
+      "@armadra/relay-runtime-node",
+      "@armadra/relay-runtime-node/*",
+      "@armadra/relay-runtime-workers",
+      "@armadra/relay-runtime-workers/*",
+      "@armadra/relay",
+      "@armadra/relay/*",
+      "@armadra/cloud",
+      "@armadra/cloud/*",
+    ],
+    message:
+      "control-store-postgres 只实现控制核的端口：不带 Redis、网络、中继与别的存储实现。",
   },
 ];
 
@@ -80,7 +132,7 @@ const kernelPatterns = [
   {
     group: ["redis", "@armadra/cloud-shared/redis"],
     message:
-      "relay-kernel 不带 SaaS 专有依赖：Redis 实现放在 apps/relay 的 saas 装配里。",
+      "relay-kernel 不带 SaaS 专有依赖：Redis 实现在 relay-runtime-node 的 control/redis.ts。",
   },
 ];
 
@@ -245,6 +297,36 @@ export default tseslint.config(
       armadraSourcePattern,
       ...relayPatterns,
       ...kernelPatterns,
+    ),
+  },
+  {
+    files: ["packages/relay-runtime-node/src/control/postgres.ts"],
+    rules: restrictImports(
+      orpcPattern,
+      armadraSourcePattern,
+      ...clusterControlPatterns("db"),
+    ),
+  },
+  {
+    files: ["packages/relay-runtime-node/src/control/redis.ts"],
+    rules: restrictImports(
+      orpcPattern,
+      armadraSourcePattern,
+      ...clusterControlPatterns("redis"),
+    ),
+  },
+  {
+    // 多节点控制面的集成测试：真连 PostgreSQL 与 Redis。
+    files: ["packages/relay-runtime-node/test/external/**/*.ts"],
+    rules: restrictImports(orpcPattern, armadraSourcePattern),
+  },
+  {
+    files: ["packages/control-store-postgres/src/**/*.ts"],
+    ignores: ["packages/control-store-postgres/src/**/*.test.ts"],
+    rules: restrictImports(
+      orpcPattern,
+      armadraSourcePattern,
+      ...controlStorePostgresPatterns,
     ),
   },
   {
