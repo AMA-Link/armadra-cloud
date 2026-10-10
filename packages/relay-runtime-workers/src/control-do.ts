@@ -15,6 +15,10 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
+import {
+  createChallengeGate,
+  type ChallengeGate,
+} from "@armadra/control-core/challenge";
 import { LAST_SEEN_FLUSH_MS } from "@armadra/control-core/sessions";
 import type { Caller } from "@armadra/control-core/sessions";
 import { isRevokedJti } from "@armadra/control-core/revocation";
@@ -37,6 +41,7 @@ import { errorName } from "@armadra/relay-kernel/log";
 
 import { API_CORS_HEADERS, isApiPath } from "./api.ts";
 import { BudgetLedger, type BudgetDelta } from "./budget.ts";
+import { createWorkersTurnstileVerifier } from "./challenge.ts";
 import {
   ConfigError,
   readConfig,
@@ -96,6 +101,8 @@ export class ControlDO extends DurableObject<RelayEnv> {
   private assetsReady = false;
   private assetsProbed = false;
   private warnedSecrets = false;
+  /** 人机挑战（防重放表跟着对象活）；没配是 undefined。 */
+  private readonly challenge: ChallengeGate | undefined;
 
   constructor(ctx: DurableObjectState, env: RelayEnv) {
     super(ctx, env);
@@ -130,6 +137,22 @@ export class ControlDO extends DurableObject<RelayEnv> {
       requests: config?.dailyRequestBudget ?? 0,
       bytes: config?.dailyTunnelBytesBudget ?? 0,
     });
+    this.challenge =
+      config?.challenge && env.RELAY_TURNSTILE_SECRET
+        ? createChallengeGate({
+            siteKey: config.challenge.siteKey,
+            scope: config.challenge.scope,
+            verifier: createWorkersTurnstileVerifier({
+              secret: env.RELAY_TURNSTILE_SECRET.trim(),
+            }),
+            now: Date.now,
+            onRejected: (procedure, reasons) =>
+              this.log.info("人机挑战没通过", {
+                procedure,
+                reasons: reasons.join(","),
+              }),
+          })
+        : undefined;
     this.restoreMeSockets();
   }
 
@@ -145,6 +168,7 @@ export class ControlDO extends DurableObject<RelayEnv> {
       now: Date.now,
       onError: (error) =>
         this.log.error("请求处理失败", { error: errorName(error) }),
+      ...(this.challenge ? { challenge: this.challenge } : {}),
     };
   }
 

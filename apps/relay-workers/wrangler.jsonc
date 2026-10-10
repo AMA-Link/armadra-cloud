@@ -7,6 +7,11 @@
 //   RELAY_ALARM_MS 改回 60000、RELAY_DAILY_REQUEST_BUDGET 改成 2000000，并打开 limits.cpu_ms。
 // - secret 只经 `wrangler secret put` 录入，这里只列名字（secrets.required）；其余可选 secret 见
 //   apps/relay-workers/README.md。
+// - 人机挑战（cloud-api §16）：先把 Turnstile 的站点密钥填进 RELAY_TURNSTILE_SITE_KEY 并部署，再
+//   `wrangler secret put RELAY_TURNSTILE_SECRET`——录了 secret 才要求挑战；录了 secret 而站点密钥为空
+//   是配错，整个 Worker 答 503。RELAY_CHALLENGE_SCOPE 缺省只要求登录（core 接受链接时没有挑战组件）。
+// - 拉闸：维护页 Worker 在 wrangler.maintenance.jsonc，`node scripts/kill-switch.mjs` 切换 Custom Domain；
+//   区域规则（WAF、限速、DNS、Bot）在 deploy/cloudflare/terraform/。见 docs/runbooks/cloudflare-protection.md。
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "armadra-relay",
@@ -74,7 +79,8 @@
       "simple": { "limit": 1200, "period": 60 },
     },
   ],
-  // Workers Paid：单次调用的 CPU 上限（防失控循环；转发是 I/O 型，正常远低于此）。Free 不支持，先注释。
+  // Workers Paid：单次调用的 CPU 上限（防失控循环；转发是 I/O 型，正常远低于此）。Free 固定 10 ms、
+  // 不能配，先注释；升 Paid 时取消注释（env.staging 继承顶层的 limits）。
   // "limits": { "cpu_ms": 5000 },
   "observability": { "logs": { "enabled": true } },
   "vars": {
@@ -87,6 +93,8 @@
     "RELAY_DAILY_TUNNEL_BYTES_BUDGET": "53687091200",
     "RELAY_CONTROL_LOCATION": "apac",
     "RELAY_LOG_LEVEL": "info",
+    "RELAY_TURNSTILE_SITE_KEY": "",
+    "RELAY_CHALLENGE_SCOPE": "auth.login",
   },
   "secrets": { "required": ["RELAY_MASTER_KEY"] },
   "env": {
@@ -148,6 +156,8 @@
         "RELAY_DAILY_TUNNEL_BYTES_BUDGET": "53687091200",
         "RELAY_CONTROL_LOCATION": "apac",
         "RELAY_LOG_LEVEL": "info",
+        "RELAY_TURNSTILE_SITE_KEY": "",
+        "RELAY_CHALLENGE_SCOPE": "auth.login",
       },
     },
   },

@@ -9,6 +9,10 @@ import {
 } from "@armadra/cloud-shared/config";
 import { resolve } from "node:path";
 
+import {
+  parseChallengeScope,
+  type ChallengeScope,
+} from "@armadra/control-core/challenge";
 import { PLATFORM_NAME_MAX } from "@armadra/platform-protocol/cloud-api";
 import {
   createClientIp,
@@ -245,6 +249,17 @@ export interface PersonalServeOptions extends Common {
    * `settings.displayName`，再取 `host`。
    */
   name?: string;
+  /** 人机挑战（`--challenge turnstile`，cloud-api §16）；缺省不开。 */
+  challenge?: ChallengeOptions;
+}
+
+export interface ChallengeOptions {
+  provider: "turnstile";
+  /** 不是秘密，`platform.info.challenge.siteKey`。 */
+  siteKey: string;
+  /** secret 文件（只读文件，不收命令行明文）。 */
+  secretFile: string;
+  scope: ChallengeScope[];
 }
 
 export interface RateLimitOptions {
@@ -314,6 +329,52 @@ function trustedProxyOf(
   return { proxies, ...(preferText ? { prefer: preferText } : {}) };
 }
 
+function challengeOf(
+  values: Map<string, string>,
+  env: Env,
+  cwd: string,
+): ChallengeOptions | undefined {
+  // 环境变量为空当作没给（compose 缺省把它们传成空串）。
+  const pick = (flag: string, variable: string) =>
+    values.get(flag) ?? (env[variable] || undefined);
+  const provider = pick("challenge", "RELAY_CHALLENGE") ?? "off";
+  const siteKey = pick("turnstile-site-key", "RELAY_TURNSTILE_SITE_KEY");
+  const secretFile = pick(
+    "turnstile-secret-file",
+    "RELAY_TURNSTILE_SECRET_FILE",
+  );
+  const scopeText = pick("challenge-scope", "RELAY_CHALLENGE_SCOPE");
+  if (provider === "off") {
+    if (siteKey || secretFile || scopeText)
+      throw new UsageError(
+        "--turnstile-site-key、--turnstile-secret-file 与 --challenge-scope 要和 --challenge turnstile 一起给",
+      );
+    return undefined;
+  }
+  if (provider !== "turnstile")
+    throw new UsageError(`--challenge 只能是 turnstile 或 off：${provider}`);
+  if (!siteKey?.trim() || !secretFile)
+    throw new UsageError(
+      "--challenge turnstile 要同时给 --turnstile-site-key 与 --turnstile-secret-file",
+    );
+  let scope: ChallengeScope[] = ["auth.login"];
+  if (scopeText !== undefined) {
+    try {
+      scope = parseChallengeScope(scopeText);
+    } catch {
+      throw new UsageError(
+        `--challenge-scope 只能是 auth.login、links.accept，逗号分隔：${scopeText}`,
+      );
+    }
+  }
+  return {
+    provider,
+    siteKey: siteKey.trim(),
+    secretFile: resolve(cwd, secretFile),
+    scope,
+  };
+}
+
 function nameOf(values: Map<string, string>, env: Env): string | undefined {
   // 环境变量为空当作没给（compose 缺省把它传成空串）；命令行给了空串则拒绝。
   const text = values.get("name") ?? (env.RELAY_NAME || undefined);
@@ -352,6 +413,10 @@ const SERVE_FLAGS = new Set([
   "trusted-proxy",
   "trusted-proxy-prefer",
   "name",
+  "challenge",
+  "turnstile-site-key",
+  "turnstile-secret-file",
+  "challenge-scope",
 ]);
 
 export function parsePersonalServe(
@@ -412,6 +477,7 @@ export function parsePersonalServe(
   const trustedProxy = trustedProxyOf(values, env);
   const name = nameOf(values, env);
   const store = storeOf(values, env);
+  const challenge = challengeOf(values, env, cwd);
   return {
     dataDir,
     ...(store ? { store } : {}),
@@ -437,6 +503,7 @@ export function parsePersonalServe(
     ...(rateLimits ? { rateLimits } : {}),
     ...(trustedProxy ? { trustedProxy } : {}),
     ...(name ? { name } : {}),
+    ...(challenge ? { challenge } : {}),
   };
 }
 

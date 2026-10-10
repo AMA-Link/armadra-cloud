@@ -56,7 +56,11 @@ serve:
   --trusted-proxy LIST     受信反向代理的 IP / CIDR，逗号分隔（或 RELAY_TRUSTED_PROXY），如 127.0.0.1/32,::1/128；
                            直连对端在列表内才读 X-Forwarded-For / X-Real-IP 取客户端 IP，默认空（不信任任何代理）
   --trusted-proxy-prefer H 先读哪个头：forwarded-for（默认）| real-ip（或 RELAY_TRUSTED_PROXY_PREFER）
-  --name NAME              服务端名称（或 RELAY_NAME），客户端添加时的缺省显示名；默认取状态文件 settings.displayName，再取 --host`;
+  --name NAME              服务端名称（或 RELAY_NAME），客户端添加时的缺省显示名；默认取状态文件 settings.displayName，再取 --host
+  --challenge P            人机挑战：turnstile | off（或 RELAY_CHALLENGE），默认 off
+  --turnstile-site-key K   Turnstile 站点密钥（或 RELAY_TURNSTILE_SITE_KEY），不是秘密
+  --turnstile-secret-file F Turnstile secret 文件（或 RELAY_TURNSTILE_SECRET_FILE）
+  --challenge-scope LIST   要挑战的 procedure：auth.login、links.accept，逗号分隔（或 RELAY_CHALLENGE_SCOPE），默认 auth.login`;
 
 function onSignal(stop: () => Promise<void>): void {
   const handler = () => {
