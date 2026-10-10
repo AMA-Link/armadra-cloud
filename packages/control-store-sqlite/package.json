@@ -1,0 +1,24 @@
+{
+  "name": "@armadra/control-store-sqlite",
+  "version": "0.3.3",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "控制面端口的 SQLite 实现（`node:sqlite`）：打开与迁移、全部存储端口、签名钥、导入导出与备份（不发布）",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@armadra/control-core": "workspace:*",
+    "@armadra/control-store-sql": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}

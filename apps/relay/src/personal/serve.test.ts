@@ -17,7 +17,13 @@ import { PASSWORD } from "../../test/personal.ts";
 import type { PersonalServeOptions } from "./args.ts";
 import { runRotateKey } from "./commands.ts";
 import { edgeLimitRules, startPersonalRelay } from "./serve.ts";
+import { DEFAULT_TENANT } from "@armadra/control-core/ports";
+import { openDatabase } from "@armadra/control-store-sqlite/open";
+import { updateTenant } from "@armadra/control-store-sqlite/tenants";
+
 import { StateError, StateStore } from "./state.ts";
+import { openPersonalStore } from "./store.ts";
+import { STORE_KINDS } from "./store-types.ts";
 import { RELAY_VERSION } from "../version.ts";
 
 const root = mkdtempSync(join(tmpdir(), "relay-personal-"));
@@ -39,13 +45,17 @@ const quiet = {
   log: createLogger({ name: "relay", level: "error", write: () => {} }),
 };
 
-it("首次自动初始化：数据目录 0700、状态文件在；/health 与 /ready 200", async () => {
+it("首次自动初始化：新装缺省 SQLite（relay.db 0600）、数据目录 0700；/health 与 /ready 200", async () => {
   const dataDir = join(root, "a", "data");
   const relay = await startPersonalRelay({ ...base, dataDir }, quiet);
   try {
-    expect(existsSync(join(dataDir, "state.json"))).toBe(true);
-    if (process.platform !== "win32")
+    expect(relay.store.kind).toBe("sqlite");
+    expect(existsSync(join(dataDir, "relay.db"))).toBe(true);
+    expect(existsSync(join(dataDir, "state.json"))).toBe(false);
+    if (process.platform !== "win32") {
       expect(statSync(dataDir).mode & 0o777).toBe(0o700);
+      expect(statSync(join(dataDir, "relay.db")).mode & 0o777).toBe(0o600);
+    }
     const health = await fetch(`${relay.url}/health`);
     expect(await health.json()).toEqual({
       ok: true,
@@ -78,30 +88,64 @@ it("没初始化又没给账号口令：拒绝启动", async () => {
   ).rejects.toThrow(StateError);
 });
 
-it("--public-origin 变了：issuer 跟着改并写回状态文件", async () => {
-  const dataDir = join(root, "c");
-  const first = await startPersonalRelay({ ...base, dataDir }, quiet);
-  await first.close();
-  const second = await startPersonalRelay(
-    { ...base, dataDir, publicOrigin: "https://relay.example" },
+it("--store file 自动初始化写状态文件；之后不写 --store 照旧用它；--store 与目录里的不符就拒绝", async () => {
+  const dataDir = join(root, "f");
+  const first = await startPersonalRelay(
+    { ...base, dataDir, store: "file" },
     quiet,
   );
+  await first.close();
+  expect(existsSync(join(dataDir, "state.json"))).toBe(true);
+  expect(existsSync(join(dataDir, "relay.db"))).toBe(false);
+  const again = await startPersonalRelay({ ...base, dataDir }, quiet);
   try {
-    expect(second.issuer).toBe("https://relay.example");
-    expect(StateStore.open(dataDir).current.issuer).toBe(
-      "https://relay.example",
-    );
-    const info = (await (
-      await fetch(`${second.url}/.well-known/armadra-platform`)
-    ).json()) as { issuer: string; webApp: string | null };
-    expect(info).toMatchObject({
-      issuer: "https://relay.example",
-      webApp: null,
-    });
+    expect(again.store.kind).toBe("file");
   } finally {
-    await second.close();
+    await again.close();
   }
+  await expect(
+    startPersonalRelay({ ...base, dataDir, store: "sqlite" }, quiet),
+  ).rejects.toThrow(/migrate --to sqlite/);
+  await expect(
+    startPersonalRelay(
+      { ...base, dataDir: join(root, "a", "data"), store: "file" },
+      quiet,
+    ),
+  ).rejects.toThrow(/migrate --to file/);
+  // 两种存储都在：拒绝启动，不替人挑。
+  writeFileSync(join(dataDir, "relay.db"), "");
+  await expect(startPersonalRelay({ ...base, dataDir }, quiet)).rejects.toThrow(
+    /同时有/,
+  );
 });
+
+it.each(STORE_KINDS)(
+  "--public-origin 变了：issuer 跟着改并写回存储（%s）",
+  async (store) => {
+    const dataDir = join(root, `c-${store}`);
+    const first = await startPersonalRelay({ ...base, dataDir, store }, quiet);
+    await first.close();
+    const second = await startPersonalRelay(
+      { ...base, dataDir, publicOrigin: "https://relay.example" },
+      quiet,
+    );
+    try {
+      expect(second.issuer).toBe("https://relay.example");
+      const reopened = openPersonalStore(dataDir);
+      expect(reopened.issuer()).toBe("https://relay.example");
+      reopened.close();
+      const info = (await (
+        await fetch(`${second.url}/.well-known/armadra-platform`)
+      ).json()) as { issuer: string; webApp: string | null };
+      expect(info).toMatchObject({
+        issuer: "https://relay.example",
+        webApp: null,
+      });
+    } finally {
+      await second.close();
+    }
+  },
+);
 
 it("--web-root 有产物：/app/ 托管，platform.info 报 webApp", async () => {
   const web = join(root, "web");
@@ -127,60 +171,75 @@ it("--web-root 有产物：/app/ 托管，platform.info 报 webApp", async () =>
   }
 });
 
-it("platform.info 报服务端名称：--name 优先，其次状态文件 displayName，缺省 --host", async () => {
-  const dataDir = join(root, "name");
-  const nameOf = async (url: string) =>
-    (
-      (await (await fetch(`${url}/.well-known/armadra-platform`)).json()) as {
-        name?: string;
-      }
-    ).name;
-  const first = await startPersonalRelay({ ...base, dataDir }, quiet);
-  try {
-    expect(await nameOf(first.url)).toBe("127.0.0.1");
-  } finally {
-    await first.close();
-  }
-  StateStore.open(dataDir).update((draft) => {
-    draft.settings.displayName = "家里的中转";
-  });
-  const second = await startPersonalRelay({ ...base, dataDir }, quiet);
-  try {
-    expect(await nameOf(second.url)).toBe("家里的中转");
-  } finally {
-    await second.close();
-  }
-  const third = await startPersonalRelay(
-    { ...base, dataDir, name: "书房" },
-    quiet,
-  );
-  try {
-    expect(await nameOf(third.url)).toBe("书房");
-  } finally {
-    await third.close();
-  }
-});
-
-it("运行中另一个进程轮换签名钥：一秒内 JWKS 就有新钥", async () => {
-  const dataDir = join(root, "e");
-  const relay = await startPersonalRelay({ ...base, dataDir }, quiet);
-  try {
-    runRotateKey(dataDir, () => {});
-    const deadline = Date.now() + 5_000;
-    let kids: string[] = [];
-    while (Date.now() < deadline) {
-      const jwks = (await (
-        await fetch(`${relay.url}/.well-known/jwks.json`)
-      ).json()) as { keys: { kid: string }[] };
-      kids = jwks.keys.map((key) => key.kid);
-      if (kids.includes("k2")) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+it.each(STORE_KINDS)(
+  "platform.info 报服务端名称：--name 优先，其次存储里的 displayName，缺省 --host（%s）",
+  async (store) => {
+    const dataDir = join(root, `name-${store}`);
+    const nameOf = async (url: string) =>
+      (
+        (await (await fetch(`${url}/.well-known/armadra-platform`)).json()) as {
+          name?: string;
+        }
+      ).name;
+    const first = await startPersonalRelay({ ...base, dataDir, store }, quiet);
+    try {
+      expect(await nameOf(first.url)).toBe("127.0.0.1");
+    } finally {
+      await first.close();
     }
-    expect(kids).toEqual(["k1", "k2"]);
-  } finally {
-    await relay.close();
-  }
-}, 10_000);
+    if (store === "file")
+      StateStore.open(dataDir).update((draft) => {
+        draft.settings.displayName = "家里的中转";
+      });
+    else {
+      const db = openDatabase(join(dataDir, "relay.db"));
+      updateTenant(db, DEFAULT_TENANT, (draft) => {
+        draft.displayName = "家里的中转";
+      });
+      db.close();
+    }
+    const second = await startPersonalRelay({ ...base, dataDir }, quiet);
+    try {
+      expect(await nameOf(second.url)).toBe("家里的中转");
+    } finally {
+      await second.close();
+    }
+    const third = await startPersonalRelay(
+      { ...base, dataDir, name: "书房" },
+      quiet,
+    );
+    try {
+      expect(await nameOf(third.url)).toBe("书房");
+    } finally {
+      await third.close();
+    }
+  },
+);
+
+it.each(STORE_KINDS)(
+  "运行中另一个进程轮换签名钥：一秒内 JWKS 就有新钥（%s）",
+  async (store) => {
+    const dataDir = join(root, `e-${store}`);
+    const relay = await startPersonalRelay({ ...base, dataDir, store }, quiet);
+    try {
+      await runRotateKey(dataDir, () => {});
+      const deadline = Date.now() + 5_000;
+      let kids: string[] = [];
+      while (Date.now() < deadline) {
+        const jwks = (await (
+          await fetch(`${relay.url}/.well-known/jwks.json`)
+        ).json()) as { keys: { kid: string }[] };
+        kids = jwks.keys.map((key) => key.kid);
+        if (kids.includes("k2")) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(kids).toEqual(["k1", "k2"]);
+    } finally {
+      await relay.close();
+    }
+  },
+  10_000,
+);
 
 it("边缘限流额度：命令行 > 状态文件 > 缺省；登录与链接的限流不可配、不变", () => {
   expect(edgeLimitRules(undefined, undefined)).toEqual({});

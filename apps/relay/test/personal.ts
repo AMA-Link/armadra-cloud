@@ -1,9 +1,9 @@
 /**
- * personal 单测的装配：临时数据目录里的状态文件（控制核端口）+ 签名钥 + 内存控制面 + 假时钟。
- * 口令派生是真的 scrypt（每次约几十毫秒），所以一个文件里只建一次账号。
+ * personal 单测的装配：临时数据目录里的存储（`file` 或 `sqlite`，控制核端口）+ 签名钥 + 内存控制面
+ * + 假时钟。口令派生是真的 scrypt（每次约几十毫秒），所以一个文件里每种存储只建一次账号。
  */
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,7 @@ import {
   type PersonalContext,
 } from "../src/personal/context.ts";
 import { createState } from "../src/personal/init.ts";
+import type { StoreKind } from "../src/personal/store-types.ts";
 
 export const PASSWORD = "plover-quartz-lantern-41";
 export const ISSUER = "https://relay.test:8443";
@@ -35,11 +36,13 @@ export interface Harness {
   clock: { now: number };
   events: ControlEvent[];
   disconnects: ConnectionFilter[];
+  /** 存储落盘的全部字节（状态文件，或库连同 WAL）：查有没有不该落盘的明文。 */
+  persisted(): string;
   cleanup(): void;
 }
 
 export async function personalHarness(
-  options: { account?: string; nowMs?: number } = {},
+  options: { account?: string; nowMs?: number; store?: StoreKind } = {},
 ): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "relay-personal-"));
   const clock = { now: options.nowMs ?? Date.UTC(2026, 9, 6, 12) };
@@ -49,6 +52,7 @@ export async function personalHarness(
     account: options.account ?? "me",
     password: PASSWORD,
     issuer: ISSUER,
+    store: options.store ?? "sqlite",
     nowMs: clock.now,
   });
   const signer = stateSigner(store, now);
@@ -74,7 +78,15 @@ export async function personalHarness(
     events,
     disconnects,
     context,
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    persisted: () =>
+      [store.path, `${store.path}-wal`]
+        .filter((file) => existsSync(file))
+        .map((file) => readFileSync(file).toString("latin1"))
+        .join("\n"),
+    cleanup: () => {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
 }
 

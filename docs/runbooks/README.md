@@ -3,3 +3,4 @@
 - 本地开发环境：见仓库根 [README](../../README.md)。
 - 部署与环境变量：见 [deploy/README.md](../../deploy/README.md)。
 - 滚动升级顺序：先 relay 后 cloud。
+- 个人中转的存储（SQLite / 状态文件、迁移、备份、体检）：见 [personal-storage.md](personal-storage.md)。
