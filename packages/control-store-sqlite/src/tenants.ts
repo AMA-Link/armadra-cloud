@@ -13,7 +13,7 @@ import type {
   TenantSettings,
 } from "@armadra/control-core/ports";
 
-import type { Database, Row } from "./open.ts";
+import type { SqlDatabase as Database, KeyWrap, Row } from "./db.ts";
 import { readSigningKeys } from "./keys.ts";
 import {
   bumpRevision,
@@ -164,12 +164,14 @@ export function importTenant(
   db: Database,
   tenantId: string,
   snapshot: TenantSnapshot,
+  wrap?: KeyWrap,
 ): void {
   db.transaction(() => {
     const { revision, ...tenant } = snapshot.tenant;
     createTenant(db, tenantId, tenant, revision);
     for (const row of snapshot.accounts) insertAccount(db, tenantId, row);
-    for (const row of snapshot.signingKeys) insertSigningKey(db, tenantId, row);
+    for (const row of snapshot.signingKeys)
+      insertSigningKey(db, tenantId, row, wrap);
     for (const row of snapshot.sources) insertSource(db, tenantId, row);
     for (const row of snapshot.registrations)
       insertRegistration(db, tenantId, row);
@@ -179,7 +181,11 @@ export function importTenant(
 }
 
 /** 整个租户的一致快照（读在一个事务里，别的进程写不进中间）。 */
-export function exportTenant(db: Database, tenantId: string): TenantSnapshot {
+export function exportTenant(
+  db: Database,
+  tenantId: string,
+  wrap?: KeyWrap,
+): TenantSnapshot {
   return db.transaction(() => {
     const tenant = readTenant(db, tenantId);
     if (!tenant) throw new Error(`没有这个租户：${tenantId}`);
@@ -191,7 +197,7 @@ export function exportTenant(db: Database, tenantId: string): TenantSnapshot {
     return {
       tenant,
       accounts: rows("accounts").map(toAccount),
-      signingKeys: readSigningKeys(db, tenantId),
+      signingKeys: readSigningKeys(db, tenantId, wrap),
       sources: rows("sources").map(toSource),
       registrations: rows("registration_tokens").map(toRegistration),
       devices: rows("devices").map(toDevice),

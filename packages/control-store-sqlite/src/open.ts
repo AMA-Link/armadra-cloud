@@ -11,8 +11,11 @@ import { closeSync, existsSync, openSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 
+import type { Row, SqlDatabase, SqlValue } from "./db.ts";
 import { SqliteStoreError } from "./errors.ts";
 import { loadMigrations, migrate } from "./migrate.ts";
+
+export type { Row, SqlValue };
 
 /** `PRAGMA application_id`：「ARMD」。别的程序的 SQLite 库一眼认出来，拒绝打开。 */
 export const APPLICATION_ID = 0x41524d44;
@@ -46,11 +49,8 @@ function loadSqlite(): typeof import("node:sqlite") {
   return sqlite;
 }
 
-export type SqlValue = string | number | bigint | null | Uint8Array;
-export type Row = Record<string, SqlValue>;
-
 /** 一个打开的库：语句缓存 + 可嵌套的写事务。 */
-export class Database {
+export class Database implements SqlDatabase {
   readonly path: string;
   private readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();

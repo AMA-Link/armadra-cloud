@@ -17,7 +17,7 @@ import { sameHex } from "@armadra/control-core/secrets";
 import { isStaleDevice } from "@armadra/control-core/sessions";
 import { guestPrefix } from "@armadra/control-core/subjects";
 
-import type { Database, Row } from "./open.ts";
+import type { SqlDatabase as Database, Row } from "./db.ts";
 import {
   bumpRevision,
   insertDevice,
