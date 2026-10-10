@@ -1,8 +1,8 @@
 /**
  * 测试夹具：端口的内存实现（多租户，按 `tenantId` 隔离）与一套可直接跑服务的装配。
  *
- * 语义与端口约定一致：`update` 在副本上执行 `fn`，抛错不写；读方法答副本。给新的存储实现
- * （PostgreSQL / Redis）写对照测试时，拿它当参照。
+ * 语义与端口约定一致：`update` 在副本上执行 `fn`，抛错不写；读方法答副本。它是参照实现：
+ * `ports-contract.ts` 与 `services-contract.ts` 两套合同测试对它和每个存储实现（SQLite……）各跑一遍。
  */
 import { createEventBus, type ControlEvent } from "../events.ts";
 import type {
@@ -58,6 +58,7 @@ function tenant(
   return found;
 }
 
+/** 端口 + 测试装配用的两个入口（合同测试要求存储实现也提供）。 */
 export interface MemoryPorts extends ControlPorts {
   /** 建一个租户（测试装配用）。 */
   addTenant(tenantId: string, settings: TenantSettings): void;
@@ -272,13 +273,15 @@ export function memoryHarness(
     allowGuests?: boolean;
     passwordPolicy?: PasswordPolicy;
     limit?: (kind: ControlLimitKind, key: string) => LimitResult;
+    /** 换一个存储实现（缺省内存参照）；合同测试用。 */
+    ports?: MemoryPorts;
   } = {},
 ): MemoryHarness {
   const tenantId = options.tenantId ?? "t1";
   const issuer = options.issuer ?? "https://cloud.armadra.test";
   const clock = { now: options.nowMs ?? Date.UTC(2026, 9, 10, 12) };
   const now = () => clock.now;
-  const ports = createMemoryPorts();
+  const ports = options.ports ?? createMemoryPorts();
   ports.addTenant(tenantId, {
     issuer,
     allowGuests: options.allowGuests ?? true,
