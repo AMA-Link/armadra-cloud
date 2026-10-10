@@ -28,12 +28,17 @@ export const PAGE_CSP = [
 /** Turnstile 组件的来源（script-src、frame-src、connect-src 的最小集合，见 Cloudflare Turnstile 文档 “Content Security Policy”）。 */
 export const TURNSTILE_ORIGIN = "https://challenges.cloudflare.com";
 
-/** 客户端（桌面壳、移动壳、本地开发）内嵌挑战页时的固定受信来源。 */
+/**
+ * 客户端内嵌挑战页时的固定受信来源：移动壳（`https://localhost`、`capacitor://localhost`）、
+ * 本地开发（`http://localhost[:端口]`）与桌面壳——桌面窗口的页面由本机回环上随机端口的
+ * 静态服务给出，来源是 `http://127.0.0.1:<端口>`。只放行回环主机的端口，不通配域名。
+ */
 export const CHALLENGE_EMBED_ORIGINS = [
   "https://localhost",
   "capacitor://localhost",
   "http://localhost",
   "http://localhost:*",
+  "http://127.0.0.1:*",
 ];
 
 export interface PageChallenge {
