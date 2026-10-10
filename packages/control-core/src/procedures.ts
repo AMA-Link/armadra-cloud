@@ -86,9 +86,12 @@ export function createPersonalProcedures(
         ...(name === "" ? {} : { name }),
         issuer: context.signer.issuer,
         protocol: { ...PROTOCOL_VERSION },
-        capabilities: [...PERSONAL_CAPABILITIES],
+        capabilities: context.challenge
+          ? [...PERSONAL_CAPABILITIES, "challenge.turnstile"]
+          : [...PERSONAL_CAPABILITIES],
         relay: { addressing: "path" },
         webApp: options.webApp(),
+        ...(context.challenge ? { challenge: context.challenge.info() } : {}),
       };
     },
     "platform.jwks": () => context.signer.jwks(),

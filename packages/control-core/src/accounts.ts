@@ -1,7 +1,8 @@
 /**
  * 账号与登录（中继设计 §6.2，平台设计 §17.3）。
  *
- * 登录：按 IP 限流（`login.ip`，20 次 / 分钟）→ 按账号名找账号 → 锁定检查 → scrypt 比对（定时
+ * 登录：按 IP 限流（`login.ip`，20 次 / 分钟）→ 人机挑战（配置了才有，cloud-api §16；失败不计入
+ * 失败次数）→ 按账号名找账号 → 锁定检查 → scrypt 比对（定时
  * 安全）→ 失败计数 / 锁定 → 成功清零 → 建设备 → 签会话。
  *
  * 锁定与 core `identity/throttle.ts` 同一算法（常量来自 identity-vectors 的 `THROTTLE`）：
@@ -10,6 +11,7 @@
  * 内存），不泄露账号名是否存在。
  */
 import type {
+  ChallengeToken,
   DeviceInput,
   Session,
 } from "@armadra/platform-protocol/cloud-api";
@@ -47,6 +49,7 @@ export interface LoginInput {
   account: string;
   password: string;
   device: DeviceInput;
+  challenge?: ChallengeToken;
 }
 
 export function createAccounts(context: ControlContext) {
@@ -79,6 +82,7 @@ export function createAccounts(context: ControlContext) {
         throw new ControlError("rate_limited", {
           retryAfterMs: byIp.retryAfterMs,
         });
+      await context.challenge?.check("auth.login", input.challenge, ip);
       const account = await context.ports.accounts.findByName(
         context.tenantId,
         input.account,

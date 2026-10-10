@@ -20,6 +20,7 @@ import type {
 } from "@armadra/platform-protocol/cloud-api";
 import type { z } from "zod";
 
+import type { ChallengeGate } from "./challenge.ts";
 import type { EventBus } from "./events.ts";
 import type { Signer } from "./signer.ts";
 
@@ -301,4 +302,9 @@ export interface ControlContext extends EventBus {
    * issuer 的 `wss://…/t/v1`。Workers 中继答 `…/t/v1?src=<sourceId>`，把隧道路由到源的对象。
    */
   tunnelUrl?: (sourceId: string) => string;
+  /**
+   * 人机挑战（cloud-api §16）：配置了 siteKey 与 secret 才有；没有 = 不要求挑战、`platform.info`
+   * 不报 `challenge`。
+   */
+  challenge?: ChallengeGate;
 }

@@ -4,7 +4,8 @@
  * - `create` 答 `secret`（32 字节 base64url），存储只存哈希。分享出去的链接是
  *   `https://<中继>/j/<linkId>#<secret>.<core 邀请令牌>`：秘密只在 `#` 片段里，浏览器不会把
  *   它发给任何服务器；中继自己拼的 `url` 不带片段。
- * - `accept { secret }`：按 IP 限流（`link.accept.ip`，20 次 / 分钟）→ 链接在、未撤销 → 秘密
+ * - `accept { secret }`：按 IP 限流（`link.accept.ip`，20 次 / 分钟）→ 人机挑战（scope 含
+ *   `links.accept` 时，cloud-api §16）→ 链接在、未撤销 → 秘密
  *   比对 → 未过期、次数未满 → `uses++` → 建访客设备（`guest:<linkId>:<随机>`，30 天）→ 签
  *   带 `link` 声明的断言与中继令牌。
  * - `update { label }`：只改备注（落地页与访客的源名用它）；已撤销的也能改，不动秘密、次数与期限。
@@ -13,6 +14,7 @@
  *   只读时中继令牌带 `ro: true`（边缘只放行安全方法与身份域）。缺省 = 整台、按角色（旧行为）。
  */
 import type {
+  ChallengeToken,
   DeviceInput,
   LinkScope,
   LinkSummary,
@@ -181,6 +183,7 @@ export function createLinks(context: ControlContext, sources: Sources) {
         linkId: string;
         secret?: string;
         device?: Pick<DeviceInput, "platform" | "name">;
+        challenge?: ChallengeToken;
       },
       ip: string,
     ) {
@@ -189,6 +192,7 @@ export function createLinks(context: ControlContext, sources: Sources) {
         throw new ControlError("rate_limited", {
           retryAfterMs: limited.retryAfterMs,
         });
+      await context.challenge?.check("links.accept", input.challenge, ip);
       const nowMs = context.now();
       const device = input.device ?? {
         platform: "browser" as const,
