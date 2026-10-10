@@ -159,5 +159,15 @@ export async function handleRequest(
     return controlStub(env, config).fetch(request);
   }
 
-  return (await servePages(request, env.ASSETS)) ?? relayError("not_found");
+  return (
+    (await servePages(
+      request,
+      env.ASSETS,
+      config.challenge
+        ? {
+            embedOrigins: [config.issuer, ...config.trustedOrigins],
+          }
+        : undefined,
+    )) ?? relayError("not_found")
+  );
 }

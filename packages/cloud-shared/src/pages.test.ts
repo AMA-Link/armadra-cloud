@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   contentTypeFor,
   hashedAsset,
+  PAGE_CSP,
+  pageCsp,
   PAGE_MESSAGES,
   pickLocale,
   renderPage,
@@ -37,5 +39,42 @@ describe("中继自有页面", () => {
     const other = renderPage("zh-CN", "unavailable");
     expect(other.csp).not.toBe(join.csp);
     expect(other.html).toContain("页面不可用");
+  });
+});
+
+describe("pageCsp", () => {
+  const directive = (csp: string, name: string) =>
+    csp.split("; ").find((item) => item.startsWith(`${name} `));
+
+  it("没配 Turnstile：与 PAGE_CSP 完全相同", () => {
+    expect(pageCsp("/app/challenge")).toBe(PAGE_CSP);
+    expect(pageCsp("/app/")).toBe(PAGE_CSP);
+    expect(PAGE_CSP).not.toContain("challenges.cloudflare.com");
+    expect(directive(PAGE_CSP, "frame-ancestors")).toBe(
+      "frame-ancestors 'none'",
+    );
+  });
+
+  it("配了：放行 Turnstile 的 script / frame / connect；只有 /app/challenge 可被受信来源内嵌", () => {
+    const csp = pageCsp("/app/challenge", {
+      embedOrigins: ["https://relay.test", "https://x.test;script-src *", "*"],
+    });
+    expect(directive(csp, "script-src")).toBe(
+      "script-src 'self' https://challenges.cloudflare.com",
+    );
+    expect(directive(csp, "connect-src")).toContain(
+      "https://challenges.cloudflare.com",
+    );
+    expect(directive(csp, "frame-src")).toContain(
+      "https://challenges.cloudflare.com",
+    );
+    expect(directive(csp, "frame-ancestors")).toBe(
+      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* https://relay.test",
+    );
+    expect(csp).not.toContain("*;");
+    for (const path of ["/app/", "/app/board/1", "/app/challengex"])
+      expect(
+        directive(pageCsp(path, { embedOrigins: [] }), "frame-ancestors"),
+      ).toBe("frame-ancestors 'none'");
   });
 });
