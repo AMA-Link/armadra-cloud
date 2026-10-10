@@ -13,6 +13,7 @@ const ROOTS = [
   "packages/cloud-shared/src",
   "packages/control-core/src",
   "packages/relay-kernel/src",
+  "packages/relay-runtime-node/src",
 ];
 const registry = JSON.parse(
   readFileSync(

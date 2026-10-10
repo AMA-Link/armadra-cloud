@@ -85,8 +85,23 @@
   ],
   "packageDependencies": [
     {
-      "$comment": "中继内核是 personal 与 saas 共用的数据面：不依赖控制核与 app，不带 SaaS 专有依赖（PostgreSQL / Redis），也不带 oRPC。",
+      "$comment": "中继内核是 personal 与 saas、Node 与 Workers 共用的数据面：不依赖控制核、app 与 Node 运行时，不带 SaaS 专有依赖（PostgreSQL / Redis）、oRPC 与 ws（源码层只许 node:crypto / node:buffer，由内核的 boundaries.test.ts 与 ESLint 守）。",
       "package": "packages/relay-kernel",
+      "forbid": [
+        "@armadra/control-core",
+        "@armadra/cloud",
+        "@armadra/relay",
+        "@armadra/relay-runtime-node",
+        "postgres",
+        "redis",
+        "@orpc/*",
+        "ws",
+        "@types/ws"
+      ]
+    },
+    {
+      "$comment": "中继的 Node 运行时只装配内核：不依赖控制核与 app，不带 SaaS 专有依赖（PostgreSQL / Redis），也不带 oRPC。",
+      "package": "packages/relay-runtime-node",
       "forbid": [
         "@armadra/control-core",
         "@armadra/cloud",
@@ -101,6 +116,7 @@
       "package": "packages/control-core",
       "forbid": [
         "@armadra/relay-kernel",
+        "@armadra/relay-runtime-node",
         "@armadra/cloud",
         "@armadra/relay",
         "postgres",
@@ -115,6 +131,7 @@
         "@armadra/cloud-shared",
         "@armadra/control-core",
         "@armadra/relay-kernel",
+        "@armadra/relay-runtime-node",
         "@armadra/cloud",
         "@armadra/relay"
       ]

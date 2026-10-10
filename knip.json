@@ -25,6 +25,9 @@
     },
     "packages/relay-kernel": {
       "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/relay-runtime-node": {
+      "project": ["src/**/*.ts", "test/**/*.ts"]
     }
   }
 }

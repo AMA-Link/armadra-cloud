@@ -84,6 +84,29 @@ const kernelPatterns = [
   },
 ];
 
+/**
+ * 内核运行时无关（Node 与 Workers 共用）：只许 `node:crypto` / `node:buffer`；`ws`、
+ * `node:http` / `net` / `stream` / `fs` 与 HTTP 外壳在 `@armadra/relay-runtime-node`。
+ * 只管源码，测试照常可以用 Node 起服务器。
+ */
+const kernelPortablePatterns = [
+  {
+    regex: "^node:(?!(crypto|buffer)$)",
+    message:
+      "relay-kernel 运行时无关：只许 node:crypto / node:buffer，其余 Node 专有部分放 @armadra/relay-runtime-node。",
+  },
+  {
+    group: [
+      "ws",
+      "@armadra/cloud-shared/http",
+      "@armadra/relay-runtime-node",
+      "@armadra/relay-runtime-node/*",
+    ],
+    message:
+      "relay-kernel 运行时无关：WebSocket 与 HTTP 外壳放 @armadra/relay-runtime-node。",
+  },
+];
+
 /** 控制核只经端口读写状态，且与传输无关。 */
 const controlCorePatterns = [
   {
@@ -114,6 +137,8 @@ const controlCorePatterns = [
     group: [
       "@armadra/relay-kernel",
       "@armadra/relay-kernel/*",
+      "@armadra/relay-runtime-node",
+      "@armadra/relay-runtime-node/*",
       "@armadra/relay",
       "@armadra/relay/*",
       "@armadra/cloud",
@@ -175,12 +200,26 @@ export default tseslint.config(
     rules: restrictImports(orpcPattern, armadraSourcePattern, ...relayPatterns),
   },
   {
-    files: ["packages/relay-kernel/**/*.ts"],
+    files: [
+      "packages/relay-kernel/**/*.ts",
+      "packages/relay-runtime-node/**/*.ts",
+    ],
     rules: restrictImports(
       orpcPattern,
       armadraSourcePattern,
       ...relayPatterns,
       ...kernelPatterns,
+    ),
+  },
+  {
+    files: ["packages/relay-kernel/src/**/*.ts"],
+    ignores: ["packages/relay-kernel/src/**/*.test.ts"],
+    rules: restrictImports(
+      orpcPattern,
+      armadraSourcePattern,
+      ...relayPatterns,
+      ...kernelPatterns,
+      ...kernelPortablePatterns,
     ),
   },
   {
