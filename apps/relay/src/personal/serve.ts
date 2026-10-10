@@ -20,9 +20,12 @@ import { pathAddressing } from "@armadra/relay-kernel/edge/addressing";
 import {
   createClientIp,
   type ClientIp,
-} from "@armadra/relay-kernel/http/client-ip";
+} from "@armadra/relay-runtime-node/client-ip";
 import { errorName } from "@armadra/relay-kernel/log";
-import { startRelay, type RunningRelay } from "@armadra/relay-kernel/main";
+import {
+  startRelay,
+  type RunningRelay,
+} from "@armadra/relay-runtime-node/start-relay";
 
 import { RELAY_VERSION } from "../version.ts";
 import {

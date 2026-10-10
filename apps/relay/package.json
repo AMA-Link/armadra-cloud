@@ -1,6 +1,6 @@
 {
   "name": "@armadra/relay",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -22,6 +22,7 @@
     "@armadra/control-core": "workspace:*",
     "@armadra/platform-protocol": "workspace:*",
     "@armadra/relay-kernel": "workspace:*",
+    "@armadra/relay-runtime-node": "workspace:*",
     "acme-client": "5.4.0",
     "ws": "8.21.0",
     "zod": "4.4.3"
