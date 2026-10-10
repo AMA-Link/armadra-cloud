@@ -352,7 +352,7 @@ describe("托管页的 CSP（Turnstile）", () => {
       "script-src 'self' https://challenges.cloudflare.com",
     );
     expect(page).toContain(
-      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* https://relay.armadra.test",
+      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* http://127.0.0.1:* https://relay.armadra.test",
     );
     expect(await csp("/app/x", challenge)).toContain("frame-ancestors 'none'");
   });

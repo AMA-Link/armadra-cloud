@@ -69,12 +69,28 @@ describe("pageCsp", () => {
       "https://challenges.cloudflare.com",
     );
     expect(directive(csp, "frame-ancestors")).toBe(
-      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* https://relay.test",
+      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* http://127.0.0.1:* https://relay.test",
     );
     expect(csp).not.toContain("*;");
     for (const path of ["/app/", "/app/board/1", "/app/challengex"])
       expect(
         directive(pageCsp(path, { embedOrigins: [] }), "frame-ancestors"),
       ).toBe("frame-ancestors 'none'");
+  });
+
+  it("桌面壳（页面来源 http://127.0.0.1:<随机端口>）能内嵌挑战页；只放行回环主机的端口，不通配域名", () => {
+    const ancestors = (
+      directive(
+        pageCsp("/app/challenge", { embedOrigins: [] }),
+        "frame-ancestors",
+      ) ?? ""
+    )
+      .split(" ")
+      .slice(1);
+    expect(ancestors).toContain("http://127.0.0.1:*");
+    for (const source of ancestors)
+      expect(source).toMatch(
+        /^('self'|(https?|capacitor):\/\/(localhost|127\.0\.0\.1)(:\*)?)$/,
+      );
   });
 });

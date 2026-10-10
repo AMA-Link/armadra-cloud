@@ -169,7 +169,7 @@ describe("开了 Turnstile", () => {
       "script-src 'self' https://challenges.cloudflare.com",
     );
     expect(csp).toContain(
-      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* https://relay.test",
+      "frame-ancestors 'self' https://localhost capacitor://localhost http://localhost http://localhost:* http://127.0.0.1:* https://relay.test",
     );
     await challenge.arrayBuffer();
     const other = await fetch(`${withChallenge.url}/app/board/1`);
