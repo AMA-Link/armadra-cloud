@@ -18,6 +18,7 @@
 #   proxy_set_header X-Forwarded-For $remote_addr;   # 直接面向公网时
 #   proxy_set_header X-Real-IP $remote_addr;
 # 也可写进 state.json 的 settings.trustedProxy: { "proxies": ["127.0.0.1/32"], "prefer": "forwarded-for" }；命令行优先。
+# 服务端名称（客户端添加时的缺省显示名）：RELAY_NAME=家里 或 state.json 的 settings.displayName，缺省用 RELAY_HOST。
 # 页面：把 Armadra apps/web 的构建产物挂到 /app/web（或用带页面的镜像），否则 /app 答错误页。
 name: armadra-relay-personal
 
@@ -38,6 +39,7 @@ services:
       RELAY_LISTEN: 0.0.0.0:8443
       RELAY_PERSONAL_ACCOUNT: "${RELAY_ACCOUNT:-me}"
       RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/relay_password
+      RELAY_NAME: "${RELAY_NAME:-}"
     secrets:
       - relay_password
     ports:

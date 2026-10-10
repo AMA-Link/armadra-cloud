@@ -206,6 +206,9 @@ export async function startPersonalRelay(
   const api = createPersonalApi(context, streamCore, {
     clientIp,
     webApp: () => (webRoot ? `${signer.issuer}/app/` : null),
+    // 每次现读：状态文件里的 displayName 被别的进程改了也即时生效。
+    name: () =>
+      options.name ?? store.current.settings.displayName ?? options.host,
     onError: (error) => log.error("请求处理失败", { error: errorName(error) }),
   });
   const web = createWebPages({

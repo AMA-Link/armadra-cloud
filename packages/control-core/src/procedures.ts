@@ -3,6 +3,7 @@
  * 交给 `createCloudRouter`；没列出的 procedure 由装配方答 `404 not_found`。
  */
 import { PROTOCOL_VERSION } from "@armadra/platform-protocol";
+import { PLATFORM_NAME_MAX } from "@armadra/platform-protocol/cloud-api";
 
 import { createAccounts } from "./accounts.ts";
 import { ControlError } from "./errors.ts";
@@ -67,6 +68,8 @@ export function createPersonalProcedures(
     stream: MeStreamCore;
     /** 托管页面的地址；没有页面产物时为 null。 */
     webApp: () => string | null;
+    /** 服务端名称（`platform.info.name`，0.3.1 起）；不给或为空不报。 */
+    name?: () => string | null;
   },
 ): PersonalProcedures {
   const { tenantId, ports } = context;
@@ -76,14 +79,18 @@ export function createPersonalProcedures(
   const links = createLinks(context, sources);
 
   const handlers: Record<PersonalProcedure, ProcedureHandler> = {
-    "platform.info": () => ({
-      mode: "personal",
-      issuer: context.signer.issuer,
-      protocol: { ...PROTOCOL_VERSION },
-      capabilities: [...PERSONAL_CAPABILITIES],
-      relay: { addressing: "path" },
-      webApp: options.webApp(),
-    }),
+    "platform.info": () => {
+      const name = options.name?.()?.trim().slice(0, PLATFORM_NAME_MAX) ?? "";
+      return {
+        mode: "personal",
+        ...(name === "" ? {} : { name }),
+        issuer: context.signer.issuer,
+        protocol: { ...PROTOCOL_VERSION },
+        capabilities: [...PERSONAL_CAPABILITIES],
+        relay: { addressing: "path" },
+        webApp: options.webApp(),
+      };
+    },
     "platform.jwks": () => context.signer.jwks(),
     "auth.login": ({ input, ip }) =>
       accounts

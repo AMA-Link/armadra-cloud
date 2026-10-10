@@ -127,6 +127,40 @@ it("--web-root 有产物：/app/ 托管，platform.info 报 webApp", async () =>
   }
 });
 
+it("platform.info 报服务端名称：--name 优先，其次状态文件 displayName，缺省 --host", async () => {
+  const dataDir = join(root, "name");
+  const nameOf = async (url: string) =>
+    (
+      (await (await fetch(`${url}/.well-known/armadra-platform`)).json()) as {
+        name?: string;
+      }
+    ).name;
+  const first = await startPersonalRelay({ ...base, dataDir }, quiet);
+  try {
+    expect(await nameOf(first.url)).toBe("127.0.0.1");
+  } finally {
+    await first.close();
+  }
+  StateStore.open(dataDir).update((draft) => {
+    draft.settings.displayName = "家里的中转";
+  });
+  const second = await startPersonalRelay({ ...base, dataDir }, quiet);
+  try {
+    expect(await nameOf(second.url)).toBe("家里的中转");
+  } finally {
+    await second.close();
+  }
+  const third = await startPersonalRelay(
+    { ...base, dataDir, name: "书房" },
+    quiet,
+  );
+  try {
+    expect(await nameOf(third.url)).toBe("书房");
+  } finally {
+    await third.close();
+  }
+});
+
 it("运行中另一个进程轮换签名钥：一秒内 JWKS 就有新钥", async () => {
   const dataDir = join(root, "e");
   const relay = await startPersonalRelay({ ...base, dataDir }, quiet);

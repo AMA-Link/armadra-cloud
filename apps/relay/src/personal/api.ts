@@ -117,6 +117,8 @@ export function createPersonalApi(
   stream: MeStreamCore,
   options: {
     webApp: () => string | null;
+    /** 服务端名称（`platform.info.name`）。 */
+    name?: () => string | null;
     /** 客户端 IP 的取法；缺省直连对端地址。 */
     clientIp?: ClientIp;
     /** 处理器意外出错时记一笔（只给错误类名）。 */
@@ -127,6 +129,7 @@ export function createPersonalApi(
   const { handlers, authenticator } = createPersonalProcedures(context, {
     stream,
     webApp: options.webApp,
+    ...(options.name ? { name: options.name } : {}),
   });
   const router = createCloudRouter(handlers);
 

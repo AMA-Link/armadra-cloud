@@ -280,3 +280,25 @@ describe("parsePersonalServe 受信代理", () => {
       );
   });
 });
+
+describe("parsePersonalServe 服务端名称", () => {
+  const base = ["--data-dir", "d", "--host", "127.0.0.1"];
+  it("缺省不给（serve 再取状态文件与 --host）", () => {
+    expect(parsePersonalServe(base, {}, "/w").name).toBeUndefined();
+  });
+  it("命令行优先于环境变量，去首尾空白", () => {
+    expect(
+      parsePersonalServe([...base, "--name", "  家里  "], {
+        RELAY_NAME: "公司",
+      }).name,
+    ).toBe("家里");
+    expect(parsePersonalServe(base, { RELAY_NAME: "公司" }).name).toBe("公司");
+    expect(parsePersonalServe(base, { RELAY_NAME: "" }).name).toBeUndefined();
+  });
+  it("空白或超过 128 个字符就拒绝", () => {
+    for (const value of ["   ", "x".repeat(129)])
+      expect(() =>
+        parsePersonalServe([...base, "--name", value], {}, "/w"),
+      ).toThrow(UsageError);
+  });
+});
