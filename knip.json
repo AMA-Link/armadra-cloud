@@ -14,8 +14,8 @@
       "project": ["src/**/*.ts"]
     },
     "apps/relay-workers": {
-      "entry": ["src/index.ts", "scripts/build.mjs", "test/**/*.ts"],
-      "project": ["src/**/*.ts", "test/**/*.ts"]
+      "project": ["src/**/*.ts", "test/**/*.ts"],
+      "ignoreDependencies": ["cloudflare"]
     },
     "packages/cloud-shared": {
       "project": ["src/**/*.ts"]
@@ -40,8 +40,9 @@
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "packages/relay-runtime-workers": {
-      "entry": ["src/index.ts", "test/worker.ts", "test/**/*.test.ts"],
-      "project": ["src/**/*.ts", "test/**/*.ts"]
+      "entry": ["test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"],
+      "ignoreDependencies": ["cloudflare", "wrangler"]
     }
   }
 }
