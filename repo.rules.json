@@ -37,7 +37,9 @@
     ".idea/",
     ".env",
     ".env.dev",
-    "*.tgz"
+    "*.tgz",
+    ".dev.vars",
+    ".wrangler/"
   ],
   "docs": {
     "root": "docs",
@@ -96,6 +98,7 @@
         "@armadra/cloud",
         "@armadra/relay",
         "@armadra/relay-runtime-node",
+        "@armadra/relay-runtime-workers",
         "postgres",
         "redis",
         "@orpc/*",
@@ -110,9 +113,39 @@
         "@armadra/control-core",
         "@armadra/cloud",
         "@armadra/relay",
+        "@armadra/relay-runtime-workers",
         "postgres",
         "redis",
         "@orpc/*"
+      ]
+    },
+    {
+      "$comment": "中继的 Workers 运行时只装配内核、控制核与 SQLite 端口（DO SQLite）：不依赖 app 与 Node 运行时，不带 ws、PostgreSQL / Redis、oRPC 与第三方 SQLite 驱动。",
+      "package": "packages/relay-runtime-workers",
+      "forbid": [
+        "@armadra/cloud",
+        "@armadra/relay",
+        "@armadra/relay-workers",
+        "@armadra/relay-runtime-node",
+        "postgres",
+        "redis",
+        "@orpc/*",
+        "ws",
+        "@types/ws",
+        "better-sqlite3",
+        "sqlite3"
+      ]
+    },
+    {
+      "$comment": "Workers 中继的 wrangler 项目只 re-export 运行时：不依赖别的 app，不带 ws、PostgreSQL / Redis。",
+      "package": "apps/relay-workers",
+      "forbid": [
+        "@armadra/cloud",
+        "@armadra/relay",
+        "@armadra/relay-runtime-node",
+        "postgres",
+        "redis",
+        "ws"
       ]
     },
     {
@@ -121,6 +154,7 @@
       "forbid": [
         "@armadra/relay-kernel",
         "@armadra/relay-runtime-node",
+        "@armadra/relay-runtime-workers",
         "@armadra/cloud",
         "@armadra/relay",
         "postgres",
@@ -133,6 +167,7 @@
       "package": "packages/control-store-sqlite",
       "forbid": [
         "@armadra/relay-kernel",
+        "@armadra/relay-runtime-workers",
         "@armadra/cloud",
         "@armadra/relay",
         "postgres",
@@ -163,6 +198,7 @@
         "@armadra/relay-kernel",
         "@armadra/relay-runtime-node",
         "@armadra/cloud",
+        "@armadra/relay-runtime-workers",
         "@armadra/relay"
       ]
     }
