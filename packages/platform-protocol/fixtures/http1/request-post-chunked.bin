@@ -1,0 +1,11 @@
+POST /api/upload HTTP/1.1
+host: relay.armadra.test
+connection: close
+transfer-encoding: chunked
+
+7
+hello, 
+1b
+world! this chunk is longer
+0
+

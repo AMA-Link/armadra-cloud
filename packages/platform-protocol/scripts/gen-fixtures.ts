@@ -40,6 +40,7 @@ import { challengeSigningInput } from "../src/tunnel/handshake.ts";
 import { LIMITS } from "../src/tunnel/limits.ts";
 import { PROTOCOL_VERSION } from "../src/version.ts";
 import { CLOUD_API_SAMPLES } from "./cloud-api-samples.ts";
+import { wireFixtures } from "./wire-fixtures.ts";
 
 const ROOT = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const FIXED_NOW_MS = 1_760_000_000_000;
@@ -402,6 +403,10 @@ put(
 for (const [key, sample] of Object.entries(CLOUD_API_SAMPLES))
   put(`cloud-api/${key}.json`, json(sample));
 put("errors.json", json(ERRORS));
+
+// ------------------------------------------------------------------ http1 / ws
+
+for (const [name, bytes] of wireFixtures()) put(name, bytes);
 
 // ------------------------------------------------------------------ write
 

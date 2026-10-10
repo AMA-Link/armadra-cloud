@@ -41,6 +41,7 @@
   "relay_token_invalid": 401,
   "relay_source_mismatch": 403,
   "limit_reached": 429,
+  "bad_gateway": 502,
   "cloud_not_registered": 401,
   "cloud_account_unlinked": 401,
   "cloud_assertion_invalid": 401,

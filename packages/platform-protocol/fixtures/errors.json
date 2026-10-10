@@ -125,6 +125,9 @@
   "limit_reached": {
     "status": 429
   },
+  "bad_gateway": {
+    "status": 502
+  },
   "cloud_not_registered": {
     "status": 401
   },

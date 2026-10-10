@@ -1,0 +1,319 @@
+{
+  "$comment": "WebSocket 帧（RFC 6455 §5；rfc-* 是 §5.7 的示例）。from=client 的帧必须带掩码、server 的不得带；encode 依次编码后拼起来等于文件字节。",
+  "frames": [
+    {
+      "name": "rfc-text-unmasked",
+      "from": "server",
+      "events": [
+        {
+          "type": "message",
+          "binary": false,
+          "data": {
+            "text": "Hello"
+          }
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 1,
+          "fin": true,
+          "payload": {
+            "text": "Hello"
+          }
+        }
+      ],
+      "file": "ws/rfc-text-unmasked.bin"
+    },
+    {
+      "name": "rfc-text-masked",
+      "from": "client",
+      "events": [
+        {
+          "type": "message",
+          "binary": false,
+          "data": {
+            "text": "Hello"
+          }
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 1,
+          "fin": true,
+          "payload": {
+            "text": "Hello"
+          },
+          "mask": "37fa213d"
+        }
+      ],
+      "file": "ws/rfc-text-masked.bin"
+    },
+    {
+      "name": "rfc-fragmented",
+      "from": "server",
+      "events": [
+        {
+          "type": "message",
+          "binary": false,
+          "data": {
+            "text": "Hello"
+          }
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 1,
+          "fin": false,
+          "payload": {
+            "text": "Hel"
+          }
+        },
+        {
+          "opcode": 0,
+          "fin": true,
+          "payload": {
+            "text": "lo"
+          }
+        }
+      ],
+      "file": "ws/rfc-fragmented.bin"
+    },
+    {
+      "name": "fragmented-with-ping",
+      "from": "client",
+      "events": [
+        {
+          "type": "ping",
+          "data": {
+            "text": ""
+          }
+        },
+        {
+          "type": "message",
+          "binary": true,
+          "data": {
+            "hex": "0102030405"
+          }
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 2,
+          "fin": false,
+          "payload": {
+            "hex": "0102"
+          },
+          "mask": "37fa213d"
+        },
+        {
+          "opcode": 9,
+          "fin": true,
+          "payload": {
+            "hex": ""
+          },
+          "mask": "37fa213d"
+        },
+        {
+          "opcode": 0,
+          "fin": true,
+          "payload": {
+            "hex": "030405"
+          },
+          "mask": "37fa213d"
+        }
+      ],
+      "file": "ws/fragmented-with-ping.bin"
+    },
+    {
+      "name": "rfc-ping",
+      "from": "server",
+      "events": [
+        {
+          "type": "ping",
+          "data": {
+            "text": "Hello"
+          }
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 9,
+          "fin": true,
+          "payload": {
+            "text": "Hello"
+          }
+        }
+      ],
+      "file": "ws/rfc-ping.bin"
+    },
+    {
+      "name": "rfc-pong-masked",
+      "from": "client",
+      "events": [
+        {
+          "type": "pong",
+          "data": {
+            "text": "Hello"
+          }
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 10,
+          "fin": true,
+          "payload": {
+            "text": "Hello"
+          },
+          "mask": "37fa213d"
+        }
+      ],
+      "file": "ws/rfc-pong-masked.bin"
+    },
+    {
+      "name": "rfc-binary-256",
+      "from": "server",
+      "events": [
+        {
+          "type": "message",
+          "binary": true,
+          "data": {
+            "length": 256,
+            "fill": 42
+          }
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 2,
+          "fin": true,
+          "payload": {
+            "length": 256,
+            "fill": 42
+          }
+        }
+      ],
+      "file": "ws/rfc-binary-256.bin"
+    },
+    {
+      "name": "rfc-binary-64k",
+      "from": "server",
+      "events": [
+        {
+          "type": "message",
+          "binary": true,
+          "data": {
+            "length": 65536,
+            "fill": 7
+          }
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 2,
+          "fin": true,
+          "payload": {
+            "length": 65536,
+            "fill": 7
+          }
+        }
+      ],
+      "file": "ws/rfc-binary-64k.bin"
+    },
+    {
+      "name": "close-source-offline",
+      "from": "server",
+      "events": [
+        {
+          "type": "close",
+          "code": 4404,
+          "reason": "source_offline"
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 8,
+          "fin": true,
+          "payload": {
+            "hex": "1134736f757263655f6f66666c696e65"
+          }
+        }
+      ],
+      "file": "ws/close-source-offline.bin"
+    },
+    {
+      "name": "close-empty",
+      "from": "client",
+      "events": [
+        {
+          "type": "close",
+          "reason": ""
+        }
+      ],
+      "encode": [
+        {
+          "opcode": 8,
+          "fin": true,
+          "payload": {
+            "hex": ""
+          },
+          "mask": "37fa213d"
+        }
+      ],
+      "file": "ws/close-empty.bin"
+    },
+    {
+      "name": "reserved-bit",
+      "from": "server",
+      "error": "reserved_bits",
+      "file": "ws/reserved-bit.bin"
+    },
+    {
+      "name": "unknown-opcode",
+      "from": "server",
+      "error": "bad_opcode",
+      "file": "ws/unknown-opcode.bin"
+    },
+    {
+      "name": "fragmented-ping",
+      "from": "server",
+      "error": "bad_control_frame",
+      "file": "ws/fragmented-ping.bin"
+    },
+    {
+      "name": "long-ping",
+      "from": "server",
+      "error": "bad_control_frame",
+      "file": "ws/long-ping.bin"
+    },
+    {
+      "name": "orphan-continuation",
+      "from": "server",
+      "error": "bad_continuation",
+      "file": "ws/orphan-continuation.bin"
+    },
+    {
+      "name": "interleaved-data",
+      "from": "server",
+      "error": "bad_continuation",
+      "file": "ws/interleaved-data.bin"
+    },
+    {
+      "name": "unmasked-from-client",
+      "from": "client",
+      "error": "mask_required",
+      "file": "ws/unmasked-from-client.bin"
+    },
+    {
+      "name": "masked-from-server",
+      "from": "server",
+      "error": "mask_forbidden",
+      "file": "ws/masked-from-server.bin"
+    },
+    {
+      "name": "close-one-byte",
+      "from": "server",
+      "error": "bad_close_payload",
+      "file": "ws/close-one-byte.bin"
+    }
+  ]
+}
