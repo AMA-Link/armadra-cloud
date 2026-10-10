@@ -1,6 +1,6 @@
 # @armadra/relay-workers
 
-Cloudflare Workers 上的 Armadra 个人中转（`relay.armadra.com`，staging `relay-staging.armadra.com`）。这里只有 wrangler 项目：[wrangler.jsonc](wrangler.jsonc)、入口 [src/index.ts](src/index.ts)（re-export [`@armadra/relay-runtime-workers`](../../packages/relay-runtime-workers/)）与页面产物的构建脚本；部署步骤见 [deploy/cloudflare/README.md](../../deploy/cloudflare/README.md)，运维见[运维手册](../../docs/runbooks/relay-on-cloudflare.md)。
+Cloudflare Workers 上的 Armadra 个人中转（只有生产环境 `relay.armadra.com`）。这里只有 wrangler 项目：[wrangler.jsonc](wrangler.jsonc)、入口 [src/index.ts](src/index.ts)（re-export [`@armadra/relay-runtime-workers`](../../packages/relay-runtime-workers/)）与页面产物的构建脚本；部署步骤见 [deploy/cloudflare/README.md](../../deploy/cloudflare/README.md)，运维见[运维手册](../../docs/runbooks/relay-on-cloudflare.md)。
 
 ```sh
 pnpm --filter @armadra/relay-workers build -- --web ../Armadra/apps/web/dist   # 页面产物拷进 assets/（或 --image <服务器壳镜像>）

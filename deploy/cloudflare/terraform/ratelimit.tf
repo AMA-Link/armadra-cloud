@@ -2,7 +2,7 @@
 #
 # Free 只有 1 条：表达式只能用路径（不能按主机），按 IP（+ 节点）计数，10 秒窗、封 10 秒。登录与接受
 # 分享链接合写一条（中继设计 §4.6）。Pro 改成 1 分钟窗、封 10 分钟，并按主机收窄。
-# 只有经 Cloudflare 代理的主机吃这条规则；灰云的 cn.relay / app 不受影响。
+# 只有经 Cloudflare 代理的主机吃这条规则；灰云的 app 不受影响。
 
 variable "login_requests_per_period" {
   description = "每个 IP 在一个窗口内的登录 + 接受链接请求上限（Free 窗口 10 秒，Pro 60 秒）。"

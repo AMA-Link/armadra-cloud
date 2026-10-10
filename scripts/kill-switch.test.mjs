@@ -47,21 +47,21 @@ test("缺省演练：打印要发的请求，不读令牌、不连网络，退�
     assert.match(result.stdout, /relay\.armadra\.com/);
     assert.doesNotMatch(result.stdout + result.stderr, /tok-secret-value/);
   }
-  const maintenance = run(["maintenance", "--env", "staging"]).stdout;
+  const maintenance = run(["maintenance"]).stdout;
   assert.match(
     maintenance,
     /PUT https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/a27d9dab9190150768845b62cfd57cfe\/workers\/domains/,
   );
   assert.match(
     maintenance,
-    /"hostname":"relay-staging\.armadra\.com","service":"armadra-relay-maintenance"/,
+    /"hostname":"relay\.armadra\.com","service":"armadra-relay-maintenance"/,
   );
 });
 
 test("用法错误以 64 退出；--help 以 0 退出", () => {
   assert.equal(run([]).status, 64);
   assert.equal(run(["explode"]).status, 64);
-  assert.equal(run(["restore", "--env", "dev"]).status, 64);
+  assert.equal(run(["restore", "--env", "staging"]).status, 64);
   assert.equal(run(["restore", "--token", "x"]).status, 64);
   const help = run(["--help"]);
   assert.equal(help.status, 0);
@@ -93,9 +93,8 @@ test("参数与计划", () => {
     enabled: true,
   });
   assert.equal(
-    planKillSwitch(parseArgs(["restore", "--env", "staging"])).steps[1].body
-      .service,
-    "armadra-relay-staging",
+    planKillSwitch(parseArgs(["restore"])).steps[1].body.service,
+    "armadra-relay",
   );
 });
 

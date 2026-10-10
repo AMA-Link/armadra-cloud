@@ -7,7 +7,7 @@
 #   Bot Management:Edit），不写进任何文件。
 # - zone 是 Free Website：缺省只写 Free 能用的规则；付费能力（托管 WAF、OWASP、更长的限速窗口）
 #   用变量开关，升级后再打开。
-# - Worker 的 Custom Domain（relay、relay-staging）由 wrangler 建与管，这里不碰，免得两边抢同一条记录。
+# - Worker 的 Custom Domain（relay）由 wrangler 建与管，这里不碰，免得两边抢同一条记录。
 # - state 缺省在本目录（已在 .gitignore）；要多人共用时换成 R2 的 s3 后端（见 runbook）。
 
 terraform {
@@ -47,7 +47,7 @@ variable "zone_plan" {
 variable "relay_hosts" {
   description = "Workers 中继的主机名（Custom Domain，由 wrangler 管）；WAF 规则按它们收窄。"
   type        = list(string)
-  default     = ["relay.armadra.com", "relay-staging.armadra.com"]
+  default     = ["relay.armadra.com"]
 }
 
 data "cloudflare_zone" "this" {
@@ -57,7 +57,7 @@ data "cloudflare_zone" "this" {
   }
 }
 
-# relay_host_set 是规则表达式里的主机集合：{"relay.armadra.com" "relay-staging.armadra.com"}。
+# relay_host_set 是规则表达式里的主机集合：{"relay.armadra.com"}。
 locals {
   zone_id        = data.cloudflare_zone.this.id
   relay_host_set = "{${join(" ", [for host in var.relay_hosts : "\"${host}\""])}}"

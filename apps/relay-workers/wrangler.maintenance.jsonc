@@ -2,7 +2,7 @@
 //
 // - 预先部署一次：`pnpm exec wrangler deploy -c wrangler.maintenance.jsonc`（维护者在本机执行）。
 // - 没有路由、不开 workers.dev：平时不收任何流量；`node scripts/kill-switch.mjs maintenance --apply`
-//   把 relay.armadra.com（`--env staging` 时 relay-staging）的 Custom Domain 切到它，`restore` 切回。
+//   把 relay.armadra.com的 Custom Domain 切到它，`restore` 切回。
 // - 没有绑定、没有存储：所有请求答 503 `unavailable`，不计 Durable Object 用量。
 {
   "$schema": "./node_modules/wrangler/config-schema.json",

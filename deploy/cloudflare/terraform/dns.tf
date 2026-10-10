@@ -1,9 +1,9 @@
-# DNS（中继设计 §2.11）。relay、relay-staging、edge 是 Worker 的 Custom Domain，由 wrangler 建记录与
-# 证书，这里不管。49 服务器上的主机走 DNS only（灰云）：大陆直达，证书由服务器自己签。
+# DNS（中继设计 §2.11）。relay、edge 是 Worker 的 Custom Domain，由 wrangler 建记录与
+# 证书，这里不管。控制面服务器（49）上的 app / status 由这里管；app 走 DNS only（灰云），证书由服务器自己签。
 # 没给 origin_ipv4 时不建任何 49 的记录（CI 的 validate 与首次 plan 不需要它）。
 
 variable "origin_ipv4" {
-  description = "49 服务器的公网 IPv4（cn.relay、app、status 指向它）；null = 不建这些记录。"
+  description = "49 服务器的公网 IPv4（app、status 指向它）；null = 不建这些记录。"
   type        = string
   default     = null
 }
@@ -22,7 +22,6 @@ variable "enable_saas_wildcard" {
 
 locals {
   origin_records = var.origin_ipv4 == null ? {} : {
-    "cn.relay" = { proxied = false, comment = "49 的 Node 中继（大陆直达，灰云）" }
     "app"      = { proxied = false, comment = "SaaS 控制面（M1 在 49，灰云）" }
     "status"   = { proxied = var.status_proxied, comment = "状态页（49）" }
   }
