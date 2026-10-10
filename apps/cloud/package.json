@@ -17,6 +17,7 @@
   "dependencies": {
     "@armadra/cloud-shared": "workspace:*",
     "@armadra/control-core": "workspace:*",
+    "@armadra/control-store-postgres": "workspace:*",
     "@armadra/platform-protocol": "workspace:*",
     "zod": "4.4.3"
   },

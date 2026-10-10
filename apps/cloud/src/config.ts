@@ -5,12 +5,11 @@ import {
   parseConfig,
   type Env,
 } from "@armadra/cloud-shared/config";
-import { fileURLToPath } from "node:url";
+import { defaultMigrationsDir } from "@armadra/control-store-postgres/migrate";
 import { z } from "zod";
 
-const DEFAULT_MIGRATIONS_DIR = fileURLToPath(
-  new URL("./db/migrations/", import.meta.url),
-);
+/** PostgreSQL 迁移只有一个目录：`@armadra/control-store-postgres` 的 `migrations/`（单文件旁的 `pg-migrations/`）。 */
+const DEFAULT_MIGRATIONS_DIR = defaultMigrationsDir();
 
 const serveSchema = z.object({
   ARMADRA_CLOUD_ISSUER: z.url(),
