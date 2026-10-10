@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "armadra-cloud /v1",
-    "version": "0.2.3",
+    "version": "0.3.0",
     "description": "由 tools/contract/generate.mjs 从 @armadra/platform-protocol 的 cloudContract 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -4046,6 +4046,22 @@
                         "minimum": -9007199254740991,
                         "maximum": 9007199254740991,
                         "exclusiveMinimum": 0
+                      },
+                      "scope": {
+                        "type": "object",
+                        "properties": {
+                          "workspaceId": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                          },
+                          "sessionId": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                          },
+                          "readOnly": {
+                            "type": "boolean"
+                          }
+                        }
                       }
                     },
                     "required": [
@@ -4253,6 +4269,22 @@
                           "orgId": {
                             "type": "string"
                           },
+                          "scope": {
+                            "type": "object",
+                            "properties": {
+                              "workspaceId": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                              },
+                              "sessionId": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                              },
+                              "readOnly": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
                           "url": {
                             "type": "string"
                           },
@@ -4360,6 +4392,22 @@
                     },
                     "orgName": {
                       "type": "string"
+                    },
+                    "scope": {
+                      "type": "object",
+                      "properties": {
+                        "workspaceId": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                        },
+                        "readOnly": {
+                          "type": "boolean"
+                        }
+                      }
                     },
                     "expiresAtMs": {
                       "type": "integer",
@@ -4476,6 +4524,22 @@
                     },
                     "orgId": {
                       "type": "string"
+                    },
+                    "scope": {
+                      "type": "object",
+                      "properties": {
+                        "workspaceId": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                        },
+                        "readOnly": {
+                          "type": "boolean"
+                        }
+                      }
                     },
                     "url": {
                       "type": "string"

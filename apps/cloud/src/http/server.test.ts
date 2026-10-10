@@ -28,7 +28,7 @@ it("/health 答 200 与协议头，不依赖数据库", async () => {
   });
   const response = await fetch(`${url}/health`);
   expect(response.status).toBe(200);
-  expect(response.headers.get("armadra-protocol")).toBe("1.0");
+  expect(response.headers.get("armadra-protocol")).toBe("1.1");
   expect(await response.json()).toEqual({
     ok: true,
     version: "0.1.0",
