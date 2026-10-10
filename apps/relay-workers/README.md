@@ -7,6 +7,7 @@ pnpm --filter @armadra/relay-workers build -- --web ../Armadra/apps/web/dist   #
 pnpm --filter @armadra/relay-workers dev      # wrangler dev --local：本地 workerd，不连 Cloudflare 账号
 pnpm --filter @armadra/relay-workers test     # 按这份 wrangler.jsonc 起本地 workerd 的冒烟测试
 pnpm e2e --mode personal-workers              # 本地 workerd 上的端到端
+bash apps/relay-workers/scripts/rotate-password.sh   # 改线上账号口令（本机运行，新口令只显示在终端，cloud-api §18）
 ```
 
 本地 `dev` 的 secret 写在 `apps/relay-workers/.dev.vars`（已在 `.gitignore`，不提交），名字与线上相同：
