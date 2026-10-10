@@ -22,7 +22,7 @@ Every requirement follows the same path, and its conclusions live in the Issue r
 - 先搜索已有 issue，一个 issue 只写一个问题。 / Search existing issues first; one problem per issue.
 - 使用对应的表单：缺陷报告、功能建议、中继 / 部署问题、文档问题。 / Use the matching form: bug report, feature request, relay or deployment issue, or documentation.
 - 写清模式（personal / saas）、部署方式（compose、镜像、源码）、版本、协议版本与 Armadra 客户端版本。 / Include the mode (personal / saas), deployment (compose, image, source), version, protocol version and Armadra client version.
-- **不要贴凭据**（口令、令牌、签名钥、`state.json`、`.env`）、流正文与终端输出，日志只摘相关行并把域名、IP 打码。 / **Never paste credentials** (passwords, tokens, signing keys, `state.json`, `.env`), stream bodies or terminal output; quote only relevant log lines with domains and IPs redacted.
+- **不要贴凭据**（口令、令牌、签名钥、`state.json`、`relay.db`、`.env`）、流正文与终端输出，日志只摘相关行并把域名、IP 打码。 / **Never paste credentials** (passwords, tokens, signing keys, `state.json`, `relay.db`, `.env`), stream bodies or terminal output; quote only relevant log lines with domains and IPs redacted.
 - 安全问题按 [SECURITY.md](SECURITY.md) 私下报告。 / Report security problems privately as described in [SECURITY.md](SECURITY.md).
 
 ## 提交信息 / Commit messages
@@ -55,7 +55,7 @@ docs(contract): cloud-api §12 媒体票
 - `personal` 模式与其入口（`pnpm relay:personal`、`deploy/personal/compose.yml`）不依赖 PostgreSQL / Redis。SaaS 业务路由只预留，答 501 `not_implemented`。 / `personal` mode and its entry points do not depend on PostgreSQL / Redis. SaaS business routes are reserved and answer 501 `not_implemented`.
 - 改接口形状先改协议包，再 `pnpm contract:generate`；[契约](../docs/contracts/cloud-api.md)已有 §N 不改号，新增节往后加。 / Change shapes in the protocol package first, then run `pnpm contract:generate`; keep existing §N numbers in the [contract](../docs/contracts/cloud-api.md) and append new sections.
 - 协议包的黄金夹具与身份向量是生成物，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`node scripts/gen-vectors.mjs`）。 / Golden fixtures and identity vectors are generated files; regenerate them in the same PR.
-- 数据库只在 `apps/cloud/src/db/migrations/` 新增编号迁移并同步 `migrations.lock`，每个迁移带测试，已发布迁移不得修改。 / Only add numbered migrations under `apps/cloud/src/db/migrations/`, update `migrations.lock` and test every migration; never modify published migrations.
+- 数据库迁移只在 `apps/cloud/src/db/migrations/`（PostgreSQL）与 `packages/control-store-sql/migrations/`（SQLite）新增编号迁移并同步 `migrations.lock`，每个迁移带测试，已发布迁移不得修改。 / Only add numbered migrations under `apps/cloud/src/db/migrations/` (PostgreSQL) and `packages/control-store-sql/migrations/` (SQLite), update `migrations.lock` and test every migration; never modify published migrations.
 - 依赖写精确版本（无 `^`）；改了生产依赖跑 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。 / Pin exact dependency versions (no `^`); after changing production dependencies, run `pnpm notices` and commit `THIRD_PARTY_NOTICES.md`.
 - CLI 提示、错误与日志 `msg` 用简体中文短句，变量进字段；错误码登记在协议包的注册表。 / CLI prompts, errors and log `msg` values are short Simplified Chinese sentences with variables in fields; error codes are registered in the protocol package.
 - 用户可见的变化记进 [CHANGELOG](../CHANGELOG.md) 的 Unreleased。 / Record user-visible changes under Unreleased in the [CHANGELOG](../CHANGELOG.md).
