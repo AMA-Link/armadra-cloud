@@ -6,7 +6,7 @@
 //   RELAY_ALARM_MS 改回 60000、RELAY_DAILY_REQUEST_BUDGET 改成 2000000，并打开 limits.cpu_ms。
 // - secret 只经 `wrangler secret put` 录入，这里只列名字（secrets.required）；其余可选 secret 见
 //   apps/relay-workers/README.md。
-// - 人机挑战（cloud-api §16）：站点密钥（RELAY_TURNSTILE_SITE_KEY，不是秘密）与允许的主机名
+// - 人机挑战（cloud-api §16）为可选项，缺省关闭（站点密钥为空）。要开启：填站点密钥（RELAY_TURNSTILE_SITE_KEY，不是秘密）与允许的主机名
 //   （RELAY_TURNSTILE_HOSTNAMES）已按环境填好；再
 //   `wrangler secret put RELAY_TURNSTILE_SECRET`——录了 secret 才要求挑战；录了 secret 而站点密钥为空
 //   是配错，整个 Worker 答 503。RELAY_CHALLENGE_SCOPE 缺省只要求登录（core 接受链接时没有挑战组件）。
@@ -93,7 +93,7 @@
     "RELAY_DAILY_TUNNEL_BYTES_BUDGET": "53687091200",
     "RELAY_CONTROL_LOCATION": "apac",
     "RELAY_LOG_LEVEL": "info",
-    "RELAY_TURNSTILE_SITE_KEY": "0x4AAAAAAFTEevK9h0keZPRh",
+    "RELAY_TURNSTILE_SITE_KEY": "",
     "RELAY_TURNSTILE_HOSTNAMES": "relay.armadra.com",
     "RELAY_CHALLENGE_SCOPE": "auth.login",
   },

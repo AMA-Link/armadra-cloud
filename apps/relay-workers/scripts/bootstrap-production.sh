@@ -7,21 +7,27 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CLOUDFLARE_ACCOUNT_ID=a27d9dab9190150768845b62cfd57cfe
 ORIGIN=https://relay.armadra.com
-SITE_KEY=0x4AAAAAAFTEevK9h0keZPRh
+# 人机验证缺省关闭；要开启就先在 wrangler.jsonc 填站点密钥，并运行时设 ARMADRA_RELAY_TURNSTILE_SITE_KEY=<siteKey>。
+SITE_KEY=${ARMADRA_RELAY_TURNSTILE_SITE_KEY:-}
 ACCOUNT=${ARMADRA_RELAY_ACCOUNT:-owner}
 W="pnpm exec wrangler"
 WG="$(command -v wrangler || echo pnpm exec wrangler)"
 # 本机代理的假 IP 解析会让新域名连不上，查询走 DoH。
 CURL="curl -s -m 20 --doh-url https://cloudflare-dns.com/dns-query"
 
-echo "== Turnstile secret（从你的 Cloudflare 账号读取并校验，不显示）"
-TS=$($WG turnstile widget get "$SITE_KEY" --json 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); d=d.get("result",d); print(d["secret"])')
-CHECK=$(curl -s -m 10 -X POST https://challenges.cloudflare.com/turnstile/v0/siteverify \
-  --data-urlencode "secret=$TS" --data-urlencode "response=dummy" | python3 -c 'import sys,json; print(",".join(json.load(sys.stdin).get("error-codes",[])))')
-case "$CHECK" in
-  *invalid-input-secret*) echo "Turnstile secret 无效（$CHECK），停止" >&2; exit 1 ;;
-  *) echo "✓ Turnstile secret 校验通过（$CHECK）" ;;
-esac
+TS=""
+if [ -n "$SITE_KEY" ]; then
+  echo "== Turnstile secret（从你的 Cloudflare 账号读取并校验，不显示）"
+  TS=$($WG turnstile widget get "$SITE_KEY" --json 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); d=d.get("result",d); print(d["secret"])')
+  CHECK=$(curl -s -m 10 -X POST https://challenges.cloudflare.com/turnstile/v0/siteverify \
+    --data-urlencode "secret=$TS" --data-urlencode "response=dummy" | python3 -c 'import sys,json; print(",".join(json.load(sys.stdin).get("error-codes",[])))')
+  case "$CHECK" in
+    *invalid-input-secret*) echo "Turnstile secret 无效（$CHECK），停止" >&2; exit 1 ;;
+    *) echo "✓ Turnstile secret 校验通过（$CHECK）" ;;
+  esac
+else
+  echo "== 人机验证：未开启（跳过 Turnstile）"
+fi
 
 echo "== 生成"
 MASTER=$(openssl rand -hex 32)
@@ -39,7 +45,7 @@ read -r -p "已保存？回车继续部署 …" _
 echo "== 部署（secret 随首个版本上传）"
 # wrangler 会起子进程读 secrets 文件，进程替换的 fd 传不过去；改用 0700 私有目录里的临时文件，部署完立刻删除。
 SECDIR=$(mktemp -d); chmod 700 "$SECDIR"; trap 'rm -rf "$SECDIR"' EXIT
-( umask 077; printf '%s\n%s\n%s\n%s\n' "$MASTER" "$ACCOUNT" "$PASS" "$TS" | python3 -c 'import sys,json; m,a,p,t=sys.stdin.read().split("\n")[:4]; print(json.dumps({"RELAY_MASTER_KEY":m,"RELAY_PERSONAL_ACCOUNT":a,"RELAY_PERSONAL_PASSWORD":p,"RELAY_TURNSTILE_SECRET":t}))' > "$SECDIR/secrets.json" )
+( umask 077; printf '%s\n%s\n%s\n%s\n' "$MASTER" "$ACCOUNT" "$PASS" "$TS" | python3 -c 'import sys,json; m,a,p,t=sys.stdin.read().split("\n")[:4]; d={"RELAY_MASTER_KEY":m,"RELAY_PERSONAL_ACCOUNT":a,"RELAY_PERSONAL_PASSWORD":p}; d.update({"RELAY_TURNSTILE_SECRET":t} if t else {}); print(json.dumps(d))' > "$SECDIR/secrets.json" )
 $W deploy --env="" --secrets-file "$SECDIR/secrets.json" >/dev/null
 rm -rf "$SECDIR"
 unset MASTER PASS TS
