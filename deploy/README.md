@@ -1,13 +1,13 @@
 # 部署
 
-| 文件                                         | 用途                                                                    |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| [compose.yml](compose.yml)                   | 参考部署：cloud + relay + PostgreSQL 17 + Redis 8                       |
-| [personal/compose.yml](personal/compose.yml) | 单人中转，一个服务、不带数据库                                          |
-| [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                                           |
-| [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动）                      |
-| [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本                               |
-| [cloudflare/README.md](cloudflare/README.md) | Cloudflare Workers 上的个人中转（wrangler 项目在 `apps/relay-workers`） |
+| 文件                                         | 用途                                                                                             |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [compose.yml](compose.yml)                   | 参考部署：cloud + relay + PostgreSQL 17 + Redis 8；`personal-cluster` profile 是两节点的个人中转 |
+| [personal/compose.yml](personal/compose.yml) | 单人中转，一个服务、不带数据库                                                                   |
+| [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                                                                    |
+| [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动）                                               |
+| [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本                                                        |
+| [cloudflare/README.md](cloudflare/README.md) | Cloudflare Workers 上的个人中转（wrangler 项目在 `apps/relay-workers`）                          |
 
 ## 环境变量
 
@@ -42,7 +42,13 @@
 | 参数 / 变量                                                   | 必填 | 说明                                                                     |
 | ------------------------------------------------------------- | ---- | ------------------------------------------------------------------------ |
 | `--data-dir` / `RELAY_DATA_DIR`                               | 是   | 数据目录（0700）：`relay.db` 或 `state.json`、`tls/`、`acme/`            |
-| `--store` / `RELAY_STORE`                                     |      | `sqlite` / `file`；缺省按数据目录里已有的，新装 `sqlite`                 |
+| `--store` / `RELAY_STORE`                                     |      | `sqlite` / `file` / `postgres`；缺省按数据目录里已有的，新装 `sqlite`    |
+| `--database-url` / `RELAY_DATABASE_URL`                       |      | `postgres://…`；`--store postgres` 与 `--control postgres` 必填          |
+| `--database-url-file` / `RELAY_DATABASE_URL_FILE`             |      | 从文件读连接串（口令不出现在进程参数里）                                 |
+| `--database-schema` / `RELAY_DATABASE_SCHEMA`                 |      | 用哪个 schema，缺省连接的缺省 schema                                     |
+| `--control` / `RELAY_CONTROL`                                 |      | `memory`（缺省，单节点）/ `redis` / `postgres`（多节点）                 |
+| `--redis-url` / `RELAY_REDIS_URL`                             |      | `redis://…`；`--control redis` 必填                                      |
+| `--node-id` / `RELAY_NODE_ID`                                 |      | 本节点的名字，多节点时各不相同，缺省 `--host`                            |
 | `--host` / `RELAY_HOST`                                       | 是   | 对外的 IP 或域名（issuer 与证书 SAN）                                    |
 | `--port` / `RELAY_PORT`                                       |      | 对外端口，缺省 8443（443 时 issuer 省略端口）                            |
 | `--public-origin` / `RELAY_PUBLIC_ORIGIN`                     |      | 对外来源，缺省 `https://<host>:<port>`                                   |
@@ -65,24 +71,25 @@
 
 限流额度也可写在状态文件 `settings.rateLimits`（`anonymous`、`preflight`、`token`、`account`，都是 1–1000000 的整数，可省略），优先级：命令行 > 环境变量 > 状态文件 > 缺省；改动后重启 `serve` 生效。登录、链接接受与隧道登记的限流不可配。
 
-其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`backup`、`doctor`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay node /app/out/cli.js personal …`），改动一秒内生效；`migrate --to sqlite|file` 要先停 `serve`。
+其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`backup`、`doctor`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay node /app/out/cli.js personal …`），改动一秒内生效；`migrate --to sqlite|file|postgres` 要先停 `serve`（多节点要停掉所有节点）。数据目录用 PostgreSQL 时每个子命令都要连接串（参数或环境变量）。
 
 存储（[运维手册](../docs/runbooks/personal-storage.md)）：
 
-| `--store` | 文件                    | 适用                                   | 备份                                        |
-| --------- | ----------------------- | -------------------------------------- | ------------------------------------------- |
-| `sqlite`  | `relay.db`（WAL，0600） | 新装缺省；单节点个人 / 小团队          | `personal backup --out F`（在线、一致）     |
-| `file`    | `state.json`（0600）    | 已部署的个人中转（只有它时自动沿用它） | `personal backup --out F` 或 `tar` 数据目录 |
+| `--store`  | 文件                                     | 适用                                             | 备份                                        |
+| ---------- | ---------------------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| `sqlite`   | `relay.db`（WAL，0600）                  | 新装缺省；单节点个人 / 小团队                    | `personal backup --out F`（在线、一致）     |
+| `file`     | `state.json`（0600）                     | 已部署的个人中转（只有它时自动沿用它）           | `personal backup --out F` 或 `tar` 数据目录 |
+| `postgres` | PostgreSQL（数据目录留 `postgres.json`） | 多节点（显式选，配 `--control redis\|postgres`） | 库自己的备份（`pg_dump`）                   |
 
-两种存储都在、`--store` 与目录里已有的不符、库认不出或损坏，一律拒绝启动，不自动清库或重建。`personal doctor` 检查目录与文件权限、库的完整性、监听地址与 TLS、受信代理与口令，有失败项时退出码为 1。
+两种以上存储都在、`--store` 与目录里已有的不符、库认不出或损坏、账本对不上，一律拒绝启动，不自动清库或重建。`personal doctor` 检查目录与文件权限、库的完整性、监听地址与 TLS、受信代理与口令，有失败项时退出码为 1。
 
 ## 端点
 
 - `GET /health`：进程存活，200 即活着（镜像的 `HEALTHCHECK` 经 `armadra-relay health` 打它，先 HTTPS 再明文）。
-- `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，saas relay 报 Redis，personal relay 报数据目录），任一不可达答 503。
+- `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，saas relay 报 Redis，personal relay 报数据目录，多节点时另报 `database` 或 `redis`），任一不可达答 503。
 - 控制面的 `/v1/*` 与 `/.well-known/*` 业务路由现在是预留，答 501 `{ code: "not_implemented", message, requestId }`。
 - 个人中转另有 `/v1/*` 子集、`/.well-known/*`、`/ca.crt`、`/app/*` 与 `/j/<linkId>`（[契约](../docs/contracts/cloud-api.md) §10–§11）。
 
 ## 升级顺序
 
-先升 relay、后升 cloud；PostgreSQL 迁移由 cloud 执行，relay 不碰 PostgreSQL。个人中转的 SQLite 迁移（`packages/control-store-sql/migrations/`）在打开 `relay.db` 时自动补跑；库比程序新（降级）时拒绝启动，先备份再升回去。
+先升 relay、后升 cloud；PostgreSQL 迁移（`packages/control-store-postgres/migrations/`）由 `armadra-cloud migrate` 执行，个人中转 `--store postgres` / `--control postgres` 打开时也会补跑同一份（advisory lock 保证只跑一次）。个人中转的 SQLite 迁移（`packages/control-store-sql/migrations/`）在打开 `relay.db` 时自动补跑；库比程序新（降级）时拒绝启动，先备份再升回去。
