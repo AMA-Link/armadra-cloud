@@ -1,12 +1,13 @@
 # 部署
 
-| 文件                                         | 用途                                               |
-| -------------------------------------------- | -------------------------------------------------- |
-| [compose.yml](compose.yml)                   | 参考部署：cloud + relay + PostgreSQL 17 + Redis 8  |
-| [personal/compose.yml](personal/compose.yml) | 单人中转，一个服务、不带数据库                     |
-| [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                      |
-| [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动） |
-| [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本          |
+| 文件                                         | 用途                                                                    |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| [compose.yml](compose.yml)                   | 参考部署：cloud + relay + PostgreSQL 17 + Redis 8                       |
+| [personal/compose.yml](personal/compose.yml) | 单人中转，一个服务、不带数据库                                          |
+| [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                                           |
+| [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动）                      |
+| [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本                               |
+| [cloudflare/README.md](cloudflare/README.md) | Cloudflare Workers 上的个人中转（wrangler 项目在 `apps/relay-workers`） |
 
 ## 环境变量
 

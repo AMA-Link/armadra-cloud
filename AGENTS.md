@@ -3,12 +3,12 @@
 ## 代码边界
 
 - `apps/cloud` 是控制面，`apps/relay` 是中继；`apps/relay` 不得 import `apps/cloud`，两者只共享 `packages/*`。两个 app 都不得 import Armadra 仓的源码；与 Armadra 的全部往来只经 `@armadra/platform-protocol` 与容器镜像。
-- 共享内核两个包：`packages/relay-kernel`（隧道帧流与信用窗口、握手、心跳、隧道表、边缘判定、限流、媒体票、令牌校验、HTTP/1.1 与 WebSocket 帧编解码、`ControlPlane` 接口与内存实现）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 运行时无关（Node 与 Workers 共用）：源码只许 `node:crypto` / `node:buffer`，不 import `ws`、`node:http` / `net` / `stream` / `fs` 与 `control-core`，不带 PostgreSQL / Redis；Node 专有部分（`ws` 隧道终端、边缘的字节进出、clientIp、HTTP 分派、`startRelay`）在 `packages/relay-runtime-node`。`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与中继内核；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
+- 共享内核两个包：`packages/relay-kernel`（隧道帧流与信用窗口、握手、心跳、隧道表、边缘判定、限流、媒体票、令牌校验、HTTP/1.1 与 WebSocket 帧编解码、`ControlPlane` 接口与内存实现）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 运行时无关（Node 与 Workers 共用）：源码只许 `node:crypto` / `node:buffer`，不 import `ws`、`node:http` / `net` / `stream` / `fs` 与 `control-core`，不带 PostgreSQL / Redis；Node 专有部分（`ws` 隧道终端、边缘的字节进出、clientIp、HTTP 分派、`startRelay`）在 `packages/relay-runtime-node`；Cloudflare Workers 部分（Worker 入口与闸、`SourceDO` / `ControlDO`、Hibernation 粘合、DO 内的 HTTP / WS 转发、DO SQLite 适配）在 `packages/relay-runtime-workers`，源码只许 `node:crypto` / `node:buffer`，复用 `control-store-sqlite` 的可移植模块（不碰它的 `open` / `migrate`），wrangler 项目是 `apps/relay-workers`（只 re-export 运行时）。`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与中继内核；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
 - `/v1/*` 的路由表只有 `control-core` 的 `createCloudRouter` 一份：personal 给处理器、其余答 404；cloud 未实现的统一答 501。
 - `@orpc/*` 只能出现在 `packages/platform-protocol/src/cloud-api/`、`packages/control-core/src/router.ts`、`tools/contract/`（ESLint `no-restricted-imports` 守）。
 - 协议包只含 zod schema、类型、纯编解码与常量，不 import `node:*`（`src/fixtures/` 例外，只在测试里用）。
 - 错误码只从 `@armadra/platform-protocol/errors` 取；线上形状 `{ code, message, requestId?, details? }`，JSON camelCase。
-- relay 不碰 PostgreSQL；personal 的状态只在数据目录（`state.json` 或 `node:sqlite` 的 `relay.db`，经 `packages/control-store-sqlite`）。relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
+- relay 不碰 PostgreSQL；personal 的状态只在数据目录（`state.json` 或 `node:sqlite` 的 `relay.db`，经 `packages/control-store-sqlite`）；Workers 中继的状态只在 `ControlDO` 的 DO SQLite（同一份迁移与账本，签名私钥用 `RELAY_MASTER_KEY` 包裹）与 `SourceDO` 的 WS 附件 / 同步 KV（媒体票存哈希）。relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
 - `personal` 模式不得引入对 PostgreSQL / Redis 的运行时依赖（`apps/relay/src/boundaries.test.ts` 连同它装配的内核与控制核一起扫）。
 
 ## 范围与优先级
@@ -25,7 +25,7 @@
 
 ## 数据库
 
-- 迁移两个目录，各自从 0001 连续：PostgreSQL 在 `apps/cloud/src/db/migrations/`，SQLite（Node 中继 `--store sqlite` 与 DO SQLite 共用）在 `packages/control-store-sql/migrations/`；字节记进 `migrations.lock`（`pnpm repo:check`）；已发布迁移不得修改；未知 / 损坏的库或账本拒绝启动，禁止自动清库或重建。
+- 迁移两个目录，各自从 0001 连续：PostgreSQL 在 `apps/cloud/src/db/migrations/`，SQLite（Node 中继 `--store sqlite` 与 Workers 中继的 DO SQLite 共用；新增迁移同时登记进 `relay-runtime-workers` 的 `store-do-sqlite/migrations.ts`）在 `packages/control-store-sql/migrations/`；字节记进 `migrations.lock`（`pnpm repo:check`）；已发布迁移不得修改；未知 / 损坏的库或账本拒绝启动，禁止自动清库或重建。
 - 每个迁移同 PR 带测试。
 
 ## 按需阅读与验证
@@ -35,8 +35,8 @@
 - 怎么跑见 [README](README.md)；文档索引在 [docs/README.md](docs/README.md)，新增文档要登记。
 - 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表与 `cloud-openapi.json` 由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
 - 协议包的黄金夹具、schema 导出（`schema/`，JSON Schema、错误码表、常量与 OpenAPI）与身份向量是生成物：改了帧、声明、契约或身份常量，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`pnpm --filter @armadra/platform-protocol schema`、`pnpm contract:generate`、`node scripts/gen-vectors.mjs`），`pnpm protocol:check` 守住。
-- 验证：`pnpm check`、`pnpm repo:test`、`pnpm test`、`pnpm test:integration`（需 `pnpm dev:up`）、`pnpm images:build`。
-- 发布（npm、GHCR）、域名、证书、密钥都是对外操作，由维护者执行；本地绝不手动 `npm publish` / `docker push`。
+- 验证：`pnpm check`、`pnpm repo:test`、`pnpm test`、`pnpm test:integration`（需 `pnpm dev:up`）、`pnpm images:build`；Workers 中继另有 `pnpm e2e --mode personal-workers`（本地 workerd）。
+- 发布（npm、GHCR）、域名、证书、密钥都是对外操作，由维护者执行；本地绝不手动 `npm publish` / `docker push`。Workers 中继同理：`wrangler deploy` / `rollback` / `secret put|delete`、改 DNS 与面板设置都由维护者执行，测试与端到端只用本地 workerd（vitest 的 Workers 插件、`wrangler dev --local`）。
 - 依赖写精确版本（无 `^`）；改生产依赖后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。
 - 不出现任何第三方参考项目的名字。
 
