@@ -39,7 +39,10 @@
     ".env.dev",
     "*.tgz",
     ".dev.vars",
-    ".wrangler/"
+    ".wrangler/",
+    ".terraform/",
+    "*.tfstate",
+    "*.tfvars"
   ],
   "docs": {
     "root": "docs",
