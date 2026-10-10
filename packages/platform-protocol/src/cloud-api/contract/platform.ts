@@ -26,8 +26,17 @@ export const PLATFORM_CAPABILITIES = [
 
 export const platformModeSchema = z.enum(["saas", "personal"]);
 
+/** 服务端名称的上限（与 core 源表 `label` 相同）。 */
+export const PLATFORM_NAME_MAX = 128;
+
 export const platformInfoSchema = z.object({
   mode: platformModeSchema,
+  /**
+   * 服务端名称（0.3.1 起，可选）：客户端添加这个服务时用它作缺省显示名，用户改名后
+   * 以本地名为准。personal 取 `--name` / `RELAY_NAME` / 状态文件 `settings.displayName`，
+   * 都没有时是 `--host`；saas 预留。旧客户端忽略它，旧中继不报时客户端用地址兜底。
+   */
+  name: z.string().min(1).max(PLATFORM_NAME_MAX).optional(),
   issuer: z.url(),
   protocol: protocolVersionSchema,
   capabilities: z.array(z.string()),

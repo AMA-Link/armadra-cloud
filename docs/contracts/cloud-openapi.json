@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "armadra-cloud /v1",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "description": "由 tools/contract/generate.mjs 从 @armadra/platform-protocol 的 cloudContract 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -24,6 +24,11 @@
                         "personal"
                       ],
                       "type": "string"
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
                     },
                     "issuer": {
                       "type": "string",

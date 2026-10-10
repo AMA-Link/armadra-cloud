@@ -50,7 +50,8 @@ serve:
   --limit-account N        同一账号全部令牌每分钟上限（或 RELAY_LIMIT_ACCOUNT），默认 3600
   --trusted-proxy LIST     受信反向代理的 IP / CIDR，逗号分隔（或 RELAY_TRUSTED_PROXY），如 127.0.0.1/32,::1/128；
                            直连对端在列表内才读 X-Forwarded-For / X-Real-IP 取客户端 IP，默认空（不信任任何代理）
-  --trusted-proxy-prefer H 先读哪个头：forwarded-for（默认）| real-ip（或 RELAY_TRUSTED_PROXY_PREFER）`;
+  --trusted-proxy-prefer H 先读哪个头：forwarded-for（默认）| real-ip（或 RELAY_TRUSTED_PROXY_PREFER）
+  --name NAME              服务端名称（或 RELAY_NAME），客户端添加时的缺省显示名；默认取状态文件 settings.displayName，再取 --host`;
 
 function onSignal(stop: () => Promise<void>): void {
   const handler = () => {

@@ -91,14 +91,26 @@ export interface Sample {
 export const CLOUD_API_SAMPLES: Record<string, Sample> = {
   "platform.info": {
     input: {},
-    output: {
-      mode: "saas",
-      issuer: ISSUER,
-      protocol: { major: 1, minor: 0 },
-      capabilities: ["auth.password", "auth.device-code", "me.stream"],
-      relay: { addressing: "subdomain" },
-      webApp: "https://app.armadra.test",
-    },
+    outputs: [
+      {
+        mode: "saas",
+        issuer: ISSUER,
+        protocol: { major: 1, minor: 0 },
+        capabilities: ["auth.password", "auth.device-code", "me.stream"],
+        relay: { addressing: "subdomain" },
+        webApp: "https://app.armadra.test",
+      },
+      // 0.3.1 起可选的服务端名称（个人中转 `--name`）。
+      {
+        mode: "personal",
+        name: "Home relay",
+        issuer: ISSUER,
+        protocol: { major: 1, minor: 1 },
+        capabilities: ["auth.password", "me.stream"],
+        relay: { addressing: "path" },
+        webApp: null,
+      },
+    ],
   },
   "platform.jwks": {
     input: {},

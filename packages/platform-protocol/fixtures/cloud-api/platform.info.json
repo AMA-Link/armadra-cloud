@@ -1,20 +1,39 @@
 {
   "input": {},
-  "output": {
-    "mode": "saas",
-    "issuer": "https://cloud.armadra.test",
-    "protocol": {
-      "major": 1,
-      "minor": 0
+  "outputs": [
+    {
+      "mode": "saas",
+      "issuer": "https://cloud.armadra.test",
+      "protocol": {
+        "major": 1,
+        "minor": 0
+      },
+      "capabilities": [
+        "auth.password",
+        "auth.device-code",
+        "me.stream"
+      ],
+      "relay": {
+        "addressing": "subdomain"
+      },
+      "webApp": "https://app.armadra.test"
     },
-    "capabilities": [
-      "auth.password",
-      "auth.device-code",
-      "me.stream"
-    ],
-    "relay": {
-      "addressing": "subdomain"
-    },
-    "webApp": "https://app.armadra.test"
-  }
+    {
+      "mode": "personal",
+      "name": "Home relay",
+      "issuer": "https://cloud.armadra.test",
+      "protocol": {
+        "major": 1,
+        "minor": 1
+      },
+      "capabilities": [
+        "auth.password",
+        "me.stream"
+      ],
+      "relay": {
+        "addressing": "path"
+      },
+      "webApp": null
+    }
+  ]
 }

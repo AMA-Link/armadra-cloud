@@ -9,6 +9,7 @@ import {
 } from "@armadra/cloud-shared/config";
 import { resolve } from "node:path";
 
+import { PLATFORM_NAME_MAX } from "@armadra/platform-protocol/cloud-api";
 import {
   createClientIp,
   parseProxyList,
@@ -221,6 +222,11 @@ export interface PersonalServeOptions extends Common {
   rateLimits?: RateLimitOptions;
   /** 受信代理（`--trusted-proxy` / `RELAY_TRUSTED_PROXY`）；没给取状态文件 `settings.trustedProxy`。 */
   trustedProxy?: TrustedProxyConfig;
+  /**
+   * 服务端名称（`--name` / `RELAY_NAME`，`platform.info.name`）；没给取状态文件
+   * `settings.displayName`，再取 `host`。
+   */
+  name?: string;
 }
 
 export interface RateLimitOptions {
@@ -290,6 +296,18 @@ function trustedProxyOf(
   return { proxies, ...(preferText ? { prefer: preferText } : {}) };
 }
 
+function nameOf(values: Map<string, string>, env: Env): string | undefined {
+  // 环境变量为空当作没给（compose 缺省把它传成空串）；命令行给了空串则拒绝。
+  const text = values.get("name") ?? (env.RELAY_NAME || undefined);
+  if (text === undefined) return undefined;
+  const name = text.trim();
+  if (name.length < 1 || name.length > PLATFORM_NAME_MAX)
+    throw new UsageError(
+      `--name 要是 1 到 ${PLATFORM_NAME_MAX} 个字符：${text}`,
+    );
+  return name;
+}
+
 const SERVE_FLAGS = new Set([
   "data-dir",
   "host",
@@ -314,6 +332,7 @@ const SERVE_FLAGS = new Set([
   "limit-account",
   "trusted-proxy",
   "trusted-proxy-prefer",
+  "name",
 ]);
 
 export function parsePersonalServe(
@@ -372,6 +391,7 @@ export function parsePersonalServe(
   const webRoot = values.get("web-root") ?? env.RELAY_WEB_ROOT;
   const rateLimits = rateLimitsOf(values, env);
   const trustedProxy = trustedProxyOf(values, env);
+  const name = nameOf(values, env);
   return {
     dataDir,
     host,
@@ -395,6 +415,7 @@ export function parsePersonalServe(
       : {}),
     ...(rateLimits ? { rateLimits } : {}),
     ...(trustedProxy ? { trustedProxy } : {}),
+    ...(name ? { name } : {}),
   };
 }
 

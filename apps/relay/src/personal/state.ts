@@ -34,6 +34,7 @@ import {
   ed25519PublicJwkSchema,
 } from "@armadra/platform-protocol/assertion";
 import {
+  PLATFORM_NAME_MAX,
   linkScopeSchema,
   sourceKindSchema,
 } from "@armadra/platform-protocol/cloud-api";
@@ -155,6 +156,11 @@ export const stateSchema = z.object({
         account: rateLimitValue.optional(),
       })
       .optional(),
+    /**
+     * 服务端名称（`platform.info.name`，0.3.1 起）；命令行与环境变量优先于它，都没有时
+     * 用 `--host`。旧文件没有这个键，照常读。
+     */
+    displayName: z.string().trim().min(1).max(PLATFORM_NAME_MAX).optional(),
     /** 受信代理（见 `http/client-ip.ts`）；命令行与环境变量优先于它。缺省不信任任何代理。 */
     trustedProxy: z
       .object({
