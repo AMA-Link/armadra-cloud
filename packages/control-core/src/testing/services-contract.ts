@@ -203,6 +203,28 @@ export function servicesContract(
         });
       });
 
+      it("隧道节点地址：缺省 issuer 的 wss /t/v1；装配方给 tunnelUrl 时原样答（可带 query，§17）", async () => {
+        const h = harness();
+        const owner = await ownerOf(h);
+        const { sources } = await registered(h, owner);
+        const source = await h.context.ports.sources.get(
+          h.context.tenantId,
+          SOURCE_ID,
+        );
+        if (!source) throw new Error("源没登记上");
+        expect(sources.relayFor(source).nodes).toEqual([
+          { url: "wss://cloud.armadra.test/t/v1", weight: 1 },
+        ]);
+        h.context.tunnelUrl = (sourceId) =>
+          `wss://relay.armadra.test/t/v1?src=${sourceId}`;
+        expect(createSources(h.context).relayFor(source).nodes).toEqual([
+          {
+            url: `wss://relay.armadra.test/t/v1?src=${SOURCE_ID}`,
+            weight: 1,
+          },
+        ]);
+      });
+
       it("访客 accept → 断言；次数用完 link_exhausted；撤销链接连同访客设备与中继令牌一起失效", async () => {
         const h = harness();
         const owner = await ownerOf(h);

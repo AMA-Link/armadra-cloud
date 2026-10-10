@@ -321,7 +321,12 @@ export function createSources(context: ControlContext) {
       return {
         tunnelToken: tunnel.token,
         expiresAtMs: tunnel.expiresAtMs,
-        nodes: [{ url: tunnelUrl(issuer), weight: 1 }],
+        nodes: [
+          {
+            url: context.tunnelUrl?.(source.sourceId) ?? tunnelUrl(issuer),
+            weight: 1,
+          },
+        ],
         limits: {
           maxStreams: LIMITS.maxStreams,
           streamWindow: LIMITS.streamWindow,
