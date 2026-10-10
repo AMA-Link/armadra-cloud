@@ -29,7 +29,7 @@ name: armadra-relay-personal
 
 services:
   relay:
-    image: ${ARMADRA_RELAY_IMAGE:-ghcr.io/owlbay/armadra-relay:latest}
+    image: ${ARMADRA_RELAY_IMAGE:-ghcr.io/ama-link/armadra-relay:latest}
     command:
       [
         "personal",

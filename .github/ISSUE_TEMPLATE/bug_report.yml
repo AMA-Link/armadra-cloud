@@ -56,7 +56,7 @@ body:
       options:
         - compose（deploy/personal/compose.yml）
         - compose（deploy/compose.yml）
-        - 容器镜像 / Container image (ghcr.io/owlbay/armadra-*)
+        - 容器镜像 / Container image (ghcr.io/ama-link/armadra-*)
         - 从源码运行 / From source (pnpm relay:personal / pnpm dev)
         - 跨仓端到端 / Cross-repo e2e (pnpm e2e)
         - CI

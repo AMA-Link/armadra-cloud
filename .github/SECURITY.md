@@ -6,7 +6,7 @@
 
 This is a private repository. Please **do not** describe security problems in issues, discussions or pull requests, even though only collaborators can see them. Report them privately through GitHub Security Advisories:
 
-**<https://github.com/Owlbay/armadra-cloud/security/advisories/new>**
+**<https://github.com/AMA-Link/armadra-cloud/security/advisories/new>**
 
 报告里请写明 / Please include:
 
@@ -27,7 +27,7 @@ Do not include real credentials, signing keys or `state.json`; use test accounts
 
 ## 支持的版本 / Supported versions
 
-只有最新发布版（`ghcr.io/owlbay/armadra-relay`、`ghcr.io/owlbay/armadra-cloud` 的最新标签与最新的 `@armadra/platform-protocol`）会收到安全修复。 / Only the latest release (the latest tags of `ghcr.io/owlbay/armadra-relay` and `ghcr.io/owlbay/armadra-cloud`, and the latest `@armadra/platform-protocol`) receives security fixes.
+只有最新发布版（`ghcr.io/ama-link/armadra-relay`、`ghcr.io/ama-link/armadra-cloud` 的最新标签与最新的 `@armadra/platform-protocol`）会收到安全修复。 / Only the latest release (the latest tags of `ghcr.io/ama-link/armadra-relay` and `ghcr.io/ama-link/armadra-cloud`, and the latest `@armadra/platform-protocol`) receives security fixes.
 
 ## 范围 / Scope
 

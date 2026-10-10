@@ -57,7 +57,7 @@ const USAGE = `用法: pnpm e2e --mode personal [选项]
   --mode personal-workers  本地 workerd 上的 Workers 中继（wrangler dev --local）对假 core
   --skip-build           不构建镜像，用已有的 armadra-relay:e2e 与 armadra-server:e2e
   --relay-image IMAGE    用现成的中继镜像
-  --server-image IMAGE   用现成的服务器壳镜像（如 ghcr.io/owlbay/armadra-server:<compat.min>）
+  --server-image IMAGE   用现成的服务器壳镜像（如 ghcr.io/ama-link/armadra-server:<compat.min>）
   --output DIR           result.json 的目录，缺省 .data/e2e
   --keep                 跑完不清理（调试用，之后手动 docker compose -p <项目> down -v）`;
 
