@@ -1,24 +1,37 @@
 /**
- * `personal init | status | passwd | rotate-key | links`：只读写状态文件的子命令。
+ * `personal init | status | passwd | rotate-key | links`：只读写存储的子命令。
  *
- * 与正在运行的 `serve` 并存：写入都走 `StateStore.update` 的目录锁，`serve` 每秒看一眼文件，
- * 改口令、轮换密钥、撤销链接立即生效（撤销的访客 WS 会被断开）。输出只有账号名、id、时间、
- * 指纹这类元数据，不打印口令、令牌或私钥。
+ * 与正在运行的 `serve` 并存：状态文件的写入走目录锁、SQLite 的写入走 `BEGIN IMMEDIATE` 事务，
+ * `serve` 每秒察觉一次外部改动，改口令、轮换密钥、撤销链接立即生效（撤销的访客 WS 会被断开）。
+ * 输出只有账号名、id、时间、指纹这类元数据，不打印口令、令牌或私钥。
  */
 import { changePassword } from "@armadra/control-core/accounts";
 import { listLinks, revokeLink } from "@armadra/control-core/links";
-import { rotateSigningKey } from "@armadra/control-core/signer";
 
 import { defaultIssuer, UsageError, type PersonalInitOptions } from "./args.ts";
 import { stateOnly } from "./context.ts";
 import { createState, obtainPassword, passwordUsageError } from "./init.ts";
-import { StateStore } from "./state.ts";
+import { openPersonalStore } from "./store.ts";
+import type { PersonalStore } from "./store-types.ts";
 import { existingCaFingerprint, selfSignedMaterial, tlsNames } from "./tls.ts";
 
 export type Print = (line: string) => void;
 
 const time = (ms: number | null) =>
   ms === null ? "—" : new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+/** 打开存储跑一下就关（SQLite 要关库）。 */
+export async function withStore<T>(
+  dataDir: string,
+  fn: (store: PersonalStore) => T | Promise<T>,
+): Promise<T> {
+  const store = openPersonalStore(dataDir);
+  try {
+    return await fn(store);
+  } finally {
+    store.close();
+  }
+}
 
 export async function runInit(
   options: PersonalInitOptions,
@@ -27,13 +40,16 @@ export async function runInit(
   const issuer =
     options.publicOrigin ?? defaultIssuer(options.host, options.port);
   const password = await obtainPassword(options.passwordFile, true);
-  await createState({
+  const store = await createState({
     dataDir: options.dataDir,
     account: options.account,
     password,
     issuer,
+    ...(options.store ? { store: options.store } : {}),
   });
+  store.close();
   print(`已初始化：${options.dataDir}`);
+  print(`存储：${store.kind === "sqlite" ? "SQLite" : "状态文件"}`);
   print(`账号：${options.account}`);
   print(`对外地址：${issuer}`);
   if (options.tls === "self-signed") {
@@ -45,13 +61,17 @@ export async function runInit(
   }
 }
 
-export function runStatus(
+export async function runStatus(
   dataDir: string,
   print: Print,
   nowMs = Date.now(),
-): void {
-  const state = StateStore.open(dataDir).current;
+): Promise<void> {
+  const { state, kind } = await withStore(dataDir, (store) => ({
+    state: store.snapshot(),
+    kind: store.kind,
+  }));
   const fingerprint = existingCaFingerprint(dataDir);
+  print(`存储：${kind === "sqlite" ? "SQLite" : "状态文件"}`);
   print(`账号：${state.account.name}`);
   print(`对外地址：${state.issuer}`);
   print(`CA 指纹：${fingerprint ?? "—"}`);
@@ -86,24 +106,29 @@ export async function runPasswd(
   passwordFile: string | undefined,
   print: Print,
 ): Promise<void> {
-  const store = StateStore.open(dataDir);
+  // 先确认存储能打开，再问口令。
+  await withStore(dataDir, () => undefined);
   const password = await obtainPassword(passwordFile, true);
-  try {
-    await changePassword(
-      stateOnly(store),
-      store.current.account.name,
-      password,
-      Date.now(),
-    );
-  } catch (error) {
-    throw passwordUsageError(error);
-  }
+  await withStore(dataDir, async (store) => {
+    try {
+      await changePassword(
+        stateOnly(store),
+        store.snapshot().account.name,
+        password,
+        Date.now(),
+      );
+    } catch (error) {
+      throw passwordUsageError(error);
+    }
+  });
   print("口令已更新，账号的全部设备需要重新登录");
 }
 
-export function runRotateKey(dataDir: string, print: Print): void {
-  const store = StateStore.open(dataDir);
-  const kid = store.update((draft) => rotateSigningKey(draft, Date.now()));
+export async function runRotateKey(
+  dataDir: string,
+  print: Print,
+): Promise<void> {
+  const kid = await withStore(dataDir, (store) => store.rotateKey(Date.now()));
   print(`已启用新签名钥：${kid}`);
 }
 
@@ -112,7 +137,9 @@ export async function runLinksList(
   print: Print,
   nowMs = Date.now(),
 ): Promise<void> {
-  const links = await listLinks(stateOnly(StateStore.open(dataDir)));
+  const links = await withStore(dataDir, (store) =>
+    listLinks(stateOnly(store)),
+  );
   if (links.length === 0) {
     print("没有链接");
     return;
@@ -139,8 +166,9 @@ export async function runLinksRevoke(
   linkId: string,
   print: Print,
 ): Promise<void> {
-  const store = StateStore.open(dataDir);
-  const found = await revokeLink(stateOnly(store), linkId, Date.now());
+  const found = await withStore(dataDir, (store) =>
+    revokeLink(stateOnly(store), linkId, Date.now()),
+  );
   if (found === null) throw new UsageError(`没有这条有效链接：${linkId}`);
   print(`已撤销链接：${linkId}`);
 }

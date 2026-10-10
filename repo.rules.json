@@ -69,10 +69,14 @@
   },
   "migrations": {
     "lock": "migrations.lock",
-    "$comment": "PostgreSQL 迁移只有一个目录，编号从 0001 连续；lock 守住已发布迁移的字节。",
+    "$comment": "两个迁移目录各自从 0001 连续：PostgreSQL（cloud）与 SQLite（Node 中继 --store sqlite 与 DO SQLite 共用）；lock 守住已发布迁移的字节。",
     "sources": [
       {
         "path": "apps/cloud/src/db/migrations",
+        "kind": "directory"
+      },
+      {
+        "path": "packages/control-store-sql/migrations",
         "kind": "directory"
       }
     ]
@@ -122,6 +126,32 @@
         "postgres",
         "redis",
         "ws"
+      ]
+    },
+    {
+      "$comment": "SQLite 存储只实现控制核的端口（node:sqlite）：不依赖中继内核、app 与别的存储客户端。",
+      "package": "packages/control-store-sqlite",
+      "forbid": [
+        "@armadra/relay-kernel",
+        "@armadra/cloud",
+        "@armadra/relay",
+        "postgres",
+        "redis",
+        "ws",
+        "better-sqlite3",
+        "sqlite3"
+      ]
+    },
+    {
+      "$comment": "SQL 包只放迁移与账本判定（Node 与 DO 共用）：不依赖本仓任何包。",
+      "package": "packages/control-store-sql",
+      "forbid": [
+        "@armadra/cloud-shared",
+        "@armadra/control-core",
+        "@armadra/control-store-sqlite",
+        "@armadra/relay-kernel",
+        "@armadra/cloud",
+        "@armadra/relay"
       ]
     },
     {

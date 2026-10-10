@@ -141,7 +141,7 @@
 
   已建立的 WebSocket 在源下线时以 4404 结束（帧中间则直接断开）；升级途中源下线答 503 `source_offline`。
 
-  源的 HTTP 响应不合法（状态行、头、定界或分块错）时，自己解析响应的中继重置这条流并答 502 `bad_gateway`（协议包 0.3.2 登记）；Node 中继由 Node 的 HTTP 解析器处理，仍答 503 `source_offline`。
+  源的 HTTP 响应不合法（状态行、头、定界或分块错）时，自己解析响应的中继重置这条流并答 502 `bad_gateway`（协议包 0.3.4 登记）；Node 中继由 Node 的 HTTP 解析器处理，仍答 503 `source_offline`。
 
 ## §8 隧道 `t/v1`
 

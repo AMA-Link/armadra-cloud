@@ -16,6 +16,8 @@ import {
   type TrustedProxyConfig,
 } from "@armadra/relay-runtime-node/client-ip";
 
+import { STORE_KINDS, type StoreKind } from "./store-types.ts";
+
 export const TLS_MODES = ["self-signed", "acme", "file", "plain"] as const;
 export type TlsMode = (typeof TLS_MODES)[number];
 
@@ -141,6 +143,15 @@ function tlsOf(values: Map<string, string>, env: Env): TlsMode {
   return tls;
 }
 
+/** `--store` / `RELAY_STORE`；不给时由数据目录里已有的文件决定（新装 sqlite）。 */
+function storeOf(values: Map<string, string>, env: Env): StoreKind | undefined {
+  const text = values.get("store") ?? env.RELAY_STORE;
+  if (text === undefined) return undefined;
+  if (!(STORE_KINDS as readonly string[]).includes(text))
+    throw new UsageError(`--store 只能是 ${STORE_KINDS.join(" | ")}：${text}`);
+  return text as StoreKind;
+}
+
 // ------------------------------------------------------------ init
 
 export interface PersonalInitOptions extends Common {
@@ -151,10 +162,13 @@ export interface PersonalInitOptions extends Common {
   port: number;
   tls: TlsMode;
   publicOrigin?: string;
+  /** 缺省 sqlite。 */
+  store?: StoreKind;
 }
 
 const INIT_FLAGS = new Set([
   "data-dir",
+  "store",
   "account",
   "password-file",
   "host",
@@ -177,6 +191,7 @@ export function parsePersonalInit(
     throw new UsageError("缺少 --host：公网 IP 或域名（或 RELAY_HOST）");
   const publicText = values.get("public-origin") ?? env.RELAY_PUBLIC_ORIGIN;
   const passwordFile = passwordFileOf(values, env, cwd);
+  const store = storeOf(values, env);
   return {
     dataDir: dataDirOf(values, env, cwd),
     account,
@@ -185,6 +200,7 @@ export function parsePersonalInit(
     port: portOf(values, env),
     tls: tlsOf(values, env),
     ...(publicText ? { publicOrigin: originOf(publicText) } : {}),
+    ...(store ? { store } : {}),
   };
 }
 
@@ -198,6 +214,8 @@ export interface AcmeArgs {
 }
 
 export interface PersonalServeOptions extends Common {
+  /** `--store` / `RELAY_STORE`；不给时按数据目录里已有的文件（新装 sqlite）。 */
+  store?: StoreKind;
   /** 对外的 IP 或域名（issuer 与自签证书的 SAN 用它）。 */
   host: string;
   port: number;
@@ -310,6 +328,7 @@ function nameOf(values: Map<string, string>, env: Env): string | undefined {
 
 const SERVE_FLAGS = new Set([
   "data-dir",
+  "store",
   "host",
   "port",
   "tls",
@@ -392,8 +411,10 @@ export function parsePersonalServe(
   const rateLimits = rateLimitsOf(values, env);
   const trustedProxy = trustedProxyOf(values, env);
   const name = nameOf(values, env);
+  const store = storeOf(values, env);
   return {
     dataDir,
+    ...(store ? { store } : {}),
     host,
     port,
     listen,
@@ -469,4 +490,75 @@ export function parseLinks(
     return { action, linkId, dataDir: dataDirOf(values, env, cwd) };
   }
   throw new UsageError(`links 只有 list 与 revoke：${action ?? ""}`);
+}
+
+// ------------------------------------------------------------ 存储
+
+export function parseMigrate(
+  argv: readonly string[],
+  env: Env,
+  cwd = process.cwd(),
+): Common & { to: StoreKind } {
+  const { values } = parseFlags(argv, new Set(["data-dir", "to"]));
+  const to = values.get("to");
+  if (to === undefined) throw new UsageError("缺少 --to：sqlite 或 file");
+  if (!(STORE_KINDS as readonly string[]).includes(to))
+    throw new UsageError(`--to 只能是 ${STORE_KINDS.join(" | ")}：${to}`);
+  return { dataDir: dataDirOf(values, env, cwd), to: to as StoreKind };
+}
+
+export function parseBackup(
+  argv: readonly string[],
+  env: Env,
+  cwd = process.cwd(),
+): Common & { out: string } {
+  const { values } = parseFlags(argv, new Set(["data-dir", "out"]));
+  const out = values.get("out");
+  if (!out) throw new UsageError("缺少 --out：备份文件的路径");
+  return { dataDir: dataDirOf(values, env, cwd), out: resolve(cwd, out) };
+}
+
+export interface PersonalDoctorOptions extends Common {
+  listen: ListenAddress;
+  tls: TlsMode;
+  /** 受信代理的原文（`--trusted-proxy` / `RELAY_TRUSTED_PROXY`）；没给时查存储里的。 */
+  trustedProxy?: string;
+  /** 自动初始化用过的口令文件（`--password-file` / `RELAY_PERSONAL_PASSWORD_FILE`）。 */
+  passwordFile?: string;
+}
+
+const DOCTOR_FLAGS = new Set([
+  "data-dir",
+  "host",
+  "port",
+  "listen",
+  "tls",
+  "trusted-proxy",
+  "password-file",
+]);
+
+/** `doctor` 收 `serve` 的同名参数与环境变量，只看不改；明文监听公网之类的问题报出来而不是拒绝。 */
+export function parsePersonalDoctor(
+  argv: readonly string[],
+  env: Env,
+  cwd = process.cwd(),
+): PersonalDoctorOptions {
+  const { values } = parseFlags(argv, DOCTOR_FLAGS);
+  const host = values.get("host") ?? env.RELAY_HOST;
+  const port = portOf(values, env);
+  const listen = listenOf(
+    values.get("listen") ??
+      env.RELAY_LISTEN ??
+      `${host && isLoopback(host) ? "127.0.0.1" : "0.0.0.0"}:${port}`,
+    "--listen",
+  );
+  const trustedProxy = values.get("trusted-proxy") ?? env.RELAY_TRUSTED_PROXY;
+  const passwordFile = passwordFileOf(values, env, cwd);
+  return {
+    dataDir: dataDirOf(values, env, cwd),
+    listen,
+    tls: tlsOf(values, env),
+    ...(trustedProxy !== undefined ? { trustedProxy } : {}),
+    ...(passwordFile && passwordFile !== "-" ? { passwordFile } : {}),
+  };
 }

@@ -25,8 +25,9 @@ beforeAll(async () => {
       account: "me",
       password: PASSWORD,
       issuer: "https://relay.test",
+      store: "file",
     })
-  ).current;
+  ).snapshot();
 });
 
 function fresh(name: string): StateStore {

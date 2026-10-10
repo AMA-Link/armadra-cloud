@@ -11,11 +11,13 @@ import { expect, it } from "vitest";
 
 const SRC = fileURLToPath(new URL("./", import.meta.url));
 const PACKAGES = fileURLToPath(new URL("../../../packages/", import.meta.url));
-/** personal 装配依赖的三个包：内核（`main.ts` 在这里）、Node 运行时（`start-relay.ts`）与控制核。 */
+/** personal 装配依赖的包：内核（`main.ts` 在这里）、Node 运行时（`start-relay.ts`）、控制核与 SQLite 存储。 */
 const LINKED = [
   "relay-kernel/src",
   "relay-runtime-node/src",
   "control-core/src",
+  "control-store-sqlite/src",
+  "control-store-sql/src",
 ].map((path) => join(PACKAGES, path));
 
 function sources(directory: string): string[] {

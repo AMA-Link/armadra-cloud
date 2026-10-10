@@ -1,6 +1,6 @@
 {
   "name": "@armadra/relay",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -20,6 +20,7 @@
   "dependencies": {
     "@armadra/cloud-shared": "workspace:*",
     "@armadra/control-core": "workspace:*",
+    "@armadra/control-store-sqlite": "workspace:*",
     "@armadra/platform-protocol": "workspace:*",
     "@armadra/relay-kernel": "workspace:*",
     "@armadra/relay-runtime-node": "workspace:*",

@@ -40,7 +40,8 @@
 
 | 参数 / 变量                                                   | 必填 | 说明                                                                     |
 | ------------------------------------------------------------- | ---- | ------------------------------------------------------------------------ |
-| `--data-dir` / `RELAY_DATA_DIR`                               | 是   | 数据目录（0700）：`state.json`、`tls/`、`acme/`                          |
+| `--data-dir` / `RELAY_DATA_DIR`                               | 是   | 数据目录（0700）：`relay.db` 或 `state.json`、`tls/`、`acme/`            |
+| `--store` / `RELAY_STORE`                                     |      | `sqlite` / `file`；缺省按数据目录里已有的，新装 `sqlite`                 |
 | `--host` / `RELAY_HOST`                                       | 是   | 对外的 IP 或域名（issuer 与证书 SAN）                                    |
 | `--port` / `RELAY_PORT`                                       |      | 对外端口，缺省 8443（443 时 issuer 省略端口）                            |
 | `--public-origin` / `RELAY_PUBLIC_ORIGIN`                     |      | 对外来源，缺省 `https://<host>:<port>`                                   |
@@ -51,7 +52,7 @@
 | `--acme-ca-bundle` / `RELAY_ACME_CA_BUNDLE`                   |      | 信任 ACME 目录服务器的 PEM（测试 CA）                                    |
 | `--acme-http-listen` / `RELAY_ACME_HTTP_LISTEN`               |      | `http-01` 挑战监听，缺省 `0.0.0.0:80`                                    |
 | `--web-root` / `RELAY_WEB_ROOT`                               |      | Armadra `apps/web` 构建产物；镜像缺省 `/app/web`（构建参数 `WEB_IMAGE`） |
-| `--account` / `RELAY_PERSONAL_ACCOUNT`                        |      | 状态文件不存在时自动初始化的账号                                         |
+| `--account` / `RELAY_PERSONAL_ACCOUNT`                        |      | 存储不存在时自动初始化的账号                                             |
 | `--password-file` / `RELAY_PERSONAL_PASSWORD_FILE`            |      | 自动初始化的口令文件（之后不再读取）                                     |
 | `--listen` / `RELAY_LISTEN`                                   |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`                           |
 | `--metrics-listen` / `RELAY_METRICS_LISTEN`                   |      | `/metrics` 的单独监听（只绑内网地址），缺省不开                          |
@@ -63,7 +64,16 @@
 
 限流额度也可写在状态文件 `settings.rateLimits`（`anonymous`、`preflight`、`token`、`account`，都是 1–1000000 的整数，可省略），优先级：命令行 > 环境变量 > 状态文件 > 缺省；改动后重启 `serve` 生效。登录、链接接受与隧道登记的限流不可配。
 
-其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`）只读写状态文件，可以在 `serve` 运行时执行（`docker compose exec relay node /app/out/cli.js personal …`），改动一秒内生效。
+其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`backup`、`doctor`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay node /app/out/cli.js personal …`），改动一秒内生效；`migrate --to sqlite|file` 要先停 `serve`。
+
+存储（[运维手册](../docs/runbooks/personal-storage.md)）：
+
+| `--store` | 文件                    | 适用                                   | 备份                                        |
+| --------- | ----------------------- | -------------------------------------- | ------------------------------------------- |
+| `sqlite`  | `relay.db`（WAL，0600） | 新装缺省；单节点个人 / 小团队          | `personal backup --out F`（在线、一致）     |
+| `file`    | `state.json`（0600）    | 已部署的个人中转（只有它时自动沿用它） | `personal backup --out F` 或 `tar` 数据目录 |
+
+两种存储都在、`--store` 与目录里已有的不符、库认不出或损坏，一律拒绝启动，不自动清库或重建。`personal doctor` 检查目录与文件权限、库的完整性、监听地址与 TLS、受信代理与口令，有失败项时退出码为 1。
 
 ## 端点
 
@@ -74,4 +84,4 @@
 
 ## 升级顺序
 
-先升 relay、后升 cloud；数据库迁移由 cloud 执行，relay 不碰数据库。
+先升 relay、后升 cloud；PostgreSQL 迁移由 cloud 执行，relay 不碰 PostgreSQL。个人中转的 SQLite 迁移（`packages/control-store-sql/migrations/`）在打开 `relay.db` 时自动补跑；库比程序新（降级）时拒绝启动，先备份再升回去。

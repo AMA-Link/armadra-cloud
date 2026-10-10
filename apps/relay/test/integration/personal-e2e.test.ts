@@ -8,7 +8,13 @@
  * 每一步的响应都对协议包契约的 output schema 校验；最后核对日志里没有口令、令牌、秘密与正文。
  */
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { request } from "node:https";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -34,6 +40,7 @@ import {
   startPersonalRelay,
   type RunningPersonalRelay,
 } from "../../src/personal/serve.ts";
+import { openPersonalStore } from "../../src/personal/store.ts";
 import { PASSWORD, registerInput, SOURCE_ID, sourceJws } from "../personal.ts";
 
 const MARKER = "PAYLOAD-MARKER-e2e-91c";
@@ -521,7 +528,7 @@ describe("个人中转端到端", () => {
     expect(errorCode(tooLong)).toBe("bad_request");
   });
 
-  it("工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；边缘只放行读与身份域；范围落进状态文件", async () => {
+  it("工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；边缘只放行读与身份域；范围落进存储", async () => {
     const created = output(
       "links",
       "create",
@@ -545,9 +552,9 @@ describe("个人中转端到端", () => {
       await call("GET", `${issuer}/v1/links/${created.linkId}`),
     ) as { scope?: unknown };
     expect(landing.scope).toEqual({ workspaceId: "ws_e2e", readOnly: true });
-    const state = JSON.parse(
-      readFileSync(join(root, "data", "state.json"), "utf8"),
-    ) as { links: { linkId: string; scope?: unknown }[] };
+    const persisted = openPersonalStore(join(root, "data"));
+    const state = persisted.snapshot();
+    persisted.close();
     expect(
       state.links.find((row) => row.linkId === created.linkId)?.scope,
     ).toEqual({ workspaceId: "ws_e2e", readOnly: true });
@@ -730,6 +737,21 @@ describe("个人中转端到端", () => {
       expect(secret.length).toBeGreaterThan(8);
       expect(text).not.toContain(secret.slice(-16));
     }
+  });
+
+  it("零落盘：SQLite 库（连同 WAL）里没有口令、令牌、秘密与正文", () => {
+    const data = join(root, "data");
+    const files = readdirSync(data).filter((name) =>
+      name.startsWith("relay.db"),
+    );
+    expect(files).toContain("relay.db");
+    const bytes = files
+      .map((name) => readFileSync(join(data, name)).toString("latin1"))
+      .join("\n");
+    expect(bytes).not.toContain(MARKER);
+    expect(bytes).not.toContain(PASSWORD);
+    for (const secret of secrets)
+      expect(bytes).not.toContain(secret.slice(-16));
   });
 });
 

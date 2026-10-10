@@ -53,7 +53,7 @@ export const ERRORS = {
   relay_token_invalid: { status: 401 },
   relay_source_mismatch: { status: 403 },
   limit_reached: { status: 429 },
-  /** 源的 HTTP 响应不合法（状态行、头、定界或分块错），中继重置流并答 502（0.3.2 起）。 */
+  /** 源的 HTTP 响应不合法（状态行、头、定界或分块错），中继重置流并答 502（0.3.4 起）。 */
   bad_gateway: { status: 502 },
   // core §31–§33（core 自己答；登记在这里是为了两仓用同一份表）
   cloud_not_registered: { status: 401 },

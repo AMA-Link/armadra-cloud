@@ -1,6 +1,7 @@
 /**
  * `personal init`（中继设计 §6.2）：建账号（口令过 identity-vectors 策略、scrypt 哈希）、生成
- * 第一把签名钥、写 `state.json`；自签模式顺带生成 CA 与叶证书并答指纹。已初始化就拒绝，不覆盖。
+ * 第一把签名钥、写存储（新装缺省 `relay.db`，`--store file` 写 `state.json`）；自签模式顺带生成
+ * CA 与叶证书并答指纹。已初始化就拒绝，不覆盖。
  *
  * 口令来源：`--password-file`（`-` 是标准输入）或 `RELAY_PERSONAL_PASSWORD_FILE`；都没有时在终端
  * 上不回显地读两遍。口令只在内存里经过，不打印、不落盘。
@@ -18,7 +19,9 @@ import {
   PASSWORD_RULE_HINTS,
   passwordViolation,
 } from "./passwords.ts";
-import { STATE_VERSION, StateStore, type State } from "./state.ts";
+import { STATE_VERSION, type State } from "./state.ts";
+import { createPersonalStore } from "./store.ts";
+import type { PersonalStore, StoreKind } from "./store-types.ts";
 import { UsageError } from "./args.ts";
 
 /** 口令文件末尾的一个换行不算口令（`echo` 与编辑器都会加）。 */
@@ -77,8 +80,10 @@ export async function createState(input: {
   account: string;
   password: string;
   issuer: string;
+  /** 缺省 sqlite（新装）。 */
+  store?: StoreKind;
   nowMs?: number;
-}): Promise<StateStore> {
+}): Promise<PersonalStore> {
   try {
     checkPassword(
       { passwordPolicy: passwordViolation },
@@ -109,5 +114,5 @@ export async function createState(input: {
     links: [],
     settings: { allowGuests: true, trustedOrigins: [] },
   };
-  return StateStore.create(input.dataDir, state);
+  return createPersonalStore(input.dataDir, input.store ?? "sqlite", state);
 }

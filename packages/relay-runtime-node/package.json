@@ -1,6 +1,6 @@
 {
   "name": "@armadra/relay-runtime-node",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "private": true,
   "type": "module",
   "license": "MIT",

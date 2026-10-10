@@ -5,7 +5,7 @@ Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`，以�
 中继有两种运行模式：
 
 - **saas**：多租户，配合控制面、PostgreSQL 与 Redis。
-- **personal**：单人中转，一个进程、不带数据库。
+- **personal**：单人中转，一个进程、不带外部数据库（状态在数据目录里的 SQLite 或状态文件）。
 
 ## 目录
 
@@ -45,7 +45,7 @@ node apps/relay/src/cli.ts personal status --data-dir .data/personal
 
 Armadra 的页面产物（`apps/web/dist`）在 `ARMADRA_WEB_DIST` 或 `../Armadra/apps/web/dist` 时托管在 `/app` 与 `/j/<linkId>`。
 
-子命令：`personal init | serve | status | passwd | rotate-key | links list|revoke`（`armadra-relay personal --help`）。一个账号（地址 + 账号 + 口令），状态只有 `<data-dir>/state.json`（账号、口令哈希、签名钥、源 / 设备 / 链接登记，不存任何消息内容）；TLS 缺省自签 CA，可选 ACME 或文件证书。接口见[契约](docs/contracts/cloud-api.md) §10–§11。
+子命令：`personal init | serve | status | passwd | rotate-key | links list|revoke | migrate | backup | doctor`（`armadra-relay personal --help`）。一个账号（地址 + 账号 + 口令），状态只有 `<data-dir>/relay.db`（新装缺省，`--store sqlite`）或 `<data-dir>/state.json`（`--store file`，已部署的照旧）：账号、口令哈希、签名钥、源 / 设备 / 链接登记，不存任何消息内容；两者用 `personal migrate --to sqlite|file` 互迁，见[运维手册](docs/runbooks/personal-storage.md)。TLS 缺省自签 CA，可选 ACME 或文件证书。接口见[契约](docs/contracts/cloud-api.md) §10–§11。
 
 容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/owlbay/armadra-relay:local .`，之后 `docker run --rm ghcr.io/owlbay/armadra-relay:local personal --help`；部署按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。
 

@@ -194,10 +194,6 @@ export function statePath(dataDir: string): string {
   return join(dataDir, STATE_FILE);
 }
 
-export function stateExists(dataDir: string): boolean {
-  return existsSync(statePath(dataDir));
-}
-
 function parseState(text: string): State {
   let raw: unknown;
   try {
@@ -256,7 +252,7 @@ function sleepSync(ms: number): void {
 }
 
 /** 目录锁：`mkdir` 是原子的。超过 {@link LOCK_STALE_MS} 的锁视为崩溃遗留。 */
-function withLock<T>(dataDir: string, fn: () => T): T {
+export function withLock<T>(dataDir: string, fn: () => T): T {
   const lock = join(dataDir, LOCK_DIR);
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {

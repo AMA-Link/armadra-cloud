@@ -1,5 +1,6 @@
 /**
- * personal 的控制面装配：状态文件端口 + 签名钥 + 内存控制面（限流、在线、关隧道）+ 事件总线。
+ * personal 的控制面装配：存储（状态文件或 SQLite）的端口 + 签名钥 + 内存控制面（限流、在线、
+ * 关隧道）+ 事件总线。
  * 服务本身在 `@armadra/control-core`。
  */
 import { createEventBus } from "@armadra/control-core/events";
@@ -13,16 +14,15 @@ import { Signer } from "@armadra/control-core/signer";
 import type { MemoryControlPlane } from "@armadra/relay-kernel/control/memory";
 
 import { passwordViolation } from "./passwords.ts";
-import { createStatePorts, stateKeys } from "./ports.ts";
-import type { StateStore } from "./state.ts";
+import type { PersonalStore } from "./store-types.ts";
 
 export interface PersonalContext extends ControlContext {
-  store: StateStore;
+  store: PersonalStore;
   control: MemoryControlPlane;
 }
 
 export function createPersonalContext(input: {
-  store: StateStore;
+  store: PersonalStore;
   control: MemoryControlPlane;
   signer: Signer;
   now: () => number;
@@ -32,7 +32,7 @@ export function createPersonalContext(input: {
   const { store, control } = input;
   return {
     tenantId: DEFAULT_TENANT,
-    ports: createStatePorts(store),
+    ports: store.ports,
     signer: input.signer,
     limits: control.limits,
     presence: control.presence,
@@ -50,25 +50,25 @@ export function createPersonalContext(input: {
   };
 }
 
-/** 签名钥读状态文件。 */
-export function stateSigner(store: StateStore, now: () => number): Signer {
-  return new Signer(stateKeys(store), now);
+/** 签名钥读存储。 */
+export function stateSigner(store: PersonalStore, now: () => number): Signer {
+  return new Signer(store.keys, now);
 }
 
-/** 中继令牌 / 隧道令牌的撤销判断（按 `jti` 的形状查状态文件）。 */
+/** 中继令牌 / 隧道令牌的撤销判断（按 `jti` 的形状查存储）。 */
 export function stateRevocation(
-  store: StateStore,
+  store: PersonalStore,
   now: () => number,
 ): (jti: string) => Promise<boolean> {
-  const context = { tenantId: DEFAULT_TENANT, ports: createStatePorts(store) };
+  const context = { tenantId: DEFAULT_TENANT, ports: store.ports };
   return (jti) => isRevokedJti(context, jti, now());
 }
 
-/** CLI（不经 serve）用的最小装配：只有状态文件端口与口令策略。 */
-export function stateOnly(store: StateStore) {
+/** CLI（不经 serve）用的最小装配：只有存储端口与口令策略。 */
+export function stateOnly(store: PersonalStore) {
   return {
     tenantId: DEFAULT_TENANT,
-    ports: createStatePorts(store),
+    ports: store.ports,
     passwordPolicy: passwordViolation,
   };
 }

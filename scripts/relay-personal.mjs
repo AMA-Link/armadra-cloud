@@ -18,7 +18,10 @@ const passwordFile = join(dataDir, "dev.password");
 const ACCOUNT = "dev";
 
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-if (!existsSync(join(dataDir, "state.json")) && !existsSync(passwordFile)) {
+const initialized = ["relay.db", "state.json"].some((name) =>
+  existsSync(join(dataDir, name)),
+);
+if (!initialized && !existsSync(passwordFile)) {
   const password = randomBytes(18).toString("base64url");
   writeFileSync(passwordFile, password, { mode: 0o600 });
   writeFileSync(

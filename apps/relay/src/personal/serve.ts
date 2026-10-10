@@ -1,10 +1,10 @@
 /**
- * `personal serve` 装配（中继设计 §1、§6）：状态文件 → 签名钥 → 内存控制面（JWKS = 自己的公钥，
- * 撤销按状态文件判）→ TLS → 中继内核（隧道终端 + `/s/<id>/` 边缘）+ `/v1` 子集 + `/v1/me/stream`
- * + 托管页面。
+ * `personal serve` 装配（中继设计 §1、§6）：存储（`--store file|sqlite`，见 `store.ts`）→ 签名钥 →
+ * 内存控制面（JWKS = 自己的公钥，撤销按存储判）→ TLS → 中继内核（隧道终端 + `/s/<id>/` 边缘）
+ * + `/v1` 子集 + `/v1/me/stream` + 托管页面。
  *
  * **不碰 PostgreSQL / Redis**（AGENTS.md；`boundaries.test.ts` 扫 import 守住）。日志只有启动 /
- * 停止 / 证书 / 状态文件这类进程事件，不记请求、令牌、口令。
+ * 停止 / 证书 / 存储这类进程事件，不记请求、令牌、口令。
  */
 import { constants, readFileSync } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
@@ -41,7 +41,9 @@ import {
   stateSigner,
 } from "./context.ts";
 import { createState, readPasswordFile } from "./init.ts";
-import { stateExists, StateStore, type State } from "./state.ts";
+import { holdRunLock } from "./runlock.ts";
+import { openPersonalStore, resolveStoreKind, storeExists } from "./store.ts";
+import type { PersonalStore } from "./store-types.ts";
 import { createMeStream } from "./stream.ts";
 import {
   fileManager,
@@ -63,7 +65,7 @@ export interface RunningPersonalRelay {
   /** 信任锚指纹（自签 / 文件模式）；明文与 ACME 没有要钉的指纹时为 null。 */
   fingerprint: string | null;
   relay: RunningRelay;
-  store: StateStore;
+  store: PersonalStore;
   close(): Promise<void>;
 }
 
@@ -79,14 +81,15 @@ export function issuerFor(options: PersonalServeOptions): string {
   return options.publicOrigin ?? defaultIssuer(options.host, options.port);
 }
 
-/** 打开状态文件；没有时若给了账号与口令就自动 init（compose 与 `pnpm relay:personal` 走这条）。 */
+/** 打开存储；没有时若给了账号与口令就自动 init（compose 与 `pnpm relay:personal` 走这条）。 */
 async function openOrInit(
   options: PersonalServeOptions,
   issuer: string,
   log: Logger,
-): Promise<StateStore> {
+): Promise<PersonalStore> {
+  const { kind, legacy } = resolveStoreKind(options.dataDir, options.store);
   if (
-    !stateExists(options.dataDir) &&
+    !storeExists(options.dataDir) &&
     options.account &&
     options.passwordFile
   ) {
@@ -95,11 +98,20 @@ async function openOrInit(
       account: options.account,
       password: readPasswordFile(options.passwordFile),
       issuer,
+      store: kind,
     });
-    log.info("已初始化个人中转", { account: options.account });
+    log.info("已初始化个人中转", { account: options.account, store: kind });
     return store;
   }
-  return StateStore.open(options.dataDir);
+  const store = openPersonalStore(options.dataDir, kind);
+  if (legacy)
+    log.info(
+      "正在用状态文件：可以用 personal migrate --to sqlite 迁到 SQLite",
+      {
+        store: kind,
+      },
+    );
+  return store;
 }
 
 /** 边缘限流：命令行 / 环境变量 > 状态文件 > 缺省；登录等防暴力破解的规则不在其中。 */
@@ -132,12 +144,29 @@ export async function startPersonalRelay(
   await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
   const issuer = issuerFor(options);
   const store = await openOrInit(options, issuer, log);
-  if (store.current.issuer !== issuer) {
-    store.update((draft) => {
-      draft.issuer = issuer;
-    });
-    log.warn("对外地址变了，已登记的源需要重新登记", { issuer });
+  try {
+    if (store.issuer() !== issuer) {
+      store.setIssuer(issuer);
+      log.warn("对外地址变了，已登记的源需要重新登记", { issuer });
+    }
+    return await startServing(options, deps, { log, now, issuer, store });
+  } catch (error) {
+    store.close();
+    throw error;
   }
+}
+
+async function startServing(
+  options: PersonalServeOptions,
+  deps: PersonalServeDeps,
+  base: {
+    log: Logger;
+    now: () => number;
+    issuer: string;
+    store: PersonalStore;
+  },
+): Promise<RunningPersonalRelay> {
+  const { log, now, issuer, store } = base;
 
   let tls: TlsManager | undefined;
   let acme: AcmeManager | undefined;
@@ -173,10 +202,7 @@ export async function startPersonalRelay(
     issuer,
     jwks: () => signer.jwks(),
     revoked: stateRevocation(store, now),
-    limits: edgeLimitRules(
-      options.rateLimits,
-      store.current.settings.rateLimits,
-    ),
+    limits: edgeLimitRules(options.rateLimits, store.settings().rateLimits),
     now,
   });
   const context = createPersonalContext({
@@ -196,8 +222,7 @@ export async function startPersonalRelay(
     log.warn("页面产物目录没有 index.html，/app 答错误页", {
       webRoot: options.webRoot,
     });
-  const trustedProxy =
-    options.trustedProxy ?? store.current.settings.trustedProxy;
+  const trustedProxy = options.trustedProxy ?? store.settings().trustedProxy;
   let clientIp: ClientIp;
   try {
     clientIp = createClientIp(trustedProxy);
@@ -210,8 +235,7 @@ export async function startPersonalRelay(
     clientIp,
     webApp: () => (webRoot ? `${signer.issuer}/app/` : null),
     // 每次现读：状态文件里的 displayName 被别的进程改了也即时生效。
-    name: () =>
-      options.name ?? store.current.settings.displayName ?? options.host,
+    name: () => options.name ?? store.settings().displayName ?? options.host,
     onError: (error) => log.error("请求处理失败", { error: errorName(error) }),
   });
   const web = createWebPages({
@@ -229,8 +253,8 @@ export async function startPersonalRelay(
     // 与登记时发给源的可信来源相同；所有源一样，答案不随某个源变。
     corsOrigins: () =>
       trustedOriginsOf({
-        issuer: store.current.issuer,
-        trustedOrigins: store.current.settings.trustedOrigins,
+        issuer: store.issuer(),
+        trustedOrigins: store.settings().trustedOrigins,
       }),
     clientIp,
     log,
@@ -266,14 +290,7 @@ export async function startPersonalRelay(
       if (seenSources.size > 0) {
         const batch = new Map(seenSources);
         seenSources.clear();
-        store.update((draft) => {
-          for (const source of draft.sources) {
-            const seen = batch.get(source.sourceId);
-            if (!seen) continue;
-            source.lastSeenAtMs = Math.max(source.lastSeenAtMs ?? 0, seen.atMs);
-            if (seen.coreVersion) source.coreVersion = seen.coreVersion;
-          }
-        });
+        store.recordSourcesSeen(batch);
       }
     } catch (error) {
       log.warn("最近在线时间写入失败", { error: errorName(error) });
@@ -282,30 +299,25 @@ export async function startPersonalRelay(
   const flushTimer = setInterval(() => void flush(), LAST_SEEN_FLUSH_MS);
   flushTimer.unref();
 
-  // 别的进程（passwd / rotate-key / links revoke）改了状态文件：撤销立即断开。
-  let previous: State = store.current;
+  // 别的进程（passwd / rotate-key / links revoke）改了存储：新撤销的源与链接立即断开。
+  let previous = store.revoked();
   const stopWatch = store.watch(
     () => {
-      const current = store.current;
-      for (const source of current.sources) {
-        const before = previous.sources.find(
-          (row) => row.sourceId === source.sourceId,
-        );
-        if (source.revokedAtMs !== null && before?.revokedAtMs === null) {
-          control.command({ type: "closeTunnel", sourceId: source.sourceId });
-          relay.disconnect({ sourceId: source.sourceId });
+      const current = store.revoked();
+      for (const sourceId of current.sources)
+        if (!previous.sources.has(sourceId)) {
+          control.command({ type: "closeTunnel", sourceId });
+          relay.disconnect({ sourceId });
         }
-      }
-      for (const link of current.links) {
-        const before = previous.links.find((row) => row.linkId === link.linkId);
-        if (link.revokedAtMs !== null && before?.revokedAtMs === null)
-          relay.disconnect({ subjectPrefix: guestPrefix(link.linkId) });
-      }
+      for (const linkId of current.links)
+        if (!previous.links.has(linkId))
+          relay.disconnect({ subjectPrefix: guestPrefix(linkId) });
       previous = current;
-      log.info("状态文件已重新载入");
+      log.info("存储有外部改动，已重新读取", { store: store.kind });
     },
-    (error) => log.error("状态文件重新载入失败", { error: errorName(error) }),
+    (error) => log.error("存储重新读取失败", { error: errorName(error) }),
   );
+  const releaseRunLock = holdRunLock(options.dataDir);
 
   const stopTls = tls?.start(
     (material) => {
@@ -324,6 +336,7 @@ export async function startPersonalRelay(
     issuer,
     host: options.host,
     tls: options.tls,
+    store: store.kind,
     ...(fingerprint ? { fingerprint } : {}),
     web: webRoot ? "ready" : "missing",
     ...(relay.metricsUrl ? { metrics: relay.metricsUrl } : {}),
@@ -347,6 +360,8 @@ export async function startPersonalRelay(
         stream.close();
         await relay.close(5_000);
         await acme?.close();
+        releaseRunLock();
+        store.close();
         log.info("个人中转已停止");
       })();
       return closing;
