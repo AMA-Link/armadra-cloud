@@ -2,6 +2,10 @@
 //
 //   pnpm e2e --mode personal [--skip-build] [--relay-image <镜像>] [--server-image <镜像>]
 //                            [--output <目录>] [--keep]
+//   pnpm e2e --mode personal-workers [--output <目录>]
+//
+// `personal-workers` 是本地 workerd 上的 Workers 中继（`wrangler dev --local`，不连 Cloudflare
+// 账号）对假 core 与 Node 客户端，见 scripts/e2e/workers.mjs；下面的编排只属于 `personal`。
 //
 // 编排（deploy/e2e/compose.yml，项目名 armadra-e2e-<随机>，跑完 down -v）：
 //   1. 本地构建个人中转镜像（本仓）与服务器壳镜像（Armadra 主仓，见下）；
@@ -50,6 +54,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const USAGE = `用法: pnpm e2e --mode personal [选项]
 
   --mode personal        个人中转（saas 模式随控制面落地再加）
+  --mode personal-workers  本地 workerd 上的 Workers 中继（wrangler dev --local）对假 core
   --skip-build           不构建镜像，用已有的 armadra-relay:e2e 与 armadra-server:e2e
   --relay-image IMAGE    用现成的中继镜像
   --server-image IMAGE   用现成的服务器壳镜像（如 ghcr.io/owlbay/armadra-server:<compat.min>）
@@ -84,11 +89,52 @@ function parseArgs(argv) {
 
 const options = parseArgs(process.argv.slice(2));
 const mode = options.values.get("--mode");
+if (mode === "personal-workers") {
+  const { runWorkersE2e } = await import("./e2e/workers.mjs");
+  const workersReport = new Report();
+  const workersOutput = resolve(
+    root,
+    options.values.get("--output") ?? ".data/e2e",
+  );
+  log("armadra-cloud e2e（personal-workers）");
+  let workersFailure;
+  try {
+    await runWorkersE2e({ root, report: workersReport });
+  } catch (error) {
+    workersFailure = error;
+  }
+  mkdirSync(workersOutput, { recursive: true });
+  const result = {
+    mode,
+    ok: workersFailure === undefined,
+    totalMs: Date.now() - workersReport.startedAt,
+    steps: workersReport.steps,
+    ...(workersFailure
+      ? {
+          error: redact(
+            workersFailure instanceof Error
+              ? workersFailure.message
+              : workersFailure,
+          ),
+        }
+      : {}),
+  };
+  writeFileSync(
+    join(workersOutput, "result.json"),
+    `${JSON.stringify(result, null, 2)}\n`,
+  );
+  log(
+    workersFailure
+      ? `失败：${result.error}（用时 ${result.totalMs} ms）`
+      : `全部通过（用时 ${result.totalMs} ms，${join(workersOutput, "result.json")}）`,
+  );
+  process.exit(workersFailure ? 1 : 0);
+}
 if (mode !== "personal") {
   console.error(
     mode === undefined
       ? `需要 --mode personal\n${USAGE}`
-      : `--mode ${mode}：现在只支持 personal`,
+      : `--mode ${mode}：现在只支持 personal 与 personal-workers`,
   );
   process.exit(2);
 }
