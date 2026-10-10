@@ -1,6 +1,7 @@
 /**
- * personal 单测的装配：临时数据目录里的存储（`file` 或 `sqlite`，控制核端口）+ 签名钥 + 内存控制面
- * + 假时钟。口令派生是真的 scrypt（每次约几十毫秒），所以一个文件里每种存储只建一次账号。
+ * personal 单测的装配：临时数据目录里的存储（`file`、`sqlite`，设了 `ARMADRA_CLOUD_TEST_DATABASE_URL`
+ * 时再加 `postgres`——临时 schema，用完删掉）+ 签名钥 + 内存控制面 + 假时钟。口令派生是真的 scrypt
+ * （每次约几十毫秒），所以一个文件里每种存储只建一次账号。
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -8,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ControlEvent } from "@armadra/control-core/events";
+import { tempSchema } from "@armadra/control-store-postgres/testing/pg";
 import type { ConnectionFilter } from "@armadra/control-core/ports";
 import { TOKEN_TYPES } from "@armadra/platform-protocol/assertion";
 import { TEST_KEYS } from "@armadra/platform-protocol/fixtures";
@@ -25,7 +27,39 @@ import {
   type PersonalContext,
 } from "../src/personal/context.ts";
 import { createState } from "../src/personal/init.ts";
-import type { StoreKind } from "../src/personal/store-types.ts";
+import type {
+  DatabaseOptions,
+  StoreKind,
+} from "../src/personal/store-types.ts";
+
+/** 要跑的存储：没有测试库时不跑 postgres（`pnpm test`）；集成测试（`test:integration`）三种都跑。 */
+export const TEST_STORE_KINDS: StoreKind[] = process.env
+  .ARMADRA_CLOUD_TEST_DATABASE_URL
+  ? ["file", "sqlite", "postgres"]
+  : ["file", "sqlite"];
+
+/** 一个临时 schema 的连接（`drop()` 删掉）。 */
+export async function testDatabase(): Promise<{
+  database: DatabaseOptions;
+  drop(): Promise<void>;
+}> {
+  const schema = tempSchema("s2_relay");
+  await schema.create();
+  return {
+    database: { url: schema.url, schema: schema.name },
+    drop: () => schema.drop(),
+  };
+}
+
+/** 按存储给出 `serve` / 子命令要的连接：postgres 才有。 */
+export async function databaseFor(store: StoreKind): Promise<{
+  options: { database?: DatabaseOptions };
+  drop(): Promise<void>;
+}> {
+  if (store !== "postgres") return { options: {}, drop: async () => {} };
+  const { database, drop } = await testDatabase();
+  return { options: { database }, drop };
+}
 
 export const PASSWORD = "plover-quartz-lantern-41";
 export const ISSUER = "https://relay.test:8443";
@@ -38,7 +72,7 @@ export interface Harness {
   disconnects: ConnectionFilter[];
   /** 存储落盘的全部字节（状态文件，或库连同 WAL）：查有没有不该落盘的明文。 */
   persisted(): string;
-  cleanup(): void;
+  cleanup(): Promise<void>;
 }
 
 export async function personalHarness(
@@ -47,12 +81,14 @@ export async function personalHarness(
   const dir = mkdtempSync(join(tmpdir(), "relay-personal-"));
   const clock = { now: options.nowMs ?? Date.UTC(2026, 9, 6, 12) };
   const now = () => clock.now;
+  const pg = await databaseFor(options.store ?? "sqlite");
   const store = await createState({
     dataDir: join(dir, "data"),
     account: options.account ?? "me",
     password: PASSWORD,
     issuer: ISSUER,
     store: options.store ?? "sqlite",
+    ...pg.options,
     nowMs: clock.now,
   });
   const signer = stateSigner(store, now);
@@ -83,8 +119,9 @@ export async function personalHarness(
         .filter((file) => existsSync(file))
         .map((file) => readFileSync(file).toString("latin1"))
         .join("\n"),
-    cleanup: () => {
-      store.close();
+    async cleanup() {
+      await store.close();
+      await pg.drop();
       rmSync(dir, { recursive: true, force: true });
     },
   };

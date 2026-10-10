@@ -13,17 +13,22 @@ import { createLogger } from "@armadra/cloud-shared/log";
 import { DEFAULT_LIMIT_RULES } from "@armadra/relay-kernel/control/types";
 import { afterAll, expect, it } from "vitest";
 
-import { PASSWORD } from "../../test/personal.ts";
+import {
+  databaseFor,
+  PASSWORD,
+  TEST_STORE_KINDS,
+} from "../../test/personal.ts";
 import type { PersonalServeOptions } from "./args.ts";
 import { runRotateKey } from "./commands.ts";
 import { edgeLimitRules, startPersonalRelay } from "./serve.ts";
 import { DEFAULT_TENANT } from "@armadra/control-core/ports";
 import { openDatabase } from "@armadra/control-store-sqlite/open";
 import { updateTenant } from "@armadra/control-store-sqlite/tenants";
+import { connectPostgres } from "@armadra/control-store-postgres/open";
+import { updateTenant as updatePostgresTenant } from "@armadra/control-store-postgres/tenants";
 
 import { StateError, StateStore } from "./state.ts";
 import { openPersonalStore } from "./store.ts";
-import { STORE_KINDS } from "./store-types.ts";
 import { RELAY_VERSION } from "../version.ts";
 
 const root = mkdtempSync(join(tmpdir(), "relay-personal-"));
@@ -119,21 +124,34 @@ it("--store file 自动初始化写状态文件；之后不写 --store 照旧用
   );
 });
 
-it.each(STORE_KINDS)(
+it.each(TEST_STORE_KINDS)(
   "--public-origin 变了：issuer 跟着改并写回存储（%s）",
   async (store) => {
     const dataDir = join(root, `c-${store}`);
-    const first = await startPersonalRelay({ ...base, dataDir, store }, quiet);
+    const pg = await databaseFor(store);
+    const first = await startPersonalRelay(
+      { ...base, dataDir, store, ...pg.options },
+      quiet,
+    );
     await first.close();
     const second = await startPersonalRelay(
-      { ...base, dataDir, publicOrigin: "https://relay.example" },
+      {
+        ...base,
+        dataDir,
+        publicOrigin: "https://relay.example",
+        ...pg.options,
+      },
       quiet,
     );
     try {
       expect(second.issuer).toBe("https://relay.example");
-      const reopened = openPersonalStore(dataDir);
+      const reopened = await openPersonalStore(
+        dataDir,
+        undefined,
+        pg.options.database,
+      );
       expect(reopened.issuer()).toBe("https://relay.example");
-      reopened.close();
+      await reopened.close();
       const info = (await (
         await fetch(`${second.url}/.well-known/armadra-platform`)
       ).json()) as { issuer: string; webApp: string | null };
@@ -143,6 +161,7 @@ it.each(STORE_KINDS)(
       });
     } finally {
       await second.close();
+      await pg.drop();
     }
   },
 );
@@ -171,17 +190,21 @@ it("--web-root 有产物：/app/ 托管，platform.info 报 webApp", async () =>
   }
 });
 
-it.each(STORE_KINDS)(
+it.each(TEST_STORE_KINDS)(
   "platform.info 报服务端名称：--name 优先，其次存储里的 displayName，缺省 --host（%s）",
   async (store) => {
     const dataDir = join(root, `name-${store}`);
+    const pg = await databaseFor(store);
     const nameOf = async (url: string) =>
       (
         (await (await fetch(`${url}/.well-known/armadra-platform`)).json()) as {
           name?: string;
         }
       ).name;
-    const first = await startPersonalRelay({ ...base, dataDir, store }, quiet);
+    const first = await startPersonalRelay(
+      { ...base, dataDir, store, ...pg.options },
+      quiet,
+    );
     try {
       expect(await nameOf(first.url)).toBe("127.0.0.1");
     } finally {
@@ -191,38 +214,57 @@ it.each(STORE_KINDS)(
       StateStore.open(dataDir).update((draft) => {
         draft.settings.displayName = "家里的中转";
       });
-    else {
+    else if (store === "postgres") {
+      const database = pg.options.database;
+      const sql = connectPostgres({
+        url: database?.url ?? "",
+        ...(database?.schema ? { schema: database.schema } : {}),
+        max: 1,
+      });
+      await updatePostgresTenant(sql, DEFAULT_TENANT, (draft) => {
+        draft.displayName = "家里的中转";
+      });
+      await sql.end({ timeout: 5 });
+    } else {
       const db = openDatabase(join(dataDir, "relay.db"));
       updateTenant(db, DEFAULT_TENANT, (draft) => {
         draft.displayName = "家里的中转";
       });
       db.close();
     }
-    const second = await startPersonalRelay({ ...base, dataDir }, quiet);
+    const second = await startPersonalRelay(
+      { ...base, dataDir, ...pg.options },
+      quiet,
+    );
     try {
       expect(await nameOf(second.url)).toBe("家里的中转");
     } finally {
       await second.close();
     }
     const third = await startPersonalRelay(
-      { ...base, dataDir, name: "书房" },
+      { ...base, dataDir, name: "书房", ...pg.options },
       quiet,
     );
     try {
       expect(await nameOf(third.url)).toBe("书房");
     } finally {
       await third.close();
+      await pg.drop();
     }
   },
 );
 
-it.each(STORE_KINDS)(
+it.each(TEST_STORE_KINDS)(
   "运行中另一个进程轮换签名钥：一秒内 JWKS 就有新钥（%s）",
   async (store) => {
     const dataDir = join(root, `e-${store}`);
-    const relay = await startPersonalRelay({ ...base, dataDir, store }, quiet);
+    const pg = await databaseFor(store);
+    const relay = await startPersonalRelay(
+      { ...base, dataDir, store, ...pg.options },
+      quiet,
+    );
     try {
-      await runRotateKey(dataDir, () => {});
+      await runRotateKey(dataDir, () => {}, pg.options.database);
       const deadline = Date.now() + 5_000;
       let kids: string[] = [];
       while (Date.now() < deadline) {
@@ -236,6 +278,7 @@ it.each(STORE_KINDS)(
       expect(kids).toEqual(["k1", "k2"]);
     } finally {
       await relay.close();
+      await pg.drop();
     }
   },
   10_000,

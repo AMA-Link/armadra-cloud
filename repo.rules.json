@@ -74,10 +74,10 @@
   },
   "migrations": {
     "lock": "migrations.lock",
-    "$comment": "两个迁移目录各自从 0001 连续：PostgreSQL（cloud）与 SQLite（Node 中继 --store sqlite 与 DO SQLite 共用）；lock 守住已发布迁移的字节。",
+    "$comment": "两个迁移目录各自从 0001 连续：PostgreSQL（cloud 与 Node 中继 --store postgres / --control postgres 共用，在 control-store-postgres 包里）与 SQLite（Node 中继 --store sqlite 与 DO SQLite 共用）；lock 守住已发布迁移的字节。",
     "sources": [
       {
-        "path": "apps/cloud/src/db/migrations",
+        "path": "packages/control-store-postgres/migrations",
         "kind": "directory"
       },
       {
@@ -106,11 +106,12 @@
         "redis",
         "@orpc/*",
         "ws",
-        "@types/ws"
+        "@types/ws",
+        "@armadra/control-store-postgres"
       ]
     },
     {
-      "$comment": "中继的 Node 运行时只装配内核：不依赖控制核与 app，不带 SaaS 专有依赖（PostgreSQL / Redis），也不带 oRPC。",
+      "$comment": "中继的 Node 运行时只装配内核：不依赖控制核与 app，不直接带存储驱动（PostgreSQL / Redis 只经 cloud-shared 的封装，只在多节点控制面 control/postgres.ts、control/redis.ts 里，由装配方按需动态 import），也不带 oRPC。",
       "package": "packages/relay-runtime-node",
       "forbid": [
         "@armadra/control-core",
@@ -119,7 +120,8 @@
         "@armadra/relay-runtime-workers",
         "postgres",
         "redis",
-        "@orpc/*"
+        "@orpc/*",
+        "@armadra/control-store-sqlite"
       ]
     },
     {
@@ -136,7 +138,8 @@
         "ws",
         "@types/ws",
         "better-sqlite3",
-        "sqlite3"
+        "sqlite3",
+        "@armadra/control-store-postgres"
       ]
     },
     {
@@ -148,7 +151,8 @@
         "@armadra/relay-runtime-node",
         "postgres",
         "redis",
-        "ws"
+        "ws",
+        "@armadra/control-store-postgres"
       ]
     },
     {
@@ -162,7 +166,24 @@
         "@armadra/relay",
         "postgres",
         "redis",
-        "ws"
+        "ws",
+        "@armadra/control-store-postgres"
+      ]
+    },
+    {
+      "$comment": "PostgreSQL 存储只实现控制核的端口：不依赖中继内核、Node / Workers 运行时、app、Redis 与别的存储实现。",
+      "package": "packages/control-store-postgres",
+      "forbid": [
+        "@armadra/relay-kernel",
+        "@armadra/relay-runtime-node",
+        "@armadra/relay-runtime-workers",
+        "@armadra/control-store-sqlite",
+        "@armadra/cloud",
+        "@armadra/relay",
+        "redis",
+        "ws",
+        "better-sqlite3",
+        "sqlite3"
       ]
     },
     {
@@ -177,7 +198,8 @@
         "redis",
         "ws",
         "better-sqlite3",
-        "sqlite3"
+        "sqlite3",
+        "@armadra/control-store-postgres"
       ]
     },
     {
@@ -189,7 +211,8 @@
         "@armadra/control-store-sqlite",
         "@armadra/relay-kernel",
         "@armadra/cloud",
-        "@armadra/relay"
+        "@armadra/relay",
+        "@armadra/control-store-postgres"
       ]
     },
     {
@@ -202,7 +225,8 @@
         "@armadra/relay-runtime-node",
         "@armadra/cloud",
         "@armadra/relay-runtime-workers",
-        "@armadra/relay"
+        "@armadra/relay",
+        "@armadra/control-store-postgres"
       ]
     }
   ]

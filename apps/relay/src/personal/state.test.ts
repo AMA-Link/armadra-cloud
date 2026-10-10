@@ -19,7 +19,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 let template: State;
 beforeAll(async () => {
-  template = (
+  template = await (
     await createState({
       dataDir: join(root, "template"),
       account: "me",

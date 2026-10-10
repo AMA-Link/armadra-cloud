@@ -1,5 +1,6 @@
 // 镜像用的单文件：src/cli.ts → out/cli.js（ESM、node22、依赖全部打进来）。
-// 运行时按 import.meta.url 读的数据文件（常见口令表、SQLite 迁移）同时拷到 out/。
+// 运行时按 import.meta.url 读的数据文件（常见口令表、SQLite 与 PostgreSQL 迁移）同时拷到 out/。
+// `--store postgres` / `--control redis|postgres` 的模块是动态 import：打进同一个文件但不在启动时执行。
 import { build } from "esbuild";
 import { copyFileSync, cpSync, rmSync } from "node:fs";
 
@@ -29,5 +30,14 @@ copyFileSync(
 cpSync(
   new URL("../../../packages/control-store-sql/migrations/", import.meta.url),
   new URL("../out/migrations/", import.meta.url),
+  { recursive: true },
+);
+// PostgreSQL 迁移（control-store-postgres 先找单文件旁的 pg-migrations/）。
+cpSync(
+  new URL(
+    "../../../packages/control-store-postgres/migrations/",
+    import.meta.url,
+  ),
+  new URL("../out/pg-migrations/", import.meta.url),
   { recursive: true },
 );

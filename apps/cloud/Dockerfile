@@ -18,7 +18,7 @@ RUN corepack enable
 WORKDIR /src
 COPY . .
 RUN pnpm install --frozen-lockfile && pnpm libs:build && pnpm --filter @armadra/cloud build
-RUN mkdir -p /app && cp -r apps/cloud/out /app/out && cp -r apps/cloud/src/db/migrations /app/migrations
+RUN mkdir -p /app && cp -r apps/cloud/out /app/out && cp -r packages/control-store-postgres/migrations /app/migrations
 
 FROM ${NODE_IMAGE} AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini && rm -rf /var/lib/apt/lists/* \

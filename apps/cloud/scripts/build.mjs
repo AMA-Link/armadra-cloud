@@ -1,6 +1,7 @@
 // 镜像用的单文件：src/cli.ts → out/main.js（ESM、node22、依赖全部打进来）。
+// PostgreSQL 迁移拷到 out/pg-migrations/（control-store-postgres 先找单文件旁的这个目录）。
 import { build } from "esbuild";
-import { rmSync } from "node:fs";
+import { cpSync, rmSync } from "node:fs";
 
 rmSync(new URL("../out", import.meta.url), { recursive: true, force: true });
 await build({
@@ -17,3 +18,11 @@ await build({
   },
   logLevel: "info",
 });
+cpSync(
+  new URL(
+    "../../../packages/control-store-postgres/migrations/",
+    import.meta.url,
+  ),
+  new URL("../out/pg-migrations/", import.meta.url),
+  { recursive: true },
+);

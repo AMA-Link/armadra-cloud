@@ -26,11 +26,11 @@ import {
   SOURCE_ID,
   SOURCE_PUBLIC_JWK,
   sourceJws,
+  TEST_STORE_KINDS,
   type Harness,
 } from "../../test/personal.ts";
-import { STORE_KINDS } from "./store-types.ts";
 
-describe.each(STORE_KINDS)("%s 存储", (store) => {
+describe.each(TEST_STORE_KINDS)("%s 存储", (store) => {
   let h: Harness;
   let owner: Caller;
   beforeAll(async () => {
@@ -216,7 +216,7 @@ describe.each(STORE_KINDS)("%s 存储", (store) => {
     it("轮换签名钥：新令牌用新 kid，旧令牌在旧钥退役（1 小时）前仍验得过", async () => {
       const sources = createSources(h.context);
       const before = await sources.assertion(owner, SOURCE_ID, undefined);
-      h.context.store.rotateKey(h.clock.now);
+      await h.context.store.rotateKey(h.clock.now);
       const after = await sources.assertion(owner, SOURCE_ID, undefined);
       expect(splitCompactJws(after.relayToken).header.kid).toBe("k2");
       expect(h.context.signer.jwks().keys.map((key) => key.kid)).toEqual([

@@ -1,10 +1,11 @@
 /**
- * `personal serve` 装配（中继设计 §1、§6）：存储（`--store file|sqlite`，见 `store.ts`）→ 签名钥 →
- * 内存控制面（JWKS = 自己的公钥，撤销按存储判）→ TLS → 中继内核（隧道终端 + `/s/<id>/` 边缘）
- * + `/v1` 子集 + `/v1/me/stream` + 托管页面。
+ * `personal serve` 装配（中继设计 §1、§6）：存储（`--store file|sqlite|postgres`，见 `store.ts`）→
+ * 签名钥 → 控制面（`--control memory|redis|postgres`，见 `control.ts`；JWKS = 自己的公钥，撤销按存储判）
+ * → TLS → 中继内核（隧道终端 + `/s/<id>/` 边缘）+ `/v1` 子集 + `/v1/me/stream` + 托管页面。
  *
- * **不碰 PostgreSQL / Redis**（AGENTS.md；`boundaries.test.ts` 扫 import 守住）。日志只有启动 /
- * 停止 / 证书 / 存储这类进程事件，不记请求、令牌、口令。
+ * 缺省装配（file / sqlite + memory）**不加载 PostgreSQL / Redis**：两者只在显式选了的时候动态 import
+ * （AGENTS.md；`boundaries.test.ts` 扫静态 import 图守住）。日志只有启动 / 停止 / 证书 / 存储这类进程
+ * 事件，不记请求、令牌、口令与连接串。
  */
 import { constants, readFileSync } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
@@ -18,7 +19,6 @@ import { LAST_SEEN_FLUSH_MS } from "@armadra/control-core/sessions";
 import { trustedOriginsOf } from "@armadra/control-core/sources";
 import { guestPrefix } from "@armadra/control-core/subjects";
 import { createLogger, type Logger } from "@armadra/cloud-shared/log";
-import { createMemoryControlPlane } from "@armadra/relay-kernel/control/memory";
 import type { LimitKind, LimitRule } from "@armadra/relay-kernel/control/types";
 import { pathAddressing } from "@armadra/relay-kernel/edge/addressing";
 import {
@@ -40,6 +40,7 @@ import {
 } from "./acme.ts";
 import { createPersonalApi } from "./api.ts";
 import { createTurnstileVerifier, readTurnstileSecret } from "./challenge.ts";
+import { createControl } from "./control.ts";
 import {
   createPersonalContext,
   stateRevocation,
@@ -47,7 +48,12 @@ import {
 } from "./context.ts";
 import { createState, readPasswordFile } from "./init.ts";
 import { holdRunLock } from "./runlock.ts";
-import { openPersonalStore, resolveStoreKind, storeExists } from "./store.ts";
+import {
+  loadPostgresStore,
+  openPersonalStore,
+  resolveStoreKind,
+  storeExists,
+} from "./store.ts";
 import type { PersonalStore } from "./store-types.ts";
 import { createMeStream } from "./stream.ts";
 import {
@@ -95,22 +101,30 @@ async function openOrInit(
   log: Logger,
 ): Promise<PersonalStore> {
   const { kind, legacy } = resolveStoreKind(options.dataDir, options.store);
-  if (
-    !storeExists(options.dataDir) &&
-    options.account &&
-    options.passwordFile
-  ) {
+  // PostgreSQL：数据目录是空的不等于没初始化（别的节点可能已经建好），要问库。
+  const missing =
+    kind === "postgres" && options.database
+      ? !(await (
+          await loadPostgresStore()
+        ).postgresStoreExists(options.database))
+      : !storeExists(options.dataDir);
+  if (missing && options.account && options.passwordFile) {
     const store = await createState({
       dataDir: options.dataDir,
       account: options.account,
       password: readPasswordFile(options.passwordFile),
       issuer,
       store: kind,
+      ...(options.database ? { database: options.database } : {}),
     });
     log.info("已初始化个人中转", { account: options.account, store: kind });
     return store;
   }
-  const store = openPersonalStore(options.dataDir, kind);
+  const store = await openPersonalStore(
+    options.dataDir,
+    kind,
+    options.database,
+  );
   if (legacy)
     log.info(
       "正在用状态文件：可以用 personal migrate --to sqlite 迁到 SQLite",
@@ -153,12 +167,12 @@ export async function startPersonalRelay(
   const store = await openOrInit(options, issuer, log);
   try {
     if (store.issuer() !== issuer) {
-      store.setIssuer(issuer);
+      await store.setIssuer(issuer);
       log.warn("对外地址变了，已登记的源需要重新登记", { issuer });
     }
     return await startServing(options, deps, { log, now, issuer, store });
   } catch (error) {
-    store.close();
+    await store.close();
     throw error;
   }
 }
@@ -204,13 +218,21 @@ async function startServing(
   const signer = stateSigner(store, now);
   // 内核起来之前没有可断开的连接；之后指向它。
   const relayRef: { current?: RunningRelay } = {};
-  const control = createMemoryControlPlane({
-    mode: "personal",
+  const { control, probes: controlProbes } = await createControl({
+    kind: options.control ?? "memory",
+    nodeId: options.nodeId ?? options.host.slice(0, 64),
     issuer,
     jwks: () => signer.jwks(),
     revoked: stateRevocation(store, now),
     limits: edgeLimitRules(options.rateLimits, store.settings().rateLimits),
     now,
+    ...(options.database ? { database: options.database } : {}),
+    ...(options.redisUrl ? { redisUrl: options.redisUrl } : {}),
+    onError: (error, operation) =>
+      log.warn("控制面后台操作失败", { operation, error: errorName(error) }),
+  }).catch(async (error: unknown) => {
+    await acme?.close();
+    throw error;
   });
   const context = createPersonalContext({
     store,
@@ -251,6 +273,8 @@ async function startServing(
   try {
     clientIp = createClientIp(trustedProxy);
   } catch (error) {
+    await control.close();
+    await acme?.close();
     throw new Error(
       `trustedProxy 不合法：${error instanceof Error ? error.message : String(error)}`,
     );
@@ -284,6 +308,7 @@ async function startServing(
     log,
     probes: {
       dataDir: () => access(options.dataDir, constants.R_OK | constants.W_OK),
+      ...controlProbes,
     },
     metricsListen: options.metricsListen,
     metricsToken: options.metricsToken,
@@ -293,6 +318,7 @@ async function startServing(
     ...(tls ? { tls: tls.current() } : {}),
     now,
   }).catch(async (error: unknown) => {
+    await control.close();
     await acme?.close();
     throw error;
   });
@@ -314,7 +340,7 @@ async function startServing(
       if (seenSources.size > 0) {
         const batch = new Map(seenSources);
         seenSources.clear();
-        store.recordSourcesSeen(batch);
+        await store.recordSourcesSeen(batch);
       }
     } catch (error) {
       log.warn("最近在线时间写入失败", { error: errorName(error) });
@@ -323,11 +349,11 @@ async function startServing(
   const flushTimer = setInterval(() => void flush(), LAST_SEEN_FLUSH_MS);
   flushTimer.unref();
 
-  // 别的进程（passwd / rotate-key / links revoke）改了存储：新撤销的源与链接立即断开。
-  let previous = store.revoked();
+  // 别的进程（passwd / rotate-key / links revoke）或别的节点改了存储：新撤销的源与链接立即断开。
+  let previous = await store.revoked();
   const stopWatch = store.watch(
-    () => {
-      const current = store.revoked();
+    async () => {
+      const current = await store.revoked();
       for (const sourceId of current.sources)
         if (!previous.sources.has(sourceId)) {
           control.command({ type: "closeTunnel", sourceId });
@@ -361,6 +387,10 @@ async function startServing(
     host: options.host,
     tls: options.tls,
     store: store.kind,
+    control: options.control ?? "memory",
+    ...(options.control && options.control !== "memory"
+      ? { node: options.nodeId }
+      : {}),
     ...(fingerprint ? { fingerprint } : {}),
     web: webRoot ? "ready" : "missing",
     ...(relay.metricsUrl ? { metrics: relay.metricsUrl } : {}),
@@ -383,9 +413,10 @@ async function startServing(
         await flush();
         stream.close();
         await relay.close(5_000);
+        await control.close();
         await acme?.close();
         releaseRunLock();
-        store.close();
+        await store.close();
         log.info("个人中转已停止");
       })();
       return closing;

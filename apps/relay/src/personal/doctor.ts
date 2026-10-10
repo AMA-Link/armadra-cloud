@@ -1,7 +1,7 @@
 /**
  * `personal doctor`（Node 中继存储设计 §5.4「缺省即安全」）：只看不改，逐项报「通过 / 警告 / 失败」。
  *
- * 检查：数据目录与存储文件、私钥文件的权限；存储能否打开、SQLite 完整性；监听地址与 TLS；
+ * 检查：数据目录与存储文件、私钥文件的权限；存储能否打开（PostgreSQL 连得上、迁移账本对得上）、SQLite 完整性；监听地址与 TLS；
  * 受信代理配置；口令哈希参数、锁定状态与残留的口令文件；自签 CA 的有效期。
  * 有任一项失败退出码为 1。输出只有路径、模式位、个数与时间，不打印口令、令牌或私钥。
  */
@@ -22,7 +22,11 @@ import type { Print } from "./commands.ts";
 import { readPasswordFile } from "./init.ts";
 import { passwordViolation, verifyPassword } from "./passwords.ts";
 import { openPersonalStore, resolveStoreKind } from "./store.ts";
-import type { PersonalStore, StoreSettings } from "./store-types.ts";
+import {
+  STORE_LABELS,
+  type PersonalStore,
+  type StoreSettings,
+} from "./store-types.ts";
 import { CA_CERT, TLS_DIR } from "./tls.ts";
 
 type Level = "pass" | "warn" | "fail";
@@ -140,7 +144,7 @@ async function password(
   store: PersonalStore,
   nowMs: number,
 ): Promise<Finding[]> {
-  const { account } = store.snapshot();
+  const { account } = await store.snapshot();
   const findings: Finding[] = [];
   const weak =
     account.password.cost < SCRYPT.cost ||
@@ -221,7 +225,7 @@ export async function diagnose(
   let store: PersonalStore | undefined;
   try {
     resolveStoreKind(dataDir);
-    store = openPersonalStore(dataDir);
+    store = await openPersonalStore(dataDir, undefined, options.database);
   } catch (error) {
     add({
       level: "fail",
@@ -234,12 +238,13 @@ export async function diagnose(
       add({
         level: "pass",
         item: "存储",
-        detail: `${store.kind === "sqlite" ? "SQLite" : "状态文件"}，${store.path}`,
+        detail: `${STORE_LABELS[store.kind]}，${store.path}`,
       });
-      for (const suffix of store.kind === "sqlite"
-        ? ["", "-wal", "-shm"]
-        : [""])
-        add(permission(`${store.path}${suffix}`, "存储文件权限", 0o600));
+      if (store.kind !== "postgres")
+        for (const suffix of store.kind === "sqlite"
+          ? ["", "-wal", "-shm"]
+          : [""])
+          add(permission(`${store.path}${suffix}`, "存储文件权限", 0o600));
       if (store.kind === "sqlite") {
         const db = openDatabase(store.path);
         try {
@@ -260,7 +265,7 @@ export async function diagnose(
       for (const finding of await password(options, store, nowMs)) add(finding);
       add(trustedProxy(options, store.settings()));
     } finally {
-      store.close();
+      await store.close();
     }
   } else {
     add(trustedProxy(options, undefined));

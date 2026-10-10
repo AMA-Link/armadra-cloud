@@ -1,8 +1,8 @@
 /**
  * `personal init | status | passwd | rotate-key | links`：只读写存储的子命令。
  *
- * 与正在运行的 `serve` 并存：状态文件的写入走目录锁、SQLite 的写入走 `BEGIN IMMEDIATE` 事务，
- * `serve` 每秒察觉一次外部改动，改口令、轮换密钥、撤销链接立即生效（撤销的访客 WS 会被断开）。
+ * 与正在运行的 `serve` 并存：状态文件的写入走目录锁、SQLite 的写入走 `BEGIN IMMEDIATE` 事务、
+ * PostgreSQL 的写入先锁租户行，`serve` 每秒察觉一次外部改动，改口令、轮换密钥、撤销链接立即生效（撤销的访客 WS 会被断开）。
  * 输出只有账号名、id、时间、指纹这类元数据，不打印口令、令牌或私钥。
  */
 import { changePassword } from "@armadra/control-core/accounts";
@@ -12,7 +12,11 @@ import { defaultIssuer, UsageError, type PersonalInitOptions } from "./args.ts";
 import { stateOnly } from "./context.ts";
 import { createState, obtainPassword, passwordUsageError } from "./init.ts";
 import { openPersonalStore } from "./store.ts";
-import type { PersonalStore } from "./store-types.ts";
+import {
+  STORE_LABELS,
+  type DatabaseOptions,
+  type PersonalStore,
+} from "./store-types.ts";
 import { existingCaFingerprint, selfSignedMaterial, tlsNames } from "./tls.ts";
 
 export type Print = (line: string) => void;
@@ -20,16 +24,17 @@ export type Print = (line: string) => void;
 const time = (ms: number | null) =>
   ms === null ? "—" : new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-/** 打开存储跑一下就关（SQLite 要关库）。 */
+/** 打开存储跑一下就关（SQLite 要关库，PostgreSQL 要关连接池）。 */
 export async function withStore<T>(
   dataDir: string,
   fn: (store: PersonalStore) => T | Promise<T>,
+  database?: DatabaseOptions,
 ): Promise<T> {
-  const store = openPersonalStore(dataDir);
+  const store = await openPersonalStore(dataDir, undefined, database);
   try {
     return await fn(store);
   } finally {
-    store.close();
+    await store.close();
   }
 }
 
@@ -46,10 +51,11 @@ export async function runInit(
     password,
     issuer,
     ...(options.store ? { store: options.store } : {}),
+    ...(options.database ? { database: options.database } : {}),
   });
-  store.close();
+  await store.close();
   print(`已初始化：${options.dataDir}`);
-  print(`存储：${store.kind === "sqlite" ? "SQLite" : "状态文件"}`);
+  print(`存储：${STORE_LABELS[store.kind]}`);
   print(`账号：${options.account}`);
   print(`对外地址：${issuer}`);
   if (options.tls === "self-signed") {
@@ -65,13 +71,15 @@ export async function runStatus(
   dataDir: string,
   print: Print,
   nowMs = Date.now(),
+  database?: DatabaseOptions,
 ): Promise<void> {
-  const { state, kind } = await withStore(dataDir, (store) => ({
-    state: store.snapshot(),
-    kind: store.kind,
-  }));
+  const { state, kind } = await withStore(
+    dataDir,
+    async (store) => ({ state: await store.snapshot(), kind: store.kind }),
+    database,
+  );
   const fingerprint = existingCaFingerprint(dataDir);
-  print(`存储：${kind === "sqlite" ? "SQLite" : "状态文件"}`);
+  print(`存储：${STORE_LABELS[kind]}`);
   print(`账号：${state.account.name}`);
   print(`对外地址：${state.issuer}`);
   print(`CA 指纹：${fingerprint ?? "—"}`);
@@ -105,30 +113,40 @@ export async function runPasswd(
   dataDir: string,
   passwordFile: string | undefined,
   print: Print,
+  database?: DatabaseOptions,
 ): Promise<void> {
   // 先确认存储能打开，再问口令。
-  await withStore(dataDir, () => undefined);
+  await withStore(dataDir, () => undefined, database);
   const password = await obtainPassword(passwordFile, true);
-  await withStore(dataDir, async (store) => {
-    try {
-      await changePassword(
-        stateOnly(store),
-        store.snapshot().account.name,
-        password,
-        Date.now(),
-      );
-    } catch (error) {
-      throw passwordUsageError(error);
-    }
-  });
+  await withStore(
+    dataDir,
+    async (store) => {
+      try {
+        await changePassword(
+          stateOnly(store),
+          (await store.snapshot()).account.name,
+          password,
+          Date.now(),
+        );
+      } catch (error) {
+        throw passwordUsageError(error);
+      }
+    },
+    database,
+  );
   print("口令已更新，账号的全部设备需要重新登录");
 }
 
 export async function runRotateKey(
   dataDir: string,
   print: Print,
+  database?: DatabaseOptions,
 ): Promise<void> {
-  const kid = await withStore(dataDir, (store) => store.rotateKey(Date.now()));
+  const kid = await withStore(
+    dataDir,
+    (store) => store.rotateKey(Date.now()),
+    database,
+  );
   print(`已启用新签名钥：${kid}`);
 }
 
@@ -136,9 +154,12 @@ export async function runLinksList(
   dataDir: string,
   print: Print,
   nowMs = Date.now(),
+  database?: DatabaseOptions,
 ): Promise<void> {
-  const links = await withStore(dataDir, (store) =>
-    listLinks(stateOnly(store)),
+  const links = await withStore(
+    dataDir,
+    (store) => listLinks(stateOnly(store)),
+    database,
   );
   if (links.length === 0) {
     print("没有链接");
@@ -165,9 +186,12 @@ export async function runLinksRevoke(
   dataDir: string,
   linkId: string,
   print: Print,
+  database?: DatabaseOptions,
 ): Promise<void> {
-  const found = await withStore(dataDir, (store) =>
-    revokeLink(stateOnly(store), linkId, Date.now()),
+  const found = await withStore(
+    dataDir,
+    (store) => revokeLink(stateOnly(store), linkId, Date.now()),
+    database,
   );
   if (found === null) throw new UsageError(`没有这条有效链接：${linkId}`);
   print(`已撤销链接：${linkId}`);

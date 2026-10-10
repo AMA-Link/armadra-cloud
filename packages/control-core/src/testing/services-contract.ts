@@ -6,7 +6,7 @@
  * `addTenant` / `addAccount`（{@link MemoryPorts}）。
  */
 import { TEST_KEYS } from "@armadra/platform-protocol/fixtures";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { changePassword, createAccounts } from "../accounts.ts";
 import { ControlError } from "../errors.ts";
@@ -461,9 +461,15 @@ export function servicesContract(
           coreVersion: "1",
           atMs: 1,
         });
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        expect(toOwner).toEqual(["sourceRevoked", "sourceOnline"]);
-        expect(toGuest).toEqual(["sourceOnline"]);
+        // 扇出要查一次库：等到预期的事件到齐（库在网络另一端时不止 10 毫秒），再多等一会儿确认
+        // 未登记的源始终没有转出来。
+        const expected = () => {
+          expect(toOwner).toEqual(["sourceRevoked", "sourceOnline"]);
+          expect(toGuest).toEqual(["sourceOnline"]);
+        };
+        await vi.waitFor(expected, { timeout: 2_000, interval: 5 });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expected();
         expect(await stream.stillValid(guest)).toBe(true);
       });
     });

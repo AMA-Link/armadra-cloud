@@ -26,6 +26,9 @@
     "packages/control-store-sql": {
       "project": ["src/**/*.ts"]
     },
+    "packages/control-store-postgres": {
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
     "packages/control-store-sqlite": {
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },

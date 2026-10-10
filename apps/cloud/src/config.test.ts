@@ -39,11 +39,11 @@ describe("loadServeConfig", () => {
   });
 });
 
-it("migrate 只要数据库地址，迁移目录缺省指向源码里的 db/migrations", () => {
+it("migrate 只要数据库地址，迁移目录缺省指向 control-store-postgres 的 migrations", () => {
   const config = loadMigrateConfig({
     ARMADRA_CLOUD_DATABASE_URL: base.ARMADRA_CLOUD_DATABASE_URL,
   });
   expect(config.migrationsDir.replaceAll("\\", "/")).toMatch(
-    /src\/db\/migrations\/$/,
+    /control-store-postgres\/migrations\/$/,
   );
 });

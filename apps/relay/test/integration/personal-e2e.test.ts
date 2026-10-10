@@ -552,9 +552,9 @@ describe("个人中转端到端", () => {
       await call("GET", `${issuer}/v1/links/${created.linkId}`),
     ) as { scope?: unknown };
     expect(landing.scope).toEqual({ workspaceId: "ws_e2e", readOnly: true });
-    const persisted = openPersonalStore(join(root, "data"));
-    const state = persisted.snapshot();
-    persisted.close();
+    const persisted = await openPersonalStore(join(root, "data"));
+    const state = await persisted.snapshot();
+    await persisted.close();
     expect(
       state.links.find((row) => row.linkId === created.linkId)?.scope,
     ).toEqual({ workspaceId: "ws_e2e", readOnly: true });

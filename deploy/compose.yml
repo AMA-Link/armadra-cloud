@@ -2,6 +2,12 @@
 #
 # 生产环境应把 postgres / redis 换成托管服务；证书与签名密钥由运维提供并挂载；
 # 滚动升级先升 relay、后升 cloud。配置写在同目录 .env（见 README.md 的变量表）。
+#
+# profile personal-cluster：两节点的个人中转（--store postgres --control postgres，schema relay_personal），
+# 前面要自己放负载均衡（同一个源的隧道与客户端要落在同一个节点，按 /s/<sourceId>/ 粘住）：
+#   printf '%s' '<口令>' > relay_password.txt && chmod 600 relay_password.txt
+#   PERSONAL_RELAY_HOST=relay.example.com docker compose --profile personal-cluster up -d
+# 单节点的个人中转不需要这些，用 personal/compose.yml。
 name: armadra-cloud
 
 services:
@@ -44,6 +50,49 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  relay-personal-a: &relay-personal
+    image: ghcr.io/owlbay/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+    profiles: ["personal-cluster"]
+    command:
+      [
+        "personal",
+        "serve",
+        "--port",
+        "443",
+        "--store",
+        "postgres",
+        "--control",
+        "postgres",
+      ]
+    environment:
+      &relay-personal-env # 对外的域名（多个节点同一个）；不设时 serve 报「缺少 --host」退出。
+      RELAY_HOST: ${PERSONAL_RELAY_HOST:-}
+      RELAY_DATABASE_URL: "postgres://armadra:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/armadra_cloud"
+      RELAY_DATABASE_SCHEMA: relay_personal
+      RELAY_NODE_ID: personal-a
+      RELAY_PERSONAL_ACCOUNT: ${RELAY_ACCOUNT:-me}
+      RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/relay_password
+    secrets:
+      - relay_password
+    volumes:
+      - relay-personal-a:/data
+    ports:
+      - "8444:8443"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  relay-personal-b:
+    <<: *relay-personal
+    environment:
+      <<: *relay-personal-env
+      RELAY_NODE_ID: personal-b
+    volumes:
+      - relay-personal-b:/data
+    ports:
+      - "8445:8443"
+
   postgres:
     image: postgres:17.11-alpine
     environment:
@@ -75,6 +124,10 @@ secrets:
     file: ./tls/relay.crt
   relay_key:
     file: ./tls/relay.key
+  relay_password:
+    file: ./relay_password.txt
 
 volumes:
   pg: {}
+  relay-personal-a: {}
+  relay-personal-b: {}

@@ -2,7 +2,7 @@
  * personal 的 SQLite 存储：`<data-dir>/relay.db`（`@armadra/control-store-sqlite`，WAL、0600）。
  *
  * - 只有一个租户（`DEFAULT_TENANT`）、一个账号（`acct:<账号名>`）；与状态文件同一份数据，
- *   {@link stateToSnapshot} / {@link snapshotToState} 两个方向逐字段对应（迁移往返等价）；
+ *   `snapshot.ts` 的两个函数逐字段对应（迁移往返等价）；
  * - 同一个库可以被 `serve` 与 CLI 同时打开：写都在 `BEGIN IMMEDIATE` 事务里，读每次走库，
  *   没有状态文件那样的目录锁与「每秒看一眼」；`serve` 每秒看一次 `data_version`，别的进程提交过
  *   就比对撤销、断开；
@@ -11,7 +11,6 @@
 import { mkdirSync, rmSync } from "node:fs";
 
 import { DEFAULT_TENANT } from "@armadra/control-core/ports";
-import { ownerSubject } from "@armadra/control-core/subjects";
 import { SqliteStoreError } from "@armadra/control-store-sqlite/errors";
 import {
   createSqliteKeys,
@@ -34,85 +33,20 @@ import {
   readTenant,
   revokedIds,
   updateTenant,
-  type TenantSnapshot,
 } from "@armadra/control-store-sqlite/tenants";
 
-import { STATE_VERSION, StateError, stateSchema, type State } from "./state.ts";
+import {
+  snapshotToState,
+  stateToSnapshot,
+  tenantSettings,
+} from "./snapshot.ts";
+import { StateError, stateSchema, type State } from "./state.ts";
 import {
   applySeen,
   databasePath,
   type PersonalStore,
   type StoreSettings,
 } from "./store-types.ts";
-
-/** 状态文件 → 一个租户的快照（账号 id 与注册令牌的签发人都是 `acct:<账号名>`）。 */
-function stateToSnapshot(state: State): TenantSnapshot {
-  const accountId = ownerSubject(state.account.name);
-  const { settings } = state;
-  return {
-    tenant: {
-      issuer: state.issuer,
-      allowGuests: settings.allowGuests,
-      trustedOrigins: [...settings.trustedOrigins],
-      ...(settings.rateLimits
-        ? { rateLimits: { ...settings.rateLimits } }
-        : {}),
-      ...(settings.trustedProxy
-        ? { trustedProxy: structuredClone(settings.trustedProxy) }
-        : {}),
-      ...(settings.displayName !== undefined
-        ? { displayName: settings.displayName }
-        : {}),
-      revision: state.revision,
-    },
-    accounts: [{ ...structuredClone(state.account), accountId }],
-    signingKeys: structuredClone(state.signingKeys),
-    sources: structuredClone(state.sources),
-    registrations: state.registrationTokens.map((row) => ({
-      ...row,
-      accountId,
-    })),
-    devices: structuredClone(state.devices),
-    links: structuredClone(state.links),
-  };
-}
-
-/** 快照 → 状态文件（schema v1）；不是「一个账号」或字段不符 → `invalid`。 */
-function snapshotToState(snapshot: TenantSnapshot): State {
-  const [account, ...extra] = snapshot.accounts;
-  if (!account || extra.length > 0)
-    throw new StateError(
-      "invalid",
-      `个人中转只有一个账号，库里有 ${snapshot.accounts.length} 个，拒绝启动`,
-    );
-  const { accountId: _accountId, ...accountFields } = account;
-  const { tenant } = snapshot;
-  const parsed = stateSchema.safeParse({
-    version: STATE_VERSION,
-    revision: tenant.revision,
-    issuer: tenant.issuer,
-    account: accountFields,
-    signingKeys: snapshot.signingKeys,
-    sources: snapshot.sources,
-    registrationTokens: snapshot.registrations.map(
-      ({ tokenHash, expiresAtMs }) => ({ tokenHash, expiresAtMs }),
-    ),
-    devices: snapshot.devices,
-    links: snapshot.links,
-    settings: {
-      allowGuests: tenant.allowGuests,
-      trustedOrigins: tenant.trustedOrigins,
-      ...(tenant.rateLimits ? { rateLimits: tenant.rateLimits } : {}),
-      ...(tenant.displayName !== undefined
-        ? { displayName: tenant.displayName }
-        : {}),
-      ...(tenant.trustedProxy ? { trustedProxy: tenant.trustedProxy } : {}),
-    },
-  });
-  if (!parsed.success)
-    throw new StateError("invalid", "数据库内容与状态 schema 不符，拒绝启动");
-  return parsed.data;
-}
 
 function asStateError(error: unknown): unknown {
   if (!(error instanceof SqliteStoreError)) return error;
@@ -133,17 +67,7 @@ function wrap(dataDir: string, db: Database): PersonalStore {
   const settings = (): StoreSettings => {
     const tenant = readTenant(db, tenantId);
     if (!tenant) throw new StateError("invalid", "数据库里没有个人中转的租户");
-    return {
-      allowGuests: tenant.allowGuests,
-      trustedOrigins: tenant.trustedOrigins,
-      ...(tenant.rateLimits
-        ? { rateLimits: tenant.rateLimits as StoreSettings["rateLimits"] }
-        : {}),
-      ...(tenant.displayName !== undefined
-        ? { displayName: tenant.displayName }
-        : {}),
-      ...(tenant.trustedProxy ? { trustedProxy: tenant.trustedProxy } : {}),
-    };
+    return tenantSettings(tenant);
   };
   return {
     kind: "sqlite",
@@ -153,13 +77,13 @@ function wrap(dataDir: string, db: Database): PersonalStore {
     keys: createSqliteKeys(db, tenantId),
     issuer: () => createSqliteKeys(db, tenantId).issuer(),
     settings,
-    setIssuer(issuer) {
+    async setIssuer(issuer) {
       updateTenant(db, tenantId, (draft) => {
         draft.issuer = issuer;
       });
     },
-    rotateKey: (nowMs) => rotateSqliteKey(db, tenantId, nowMs),
-    recordSourcesSeen(batch) {
+    rotateKey: async (nowMs) => rotateSqliteKey(db, tenantId, nowMs),
+    async recordSourcesSeen(batch) {
       if (batch.size === 0) return;
       db.transaction(() => {
         let changed = false;
@@ -177,8 +101,8 @@ function wrap(dataDir: string, db: Database): PersonalStore {
         if (changed) bumpRevision(db, tenantId);
       });
     },
-    snapshot,
-    revoked() {
+    snapshot: async () => snapshot(),
+    async revoked() {
       const ids = revokedIds(db, tenantId);
       return { sources: new Set(ids.sources), links: new Set(ids.links) };
     },
@@ -189,7 +113,7 @@ function wrap(dataDir: string, db: Database): PersonalStore {
           const next = db.dataVersion();
           if (next === version) return;
           version = next;
-          onChange();
+          void Promise.resolve(onChange()).catch(onError);
         } catch (error) {
           onError(error);
         }
@@ -197,7 +121,7 @@ function wrap(dataDir: string, db: Database): PersonalStore {
       timer.unref();
       return () => clearInterval(timer);
     },
-    close: () => db.close(),
+    close: async () => db.close(),
   };
 }
 
@@ -216,9 +140,9 @@ export function openSqliteStore(dataDir: string): PersonalStore {
         "invalid",
         "数据库不是个人中转的库（租户不对），拒绝启动",
       );
-    const store = wrap(dataDir, db);
-    store.snapshot();
-    return store;
+    // 字段合 schema 才算个人中转的库（不合就拒绝启动）。
+    snapshotToState(exportTenant(db, DEFAULT_TENANT));
+    return wrap(dataDir, db);
   } catch (error) {
     db.close();
     throw error;

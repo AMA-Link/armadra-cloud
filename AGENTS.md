@@ -3,18 +3,18 @@
 ## 代码边界
 
 - `apps/cloud` 是控制面，`apps/relay` 是中继；`apps/relay` 不得 import `apps/cloud`，两者只共享 `packages/*`。两个 app 都不得 import Armadra 仓的源码；与 Armadra 的全部往来只经 `@armadra/platform-protocol` 与容器镜像。
-- 共享内核两个包：`packages/relay-kernel`（隧道帧流与信用窗口、握手、心跳、隧道表、边缘判定、限流、媒体票、令牌校验、HTTP/1.1 与 WebSocket 帧编解码、`ControlPlane` 接口与内存实现）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 运行时无关（Node 与 Workers 共用）：源码只许 `node:crypto` / `node:buffer`，不 import `ws`、`node:http` / `net` / `stream` / `fs` 与 `control-core`，不带 PostgreSQL / Redis；Node 专有部分（`ws` 隧道终端、边缘的字节进出、clientIp、HTTP 分派、`startRelay`）在 `packages/relay-runtime-node`；Cloudflare Workers 部分（Worker 入口与闸、`SourceDO` / `ControlDO`、Hibernation 粘合、DO 内的 HTTP / WS 转发、DO SQLite 适配）在 `packages/relay-runtime-workers`，源码只许 `node:crypto` / `node:buffer`，复用 `control-store-sqlite` 的可移植模块（不碰它的 `open` / `migrate`），wrangler 项目是 `apps/relay-workers`（只 re-export 运行时）。`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与中继内核；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
+- 共享内核两个包：`packages/relay-kernel`（隧道帧流与信用窗口、握手、心跳、隧道表、边缘判定、限流、媒体票、令牌校验、HTTP/1.1 与 WebSocket 帧编解码、`ControlPlane` 接口与内存实现）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 运行时无关（Node 与 Workers 共用）：源码只许 `node:crypto` / `node:buffer`，不 import `ws`、`node:http` / `net` / `stream` / `fs` 与 `control-core`，不带 PostgreSQL / Redis；Node 专有部分（`ws` 隧道终端、边缘的字节进出、clientIp、HTTP 分派、`startRelay`，以及多节点控制面 `control/redis.ts`、`control/postgres.ts`——只有这两个文件碰存储客户端，由装配方按需动态 import）在 `packages/relay-runtime-node`；Cloudflare Workers 部分（Worker 入口与闸、`SourceDO` / `ControlDO`、Hibernation 粘合、DO 内的 HTTP / WS 转发、DO SQLite 适配）在 `packages/relay-runtime-workers`，源码只许 `node:crypto` / `node:buffer`，复用 `control-store-sqlite` 的可移植模块（不碰它的 `open` / `migrate`），wrangler 项目是 `apps/relay-workers`（只 re-export 运行时）。`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与中继内核；端口的存储实现是 `packages/control-store-sqlite`（`node:sqlite`）与 `packages/control-store-postgres`（cloud 与 Node 中继 `--store postgres` 共用，同一套端口合同与服务合同）；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
 - `/v1/*` 的路由表只有 `control-core` 的 `createCloudRouter` 一份：personal 给处理器、其余答 404；cloud 未实现的统一答 501。
 - `@orpc/*` 只能出现在 `packages/platform-protocol/src/cloud-api/`、`packages/control-core/src/router.ts`、`tools/contract/`（ESLint `no-restricted-imports` 守）。
 - 协议包只含 zod schema、类型、纯编解码与常量，不 import `node:*`（`src/fixtures/` 例外，只在测试里用）。
 - 错误码只从 `@armadra/platform-protocol/errors` 取；线上形状 `{ code, message, requestId?, details? }`，JSON camelCase。
-- relay 不碰 PostgreSQL；personal 的状态只在数据目录（`state.json` 或 `node:sqlite` 的 `relay.db`，经 `packages/control-store-sqlite`）；Workers 中继的状态只在 `ControlDO` 的 DO SQLite（同一份迁移与账本，签名私钥用 `RELAY_MASTER_KEY` 包裹）与 `SourceDO` 的 WS 附件 / 同步 KV（媒体票只存派生哈希与用票本身派生的密钥封起来的密文）。relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
-- `personal` 模式不得引入对 PostgreSQL / Redis 的运行时依赖（`apps/relay/src/boundaries.test.ts` 连同它装配的内核与控制核一起扫）。
+- relay 只经 `packages/control-store-postgres`（`--store postgres`）与 `relay-runtime-node` 的 `control/postgres.ts`（`--control postgres`）碰 PostgreSQL；personal 的状态缺省只在数据目录（`state.json` 或 `node:sqlite` 的 `relay.db`，经 `packages/control-store-sqlite`），显式选 `--store postgres` 时在库里（数据目录留 `postgres.json` 标记，不含连接串）；Workers 中继的状态只在 `ControlDO` 的 DO SQLite（同一份迁移与账本，签名私钥用 `RELAY_MASTER_KEY` 包裹）与 `SourceDO` 的 WS 附件 / 同步 KV（媒体票只存派生哈希与用票本身派生的密钥封起来的密文）。relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
+- `personal` 的缺省装配（file / sqlite 存储 + memory 控制面）不得静态依赖 PostgreSQL / Redis；`--store postgres` 与 `--control redis|postgres`（多节点）是显式选项，只经 `personal/store.ts`、`personal/control.ts` 的动态 import 加载，`@armadra/control-store-postgres` 是 `apps/relay` 的 `optionalDependencies`（`apps/relay/src/boundaries.test.ts` 沿静态 import 图连同内核、运行时与控制核一起走遍）。
 
 ## 范围与优先级
 
-- 先交付个人中转（`armadra-relay personal`）；SaaS 服务端（控制面的账号、组织、源目录、计费，中继的 Redis 实现）只预留接口：协议包的 `cloud-api` schema 保留，`apps/cloud` 的业务路由在路由表里统一答 501 `not_implemented`（测试守住），实现时逐条拿掉。
-- 个人中转的入口（`pnpm relay:personal`、`deploy/personal/compose.yml`）不得依赖 PostgreSQL / Redis。
+- 先交付个人中转（`armadra-relay personal`）；SaaS 服务端（控制面的账号、组织、源目录、计费，`saas serve` 的中继装配）只预留接口：协议包的 `cloud-api` schema 保留，`apps/cloud` 的业务路由在路由表里统一答 501 `not_implemented`（测试守住），实现时逐条拿掉。
+- 个人中转的缺省入口（`pnpm relay:personal`、`deploy/personal/compose.yml`）不得依赖 PostgreSQL / Redis；多节点是显式选项（`deploy/compose.yml` 的 `relay-personal` profile）。
 
 ## 界面与文案统一
 
@@ -25,7 +25,7 @@
 
 ## 数据库
 
-- 迁移两个目录，各自从 0001 连续：PostgreSQL 在 `apps/cloud/src/db/migrations/`，SQLite（Node 中继 `--store sqlite` 与 Workers 中继的 DO SQLite 共用；新增迁移同时登记进 `relay-runtime-workers` 的 `store-do-sqlite/migrations.ts`）在 `packages/control-store-sql/migrations/`；字节记进 `migrations.lock`（`pnpm repo:check`）；已发布迁移不得修改；未知 / 损坏的库或账本拒绝启动，禁止自动清库或重建。
+- 迁移两个目录，各自从 0001 连续：PostgreSQL 在 `packages/control-store-postgres/migrations/`（cloud 的 `armadra-cloud migrate` 与中继的 `--store postgres` / `--control postgres` 共用，账本 `cloud_migrations`），SQLite（Node 中继 `--store sqlite` 与 Workers 中继的 DO SQLite 共用；新增迁移同时登记进 `relay-runtime-workers` 的 `store-do-sqlite/migrations.ts`）在 `packages/control-store-sql/migrations/`；字节记进 `migrations.lock`（`pnpm repo:check`）；已发布迁移不得修改；未知 / 损坏的库或账本拒绝启动，禁止自动清库或重建。
 - 每个迁移同 PR 带测试。
 
 ## 按需阅读与验证
@@ -48,6 +48,6 @@
 - 正文 / 令牌 / 口令进入日志、持久化或响应：P0。
 - 令牌校验少了 `aud` / `exp` / `jti` 任一项、中继把流转给非令牌 `src` 的源：P0。
 - 接口形状改了而协议包 / `cloud-api.md` 没同步：P1。
-- `personal` 模式引入 PostgreSQL / Redis 运行时依赖：P1；依赖没写精确版本或 `THIRD_PARTY_NOTICES.md` 未同步：P2。
+- `personal` 的缺省装配静态带进 PostgreSQL / Redis（不经那两处动态 import）：P1；依赖没写精确版本或 `THIRD_PARTY_NOTICES.md` 未同步：P2。
 - 界面 / CLI 文案没进 i18n 或中英不同步：P2。
 - 新增行为没有对应测试时指出缺口；测试只改断言或重生成夹具去迁就实现时要说明理由是否成立。

@@ -1,13 +1,14 @@
-# 个人中转的存储：SQLite 与状态文件
+# 个人中转的存储：SQLite、状态文件与 PostgreSQL
 
-`armadra-relay personal` 的全部状态（账号、口令哈希、签名钥、源 / 设备 / 链接登记、设置）放在数据目录里，二选一：
+`armadra-relay personal` 的全部状态（账号、口令哈希、签名钥、源 / 设备 / 链接登记、设置）三选一：
 
-| `--store` | 文件                    | 说明                                                                     |
-| --------- | ----------------------- | ------------------------------------------------------------------------ |
-| `sqlite`  | `relay.db`（WAL，0600） | 新装缺省。`node:sqlite`，`serve` 与 CLI 同时打开同一个库，写在事务里     |
-| `file`    | `state.json`（0600）    | 0.3.x 之前的部署。目录锁 + 原子改名；只有它时不写 `--store` 也自动沿用它 |
+| `--store`  | 位置                                     | 说明                                                                     |
+| ---------- | ---------------------------------------- | ------------------------------------------------------------------------ |
+| `sqlite`   | `relay.db`（WAL，0600）                  | 新装缺省。`node:sqlite`，`serve` 与 CLI 同时打开同一个库，写在事务里     |
+| `file`     | `state.json`（0600）                     | 0.3.x 之前的部署。目录锁 + 原子改名；只有它时不写 `--store` 也自动沿用它 |
+| `postgres` | PostgreSQL（数据目录留 `postgres.json`） | 多节点，显式选。几个节点共用一个库；不选就不加载驱动                     |
 
-都不存消息内容、令牌明文或口令。私钥以 PKCS#8 存在库或文件里，靠文件权限 0600 与数据目录 0700 保护。
+都不存消息内容、令牌明文或口令。私钥以 PKCS#8 存在库或文件里，靠文件权限 0600 与数据目录 0700（PostgreSQL 靠库的访问控制）保护。
 
 ## 怎么选
 
@@ -40,6 +41,20 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 - 在线备份：`personal backup --data-dir /data --out /data/backup-$(date +%F).db`。SQLite 用 `VACUUM INTO`，`serve` 运行时也一致；状态文件是拷一份。备份文件 0600，目标已存在就拒绝。
 - 恢复：停服，把备份文件放回数据目录改名为 `relay.db`（状态文件则为 `state.json`），确认目录里没有另一种存储文件，起服。
 - 也可以停服后 `tar` 整个数据目录（连同 `tls/`、`acme/`）。
+
+## 多节点：PostgreSQL 存储与控制面
+
+单节点什么都不用加（`--control memory` 是缺省）。几个 `serve` 共用一份数据时：
+
+- 存储：`--store postgres`，连接串给 `--database-url`、`RELAY_DATABASE_URL`，或从文件读（`--database-url-file` / `RELAY_DATABASE_URL_FILE`，口令不出现在进程参数里）；`--database-schema` 选 schema（缺省连接的缺省 schema，给了不存在的就建一个空的）。打开时自动迁移（`packages/control-store-postgres/migrations/`，账本 `cloud_migrations`，与 `armadra-cloud migrate` 同一份）。
+- 控制面：`--control postgres`（同一个库：路由 / 撤销 / 限流表 + `LISTEN/NOTIFY`）或 `--control redis --redis-url redis://…`。路由互见、在线事件与关隧道广播到各节点，撤销与速率限流各节点共用一个桶；并发限流按节点。
+- 每个节点 `--node-id` 各不相同（缺省 `--host`），数据目录各自一个（证书、ACME 账号与 `postgres.json` 标记在里面）。
+
+第一个节点给了 `--account` 与口令文件就自动初始化；之后的节点看到库里已有个人中转直接打开。`passwd` / `rotate-key` / `links revoke` 在任一节点执行，所有节点一秒内察觉（看租户修订号）并断开撤销掉的连接。
+
+库里只能有个人中转那一个租户；连不上、库不认识（没有账本却已有表）、账本对不上、库比程序新：一律拒绝启动，不自动清库或重建。数据目录有 `postgres.json` 而没给连接串也拒绝——不会悄悄新建一个本地库。
+
+迁入：停掉所有节点，`personal migrate --data-dir /data --to postgres --database-url …`（`state.json` 或 `relay.db` 整份写进库、读回比对，原文件改名留作回退）。迁出：`--to sqlite` 或 `--to file`，库里的数据原样保留（不删），只把 `postgres.json` 改名。PostgreSQL 的备份用库自己的（`pg_dump` 或托管服务的快照），`personal backup` 会提示。
 
 ## 升级与降级
 
