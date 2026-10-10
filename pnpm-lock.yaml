@@ -135,6 +135,31 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@types/node@24.3.0)(@vitest/coverage-v8@4.1.11)(vite@8.3.1(@types/node@24.3.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
+  apps/relay-workers:
+    dependencies:
+      '@armadra/relay-runtime-workers':
+        specifier: workspace:*
+        version: link:../../packages/relay-runtime-workers
+    devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: 1.3.6
+        version: 1.3.6(@cloudflare/workers-types@5.20261001.1)(@types/node@24.3.0)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11)
+      '@cloudflare/workers-types':
+        specifier: 5.20261001.1
+        version: 5.20261001.1
+      '@types/node':
+        specifier: 24.3.0
+        version: 24.3.0
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@types/node@24.3.0)(@vitest/coverage-v8@4.1.11)(vite@8.3.1(@types/node@24.3.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+      wrangler:
+        specifier: 4.147.0
+        version: 4.147.0(@cloudflare/workers-types@5.20261001.1)(@types/node@24.3.0)
+
   packages/cloud-shared:
     dependencies:
       '@armadra/platform-protocol':
