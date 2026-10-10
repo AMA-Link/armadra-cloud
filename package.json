@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "packageManager": "pnpm@11.18.0",
+  "packageManager": "pnpm@12.8.1",
   "engines": {
-    "node": ">=22.18"
+    "node": ">=24"
   },
   "scripts": {
     "libs:build": "pnpm --filter @armadra/platform-protocol build",
