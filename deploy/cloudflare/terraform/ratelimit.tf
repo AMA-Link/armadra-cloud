@@ -11,7 +11,7 @@ variable "login_requests_per_period" {
 }
 
 locals {
-  login_paths_free = "(http.request.uri.path eq \"/v1/auth/login\" or http.request.uri.path wildcard \"/v1/links/*/accept\")"
+  login_paths_free = "(http.request.uri.path eq \"/v1/auth/login\" or http.request.uri.path eq \"/v1/auth/password\" or http.request.uri.path wildcard \"/v1/links/*/accept\")"
   login_paths_paid = "(http.host in ${local.relay_host_set} and ${local.login_paths_free})"
 }
 

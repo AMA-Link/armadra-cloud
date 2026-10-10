@@ -704,6 +704,53 @@ describe("个人中转端到端", () => {
     expect(await closeCode(stream)).toBe(4401);
   });
 
+  it("改口令（§18）：旧口令错 401；成功后其它设备失效、当前设备换新刷新令牌；旧口令登不上", async () => {
+    const NEXT = "saffron-glacier-meadow-77";
+    secrets.push(NEXT);
+    const signIn = async (password: string) =>
+      call("POST", `${issuer}/v1/auth/login`, {
+        body: { account: "me", password, device: DEVICE },
+      });
+    type Answer = { session: typeof ownerSession };
+    const current = (output("auth", "login", await signIn(PASSWORD)) as Answer)
+      .session;
+    const other = (output("auth", "login", await signIn(PASSWORD)) as Answer)
+      .session;
+    secrets.push(current.accessToken, other.accessToken);
+    const wrong = await call("POST", `${issuer}/v1/auth/password`, {
+      body: { password: "wrong-old-password", newPassword: NEXT },
+      headers: bearer(current.accessToken),
+    });
+    expect(wrong.status).toBe(401);
+    expect(errorCode(wrong)).toBe("credentials_invalid");
+    const changed = output(
+      "auth",
+      "changePassword",
+      await call("POST", `${issuer}/v1/auth/password`, {
+        body: { password: PASSWORD, newPassword: NEXT },
+        headers: bearer(current.accessToken),
+      }),
+    ) as Answer;
+    secrets.push(changed.session.refreshToken as string);
+    const meOf = (token: string) =>
+      call("GET", `${issuer}/v1/me`, { headers: bearer(token) });
+    expect((await meOf(current.accessToken)).status).toBe(200);
+    expect(errorCode(await meOf(other.accessToken))).toBe("unauthenticated");
+    const stale = await call("POST", `${issuer}/v1/auth/refresh`, {
+      body: { refreshToken: other.refreshToken },
+    });
+    expect(errorCode(stale)).toBe("session_revoked");
+    output(
+      "auth",
+      "refresh",
+      await call("POST", `${issuer}/v1/auth/refresh`, {
+        body: { refreshToken: changed.session.refreshToken },
+      }),
+    );
+    expect(errorCode(await signIn(PASSWORD))).toBe("credentials_invalid");
+    output("auth", "login", await signIn(NEXT));
+  });
+
   it("错 5 次锁定：第 6 次答 429 account_locked，带 retryAfterMs 与 Retry-After，不再比对口令", async () => {
     for (let index = 0; index < 5; index += 1) {
       const reply = await call("POST", `${issuer}/v1/auth/login`, {
@@ -750,6 +797,7 @@ describe("个人中转端到端", () => {
       .join("\n");
     expect(bytes).not.toContain(MARKER);
     expect(bytes).not.toContain(PASSWORD);
+    expect(bytes).not.toContain("saffron-glacier-meadow-77");
     for (const secret of secrets)
       expect(bytes).not.toContain(secret.slice(-16));
   });

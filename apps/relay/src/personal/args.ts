@@ -454,7 +454,7 @@ function challengeOf(
       scope = parseChallengeScope(scopeText);
     } catch {
       throw new UsageError(
-        `--challenge-scope 只能是 auth.login、links.accept，逗号分隔：${scopeText}`,
+        `--challenge-scope 只能是 auth.login、links.accept、auth.changePassword，逗号分隔：${scopeText}`,
       );
     }
   }

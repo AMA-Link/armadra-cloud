@@ -18,12 +18,13 @@ export function watchRevocations(
     ...ports,
     accounts: {
       ...ports.accounts,
-      async resetPassword(tenantId, accountId, password, nowMs) {
+      async resetPassword(tenantId, accountId, password, nowMs, options) {
         const done = await ports.accounts.resetPassword(
           tenantId,
           accountId,
           password,
           nowMs,
+          options,
         );
         if (done) changed();
         return done;

@@ -41,7 +41,7 @@ export interface RelayEnv {
   RELAY_TURNSTILE_SITE_KEY?: string;
   /** Turnstile 答复里 `hostname` 的允许列表，逗号分隔；空 = 拒绝一切；https 的 issuer 下不得含本机地址。 */
   RELAY_TURNSTILE_HOSTNAMES?: string;
-  /** 要挑战的 procedure，逗号分隔：`auth.login`（缺省）、`links.accept`。 */
+  /** 要挑战的 procedure，逗号分隔：`auth.login`（缺省）、`links.accept`、`auth.changePassword`。 */
   RELAY_CHALLENGE_SCOPE?: string;
   // ------------------------------------------------------------ secret
   /** 签名私钥的主密钥：64 位十六进制（32 字节），personal 必需。 */
@@ -248,7 +248,7 @@ function challengeOf(env: RelayEnv, issuer: string): RelayConfig["challenge"] {
       scope = parseChallengeScope(text);
     } catch {
       throw new ConfigError(
-        "RELAY_CHALLENGE_SCOPE 只能是 auth.login、links.accept",
+        "RELAY_CHALLENGE_SCOPE 只能是 auth.login、links.accept、auth.changePassword",
       );
     }
   }

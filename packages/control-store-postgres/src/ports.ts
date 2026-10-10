@@ -145,7 +145,7 @@ export function createPostgresPorts(
           fn,
         );
       },
-      resetPassword(tenantId, accountId, password, nowMs) {
+      resetPassword(tenantId, accountId, password, nowMs, options) {
         return write(tenantId, async (tx) => {
           const row = await account(tx, tenantId, accountId);
           if (!row) return { result: false, changed: false };
@@ -158,7 +158,8 @@ export function createPostgresPorts(
           });
           await tx`
             UPDATE devices SET revoked_at_ms = ${nowMs}
-            WHERE tenant_id = ${tenantId} AND subject = ${accountId} AND revoked_at_ms IS NULL`;
+            WHERE tenant_id = ${tenantId} AND subject = ${accountId} AND revoked_at_ms IS NULL
+              AND device_id <> ${options?.keepDeviceId ?? ""}`;
           return { result: true, changed: true };
         });
       },

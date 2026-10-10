@@ -9,6 +9,11 @@
  * 连续 5 次失败锁 1 分钟，此后每多一次翻倍，封顶 15 分钟；最后一次失败一小时后清零；
  * 锁着的时候不比对口令，直接答 `account_locked` 带 `retryAfterMs`。账号名不对也计数（只在
  * 内存），不泄露账号名是否存在。
+ *
+ * 改口令（cloud-api §18）：账号本人的会话 + 旧口令。按 IP 限流（与登录同一个桶）→ 挑战（scope
+ * 含 `auth.changePassword` 才要）→ 锁定检查 → 新口令策略 → 比对旧口令（失败计入同一个锁定计数）→
+ * 换口令记录、清锁、撤销本人除当前设备以外的全部设备 → 当前设备的刷新令牌换新。`personal passwd`
+ * 走同一个 {@link setPassword}，只是不留设备。
  */
 import type {
   ChallengeToken,
@@ -26,8 +31,9 @@ import {
   hashPassword,
   verifyPassword,
 } from "./passwords.ts";
-import type { ControlContext, Lockout } from "./ports.ts";
-import { createDevice, sessionFor } from "./sessions.ts";
+import type { ControlContext, Lockout, ResetPasswordOptions } from "./ports.ts";
+import { refreshHash, randomToken } from "./secrets.ts";
+import { createDevice, sessionFor, type Caller } from "./sessions.ts";
 
 /** 一次失败之后的计数与锁（纯函数）。 */
 export function nextLockout(previous: Lockout, nowMs: number): Lockout {
@@ -49,6 +55,13 @@ export interface LoginInput {
   account: string;
   password: string;
   device: DeviceInput;
+  challenge?: ChallengeToken;
+}
+
+export interface ChangePasswordInput {
+  /** 旧口令。 */
+  password: string;
+  newPassword: string;
   challenge?: ChallengeToken;
 }
 
@@ -75,7 +88,74 @@ export function createAccounts(context: ControlContext) {
     throw new ControlError("credentials_invalid");
   }
 
+  /** 失败一次：记进账号的锁定计数。 */
+  const recordFailure = (accountId: string, nowMs: number) =>
+    context.ports.accounts.update(context.tenantId, accountId, (draft) => {
+      if (draft) Object.assign(draft, nextLockout(draft, nowMs));
+    });
+
   return {
+    /**
+     * 改口令（cloud-api §18）：成功答当前设备换了刷新令牌的新会话；其余本人设备全部撤销。
+     */
+    async changePassword(
+      caller: Caller,
+      input: ChangePasswordInput,
+      ip: string,
+    ): Promise<Session> {
+      if (caller.role !== "owner") throw new ControlError("forbidden");
+      const byIp = await context.limits.hit("login.ip", ip);
+      if (!byIp.allowed)
+        throw new ControlError("rate_limited", {
+          retryAfterMs: byIp.retryAfterMs,
+        });
+      await context.challenge?.check(
+        "auth.changePassword",
+        input.challenge,
+        ip,
+      );
+      const account = await context.ports.accounts.get(
+        context.tenantId,
+        caller.subject,
+      );
+      if (!account) throw new ControlError("unauthenticated");
+      const wait = lockedFor(account, context.now());
+      if (wait > 0)
+        throw new ControlError("account_locked", { retryAfterMs: wait });
+      checkPassword(context, input.newPassword, account.name);
+      if (!(await verifyPassword(input.password, account.password))) {
+        await recordFailure(account.accountId, context.now());
+        throw new ControlError("credentials_invalid");
+      }
+      const nowMs = context.now();
+      await setPassword(
+        context,
+        account.accountId,
+        account.name,
+        input.newPassword,
+        nowMs,
+        {
+          keepDeviceId: caller.deviceId,
+        },
+      );
+      // 当前设备的刷新令牌也换新：旧的哪怕泄露过也就此作废（不当作重放，不撤销这台）。
+      const rotated = await context.ports.devices.update(
+        context.tenantId,
+        caller.deviceId,
+        (device) => {
+          if (!device || device.revokedAtMs !== null) return null;
+          const next = `${device.deviceId}.${randomToken(32)}`;
+          device.refreshHash = refreshHash(next);
+          device.previousRefreshHash = null;
+          device.rotation += 1;
+          device.lastSeenAtMs = nowMs;
+          return { device: { ...device }, refreshToken: next };
+        },
+      );
+      if (!rotated) throw new ControlError("unauthenticated");
+      return sessionFor(context, rotated.device, rotated.refreshToken);
+    },
+
     async login(input: LoginInput, ip: string): Promise<Session> {
       const byIp = await context.limits.hit("login.ip", ip);
       if (!byIp.allowed)
@@ -96,13 +176,7 @@ export function createAccounts(context: ControlContext) {
       const ok = await verifyPassword(input.password, account.password);
       const nowMs = context.now();
       if (!ok) {
-        await context.ports.accounts.update(
-          context.tenantId,
-          accountId,
-          (draft) => {
-            if (draft) Object.assign(draft, nextLockout(draft, nowMs));
-          },
-        );
+        await recordFailure(accountId, nowMs);
         throw new ControlError("credentials_invalid");
       }
       await context.ports.accounts.update(
@@ -135,7 +209,31 @@ export function checkPassword(
   if (rule) throw new ControlError(rule);
 }
 
-/** 改口令：重新派生、清锁、撤销账号本人的全部设备（访客不受影响，由链接管）。 */
+/**
+ * 换口令的唯一实现（API 与 `personal passwd` 共用）：过策略、重新派生、清锁，撤销账号本人的
+ * 设备（`keepDeviceId` 那台除外；访客不受影响，由链接管）。账号不存在答 `not_found`。
+ */
+export async function setPassword(
+  context: Pick<ControlContext, "tenantId" | "ports" | "passwordPolicy">,
+  accountId: string,
+  name: string,
+  password: string,
+  nowMs: number,
+  options: ResetPasswordOptions = {},
+): Promise<void> {
+  checkPassword(context, password, name);
+  const record = await hashPassword(password);
+  const found = await context.ports.accounts.resetPassword(
+    context.tenantId,
+    accountId,
+    record,
+    nowMs,
+    options,
+  );
+  if (!found) throw new ControlError("not_found");
+}
+
+/** 运维改口令（`personal passwd`）：按账号名找到账号，撤销本人的全部设备。 */
 export async function changePassword(
   context: Pick<ControlContext, "tenantId" | "ports" | "passwordPolicy">,
   name: string,
@@ -143,18 +241,10 @@ export async function changePassword(
   nowMs: number,
 ): Promise<void> {
   checkPassword(context, password, name);
-  const record = await hashPassword(password);
   const account = await context.ports.accounts.findByName(
     context.tenantId,
     name,
   );
-  const found =
-    account !== null &&
-    (await context.ports.accounts.resetPassword(
-      context.tenantId,
-      account.accountId,
-      record,
-      nowMs,
-    ));
-  if (!found) throw new ControlError("not_found");
+  if (!account) throw new ControlError("not_found");
+  await setPassword(context, account.accountId, account.name, password, nowMs);
 }

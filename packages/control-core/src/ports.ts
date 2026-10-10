@@ -126,6 +126,11 @@ export interface TenantSettings {
 
 // ------------------------------------------------------------ 存储端口
 
+export interface ResetPasswordOptions {
+  /** 不撤销的设备（改口令的当前设备）。 */
+  keepDeviceId?: string;
+}
+
 export interface AccountStore {
   findByName(tenantId: string, name: string): Promise<AccountRecord | null>;
   get(tenantId: string, accountId: string): Promise<AccountRecord | null>;
@@ -136,14 +141,15 @@ export interface AccountStore {
     fn: (draft: AccountRecord | null) => T,
   ): Promise<T>;
   /**
-   * 原子地：换口令记录、清锁，并撤销 `sub = accountId` 的全部未撤销设备（访客不受影响）。
-   * 账号不存在答 false。
+   * 原子地：换口令记录、清锁，并撤销 `sub = accountId` 的全部未撤销设备（访客不受影响）；
+   * 给了 `keepDeviceId` 时留下这一台（改口令的当前设备）。账号不存在答 false。
    */
   resetPassword(
     tenantId: string,
     accountId: string,
     password: PasswordRecord,
     nowMs: number,
+    options?: ResetPasswordOptions,
   ): Promise<boolean>;
 }
 

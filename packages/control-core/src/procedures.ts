@@ -23,6 +23,7 @@ import { createSources } from "./sources.ts";
 /** personal 报的能力（契约 `PLATFORM_CAPABILITIES` 的子集）。 */
 export const PERSONAL_CAPABILITIES = [
   "auth.password",
+  "auth.password-change",
   "links.source-invite",
   "links.update",
   "links.scope",
@@ -36,6 +37,7 @@ export const PERSONAL_PROCEDURES = [
   "auth.login",
   "auth.refresh",
   "auth.logout",
+  "auth.changePassword",
   "me.get",
   "me.sources",
   "me.devices",
@@ -106,6 +108,13 @@ export function createPersonalProcedures(
       await revokeDevice(context, (await caller()).deviceId);
       return {};
     },
+    "auth.changePassword": async ({ input, caller, ip }) => ({
+      session: await accounts.changePassword(
+        await caller(),
+        input as unknown as Parameters<typeof accounts.changePassword>[1],
+        ip,
+      ),
+    }),
     "me.get": async ({ caller }) => {
       const who = await caller();
       const displayName =

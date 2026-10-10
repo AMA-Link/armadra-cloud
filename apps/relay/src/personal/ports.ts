@@ -68,7 +68,7 @@ export function createStatePorts(store: StateStore): ControlPorts {
           return result;
         });
       },
-      async resetPassword(_tenantId, accountId, password, nowMs) {
+      async resetPassword(_tenantId, accountId, password, nowMs, options) {
         return store.update((draft) => {
           const account = owner(draft, accountId);
           if (!account) return false;
@@ -77,7 +77,11 @@ export function createStatePorts(store: StateStore): ControlPorts {
           account.failures = 0;
           account.lockedUntilMs = 0;
           for (const device of draft.devices)
-            if (device.subject === accountId && device.revokedAtMs === null)
+            if (
+              device.subject === accountId &&
+              device.revokedAtMs === null &&
+              device.deviceId !== options?.keepDeviceId
+            )
               device.revokedAtMs = nowMs;
           return true;
         });
