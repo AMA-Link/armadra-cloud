@@ -9,6 +9,10 @@
 import { constants, readFileSync } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
 
+import {
+  createChallengeGate,
+  type ChallengeVerifier,
+} from "@armadra/control-core/challenge";
 import { createMeStreamCore } from "@armadra/control-core/me-stream";
 import { LAST_SEEN_FLUSH_MS } from "@armadra/control-core/sessions";
 import { trustedOriginsOf } from "@armadra/control-core/sources";
@@ -35,6 +39,7 @@ import {
   type AcmeManager,
 } from "./acme.ts";
 import { createPersonalApi } from "./api.ts";
+import { createTurnstileVerifier, readTurnstileSecret } from "./challenge.ts";
 import {
   createPersonalContext,
   stateRevocation,
@@ -75,6 +80,8 @@ export interface PersonalServeDeps {
   acmeIssuer?: AcmeIssuer;
   /** 测试用：缩短 me/stream 的心跳。 */
   streamPingMs?: number;
+  /** 测试用：换掉挑战的提供方（缺省按 `--challenge` 调 Turnstile siteverify）。 */
+  challengeVerifier?: ChallengeVerifier;
 }
 
 export function issuerFor(options: PersonalServeOptions): string {
@@ -212,6 +219,23 @@ async function startServing(
     now,
     disconnect: (filter) => relayRef.current?.disconnect(filter),
   });
+  if (options.challenge) {
+    const { siteKey, scope, secretFile } = options.challenge;
+    context.challenge = createChallengeGate({
+      siteKey,
+      scope,
+      verifier:
+        deps.challengeVerifier ??
+        createTurnstileVerifier({ secret: readTurnstileSecret(secretFile) }),
+      now,
+      onRejected: (procedure, reasons) =>
+        log.info("人机挑战没通过", { procedure, reasons: reasons.join(",") }),
+    });
+    log.info("已开启人机挑战", {
+      provider: "turnstile",
+      scope: scope.join(","),
+    });
+  }
   const streamCore = createMeStreamCore(context);
   const stream = createMeStream(streamCore, {
     now,

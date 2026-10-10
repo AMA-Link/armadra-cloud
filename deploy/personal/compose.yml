@@ -19,6 +19,8 @@
 #   proxy_set_header X-Real-IP $remote_addr;
 # 用状态文件（--store file）时也可写进 state.json 的 settings.trustedProxy: { "proxies": ["127.0.0.1/32"], "prefer": "forwarded-for" }；命令行优先。
 # 服务端名称（客户端添加时的缺省显示名）：RELAY_NAME=家里（状态文件另可写 settings.displayName），缺省用 RELAY_HOST。
+# 人机挑战（Turnstile，契约 §16，缺省关）：RELAY_CHALLENGE=turnstile RELAY_TURNSTILE_SITE_KEY=<站点密钥>，
+#   secret 写进文件后加一个 secret 挂载并设 RELAY_TURNSTILE_SECRET_FILE=/run/secrets/<名字>（见 docs/runbooks/cloudflare-protection.md）。
 # 存储：新装缺省 SQLite（卷里的 relay.db）；卷里已有 state.json 的照旧用它，停服后
 #   docker compose -f deploy/personal/compose.yml run --rm relay personal migrate --data-dir /data --to sqlite
 # 迁过去（见 docs/runbooks/personal-storage.md）。检查：exec relay node /app/out/cli.js personal doctor --data-dir /data
@@ -43,6 +45,10 @@ services:
       RELAY_PERSONAL_ACCOUNT: "${RELAY_ACCOUNT:-me}"
       RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/relay_password
       RELAY_NAME: "${RELAY_NAME:-}"
+      RELAY_CHALLENGE: "${RELAY_CHALLENGE:-}"
+      RELAY_TURNSTILE_SITE_KEY: "${RELAY_TURNSTILE_SITE_KEY:-}"
+      RELAY_TURNSTILE_SECRET_FILE: "${RELAY_TURNSTILE_SECRET_FILE:-}"
+      RELAY_CHALLENGE_SCOPE: "${RELAY_CHALLENGE_SCOPE:-}"
     secrets:
       - relay_password
     ports:
