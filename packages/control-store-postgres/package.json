@@ -1,0 +1,34 @@
+{
+  "name": "@armadra/control-store-postgres",
+  "version": "0.3.7",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "控制面端口的 PostgreSQL 实现：编号迁移与账本、全部存储端口、签名钥、租户导入导出（cloud 与 Node 中继 `--store postgres` 共用，不发布）",
+  "exports": {
+    "./package.json": "./package.json",
+    "./migrations/*": "./migrations/*",
+    "./testing/*": "./test/*.ts",
+    "./*": "./src/*.ts"
+  },
+  "files": [
+    "migrations",
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mts"
+  },
+  "dependencies": {
+    "@armadra/cloud-shared": "workspace:*",
+    "@armadra/control-core": "workspace:*",
+    "@armadra/control-store-sql": "workspace:*",
+    "postgres": "3.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}
