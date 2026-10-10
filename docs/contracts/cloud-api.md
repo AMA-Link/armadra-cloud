@@ -20,7 +20,7 @@
 | `platform.jwks`               | `GET /.well-known/jwks.json`             | `anonymous` | —                                                                                                                                              |
 | `platform.health`             | `GET /health`                            | `anonymous` | `unavailable`                                                                                                                                  |
 | `auth.register`               | `POST /v1/auth/register`                 | `anonymous` | `email_taken`、`rate_limited`、`password_too_short`、`password_too_long`、`password_too_common`、`password_contains_name`、`password_breached` |
-| `auth.login`                  | `POST /v1/auth/login`                    | `anonymous` | `credentials_invalid`、`account_locked`、`account_disabled`、`rate_limited`                                                                    |
+| `auth.login`                  | `POST /v1/auth/login`                    | `anonymous` | `credentials_invalid`、`account_locked`、`account_disabled`、`rate_limited`、`challenge_required`、`challenge_invalid`                         |
 | `auth.mfaVerify`              | `POST /v1/auth/mfa/verify`               | `anonymous` | `mfa_invalid`、`mfa_expired`、`account_locked`                                                                                                 |
 | `auth.refresh`                | `POST /v1/auth/refresh`                  | `anonymous` | `session_expired`、`session_revoked`                                                                                                           |
 | `auth.logout`                 | `POST /v1/auth/logout`                   | `session`   | —                                                                                                                                              |
@@ -91,14 +91,14 @@
 
 <!-- rpc:begin contract=§5 -->
 
-| procedure      | 方法与路径                       | scope                   | 错误码                                                                                  |
-| -------------- | -------------------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
-| `links.create` | `POST /v1/links`                 | `owner` / `org:admin`   | `source_access_denied`、`org_role_insufficient`、`bad_request`                          |
-| `links.get`    | `GET /v1/links/{linkId}`         | `anonymous`             | `link_invalid`                                                                          |
-| `links.accept` | `POST /v1/links/{linkId}/accept` | `session` / `anonymous` | `link_invalid`、`link_expired`、`link_exhausted`、`link_secret_invalid`、`rate_limited` |
-| `links.list`   | `GET /v1/links`                  | `owner` / `org:admin`   | —                                                                                       |
-| `links.update` | `PATCH /v1/links/{linkId}`       | `owner` / `org:admin`   | `not_found`                                                                             |
-| `links.revoke` | `DELETE /v1/links/{linkId}`      | `owner` / `org:admin`   | `not_found`                                                                             |
+| procedure      | 方法与路径                       | scope                   | 错误码                                                                                                                             |
+| -------------- | -------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `links.create` | `POST /v1/links`                 | `owner` / `org:admin`   | `source_access_denied`、`org_role_insufficient`、`bad_request`                                                                     |
+| `links.get`    | `GET /v1/links/{linkId}`         | `anonymous`             | `link_invalid`                                                                                                                     |
+| `links.accept` | `POST /v1/links/{linkId}/accept` | `session` / `anonymous` | `link_invalid`、`link_expired`、`link_exhausted`、`link_secret_invalid`、`rate_limited`、`challenge_required`、`challenge_invalid` |
+| `links.list`   | `GET /v1/links`                  | `owner` / `org:admin`   | —                                                                                                                                  |
+| `links.update` | `PATCH /v1/links/{linkId}`       | `owner` / `org:admin`   | `not_found`                                                                                                                        |
+| `links.revoke` | `DELETE /v1/links/{linkId}`      | `owner` / `org:admin`   | `not_found`                                                                                                                        |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -248,3 +248,30 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 - **personal**：依次取 `--name`、`RELAY_NAME`、状态文件 `settings.displayName`（可省略，旧文件照常读），都没有时是 `--host`；每次请求现读，状态文件被别的进程改了即时生效。
 - **saas**：字段预留——`platform.info` 现在与其余业务路由一样答 501，实现时按同一语义报（运营方配置的服务名）。
+
+## §16 挑战
+
+协议 1.2（协议包 0.3.5）。服务端可以要求登录、接受分享链接之前先过一道人机挑战（Cloudflare Turnstile）。本节先定形状，校验由后续批次实现；在服务端报出 `platform.info.challenge` 之前，客户端带不带 `challenge` 行为都不变。
+
+- **服务端声明**：`platform.info.challenge = { provider: "turnstile", siteKey, scope }`，`scope` 是要求挑战的 procedure（`auth.login`、`links.accept`），`siteKey` 不是秘密；同时 `capabilities` 含 `challenge.turnstile`。不报 `challenge` = 不要求。
+- **请求**：`auth.login` 与 `links.accept` 的输入多一个可选的 `challenge: { provider: "turnstile", token }`（`token` 1–2048 字符），是页面或手机里挑战组件交回的一次性令牌（有效 300 秒、只能用一次）。原生 App 在中继托管的同源挑战页里取令牌。
+- **答复**：`scope` 列了这条 procedure 而请求没带 → `400 challenge_required`；令牌无效、过期、用过或提供方不认 → `400 challenge_invalid`。挑战先于口令校验与按账号的锁定计数，挑战失败不计入登录失败次数；按 IP 的限流照常先计。
+- **core 作为客户端**（`sources.mount` 经 `links.accept`）没有挑战组件：personal 缺省只对 `auth.login` 要求，`links.accept` 由链接自带的 128 位秘密与按 IP 限流保护。
+
+## §17 中继节点地址与节点回报
+
+协议 1.2（协议包 0.3.5）。
+
+- **节点地址可带 query**：`sources.heartbeatHint`（`GET /v1/sources/me/relay`）答的 `nodes[].url` 是完整的 WebSocket 地址，可以带路径与 query，源原样连接；没有路径时补 `/t/v1`。Workers 上的中继答 `wss://<中继域>/t/v1?src=<sourceId>`，靠 `src` 在握手前把隧道路由到这个源的对象；Node 中继匹配 `/t/v1` 时忽略 query，两种地址对它等价。`src` 只是路由提示，身份仍以握手里隧道令牌的 `sub` 为准，两者不一致时中继拒绝这条隧道（4490 `tunnel_token_invalid`）。
+- **Workers 中继的心跳**：心跳「源主动、中继被动」——`ready.heartbeatMs` 缺省 45 秒（`RELAY_HEARTBEAT_MS` 可调，10–60 秒），源按它发 `PING`，中继立即回 `PONG`、自己不发 `PING`；中继每个检查周期（缺省 60 秒）看一次，超过 `2 × heartbeatMs` 没收到源的任何帧就以 1001 关闭隧道并发 `sourceOffline`。源的静默看门狗按 `heartbeatMisses × heartbeatMs` 计，不受影响。
+- **节点回报** `relay.nodePresence`（`POST /v1/relay/nodes/{node}/presence`）：不和控制面共用 Redis 的节点（Workers 中继的 saas 模式）用它把隧道上下线告诉控制面。认证是节点令牌（`Authorization: Bearer <节点令牌>`，scope `relay-node`，运营方给每个节点发一枚，经 secret 下发）。体 `{ node, ttlMs, events }`：`events` 1–256 条 `sourceOnline { sourceId, tunnelId, coreVersion, atMs }` / `sourceOffline { sourceId, tunnelId, atMs }`，可以重复报（幂等，`sourceOffline` 只删 `tunnelId` 相同的那条）；`ttlMs`（10 秒到 10 分钟）内没再报 `sourceOnline` 的路由由控制面当作过期。答 `{ accepted }`。personal 不实现（`404`），cloud 落地前答 `501 not_implemented`。
+
+<!-- rpc:begin contract=§17 -->
+
+| procedure            | 方法与路径                             | scope        | 错误码                         |
+| -------------------- | -------------------------------------- | ------------ | ------------------------------ |
+| `relay.nodePresence` | `POST /v1/relay/nodes/{node}/presence` | `relay-node` | `unauthenticated`、`forbidden` |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
+
+<!-- rpc:end -->
