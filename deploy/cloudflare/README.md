@@ -2,7 +2,7 @@
 
 `relay.armadra.com`（生产）与 `relay-staging.armadra.com`（staging）是同一份 Worker 代码的两个环境：wrangler 项目在 [apps/relay-workers](../../apps/relay-workers/)（[wrangler.jsonc](../../apps/relay-workers/wrangler.jsonc)），运行时在 [packages/relay-runtime-workers](../../packages/relay-runtime-workers/)。线上形状与 Node 中继相同（契约 [cloud-api §7–§12、§17](../../docs/contracts/cloud-api.md)），唯一差别是隧道节点地址带 `?src=<sourceId>`。
 
-部署、录 secret、改 DNS 都是对外操作，由维护者在本机执行；仓库里的脚本与测试只在本地 workerd 上跑，不连 Cloudflare 账号。日常运维（初始化、心跳、配额、回滚、排障）见[运维手册](../../docs/runbooks/relay-on-cloudflare.md)。
+部署、录 secret、改 DNS 都是对外操作，由维护者在本机执行；仓库里的脚本与测试只在本地 workerd 上跑，不连 Cloudflare 账号。日常运维（初始化、心跳、配额、回滚、排障）见[运维手册](../../docs/runbooks/relay-on-cloudflare.md)；区域规则、人机挑战、预算告警与拉闸见[防护手册](../../docs/runbooks/cloudflare-protection.md)。
 
 ## 架构
 
@@ -28,22 +28,23 @@
 
 只经 `wrangler secret put` 录入，值不进仓库、不进对话、不进日志：
 
-| 名字                      | 必填 | 说明                                                                        |
-| ------------------------- | ---- | --------------------------------------------------------------------------- |
-| `RELAY_MASTER_KEY`        | 是   | 签名私钥的主密钥，64 位十六进制（`openssl rand -hex 32`）；丢了就要换签名钥 |
-| `RELAY_PERSONAL_ACCOUNT`  | 首次 | 首次初始化的账号名；初始化后删掉                                            |
-| `RELAY_PERSONAL_PASSWORD` | 首次 | 首次初始化的口令（策略与 Node 中继相同）；初始化后删掉                      |
-| `RELAY_METRICS_TOKEN`     |      | `/metrics` 的 Bearer 令牌；不录就不开 `/metrics`                            |
-| `RELAY_NODE_TOKEN`        |      | 只有 `RELAY_MODE=saas`：向控制面回报在线（cloud-api §17）的节点令牌         |
-| `RELAY_TURNSTILE_SECRET`  |      | 预留给挑战（cloud-api §16）；校验落地前不用录                               |
+| 名字                      | 必填 | 说明                                                                                               |
+| ------------------------- | ---- | -------------------------------------------------------------------------------------------------- |
+| `RELAY_MASTER_KEY`        | 是   | 签名私钥的主密钥，64 位十六进制（`openssl rand -hex 32`）；丢了就要换签名钥                        |
+| `RELAY_PERSONAL_ACCOUNT`  | 首次 | 首次初始化的账号名；初始化后删掉                                                                   |
+| `RELAY_PERSONAL_PASSWORD` | 首次 | 首次初始化的口令（策略与 Node 中继相同）；初始化后删掉                                             |
+| `RELAY_METRICS_TOKEN`     |      | `/metrics` 的 Bearer 令牌；不录就不开 `/metrics`                                                   |
+| `RELAY_NODE_TOKEN`        |      | 只有 `RELAY_MODE=saas`：向控制面回报在线（cloud-api §17）的节点令牌                                |
+| `RELAY_TURNSTILE_SECRET`  |      | 人机挑战（cloud-api §16）：录了才要求登录带 Turnstile 令牌，先配好 `vars.RELAY_TURNSTILE_SITE_KEY` |
 
 ## 部署前要在 Cloudflare 面板做的事
 
 1. **确认 Workers 套餐**（Workers & Pages → Plans）。Free 就用现在的配置 F；第三台主机起或连续几天 `/metrics` 的 `relay_budget_used` 超过额度七成时升 Paid，按上表改成配置 P，同时在账单里确认**预算告警**已开并设阈值（例如 $15 / 月）。
 2. **不要手建 `relay` 与 `relay-staging` 的 DNS 记录**：Custom Domain 在第一次部署时自动建记录、自动签证书。已有同名记录要先删掉，否则部署失败。
 3. **Bot Fight Mode 保持关闭**（Security → Bots）：它会挑战原生 App 与 core 的非浏览器请求，WAF 规则绕不过。
-4. 可选：Security → WAF → Rate limiting rules 建 1 条区域级规则兜底（按 IP，`/v1/auth/login` 与 `/v1/links/*/accept`，10 秒窗）；Worker 里的闸按节点各自计数，这条是全局的。
-5. 可选（CI 自动部署才需要）：建一个只有 Workers Scripts:Edit、Durable Objects:Edit、Workers Routes:Edit 的 API Token，自己放进 GitHub secret `CLOUDFLARE_API_TOKEN`。本机部署用已登录的 `wrangler login` 即可。
+4. 区域规则（自定义规则、Free 托管规则、1 条区域级限速兜底、Bot Fight Mode 关闭、49 的 DNS 记录）用 [terraform/](terraform/) 管，不在面板手点；步骤、import 与回滚见[防护手册](../../docs/runbooks/cloudflare-protection.md)。Worker 里的闸按节点各自计数，区域级限速是全局的。
+5. 拉闸用的维护页 Worker 预先部署一次：`pnpm exec wrangler deploy -c wrangler.maintenance.jsonc`（没有路由，平时不收流量）；`node scripts/kill-switch.mjs` 切换，缺省只演练。
+6. 可选（CI 自动部署才需要）：建一个只有 Workers Scripts:Edit、Durable Objects:Edit、Workers Routes:Edit 的 API Token，自己放进 GitHub secret `CLOUDFLARE_API_TOKEN`。本机部署用已登录的 `wrangler login` 即可。
 
 ## 部署（维护者在本机）
 

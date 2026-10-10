@@ -251,12 +251,13 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §16 挑战
 
-协议 1.2（协议包 0.3.5）。服务端可以要求登录、接受分享链接之前先过一道人机挑战（Cloudflare Turnstile）。本节先定形状，校验由后续批次实现；在服务端报出 `platform.info.challenge` 之前，客户端带不带 `challenge` 行为都不变。
+协议 1.2（协议包 0.3.5 定形状，0.3.6 起个人中转实现校验）。服务端可以要求登录、接受分享链接之前先过一道人机挑战（Cloudflare Turnstile）。在服务端报出 `platform.info.challenge` 之前，客户端带不带 `challenge` 行为都不变。
 
 - **服务端声明**：`platform.info.challenge = { provider: "turnstile", siteKey, scope }`，`scope` 是要求挑战的 procedure（`auth.login`、`links.accept`），`siteKey` 不是秘密；同时 `capabilities` 含 `challenge.turnstile`。不报 `challenge` = 不要求。
 - **请求**：`auth.login` 与 `links.accept` 的输入多一个可选的 `challenge: { provider: "turnstile", token }`（`token` 1–2048 字符），是页面或手机里挑战组件交回的一次性令牌（有效 300 秒、只能用一次）。原生 App 在中继托管的同源挑战页里取令牌。
 - **答复**：`scope` 列了这条 procedure 而请求没带 → `400 challenge_required`；令牌无效、过期、用过或提供方不认 → `400 challenge_invalid`。挑战先于口令校验与按账号的锁定计数，挑战失败不计入登录失败次数；按 IP 的限流照常先计。
 - **core 作为客户端**（`sources.mount` 经 `links.accept`）没有挑战组件：personal 缺省只对 `auth.login` 要求，`links.accept` 由链接自带的 128 位秘密与按 IP 限流保护。
+- **校验**（0.3.6 起）：中继向 Turnstile 的 siteverify 校验（带 `remoteip` 与幂等键；提供方没答或 5xx 时同一个幂等键重试一次，仍不行答 `challenge_invalid`）；同一个令牌在 300 秒内再出现直接 `challenge_invalid`。只在配置了站点密钥与 secret 时要求：Workers 中继是 `vars.RELAY_TURNSTILE_SITE_KEY` + secret `RELAY_TURNSTILE_SECRET`（录了 secret 却没有站点密钥是配错，答 `503 unavailable`），Node 中继是 `--challenge turnstile --turnstile-site-key --turnstile-secret-file`（缺省关）；范围是 `RELAY_CHALLENGE_SCOPE` / `--challenge-scope`，缺省 `auth.login`。日志只记原因码，令牌与 secret 不进日志、存储与响应。
 
 ## §17 中继节点地址与节点回报
 
