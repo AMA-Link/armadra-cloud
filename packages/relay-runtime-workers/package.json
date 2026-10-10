@@ -1,0 +1,33 @@
+{
+  "name": "@armadra/relay-runtime-workers",
+  "version": "0.3.5",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "中继的 Cloudflare Workers 运行时：Worker 入口与闸门、SourceDO（隧道与客户端 WS 的 Hibernation、DO 内 HTTP/1.1 与 WS 帧转发、媒体票、限流、撤销）、ControlDO（DO SQLite 实现控制核全部端口、/v1、me-stream、日配额）（装配 relay-kernel 与 control-core，不发布）",
+  "exports": {
+    "./*": "./src/*.ts",
+    "./testing/*": "./test/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@armadra/cloud-shared": "workspace:*",
+    "@armadra/control-core": "workspace:*",
+    "@armadra/control-store-sql": "workspace:*",
+    "@armadra/control-store-sqlite": "workspace:*",
+    "@armadra/platform-protocol": "workspace:*",
+    "@armadra/relay-kernel": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.3.6",
+    "@cloudflare/workers-types": "5.20261001.1",
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.147.0"
+  }
+}
