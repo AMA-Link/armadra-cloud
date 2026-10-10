@@ -2,7 +2,7 @@
 #   docker build -f apps/cloud/Dockerfile -t armadra-cloud:local .
 #
 # 页面产物（/app/web）来自 Armadra 服务器镜像：发布构建传
-#   --build-arg WEB_IMAGE=ghcr.io/owlbay/armadra-server:<deploy/compat.json 的 web>
+#   --build-arg WEB_IMAGE=ghcr.io/ama-link/armadra-server:<deploy/compat.json 的 web>
 # 缺省用空目录，本地与 CI 构建不依赖外部镜像。
 ARG NODE_IMAGE=node:24.21.0-bookworm-slim
 ARG WEB_IMAGE=web-empty

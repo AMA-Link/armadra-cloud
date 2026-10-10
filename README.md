@@ -51,7 +51,7 @@ Armadra 的页面产物（`apps/web/dist`）在 `ARMADRA_WEB_DIST` 或 `../Armad
 
 子命令：`personal init | serve | status | passwd | rotate-key | links list|revoke | migrate | backup | doctor`（`armadra-relay personal --help`）。一个账号（地址 + 账号 + 口令），状态只有 `<data-dir>/relay.db`（新装缺省，`--store sqlite`）或 `<data-dir>/state.json`（`--store file`，已部署的照旧）：账号、口令哈希、签名钥、源 / 设备 / 链接登记，不存任何消息内容；两者用 `personal migrate --to sqlite|file` 互迁，见[运维手册](docs/runbooks/personal-storage.md)。TLS 缺省自签 CA，可选 ACME 或文件证书。接口见[契约](docs/contracts/cloud-api.md) §10–§11。
 
-容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/owlbay/armadra-relay:local .`，之后 `docker run --rm ghcr.io/owlbay/armadra-relay:local personal --help`；部署按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。
+容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/ama-link/armadra-relay:local .`，之后 `docker run --rm ghcr.io/ama-link/armadra-relay:local personal --help`；部署按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。
 
 ## Cloudflare Workers 上的个人中转
 

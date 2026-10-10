@@ -4,7 +4,7 @@
 //
 //   --web DIR      产物目录（含 index.html），如 Armadra 仓的 apps/web/dist
 //   --image IMAGE  从服务器壳镜像里取 /app/web（与 Node 中继镜像同一份产物；docker create + cp，
-//                  不运行容器），如 ghcr.io/owlbay/armadra-server:<deploy/compat.json 的 web>
+//                  不运行容器），如 ghcr.io/ama-link/armadra-server:<deploy/compat.json 的 web>
 //   都不给         清空 assets/（只留 .assetsignore）：中继答自有的错误页与落地页
 //
 // 只在本地改文件，不连 Cloudflare。

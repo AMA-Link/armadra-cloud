@@ -1,6 +1,6 @@
 # @armadra/platform-protocol
 
-Armadra 平台的协议包：core、页面、手机、控制面与中继共用的 schema、类型、纯编解码与常量。真相源在 `Owlbay/armadra-cloud`，Armadra 钉精确版本。
+Armadra 平台的协议包：core、页面、手机、控制面与中继共用的 schema、类型、纯编解码与常量。真相源在 `AMA-Link/armadra-cloud`，Armadra 钉精确版本。
 
 | 子路径               | 内容                                                                                                |
 | -------------------- | --------------------------------------------------------------------------------------------------- |

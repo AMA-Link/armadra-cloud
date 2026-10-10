@@ -2,7 +2,7 @@
 #   docker build -f apps/relay/Dockerfile -t armadra-relay:local .
 #
 # personal 模式托管的页面（/app、/j）是 Armadra apps/web 的构建产物，放在 /app/web：
-#   发布构建传 --build-arg WEB_IMAGE=ghcr.io/owlbay/armadra-server:<deploy/compat.json 的 web>；
+#   发布构建传 --build-arg WEB_IMAGE=ghcr.io/ama-link/armadra-server:<deploy/compat.json 的 web>；
 #   或运行时挂载一份构建产物并设 RELAY_WEB_ROOT（--web-root）。
 # 缺省是空目录：/app 答「页面不可用」错误页，其余功能不受影响。
 ARG NODE_IMAGE=node:24.21.0-bookworm-slim

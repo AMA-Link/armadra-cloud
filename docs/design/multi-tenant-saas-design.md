@@ -443,7 +443,7 @@ location /                           { proxy_pass http://armadra_personal; }
 ```yaml
 services:
   relay:
-    image: ghcr.io/owlbay/armadra-relay:0.2.2 # R6 合入并发布后的版本（含 --trust-proxy）
+    image: ghcr.io/ama-link/armadra-relay:0.2.2 # R6 合入并发布后的版本（含 --trust-proxy）
     network_mode: host
     command:
       [

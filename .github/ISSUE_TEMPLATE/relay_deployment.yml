@@ -40,7 +40,7 @@ body:
     attributes:
       label: 中继版本 / Relay version
       description: "`armadra-relay version` 的输出或镜像标签；从源码运行请写提交号。 / Output of `armadra-relay version` or the image tag; commit hash if running from source."
-      placeholder: 0.2.1 / ghcr.io/owlbay/armadra-relay:0.2.1 / 55d13d9
+      placeholder: 0.2.1 / ghcr.io/ama-link/armadra-relay:0.2.1 / 55d13d9
     validations:
       required: true
 

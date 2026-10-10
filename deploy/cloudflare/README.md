@@ -52,7 +52,7 @@
 
 ```sh
 pnpm install && pnpm libs:build
-node scripts/build.mjs --image ghcr.io/owlbay/armadra-server:<deploy/compat.json 的 web>   # 页面产物；不给就只有自有页面
+node scripts/build.mjs --image ghcr.io/ama-link/armadra-server:<deploy/compat.json 的 web>   # 页面产物；不给就只有自有页面
 pnpm exec wrangler whoami                                      # 确认账号 a27d9dab…
 bash scripts/bootstrap-production.sh                           # 首次部署 + 初始化（一次性）
 curl -s --doh-url https://cloudflare-dns.com/dns-query https://relay.armadra.com/health

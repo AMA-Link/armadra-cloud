@@ -12,7 +12,7 @@ name: armadra-cloud
 
 services:
   cloud:
-    image: ghcr.io/owlbay/armadra-cloud:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+    image: ghcr.io/ama-link/armadra-cloud:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
     env_file: .env
     environment:
       ARMADRA_CLOUD_LISTEN: 0.0.0.0:8100
@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
 
   relay:
-    image: ghcr.io/owlbay/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+    image: ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
     command: ["saas", "serve"]
     env_file: .env
     environment:
@@ -51,7 +51,7 @@ services:
     restart: unless-stopped
 
   relay-personal-a: &relay-personal
-    image: ghcr.io/owlbay/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+    image: ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
     profiles: ["personal-cluster"]
     command:
       [

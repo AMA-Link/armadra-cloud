@@ -56,7 +56,7 @@ jobs:
         if: matrix.server == 'latest'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Owlbay/Armadra
+          repository: AMA-Link/Armadra
           ref: main
           path: armadra
           token: ${{ secrets.ARMADRA_REPO_TOKEN }}
@@ -134,7 +134,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: steps.token.outputs.present == 'true'
         with:
-          repository: Owlbay/Armadra
+          repository: AMA-Link/Armadra
           ref: main
           path: armadra
           token: ${{ secrets.ARMADRA_REPO_TOKEN }}

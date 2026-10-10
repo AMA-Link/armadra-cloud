@@ -7,7 +7,7 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Owlbay/armadra-cloud.git",
+    "url": "git+https://github.com/AMA-Link/armadra-cloud.git",
     "directory": "packages/platform-protocol"
   },
   "exports": {

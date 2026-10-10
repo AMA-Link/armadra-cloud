@@ -1,5 +1,5 @@
 # 打 v* 标签时发布：标签必须等于根 package.json 的版本；构建两个镜像推到
-# ghcr.io/owlbay/armadra-{cloud,relay}:<版本>，再以 CHANGELOG 本版一节建 Release。
+# ghcr.io/ama-link/armadra-{cloud,relay}:<版本>，再以 CHANGELOG 本版一节建 Release。
 name: release
 
 on:
@@ -54,14 +54,14 @@ jobs:
           set -euo pipefail
           v="${{ steps.version.outputs.version }}"
           for app in cloud relay; do
-            image="ghcr.io/owlbay/armadra-${app}"
+            image="ghcr.io/ama-link/armadra-${app}"
             docker build -f "apps/${app}/Dockerfile" -t "${image}:${v}" -t "${image}:latest" .
           done
           # 冒烟过了才推。
-          docker run --rm "ghcr.io/owlbay/armadra-relay:${v}" personal --help
-          docker run --rm "ghcr.io/owlbay/armadra-cloud:${v}" version
+          docker run --rm "ghcr.io/ama-link/armadra-relay:${v}" personal --help
+          docker run --rm "ghcr.io/ama-link/armadra-cloud:${v}" version
           for app in cloud relay; do
-            image="ghcr.io/owlbay/armadra-${app}"
+            image="ghcr.io/ama-link/armadra-${app}"
             docker push "${image}:${v}"
             docker push "${image}:latest"
           done
