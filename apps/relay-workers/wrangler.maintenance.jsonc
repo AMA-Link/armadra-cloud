@@ -1,0 +1,16 @@
+// 拉闸用的维护页 Worker（中继设计 §4.5「拉闸」；runbook：docs/runbooks/cloudflare-protection.md）。
+//
+// - 预先部署一次：`pnpm exec wrangler deploy -c wrangler.maintenance.jsonc`（维护者在本机执行）。
+// - 没有路由、不开 workers.dev：平时不收任何流量；`node scripts/kill-switch.mjs maintenance --apply`
+//   把 relay.armadra.com（`--env staging` 时 relay-staging）的 Custom Domain 切到它，`restore` 切回。
+// - 没有绑定、没有存储：所有请求答 503 `unavailable`，不计 Durable Object 用量。
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "armadra-relay-maintenance",
+  "account_id": "a27d9dab9190150768845b62cfd57cfe",
+  "main": "src/maintenance.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "logs": { "enabled": false } },
+}

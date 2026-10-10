@@ -74,8 +74,7 @@ export async function createControl(
         redis.connect(),
         new Promise((_resolve, reject) => {
           timer = setTimeout(
-            () =>
-              reject(Object.assign(new Error("timeout"), { code: "timeout" })),
+            () => reject(new Error("timeout")),
             CONNECT_TIMEOUT_MS,
           );
         }),
@@ -93,10 +92,13 @@ export async function createControl(
       };
     } catch (error) {
       redis.destroy();
-      throw new StateError(
-        "invalid",
-        `Redis 连不上：${(error as { code?: string }).code ?? "unknown"}`,
-      );
+      // 只报驱动的错误码（或超时），不带地址与口令。
+      const detail =
+        (error as { code?: string }).code ??
+        (error instanceof Error && error.message === "timeout"
+          ? "timeout"
+          : "unknown");
+      throw new StateError("invalid", `Redis 连不上：${detail}`);
     }
   }
   const { connectPostgres, ensureSchema } = await import(

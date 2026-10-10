@@ -17,6 +17,12 @@ coverage/
 # Workers 中继：wrangler dev 的本地 secret 与状态
 .dev.vars
 .wrangler/
+# Terraform：本地 state、provider 缓存与变量文件（可能含 IP 与账号信息）
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.tfstate.lock.info
 
 *.log
 deploy/personal/relay_password.txt

@@ -5,3 +5,4 @@
 - 滚动升级顺序：先 relay 后 cloud。
 - 个人中转的存储（SQLite / 状态文件、迁移、备份、体检）：见 [personal-storage.md](personal-storage.md)。
 - Cloudflare Workers 上的个人中转（初始化、心跳、日配额、撤销、存储拒绝服务、回滚、排障）：见 [relay-on-cloudflare.md](relay-on-cloudflare.md)；部署步骤见 [deploy/cloudflare/README.md](../../deploy/cloudflare/README.md)。
+- Cloudflare 上的防护（区域规则 Terraform、人机挑战、预算告警、回滚、拉闸、被打时的处置与演练清单）：见 [cloudflare-protection.md](cloudflare-protection.md)。
