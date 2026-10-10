@@ -28,8 +28,8 @@ Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`（Node
 
 ## 准备
 
-- Node ≥ 22.18（原生类型剥离，开发态直接跑 `.ts`）
-- pnpm 11.18.0（`corepack enable`）
+- Node ≥ 24（原生类型剥离，开发态直接跑 `.ts`）
+- pnpm 12.8.1（`corepack enable`）
 - Docker（只用于本地 PostgreSQL / Redis 与镜像构建）
 
 ```sh

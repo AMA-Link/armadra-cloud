@@ -1225,7 +1225,6 @@ SOFTWARE.
 ## has-flag@4.0.0
 
 License: MIT
-Homepage: https://github.com/sindresorhus/has-flag#readme
 
 ```text
 MIT License
@@ -1680,7 +1679,6 @@ END OF TERMS AND CONDITIONS
 ## supports-color@7.2.0
 
 License: MIT
-Homepage: https://github.com/chalk/supports-color#readme
 
 ```text
 MIT License

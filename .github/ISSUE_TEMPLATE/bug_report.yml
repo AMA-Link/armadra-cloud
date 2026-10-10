@@ -68,7 +68,7 @@ body:
     attributes:
       label: 主机系统与架构 / Host OS and architecture
       description: 从源码运行时附上 Node 与 pnpm 版本。 / Include Node and pnpm versions when running from source.
-      placeholder: Ubuntu 24.04 x64, Docker 28.1 / macOS 15.5 arm64, Node 22.18, pnpm 11.18.0
+      placeholder: Ubuntu 24.04 x64, Docker 28.1 / macOS 15.5 arm64, Node 24.21, pnpm 12.8.1
     validations:
       required: true
 
