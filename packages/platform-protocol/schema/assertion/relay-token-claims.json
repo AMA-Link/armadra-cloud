@@ -42,6 +42,13 @@
     "ver": {
       "type": "number",
       "const": 1
+    },
+    "org": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ro": {
+      "type": "boolean"
     }
   },
   "required": [

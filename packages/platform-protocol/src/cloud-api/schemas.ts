@@ -90,6 +90,19 @@ export const meSchema = z.object({
 
 export const linkKindSchema = z.enum(["source_invite", "org_join"]);
 
+const scopeIdSchema = z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/);
+
+/**
+ * 分享范围（0.3.0 起，`source_invite` 专用）：都缺省 = 整台、按角色可写。
+ * `sessionId` 必须同时给 `workspaceId`，会话范围总是只读（`readOnly: false` 答 `bad_request`）。
+ * 签出的断言带 `scp`（`ws:` / `sess:` / `ro`），只读时中继令牌带 `ro: true`。
+ */
+export const linkScopeSchema = z.object({
+  workspaceId: scopeIdSchema.optional(),
+  sessionId: scopeIdSchema.optional(),
+  readOnly: z.boolean().optional(),
+});
+
 export const linkSummarySchema = z.object({
   linkId: z.string(),
   kind: linkKindSchema,
@@ -97,6 +110,8 @@ export const linkSummarySchema = z.object({
   role: z.string().optional(),
   sourceId: sourceIdSchema.optional(),
   orgId: z.string().optional(),
+  /** 0.3.0 起；整台时不出现。 */
+  scope: linkScopeSchema.optional(),
   url: z.string(),
   uses: z.number().int().nonnegative(),
   maxUses: z.number().int().positive().nullable(),
@@ -128,5 +143,6 @@ export type SourceSummary = z.infer<typeof sourceSummarySchema>;
 export type SourceDetail = z.infer<typeof sourceDetailSchema>;
 export type Me = z.infer<typeof meSchema>;
 export type LinkSummary = z.infer<typeof linkSummarySchema>;
+export type LinkScope = z.infer<typeof linkScopeSchema>;
 export type Org = z.infer<typeof orgSchema>;
 export type OrgMember = z.infer<typeof orgMemberSchema>;

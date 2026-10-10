@@ -10,6 +10,10 @@
         "label": "For Alice",
         "role": "editor",
         "sourceId": "0123456789abcdef0123456789abcdef",
+        "scope": {
+          "workspaceId": "ws_01",
+          "readOnly": true
+        },
         "url": "https://cloud.armadra.test/j/lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
         "uses": 1,
         "maxUses": 5,

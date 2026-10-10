@@ -32,12 +32,18 @@ import {
   ed25519PublicJwkSchema,
   jwkSetSchema,
   relayTokenClaimsSchema,
+  SCOPE_PREFIX,
+  SCOPE_READ_ONLY,
   sourceJwsClaimsSchema,
   TOKEN_TYPES,
   AUDIENCES,
   CLAIMS_VERSION,
   tunnelTokenClaimsSchema,
 } from "../src/assertion/claims.ts";
+import {
+  READ_ONLY_IDENTITY_PREFIXES,
+  READ_ONLY_SAFE_METHODS,
+} from "../src/assertion/read-only.ts";
 import { ERRORS } from "../src/errors/registry.ts";
 import * as identity from "../src/identity-vectors/constants.ts";
 import { CLOSE, FRAME_TYPE, RST } from "../src/tunnel/codes.ts";
@@ -117,6 +123,11 @@ put("constants.json", {
     types: TOKEN_TYPES,
     audiences: AUDIENCES,
     claimsVersion: CLAIMS_VERSION,
+    scope: { prefix: SCOPE_PREFIX, readOnly: SCOPE_READ_ONLY },
+    readOnly: {
+      safeMethods: READ_ONLY_SAFE_METHODS,
+      identityPrefixes: READ_ONLY_IDENTITY_PREFIXES,
+    },
   },
   tunnel: { limits: LIMITS, frameTypes: FRAME_TYPE, rst: RST, close: CLOSE },
   identity: constants,

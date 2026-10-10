@@ -281,6 +281,26 @@ const tokens: Record<string, string> = {
     link: { linkId: "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA", invitationId: "inv_01" },
     jti: "jti-assertion-with-link",
   }),
+  /** 协议 1.1：访客经「单个会话、只读」的链接进来。 */
+  "scoped-session": jwt(header(TOKEN_TYPES.assertion), {
+    ...assertion,
+    sub: "guest:lnk_01JAAAAAAAAAAAAAAAAAAAAAAA:r4nd0m",
+    name: "Guest",
+    email: undefined,
+    emailVerified: undefined,
+    link: { linkId: "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA", invitationId: "inv_01" },
+    scp: ["ws:ws_01", "sess:sess_01", "ro"],
+    jti: "jti-assertion-scoped-session",
+  }),
+  /** 协议 1.1：SaaS 组织成员经团队授予，指定两个工作空间、editor。 */
+  "team-grant": jwt(header(TOKEN_TYPES.assertion), {
+    ...assertion,
+    org: { orgId: "org_01JAAAAAAAAAAAAAAAAAAAAAAA", role: "member" },
+    team: { teamId: "team_01JAAAAAAAAAAAAAAAAAAAAAAA", role: "member" },
+    role: "editor",
+    scp: ["ws:ws_01", "ws:ws_02"],
+    jti: "jti-assertion-team-grant",
+  }),
   "access-token": jwt(header(TOKEN_TYPES.access), {
     iss: ISSUER,
     sub: ACCOUNT_ID,
@@ -299,7 +319,30 @@ const tokens: Record<string, string> = {
     jti: "jti-relay-0001",
     ver: 1,
   }),
+  /** 协议 1.1：只读、带组织的中继令牌。 */
+  "relay-token-ro": jwt(header(TOKEN_TYPES.relay), {
+    iss: ISSUER,
+    sub: "guest:lnk_01JAAAAAAAAAAAAAAAAAAAAAAA:r4nd0m",
+    aud: "relay",
+    src: SOURCE_ID,
+    ...times(RELAY_TOKEN.ttlMs),
+    jti: "jti-relay-ro-0001",
+    ver: 1,
+    org: "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    ro: true,
+  }),
   "tunnel-token": tunnelToken,
+  /** 协议 1.1：属于组织的源的隧道令牌。 */
+  "tunnel-token-org": jwt(header(TOKEN_TYPES.tunnel), {
+    iss: ISSUER,
+    sub: SOURCE_ID,
+    aud: "relay-tunnel",
+    cnf: { jwk: { kty: "OKP", crv: "Ed25519", x: source.publicJwk.x } },
+    ...times(TUNNEL_TOKEN.ttlMs),
+    jti: "jti-tunnel-org-0001",
+    ver: 1,
+    org: "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+  }),
   "source-jws": jwt(
     { alg: "EdDSA", kid: SOURCE_ID, typ: TOKEN_TYPES.source },
     {

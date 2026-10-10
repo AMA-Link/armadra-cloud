@@ -5,6 +5,7 @@ import { base, SINCE_0_1, SINCE_0_2 } from "../meta.ts";
 import {
   deviceInputSchema,
   linkKindSchema,
+  linkScopeSchema,
   linkSummarySchema,
   sessionSchema,
   sourceIdSchema,
@@ -20,6 +21,8 @@ export const createLinkInputSchema = z.discriminatedUnion("kind", [
     role: z.string(),
     expiresAtMs: z.number().int(),
     maxUses: z.number().int().positive().optional(),
+    /** 0.3.0 起（能力 `links.scope`）；缺省 = 整台、按角色。 */
+    scope: linkScopeSchema.optional(),
   }),
   z.object({
     kind: z.literal("org_join"),
@@ -64,6 +67,8 @@ export const links = {
         role: z.string().optional(),
         sourceName: z.string().optional(),
         orgName: z.string().optional(),
+        /** 0.3.0 起；整台时不出现。 */
+        scope: linkScopeSchema.optional(),
         expiresAtMs: z.number().int(),
         exhausted: z.boolean(),
         requiresAccount: z.boolean(),
