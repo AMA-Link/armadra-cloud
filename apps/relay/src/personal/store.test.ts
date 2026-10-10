@@ -47,8 +47,8 @@ beforeAll(async () => {
     store: "file",
     nowMs: NOW,
   });
-  store.rotateKey(NOW + 1);
-  store.close();
+  await store.rotateKey(NOW + 1);
+  await store.close();
   // 每张表、每个可选字段都放一点：往返要逐字段等价。
   StateStore.open(join(root, "template")).update((draft) => {
     draft.sources.push({
@@ -141,9 +141,9 @@ function legacyDir(): string {
   return dir;
 }
 
-const codeOf = (fn: () => unknown) => {
+const codeOf = async (fn: () => unknown) => {
   try {
-    fn();
+    await fn();
   } catch (error) {
     return error instanceof StateError ? error.code : String(error);
   }
@@ -151,43 +151,46 @@ const codeOf = (fn: () => unknown) => {
 };
 
 describe("选存储", () => {
-  it("有库用 sqlite；只有状态文件用 file（老部署）；都没有用 sqlite；两个都在拒绝", () => {
+  it("有库用 sqlite；只有状态文件用 file（老部署）；都没有用 sqlite；两个都在拒绝", async () => {
     const dir = legacyDir();
     expect(resolveStoreKind(dir)).toEqual({ kind: "file", legacy: true });
     expect(resolveStoreKind(dir, "file")).toEqual({
       kind: "file",
       legacy: false,
     });
-    expect(codeOf(() => resolveStoreKind(dir, "sqlite"))).toBe("invalid");
+    expect(await codeOf(() => resolveStoreKind(dir, "sqlite"))).toBe("invalid");
+    expect(await codeOf(() => resolveStoreKind(dir, "postgres"))).toBe(
+      "invalid",
+    );
     expect(resolveStoreKind(join(root, "empty"))).toEqual({
       kind: "sqlite",
       legacy: false,
     });
     writeFileSync(join(dir, "relay.db"), "");
-    expect(codeOf(() => resolveStoreKind(dir))).toBe("invalid");
+    expect(await codeOf(() => resolveStoreKind(dir))).toBe("invalid");
   });
 });
 
 describe("迁移往返", () => {
-  it("file → sqlite → file：逐字段等价、字节等价（修订号除外）；原文件改名留作回退", () => {
+  it("file → sqlite → file：逐字段等价、字节等价（修订号除外）；原文件改名留作回退", async () => {
     const dir = legacyDir();
     const original = readFileSync(join(dir, "state.json"), "utf8");
-    const toSqlite = migrateToSqlite(dir, NOW);
+    const toSqlite = await migrateToSqlite(dir, NOW);
     expect(existsSync(join(dir, "state.json"))).toBe(false);
     expect(readFileSync(toSqlite.kept, "utf8")).toBe(original);
     expect(
       readdirSync(dir).filter((name) => name.includes("migrating")),
     ).toEqual([]);
 
-    const store = openPersonalStore(dir);
+    const store = await openPersonalStore(dir);
     expect(store.kind).toBe("sqlite");
-    expect(store.snapshot()).toEqual(template);
+    expect(await store.snapshot()).toEqual(template);
     // 控制核端口读到的与状态文件里的一样。
     expect(store.settings()).toEqual(template.settings);
     expect(store.keys.signingKeys()).toEqual(template.signingKeys);
-    store.close();
+    await store.close();
 
-    const toFile = migrateToFile(dir, NOW + 1);
+    const toFile = await migrateToFile(dir, NOW + 1);
     expect(existsSync(toFile.kept)).toBe(true);
     expect(existsSync(join(dir, "relay.db"))).toBe(false);
     const back = readFileSync(join(dir, "state.json"), "utf8");
@@ -198,12 +201,12 @@ describe("迁移往返", () => {
 
   it("在 SQLite 上改过之后再迁回：改动都在、修订号前进", async () => {
     const dir = legacyDir();
-    migrateToSqlite(dir, NOW);
-    const store = openPersonalStore(dir);
+    await migrateToSqlite(dir, NOW);
+    const store = await openPersonalStore(dir);
     await store.ports.links.revoke(DEFAULT_TENANT, LINK, NOW + 9);
-    store.rotateKey(NOW + 3_600_000 * 2);
-    store.close();
-    migrateToFile(dir, NOW);
+    await store.rotateKey(NOW + 3_600_000 * 2);
+    await store.close();
+    await migrateToFile(dir, NOW);
     const state = StateStore.open(dir).current;
     expect(state.revision).toBeGreaterThan(template.revision);
     expect(state.links.find((row) => row.linkId === LINK)?.revokedAtMs).toBe(
@@ -212,13 +215,13 @@ describe("迁移往返", () => {
     expect(state.signingKeys.map((key) => key.kid)).toEqual(["k2", "k3"]);
   });
 
-  it("拒绝：目标已存在、源不存在、状态文件认不出（不建库、不动原文件）、serve 正在跑", () => {
+  it("拒绝：目标已存在、源不存在、状态文件认不出（不建库、不动原文件）、serve 正在跑", async () => {
     const dir = legacyDir();
     writeFileSync(join(dir, "relay.db"), "x");
-    expect(codeOf(() => migrateToSqlite(dir))).toBe("exists");
+    expect(await codeOf(() => migrateToSqlite(dir))).toBe("exists");
     rmSync(join(dir, "relay.db"));
-    expect(codeOf(() => migrateToFile(dir))).toBe("exists");
-    expect(codeOf(() => migrateToSqlite(join(root, "nothing")))).toBe(
+    expect(await codeOf(() => migrateToFile(dir))).toBe("exists");
+    expect(await codeOf(() => migrateToSqlite(join(root, "nothing")))).toBe(
       "not_initialized",
     );
 
@@ -228,7 +231,7 @@ describe("迁移往返", () => {
       JSON.stringify({ ...template, version: 9 }),
     );
     const before = readFileSync(join(broken, "state.json"));
-    expect(codeOf(() => migrateToSqlite(broken))).toBe("invalid");
+    expect(await codeOf(() => migrateToSqlite(broken))).toBe("invalid");
     expect(readFileSync(join(broken, "state.json")).equals(before)).toBe(true);
     expect(readdirSync(broken).sort()).toEqual(["state.json"]);
   });
@@ -242,24 +245,26 @@ describe("迁移往返", () => {
     );
     try {
       writeFileSync(join(dir, RUN_LOCK_FILE), `${child.pid}\n`);
-      expect(() => migrateToSqlite(dir)).toThrow(/serve 正在运行/);
+      await expect(migrateToSqlite(dir)).rejects.toThrow(/serve 正在运行/);
     } finally {
       child.kill();
       await new Promise((resolve) => child.once("exit", resolve));
     }
-    expect(migrateToSqlite(dir).database).toBe(join(dir, "relay.db"));
+    expect((await migrateToSqlite(dir)).database).toBe(join(dir, "relay.db"));
   });
 });
 
 describe("SQLite 存储", () => {
   it("别的进程撤销链接：watch 一秒内回调，revoked() 里有它", async () => {
     const dir = legacyDir();
-    migrateToSqlite(dir);
-    const store = openPersonalStore(dir);
-    expect(store.revoked().links.has(LINK)).toBe(false);
+    await migrateToSqlite(dir);
+    const store = await openPersonalStore(dir);
+    expect((await store.revoked()).links.has(LINK)).toBe(false);
     let changes = 0;
     const stop = store.watch(
-      () => (changes += 1),
+      () => {
+        changes += 1;
+      },
       (error) => {
         throw error;
       },
@@ -273,22 +278,22 @@ describe("SQLite 存储", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     stop();
     expect(changes).toBeGreaterThan(0);
-    expect(store.revoked().links.has(LINK)).toBe(true);
-    store.close();
+    expect((await store.revoked()).links.has(LINK)).toBe(true);
+    await store.close();
   });
 
-  it("损坏的库：serve / status 拒绝启动，库一个字节不动", () => {
+  it("损坏的库：serve / status 拒绝启动，库一个字节不动", async () => {
     const dir = join(root, "corrupt");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "relay.db"), "definitely not sqlite".repeat(64));
     const before = readFileSync(join(dir, "relay.db"));
-    expect(codeOf(() => openPersonalStore(dir))).toBe("invalid");
+    expect(await codeOf(() => openPersonalStore(dir))).toBe("invalid");
     expect(readFileSync(join(dir, "relay.db")).equals(before)).toBe(true);
   });
 
   it("备份：SQLite 用 VACUUM INTO、状态文件拷一份；都是 0600、不覆盖", async () => {
     const sqliteDir = legacyDir();
-    migrateToSqlite(sqliteDir);
+    await migrateToSqlite(sqliteDir);
     const out = join(root, "backup.db");
     await runBackup(sqliteDir, out, () => {});
     if (process.platform !== "win32")
@@ -296,9 +301,9 @@ describe("SQLite 存储", () => {
     const restoreDir = join(root, "restored");
     mkdirSync(restoreDir);
     writeFileSync(join(restoreDir, "relay.db"), readFileSync(out));
-    const restored = openPersonalStore(restoreDir);
-    expect(restored.snapshot()).toEqual(template);
-    restored.close();
+    const restored = await openPersonalStore(restoreDir);
+    expect(await restored.snapshot()).toEqual(template);
+    await restored.close();
     await expect(runBackup(sqliteDir, out, () => {})).rejects.toThrow(/已存在/);
 
     const fileDir = legacyDir();
@@ -316,7 +321,7 @@ describe("doctor", () => {
 
   it("新装 SQLite 的缺省配置全部通过", async () => {
     const dir = legacyDir();
-    migrateToSqlite(dir);
+    await migrateToSqlite(dir);
     chmodSync(dir, 0o700);
     const findings = await diagnose(
       parsePersonalDoctor(["--data-dir", dir, "--host", "relay.test"], {}),

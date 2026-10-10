@@ -3,6 +3,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "test/**/*.test.ts"],
+    // 要真 PostgreSQL / Redis 的在 test:integration（vitest.integration.config.mts）。
+    exclude: ["test/external/**", "**/node_modules/**"],
     environment: "node",
     coverage: {
       enabled: process.env.ARMADRA_COVERAGE === "1",

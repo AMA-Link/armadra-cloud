@@ -1,6 +1,6 @@
 /**
- * personal 的控制面装配：存储（状态文件或 SQLite）的端口 + 签名钥 + 内存控制面（限流、在线、
- * 关隧道）+ 事件总线。
+ * personal 的控制面装配：存储（状态文件、SQLite 或 PostgreSQL）的端口 + 签名钥 + 控制面（限流、
+ * 在线、关隧道；单节点内存，多节点 Redis / PostgreSQL）+ 事件总线。
  * 服务本身在 `@armadra/control-core`。
  */
 import { createEventBus } from "@armadra/control-core/events";
@@ -11,19 +11,19 @@ import {
 } from "@armadra/control-core/ports";
 import { isRevokedJti } from "@armadra/control-core/revocation";
 import { Signer } from "@armadra/control-core/signer";
-import type { MemoryControlPlane } from "@armadra/relay-kernel/control/memory";
+import type { RelayControl } from "@armadra/relay-runtime-node/control/types";
 
 import { passwordViolation } from "./passwords.ts";
 import type { PersonalStore } from "./store-types.ts";
 
 export interface PersonalContext extends ControlContext {
   store: PersonalStore;
-  control: MemoryControlPlane;
+  control: RelayControl;
 }
 
 export function createPersonalContext(input: {
   store: PersonalStore;
-  control: MemoryControlPlane;
+  control: RelayControl;
   signer: Signer;
   now: () => number;
   /** 中继内核起来之后才有：断开撤销掉的客户端 WS。 */

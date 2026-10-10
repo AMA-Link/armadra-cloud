@@ -15,7 +15,8 @@
     "build": "node scripts/build.mjs",
     "start": "node src/cli.ts saas serve",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mts"
   },
   "dependencies": {
     "@armadra/cloud-shared": "workspace:*",
@@ -27,6 +28,9 @@
     "acme-client": "5.4.0",
     "ws": "8.21.0",
     "zod": "4.4.3"
+  },
+  "optionalDependencies": {
+    "@armadra/control-store-postgres": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.3.0",

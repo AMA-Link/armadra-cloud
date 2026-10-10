@@ -7,6 +7,7 @@ import {
   type Env,
   type ListenAddress,
 } from "@armadra/cloud-shared/config";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { PLATFORM_NAME_MAX } from "@armadra/platform-protocol/cloud-api";
@@ -15,8 +16,16 @@ import {
   parseProxyList,
   type TrustedProxyConfig,
 } from "@armadra/relay-runtime-node/client-ip";
+import {
+  CONTROL_KINDS,
+  type ControlKind,
+} from "@armadra/relay-runtime-node/control/types";
 
-import { STORE_KINDS, type StoreKind } from "./store-types.ts";
+import {
+  STORE_KINDS,
+  type DatabaseOptions,
+  type StoreKind,
+} from "./store-types.ts";
 
 export const TLS_MODES = ["self-signed", "acme", "file", "plain"] as const;
 export type TlsMode = (typeof TLS_MODES)[number];
@@ -101,12 +110,76 @@ export function defaultIssuer(host: string, port: number): string {
 
 interface Common {
   dataDir: string;
+  /** PostgreSQL 的连接（`--store postgres` 与数据目录里有 `postgres.json` 时要）。 */
+  database?: DatabaseOptions;
 }
 
 function dataDirOf(values: Map<string, string>, env: Env, cwd: string): string {
   const dataDir = values.get("data-dir") ?? env.RELAY_DATA_DIR;
   if (!dataDir) throw new UsageError("缺少 --data-dir（或 RELAY_DATA_DIR）");
   return resolve(cwd, dataDir);
+}
+
+/** 每个子命令都收的 PostgreSQL 连接参数。 */
+const DATABASE_FLAGS = ["database-url", "database-url-file", "database-schema"];
+const withDatabase = (...flags: string[]) =>
+  new Set([...flags, ...DATABASE_FLAGS]);
+
+const SCHEMA_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
+
+/**
+ * `--database-url` / `RELAY_DATABASE_URL`，或从文件读（`--database-url-file` /
+ * `RELAY_DATABASE_URL_FILE`，口令不出现在进程参数里）。连接串里有口令：错误消息不带它。
+ */
+function databaseOf(
+  values: Map<string, string>,
+  env: Env,
+  cwd: string,
+): DatabaseOptions | undefined {
+  let url = values.get("database-url") ?? (env.RELAY_DATABASE_URL || undefined);
+  const file =
+    values.get("database-url-file") ??
+    (env.RELAY_DATABASE_URL_FILE || undefined);
+  if (url === undefined && file !== undefined) {
+    try {
+      url = readFileSync(resolve(cwd, file), "utf8").trim();
+    } catch {
+      throw new UsageError(`--database-url-file 读不出来：${file}`);
+    }
+  }
+  const schema =
+    values.get("database-schema") ?? (env.RELAY_DATABASE_SCHEMA || undefined);
+  if (url === undefined) {
+    if (schema !== undefined)
+      throw new UsageError("--database-schema 要和 --database-url 一起给");
+    return undefined;
+  }
+  if (!/^postgres(?:ql)?:\/\//.test(url))
+    throw new UsageError("--database-url 要是 postgres:// 开头的连接串");
+  if (schema !== undefined && !SCHEMA_NAME.test(schema))
+    throw new UsageError(
+      `--database-schema 只能是小写字母、数字与下划线：${schema}`,
+    );
+  return { url, ...(schema ? { schema } : {}) };
+}
+
+/** 数据目录 + PostgreSQL 连接（每个子命令都要）。 */
+function commonOf(values: Map<string, string>, env: Env, cwd: string): Common {
+  const database = databaseOf(values, env, cwd);
+  return {
+    dataDir: dataDirOf(values, env, cwd),
+    ...(database ? { database } : {}),
+  };
+}
+
+function requirePostgres(
+  store: StoreKind | undefined,
+  database: DatabaseOptions | undefined,
+): void {
+  if (store === "postgres" && !database)
+    throw new UsageError(
+      "--store postgres 要给 --database-url（或 RELAY_DATABASE_URL / RELAY_DATABASE_URL_FILE）",
+    );
 }
 
 function accountOf(values: Map<string, string>, env: Env): string | undefined {
@@ -166,7 +239,7 @@ export interface PersonalInitOptions extends Common {
   store?: StoreKind;
 }
 
-const INIT_FLAGS = new Set([
+const INIT_FLAGS = withDatabase(
   "data-dir",
   "store",
   "account",
@@ -175,7 +248,7 @@ const INIT_FLAGS = new Set([
   "port",
   "tls",
   "public-origin",
-]);
+);
 
 export function parsePersonalInit(
   argv: readonly string[],
@@ -192,8 +265,10 @@ export function parsePersonalInit(
   const publicText = values.get("public-origin") ?? env.RELAY_PUBLIC_ORIGIN;
   const passwordFile = passwordFileOf(values, env, cwd);
   const store = storeOf(values, env);
+  const common = commonOf(values, env, cwd);
+  requirePostgres(store, common.database);
   return {
-    dataDir: dataDirOf(values, env, cwd),
+    ...common,
     account,
     ...(passwordFile ? { passwordFile } : {}),
     host,
@@ -216,6 +291,15 @@ export interface AcmeArgs {
 export interface PersonalServeOptions extends Common {
   /** `--store` / `RELAY_STORE`；不给时按数据目录里已有的文件（新装 sqlite）。 */
   store?: StoreKind;
+  /**
+   * 控制面（`--control` / `RELAY_CONTROL`）：缺省 `memory`（单节点）；多节点 `redis`（`--redis-url`）
+   * 或 `postgres`（与存储同一个 `--database-url`）。
+   */
+  control?: ControlKind;
+  /** `--redis-url` / `RELAY_REDIS_URL`（`--control redis`）。 */
+  redisUrl?: string;
+  /** 本节点的名字（`--node-id` / `RELAY_NODE_ID`，多节点时各不相同）；缺省 `--host`。 */
+  nodeId?: string;
   /** 对外的 IP 或域名（issuer 与自签证书的 SAN 用它）。 */
   host: string;
   port: number;
@@ -326,9 +410,12 @@ function nameOf(values: Map<string, string>, env: Env): string | undefined {
   return name;
 }
 
-const SERVE_FLAGS = new Set([
+const SERVE_FLAGS = withDatabase(
   "data-dir",
   "store",
+  "control",
+  "redis-url",
+  "node-id",
   "host",
   "port",
   "tls",
@@ -352,7 +439,46 @@ const SERVE_FLAGS = new Set([
   "trusted-proxy",
   "trusted-proxy-prefer",
   "name",
-]);
+);
+
+/** `--control`、`--redis-url` 与 `--node-id`。 */
+function controlOf(
+  values: Map<string, string>,
+  env: Env,
+  host: string,
+  database: DatabaseOptions | undefined,
+): Required<Pick<PersonalServeOptions, "control" | "nodeId">> &
+  Pick<PersonalServeOptions, "redisUrl"> {
+  const control = (values.get("control") ??
+    (env.RELAY_CONTROL || "memory")) as ControlKind;
+  if (!(CONTROL_KINDS as readonly string[]).includes(control))
+    throw new UsageError(
+      `--control 只能是 ${CONTROL_KINDS.join(" | ")}：${control}`,
+    );
+  const redisUrl =
+    values.get("redis-url") ?? (env.RELAY_REDIS_URL || undefined);
+  if (control === "redis" && !redisUrl)
+    throw new UsageError(
+      "--control redis 要给 --redis-url（或 RELAY_REDIS_URL）",
+    );
+  if (redisUrl !== undefined && !/^rediss?:\/\//.test(redisUrl))
+    throw new UsageError("--redis-url 要是 redis:// 或 rediss:// 开头的地址");
+  if (control === "postgres" && !database)
+    throw new UsageError(
+      "--control postgres 要给 --database-url（或 RELAY_DATABASE_URL / RELAY_DATABASE_URL_FILE）",
+    );
+  const given = values.get("node-id") ?? (env.RELAY_NODE_ID || undefined);
+  if (given !== undefined && !/^[A-Za-z0-9._:-]{1,64}$/.test(given))
+    throw new UsageError(
+      `--node-id 只能是字母、数字与 . _ : -，1–64 个字符：${given}`,
+    );
+  const nodeId = given ?? host.slice(0, 64);
+  return {
+    control,
+    ...(control === "redis" && redisUrl ? { redisUrl } : {}),
+    nodeId,
+  };
+}
 
 export function parsePersonalServe(
   argv: readonly string[],
@@ -360,7 +486,7 @@ export function parsePersonalServe(
   cwd = process.cwd(),
 ): PersonalServeOptions {
   const { values } = parseFlags(argv, SERVE_FLAGS);
-  const dataDir = dataDirOf(values, env, cwd);
+  const common = commonOf(values, env, cwd);
   const host = values.get("host") ?? env.RELAY_HOST;
   if (!host)
     throw new UsageError("缺少 --host：公网 IP 或域名（或 RELAY_HOST）");
@@ -412,9 +538,11 @@ export function parsePersonalServe(
   const trustedProxy = trustedProxyOf(values, env);
   const name = nameOf(values, env);
   const store = storeOf(values, env);
+  requirePostgres(store, common.database);
   return {
-    dataDir,
+    ...common,
     ...(store ? { store } : {}),
+    ...controlOf(values, env, host, common.database),
     host,
     port,
     listen,
@@ -447,8 +575,8 @@ export function parseDataDirOnly(
   env: Env,
   cwd = process.cwd(),
 ): Common {
-  const { values } = parseFlags(argv, new Set(["data-dir"]));
-  return { dataDir: dataDirOf(values, env, cwd) };
+  const { values } = parseFlags(argv, withDatabase("data-dir"));
+  return commonOf(values, env, cwd);
 }
 
 export function parsePasswd(
@@ -456,10 +584,13 @@ export function parsePasswd(
   env: Env,
   cwd = process.cwd(),
 ): Common & { passwordFile?: string } {
-  const { values } = parseFlags(argv, new Set(["data-dir", "password-file"]));
+  const { values } = parseFlags(
+    argv,
+    withDatabase("data-dir", "password-file"),
+  );
   const passwordFile = values.get("password-file");
   return {
-    dataDir: dataDirOf(values, env, cwd),
+    ...commonOf(values, env, cwd),
     ...(passwordFile
       ? {
           passwordFile: passwordFile === "-" ? "-" : resolve(cwd, passwordFile),
@@ -477,17 +608,17 @@ export function parseLinks(
   | (Common & { action: "revoke"; linkId: string }) {
   const [action, ...rest] = argv;
   if (action === "list") {
-    const { values } = parseFlags(rest, new Set(["data-dir"]));
-    return { action, dataDir: dataDirOf(values, env, cwd) };
+    const { values } = parseFlags(rest, withDatabase("data-dir"));
+    return { action, ...commonOf(values, env, cwd) };
   }
   if (action === "revoke") {
-    const { values, positional } = parseFlags(rest, new Set(["data-dir"]), {
+    const { values, positional } = parseFlags(rest, withDatabase("data-dir"), {
       positional: 1,
     });
     const linkId = positional[0];
     if (!linkId || !/^[0-9a-f]{16}$/.test(linkId))
       throw new UsageError(`links revoke 要一个链接 id：${linkId ?? ""}`);
-    return { action, linkId, dataDir: dataDirOf(values, env, cwd) };
+    return { action, linkId, ...commonOf(values, env, cwd) };
   }
   throw new UsageError(`links 只有 list 与 revoke：${action ?? ""}`);
 }
@@ -499,12 +630,15 @@ export function parseMigrate(
   env: Env,
   cwd = process.cwd(),
 ): Common & { to: StoreKind } {
-  const { values } = parseFlags(argv, new Set(["data-dir", "to"]));
+  const { values } = parseFlags(argv, withDatabase("data-dir", "to"));
   const to = values.get("to");
-  if (to === undefined) throw new UsageError("缺少 --to：sqlite 或 file");
+  if (to === undefined)
+    throw new UsageError(`缺少 --to：${STORE_KINDS.join(" | ")}`);
   if (!(STORE_KINDS as readonly string[]).includes(to))
     throw new UsageError(`--to 只能是 ${STORE_KINDS.join(" | ")}：${to}`);
-  return { dataDir: dataDirOf(values, env, cwd), to: to as StoreKind };
+  const common = commonOf(values, env, cwd);
+  requirePostgres(to as StoreKind, common.database);
+  return { ...common, to: to as StoreKind };
 }
 
 export function parseBackup(
@@ -512,10 +646,10 @@ export function parseBackup(
   env: Env,
   cwd = process.cwd(),
 ): Common & { out: string } {
-  const { values } = parseFlags(argv, new Set(["data-dir", "out"]));
+  const { values } = parseFlags(argv, withDatabase("data-dir", "out"));
   const out = values.get("out");
   if (!out) throw new UsageError("缺少 --out：备份文件的路径");
-  return { dataDir: dataDirOf(values, env, cwd), out: resolve(cwd, out) };
+  return { ...commonOf(values, env, cwd), out: resolve(cwd, out) };
 }
 
 export interface PersonalDoctorOptions extends Common {
@@ -527,7 +661,7 @@ export interface PersonalDoctorOptions extends Common {
   passwordFile?: string;
 }
 
-const DOCTOR_FLAGS = new Set([
+const DOCTOR_FLAGS = withDatabase(
   "data-dir",
   "host",
   "port",
@@ -535,7 +669,7 @@ const DOCTOR_FLAGS = new Set([
   "tls",
   "trusted-proxy",
   "password-file",
-]);
+);
 
 /** `doctor` 收 `serve` 的同名参数与环境变量，只看不改；明文监听公网之类的问题报出来而不是拒绝。 */
 export function parsePersonalDoctor(
@@ -555,7 +689,7 @@ export function parsePersonalDoctor(
   const trustedProxy = values.get("trusted-proxy") ?? env.RELAY_TRUSTED_PROXY;
   const passwordFile = passwordFileOf(values, env, cwd);
   return {
-    dataDir: dataDirOf(values, env, cwd),
+    ...commonOf(values, env, cwd),
     listen,
     tls: tlsOf(values, env),
     ...(trustedProxy !== undefined ? { trustedProxy } : {}),

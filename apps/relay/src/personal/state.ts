@@ -251,8 +251,11 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/** 目录锁：`mkdir` 是原子的。超过 {@link LOCK_STALE_MS} 的锁视为崩溃遗留。 */
-export function withLock<T>(dataDir: string, fn: () => T): T {
+/**
+ * 目录锁：`mkdir` 是原子的。超过 {@link LOCK_STALE_MS} 的锁视为崩溃遗留。答释放函数（等不到就
+ * `locked`）；跨 await 的持锁（迁到 PostgreSQL）直接用它。
+ */
+export function acquireLock(dataDir: string): () => void {
   const lock = join(dataDir, LOCK_DIR);
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
@@ -274,14 +277,21 @@ export function withLock<T>(dataDir: string, fn: () => T): T {
       sleepSync(10);
     }
   }
-  try {
-    return fn();
-  } finally {
+  return () => {
     try {
       rmdirSync(lock);
     } catch {
       // 锁已被当作遗留清掉：不影响这次写入。
     }
+  };
+}
+
+export function withLock<T>(dataDir: string, fn: () => T): T {
+  const release = acquireLock(dataDir);
+  try {
+    return fn();
+  } finally {
+    release();
   }
 }
 

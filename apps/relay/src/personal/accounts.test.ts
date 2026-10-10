@@ -24,9 +24,9 @@ import {
   DEVICE,
   PASSWORD,
   personalHarness,
+  TEST_STORE_KINDS,
   type Harness,
 } from "../../test/personal.ts";
-import { STORE_KINDS } from "./store-types.ts";
 import {
   commonPasswordsFile,
   hashPassword,
@@ -34,7 +34,7 @@ import {
   verifyPassword,
 } from "./passwords.ts";
 
-describe.each(STORE_KINDS)("%s 存储", (store) => {
+describe.each(TEST_STORE_KINDS)("%s 存储", (store) => {
   let h: Harness;
   beforeAll(async () => {
     h = await personalHarness({ store });
@@ -138,7 +138,7 @@ describe.each(STORE_KINDS)("%s 存储", (store) => {
       h.clock.now += 60_001;
       const session = await login(PASSWORD);
       expect(sessionSchema.parse(session)).toBeTruthy();
-      expect(h.context.store.snapshot().account).toMatchObject({
+      expect((await h.context.store.snapshot()).account).toMatchObject({
         failures: 0,
         lockedUntilMs: 0,
       });

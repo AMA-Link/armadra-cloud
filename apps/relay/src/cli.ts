@@ -12,7 +12,7 @@ import { RELAY_VERSION } from "./version.ts";
 export const USAGE = `用法: armadra-relay <模式> <子命令> [选项]
 
   personal init|serve|status|passwd|rotate-key|links|migrate|backup|doctor
-                                                       单人中转，不带外部数据库
+                                                       单人中转；缺省不带外部数据库，多节点可选 PostgreSQL / Redis
   saas serve                                           多租户中继（配置走 RELAY_* 环境变量）
   health                                               探活本机 /health（镜像的 HEALTHCHECK 用）
   version                                              打印版本
@@ -21,19 +21,27 @@ personal --help 列出 personal 的子命令与选项。`;
 
 export const PERSONAL_USAGE = `用法: armadra-relay personal <子命令> [选项]
 
-  init         建账号与签名钥：--data-dir --account [--password-file F] --host [--port] [--tls] [--store S]
+  init         建账号与签名钥：--data-dir --account [--password-file F] --host [--port] [--tls] [--store S] [--database-url URL]
   serve        起个人中转
   status       打印存储、账号、源、链接与 CA 指纹：--data-dir
   passwd       改口令并让账号的全部设备重新登录：--data-dir [--password-file F]
   rotate-key   启用新签名钥，旧钥一小时后退役：--data-dir
   links        list | revoke <linkId>：--data-dir
-  migrate      换存储（先停 serve），原文件改名留作回退：--data-dir --to sqlite|file
+  migrate      换存储（先停 serve），原文件改名留作回退：--data-dir --to sqlite|file|postgres [--database-url URL]
   backup       在线备份存储到一个新文件：--data-dir --out F
   doctor       检查权限、存储完整性、监听地址、受信代理与口令：--data-dir，其余同 serve
 
+数据目录用 PostgreSQL 时，每个子命令都要 --database-url（或 RELAY_DATABASE_URL / RELAY_DATABASE_URL_FILE）。
+
 serve:
   --data-dir DIR           数据目录（或 RELAY_DATA_DIR）
-  --store S                sqlite | file（或 RELAY_STORE）；默认按数据目录里已有的，新装 sqlite
+  --store S                sqlite | file | postgres（或 RELAY_STORE）；默认按数据目录里已有的，新装 sqlite
+  --database-url URL       PostgreSQL 连接串（或 RELAY_DATABASE_URL）；--store postgres 与 --control postgres 用
+  --database-url-file F    从文件读连接串（或 RELAY_DATABASE_URL_FILE），口令不出现在进程参数里
+  --database-schema S      用哪个 schema（或 RELAY_DATABASE_SCHEMA），默认连接的缺省 schema
+  --control C              memory | redis | postgres（或 RELAY_CONTROL），默认 memory；多节点选 redis 或 postgres
+  --redis-url URL          Redis 地址（或 RELAY_REDIS_URL），--control redis 用
+  --node-id ID             本节点的名字（或 RELAY_NODE_ID），多节点时各不相同，默认 --host
   --host HOST              对外的 IP 或域名（或 RELAY_HOST）
   --port PORT              端口，默认 8443
   --public-origin URL      对外来源（或 RELAY_PUBLIC_ORIGIN），默认 https://<host>:<port>
@@ -104,45 +112,62 @@ async function personal(
       }
       case "status": {
         const { runStatus } = await import("./personal/commands.ts");
-        await runStatus(
-          args.parseDataDirOnly(rest, process.env).dataDir,
-          print,
-        );
+        const options = args.parseDataDirOnly(rest, process.env);
+        await runStatus(options.dataDir, print, Date.now(), options.database);
         return 0;
       }
       case "passwd": {
         const { runPasswd } = await import("./personal/commands.ts");
         const options = args.parsePasswd(rest, process.env);
-        await runPasswd(options.dataDir, options.passwordFile, print);
+        await runPasswd(
+          options.dataDir,
+          options.passwordFile,
+          print,
+          options.database,
+        );
         return 0;
       }
       case "rotate-key": {
         const { runRotateKey } = await import("./personal/commands.ts");
-        await runRotateKey(
-          args.parseDataDirOnly(rest, process.env).dataDir,
-          print,
-        );
+        const options = args.parseDataDirOnly(rest, process.env);
+        await runRotateKey(options.dataDir, print, options.database);
         return 0;
       }
       case "links": {
         const commands = await import("./personal/commands.ts");
         const options = args.parseLinks(rest, process.env);
         if (options.action === "list")
-          await commands.runLinksList(options.dataDir, print);
+          await commands.runLinksList(
+            options.dataDir,
+            print,
+            Date.now(),
+            options.database,
+          );
         else
-          await commands.runLinksRevoke(options.dataDir, options.linkId, print);
+          await commands.runLinksRevoke(
+            options.dataDir,
+            options.linkId,
+            print,
+            options.database,
+          );
         return 0;
       }
       case "migrate": {
         const { runMigrate } = await import("./personal/migrate.ts");
         const options = args.parseMigrate(rest, process.env);
-        runMigrate(options.dataDir, options.to, print);
+        await runMigrate(
+          options.dataDir,
+          options.to,
+          print,
+          Date.now(),
+          options.database,
+        );
         return 0;
       }
       case "backup": {
         const { runBackup } = await import("./personal/migrate.ts");
         const options = args.parseBackup(rest, process.env);
-        await runBackup(options.dataDir, options.out, print);
+        await runBackup(options.dataDir, options.out, print, options.database);
         return 0;
       }
       case "doctor": {
