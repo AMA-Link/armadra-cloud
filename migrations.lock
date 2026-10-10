@@ -1,3 +1,6 @@
 {
-  "apps/cloud/src/db/migrations": {}
+  "apps/cloud/src/db/migrations": {},
+  "packages/control-store-sql/migrations": {
+    "0001_init.sql": "b72ee6d046fd94a97c62d0b187d1c4281fab922ad74eca498df2dd58afa8e64a"
+  }
 }
