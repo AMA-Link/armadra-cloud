@@ -142,6 +142,7 @@ export class ControlDO extends DurableObject<RelayEnv> {
         ? createChallengeGate({
             siteKey: config.challenge.siteKey,
             scope: config.challenge.scope,
+            hostnames: config.challenge.hostnames,
             verifier: createWorkersTurnstileVerifier({
               secret: env.RELAY_TURNSTILE_SECRET.trim(),
             }),

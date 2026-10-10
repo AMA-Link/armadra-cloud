@@ -11,6 +11,12 @@ import { ConfigError, readConfig, type RelayEnv } from "../src/env.ts";
 import { passGate } from "../src/gates.ts";
 
 const base = { RELAY_ISSUER: "https://relay.armadra.test" } as RelayEnv;
+const ASK = { action: "armadra-login", hostnames: ["relay.armadra.test"] };
+const OK = {
+  success: true,
+  action: "armadra-login",
+  hostname: "relay.armadra.test",
+};
 
 describe("挑战配置", () => {
   it("没录 secret 不要求（站点密钥单独配了也不要求）", () => {
@@ -29,8 +35,21 @@ describe("挑战配置", () => {
         ...base,
         RELAY_TURNSTILE_SECRET: "s",
         RELAY_TURNSTILE_SITE_KEY: " 0x4AAA ",
+        RELAY_TURNSTILE_HOSTNAMES: "Relay.Armadra.test",
       }).challenge,
-    ).toEqual({ siteKey: "0x4AAA", scope: ["auth.login"] });
+    ).toEqual({
+      siteKey: "0x4AAA",
+      scope: ["auth.login"],
+      hostnames: ["relay.armadra.test"],
+    });
+    // 没给主机名：配置合法，闸拒绝一切
+    expect(
+      readConfig({
+        ...base,
+        RELAY_TURNSTILE_SECRET: "s",
+        RELAY_TURNSTILE_SITE_KEY: "k",
+      }).challenge?.hostnames,
+    ).toEqual([]);
     expect(
       readConfig({
         ...base,
@@ -39,6 +58,23 @@ describe("挑战配置", () => {
         RELAY_CHALLENGE_SCOPE: "auth.login,links.accept",
       }).challenge?.scope,
     ).toEqual(["auth.login", "links.accept"]);
+    // https 的 issuer（生产）不得含本机地址；http 的本地开发可以
+    expect(() =>
+      readConfig({
+        ...base,
+        RELAY_TURNSTILE_SECRET: "s",
+        RELAY_TURNSTILE_SITE_KEY: "k",
+        RELAY_TURNSTILE_HOSTNAMES: "relay.armadra.test,localhost",
+      }),
+    ).toThrow(ConfigError);
+    expect(
+      readConfig({
+        RELAY_ISSUER: "http://localhost:8787",
+        RELAY_TURNSTILE_SECRET: "s",
+        RELAY_TURNSTILE_SITE_KEY: "k",
+        RELAY_TURNSTILE_HOSTNAMES: "localhost",
+      } as RelayEnv).challenge?.hostnames,
+    ).toEqual(["localhost"]);
     for (const bad of [
       { RELAY_TURNSTILE_SECRET: "s" },
       {
@@ -73,7 +109,7 @@ describe("对假 siteverify 校验", () => {
     });
 
   it("成功：打到 Turnstile 的 siteverify，体里有 secret、response、remoteip、幂等键", async () => {
-    const { seen, fetcher } = fake(() => json(200, { success: true }));
+    const { seen, fetcher } = fake(() => json(200, OK));
     const verifier = createWorkersTurnstileVerifier({
       secret: "sekret",
       fetch: fetcher,
@@ -83,6 +119,7 @@ describe("对假 siteverify 校验", () => {
         token: "tok",
         remoteIp: "203.0.113.4",
         idempotencyKey: "k",
+        ...ASK,
       }),
     ).toEqual({ ok: true, reasons: [] });
     expect(seen).toEqual([
@@ -98,6 +135,29 @@ describe("对假 siteverify 校验", () => {
     ]);
   });
 
+  it("action 或 hostname 对不上、success 不是 true、非 2xx、答复不成形：一律不通过", async () => {
+    const ask = async (answer: () => Response) =>
+      createWorkersTurnstileVerifier({
+        secret: "s",
+        fetch: fake(answer).fetcher,
+      }).verify({ token: "t", idempotencyKey: "k", ...ASK });
+    expect(await ask(() => json(200, { ...OK, action: "x" }))).toMatchObject({
+      ok: false,
+      reasons: ["action-mismatch"],
+    });
+    expect(
+      await ask(() => json(200, { ...OK, hostname: "evil.test" })),
+    ).toMatchObject({ ok: false, reasons: ["hostname-mismatch"] });
+    expect(await ask(() => json(200, { ...OK, success: 1 }))).toMatchObject({
+      ok: false,
+    });
+    expect(await ask(() => json(403, OK))).toMatchObject({ ok: false });
+    expect(await ask(() => new Response("<html>"))).toMatchObject({
+      ok: false,
+      reasons: ["bad-response"],
+    });
+  });
+
   it("过期 / 重放、5xx、网络错、超时", async () => {
     const duplicate = createWorkersTurnstileVerifier({
       secret: "s",
@@ -105,14 +165,20 @@ describe("对假 siteverify 校验", () => {
         json(200, { success: false, "error-codes": ["timeout-or-duplicate"] }),
       ).fetcher,
     });
-    expect(await duplicate.verify({ token: "t", idempotencyKey: "k" })).toEqual(
-      { ok: false, reasons: ["timeout-or-duplicate"], retryable: false },
-    );
+    expect(
+      await duplicate.verify({ token: "t", idempotencyKey: "k", ...ASK }),
+    ).toEqual({
+      ok: false,
+      reasons: ["timeout-or-duplicate"],
+      retryable: false,
+    });
     const broken = createWorkersTurnstileVerifier({
       secret: "s",
       fetch: fake(() => new Response("oops", { status: 502 })).fetcher,
     });
-    expect(await broken.verify({ token: "t", idempotencyKey: "k" })).toEqual({
+    expect(
+      await broken.verify({ token: "t", idempotencyKey: "k", ...ASK }),
+    ).toEqual({
       ok: false,
       reasons: ["network"],
       retryable: true,
@@ -123,7 +189,9 @@ describe("对假 siteverify 校验", () => {
         throw new TypeError("network");
       }) as typeof fetch,
     });
-    expect(await offline.verify({ token: "t", idempotencyKey: "k" })).toEqual({
+    expect(
+      await offline.verify({ token: "t", idempotencyKey: "k", ...ASK }),
+    ).toEqual({
       ok: false,
       reasons: ["network"],
       retryable: true,
@@ -138,7 +206,9 @@ describe("对假 siteverify 校验", () => {
           ),
         )) as typeof fetch,
     });
-    expect(await hanging.verify({ token: "t", idempotencyKey: "k" })).toEqual({
+    expect(
+      await hanging.verify({ token: "t", idempotencyKey: "k", ...ASK }),
+    ).toEqual({
       ok: false,
       reasons: ["network"],
       retryable: true,

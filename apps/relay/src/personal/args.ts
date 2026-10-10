@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  parseChallengeHostnames,
   parseChallengeScope,
   type ChallengeScope,
 } from "@armadra/control-core/challenge";
@@ -344,6 +345,8 @@ export interface ChallengeOptions {
   /** secret 文件（只读文件，不收命令行明文）。 */
   secretFile: string;
   scope: ChallengeScope[];
+  /** siteverify 答复里 `hostname` 的允许列表（空 = 拒绝一切）。 */
+  hostnames: string[];
 }
 
 export interface RateLimitOptions {
@@ -428,10 +431,14 @@ function challengeOf(
     "RELAY_TURNSTILE_SECRET_FILE",
   );
   const scopeText = pick("challenge-scope", "RELAY_CHALLENGE_SCOPE");
+  const hostnamesText = pick(
+    "turnstile-hostnames",
+    "RELAY_TURNSTILE_HOSTNAMES",
+  );
   if (provider === "off") {
-    if (siteKey || secretFile || scopeText)
+    if (siteKey || secretFile || scopeText || hostnamesText)
       throw new UsageError(
-        "--turnstile-site-key、--turnstile-secret-file 与 --challenge-scope 要和 --challenge turnstile 一起给",
+        "--turnstile-site-key、--turnstile-secret-file、--turnstile-hostnames 与 --challenge-scope 要和 --challenge turnstile 一起给",
       );
     return undefined;
   }
@@ -451,11 +458,23 @@ function challengeOf(
       );
     }
   }
+  const publicText = values.get("public-origin") ?? env.RELAY_PUBLIC_ORIGIN;
+  let hostnames: string[];
+  try {
+    hostnames = parseChallengeHostnames(hostnamesText ?? "", {
+      allowLocal: !publicText || !originOf(publicText).startsWith("https://"),
+    });
+  } catch (error) {
+    throw new UsageError(
+      `--turnstile-hostnames ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   return {
     provider,
     siteKey: siteKey.trim(),
     secretFile: resolve(cwd, secretFile),
     scope,
+    hostnames,
   };
 }
 
@@ -503,6 +522,7 @@ const SERVE_FLAGS = withDatabase(
   "challenge",
   "turnstile-site-key",
   "turnstile-secret-file",
+  "turnstile-hostnames",
   "challenge-scope",
 );
 

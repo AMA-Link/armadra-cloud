@@ -17,6 +17,7 @@ import { createTurnstileVerifier, readTurnstileSecret } from "./challenge.ts";
 import { startPersonalRelay } from "./serve.ts";
 
 const SECRET = "test-turnstile-secret";
+const ASK = { action: "armadra-login", hostnames: ["relay.test"] };
 
 /** 假 siteverify：记下每个请求体；`ok-*` 通过一次、再来答重复，`slow` 不答，`boom` 答 500。 */
 let server: Server;
@@ -47,7 +48,11 @@ beforeAll(async () => {
         });
       if (token.startsWith("ok-") && !used.has(token)) {
         used.add(token);
-        return send(200, { success: true, hostname: "relay.test" });
+        return send(200, {
+          success: true,
+          action: "armadra-login",
+          hostname: "relay.test",
+        });
       }
       return send(200, {
         success: false,
@@ -96,7 +101,32 @@ describe("--challenge 参数", () => {
       siteKey: "0x4AAA",
       secretFile: "/w/secret",
       scope: ["auth.login"],
+      hostnames: [],
     });
+    const given = (env: Record<string, string>) =>
+      parsePersonalServe(
+        base,
+        {
+          RELAY_CHALLENGE: "turnstile",
+          RELAY_TURNSTILE_SITE_KEY: "k",
+          RELAY_TURNSTILE_SECRET_FILE: "s",
+          ...env,
+        },
+        "/w",
+      ).challenge?.hostnames;
+    expect(given({ RELAY_TURNSTILE_HOSTNAMES: "Relay.Test" })).toEqual([
+      "relay.test",
+    ]);
+    // 公网 https 地址下不得含本机地址；没给公网地址（本地开发）可以
+    expect(given({ RELAY_TURNSTILE_HOSTNAMES: "localhost" })).toEqual([
+      "localhost",
+    ]);
+    expect(() =>
+      given({
+        RELAY_TURNSTILE_HOSTNAMES: "relay.test,127.0.0.1",
+        RELAY_PUBLIC_ORIGIN: "https://relay.test",
+      }),
+    ).toThrow(UsageError);
     expect(
       parsePersonalServe(
         base,
@@ -151,6 +181,7 @@ describe("对假 siteverify 校验", () => {
       token: "ok-1",
       remoteIp: "203.0.113.7",
       idempotencyKey: "key-1",
+      ...ASK,
     });
     expect(verdict).toEqual({ ok: true, reasons: [] });
     expect(bodies.at(-1)).toEqual({
@@ -163,19 +194,24 @@ describe("对假 siteverify 校验", () => {
 
   it("重放与过期答 timeout-or-duplicate；无效令牌、错 secret 不可重试", async () => {
     expect(
-      await verifier().verify({ token: "ok-1", idempotencyKey: "k" }),
+      await verifier().verify({ token: "ok-1", idempotencyKey: "k", ...ASK }),
     ).toEqual({
       ok: false,
       reasons: ["timeout-or-duplicate"],
       retryable: false,
     });
     expect(
-      await verifier().verify({ token: "expired", idempotencyKey: "k" }),
+      await verifier().verify({
+        token: "expired",
+        idempotencyKey: "k",
+        ...ASK,
+      }),
     ).toMatchObject({ ok: false, reasons: ["timeout-or-duplicate"] });
     expect(
       await createTurnstileVerifier({ secret: "wrong", endpoint }).verify({
         token: "ok-2",
         idempotencyKey: "k",
+        ...ASK,
       }),
     ).toEqual({
       ok: false,
@@ -186,16 +222,16 @@ describe("对假 siteverify 校验", () => {
 
   it("超时、连不上、5xx：network，可重试", async () => {
     expect(
-      await verifier().verify({ token: "slow", idempotencyKey: "k" }),
+      await verifier().verify({ token: "slow", idempotencyKey: "k", ...ASK }),
     ).toEqual({ ok: false, reasons: ["network"], retryable: true });
     expect(
       await createTurnstileVerifier({
         secret: SECRET,
         endpoint: "http://127.0.0.1:1/siteverify",
-      }).verify({ token: "ok-3", idempotencyKey: "k" }),
+      }).verify({ token: "ok-3", idempotencyKey: "k", ...ASK }),
     ).toEqual({ ok: false, reasons: ["network"], retryable: true });
     expect(
-      await verifier().verify({ token: "boom", idempotencyKey: "k" }),
+      await verifier().verify({ token: "boom", idempotencyKey: "k", ...ASK }),
     ).toEqual({ ok: false, reasons: ["network"], retryable: true });
   });
 });
@@ -229,6 +265,7 @@ describe("开了挑战的 personal serve", () => {
           siteKey: "0x4AAA-site",
           secretFile,
           scope: ["auth.login"],
+          hostnames: ["relay.test"],
         },
       },
       {

@@ -242,10 +242,11 @@ async function startServing(
     disconnect: (filter) => relayRef.current?.disconnect(filter),
   });
   if (options.challenge) {
-    const { siteKey, scope, secretFile } = options.challenge;
+    const { siteKey, scope, secretFile, hostnames } = options.challenge;
     context.challenge = createChallengeGate({
       siteKey,
       scope,
+      hostnames,
       verifier:
         deps.challengeVerifier ??
         createTurnstileVerifier({ secret: readTurnstileSecret(secretFile) }),

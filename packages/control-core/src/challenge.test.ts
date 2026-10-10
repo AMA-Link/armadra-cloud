@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import { createAccounts } from "./accounts.ts";
 import {
   createChallengeGate,
+  CHALLENGE_ACTIONS,
+  parseChallengeHostnames,
   parseChallengeScope,
   readSiteverify,
   siteverifyBody,
@@ -36,8 +38,7 @@ const codeOf = async (run: () => unknown) => {
 
 /** 假提供方：`good-*` 通过一次（再来答重复），`down` 抛网络错，其余答令牌无效。 */
 function fakeVerifier() {
-  const calls: { token: string; remoteIp?: string; idempotencyKey: string }[] =
-    [];
+  const calls: Parameters<ChallengeVerifier["verify"]>[0][] = [];
   const used = new Set<string>();
   const verifier: ChallengeVerifier = {
     async verify(input) {
@@ -67,6 +68,7 @@ describe("挑战闸", () => {
     const rejected: string[][] = [];
     const gate = createChallengeGate({
       siteKey: " 0x4AAAA-site ",
+      hostnames: ["relay.test"],
       ...(scope ? { scope: parseChallengeScope(scope) } : {}),
       verifier: fake.verifier,
       now: () => clock.now,
@@ -112,6 +114,44 @@ describe("挑战闸", () => {
     expect(rejected).toEqual([["replayed"]]);
   });
 
+  it("令牌缺失 / 非字符串 / 空 / 超过 2048 字符即拒绝，不问提供方", async () => {
+    const { gate, calls, rejected } = setup();
+    const bad = ["", "a".repeat(2049), 42, null, { x: 1 }];
+    for (const token of bad)
+      expect(
+        await codeOf(() =>
+          gate.check(
+            "auth.login",
+            { provider: "turnstile", token: token as string },
+            "ip",
+          ),
+        ),
+      ).toBe("challenge_invalid");
+    expect(calls).toEqual([]);
+    expect(rejected).toHaveLength(bad.length);
+    await gate.check("auth.login", turnstile("good-" + "a".repeat(2043)), "ip");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("把该入口的 action 与小写的主机名白名单交给提供方", async () => {
+    const fake = fakeVerifier();
+    const gate = createChallengeGate({
+      siteKey: "k",
+      scope: parseChallengeScope("auth.login,links.accept"),
+      hostnames: [" Relay.Test ", ""],
+      verifier: fake.verifier,
+      now: () => 1,
+    });
+    await gate.check("auth.login", turnstile("good-a"), "ip");
+    await gate.check("links.accept", turnstile("good-b"), "ip");
+    expect(fake.calls.map((call) => call.action)).toEqual([
+      "armadra-login",
+      "armadra-accept",
+    ]);
+    expect(CHALLENGE_ACTIONS["auth.login"]).toBe("armadra-login");
+    expect(fake.calls[0]?.hostnames).toEqual(["relay.test"]);
+  });
+
   it("本地表过了 300 秒就忘，重放交给提供方拒（timeout-or-duplicate）", async () => {
     const { gate, clock, calls, rejected } = setup();
     await gate.check("auth.login", turnstile("good-2"), "ip");
@@ -149,7 +189,12 @@ describe("挑战闸", () => {
   it("配置不对就抛：空 siteKey、空或不认识的 scope", () => {
     const { verifier } = fakeVerifier();
     expect(() =>
-      createChallengeGate({ siteKey: " ", verifier, now: Date.now }),
+      createChallengeGate({
+        siteKey: " ",
+        hostnames: [],
+        verifier,
+        now: Date.now,
+      }),
     ).toThrow();
     expect(() => parseChallengeScope(" , ")).toThrow();
     expect(() => parseChallengeScope("auth.login,me.get")).toThrow(
@@ -185,9 +230,17 @@ describe("siteverify", () => {
     ).toBe(false);
   });
 
-  it("答复解读", () => {
+  const expectLogin = { action: "armadra-login", hostnames: ["relay.test"] };
+  const ok = {
+    success: true,
+    action: "armadra-login",
+    hostname: "relay.test",
+  };
+
+  it("答复解读：success、action、hostname 缺一不可", () => {
     const cases: [number, unknown, ChallengeVerdict][] = [
-      [200, { success: true, hostname: "relay" }, { ok: true, reasons: [] }],
+      [200, ok, { ok: true, reasons: [] }],
+      [200, { ...ok, hostname: "RELAY.test" }, { ok: true, reasons: [] }],
       [
         200,
         { success: false, "error-codes": ["timeout-or-duplicate"] },
@@ -203,20 +256,65 @@ describe("siteverify", () => {
         { success: false },
         { ok: false, reasons: ["rejected"], retryable: false },
       ],
-      [503, null, { ok: false, reasons: ["network"], retryable: true }],
       [
         200,
-        "<html>",
-        { ok: false, reasons: ["bad-response"], retryable: true },
+        { ...ok, success: "true" },
+        { ok: false, reasons: ["bad-response"] },
       ],
       [
-        400,
-        { nope: 1 },
-        { ok: false, reasons: ["bad-response"], retryable: false },
+        200,
+        { ...ok, action: "armadra-accept" },
+        { ok: false, reasons: ["action-mismatch"] },
       ],
+      [
+        200,
+        { success: true, hostname: "relay.test" },
+        { ok: false, reasons: ["action-mismatch"] },
+      ],
+      [
+        200,
+        { ...ok, hostname: "evil.test" },
+        { ok: false, reasons: ["hostname-mismatch"] },
+      ],
+      [
+        200,
+        { success: true, action: "armadra-login" },
+        { ok: false, reasons: ["hostname-mismatch"] },
+      ],
+      [503, null, { ok: false, reasons: ["network"], retryable: true }],
+      [400, ok, { ok: false, reasons: ["bad-status"] }],
+      [302, ok, { ok: false, reasons: ["bad-status"] }],
+      [200, "<html>", { ok: false, reasons: ["bad-response"] }],
+      [200, null, { ok: false, reasons: ["bad-response"] }],
     ];
     for (const [status, body, verdict] of cases)
-      expect(readSiteverify(status, body)).toEqual(verdict);
+      expect(readSiteverify(status, body, expectLogin)).toEqual(verdict);
+  });
+
+  it("主机名白名单为空：拒绝一切", () => {
+    expect(
+      readSiteverify(200, ok, { action: "armadra-login", hostnames: [] }),
+    ).toEqual({ ok: false, reasons: ["hostname-mismatch"] });
+  });
+
+  it("主机名配置：小写去重；生产（allowLocal=false）不得含本机地址；不合法的抛", () => {
+    expect(
+      parseChallengeHostnames("Relay.Test, relay.test,b.test", {
+        allowLocal: false,
+      }),
+    ).toEqual(["relay.test", "b.test"]);
+    expect(parseChallengeHostnames("", { allowLocal: false })).toEqual([]);
+    expect(
+      parseChallengeHostnames("localhost,127.0.0.1", { allowLocal: true }),
+    ).toEqual(["localhost", "127.0.0.1"]);
+    for (const bad of ["localhost", "127.0.0.1", "a.localhost", "::1"])
+      expect(() =>
+        parseChallengeHostnames(`relay.test,${bad}`, { allowLocal: false }),
+      ).toThrow();
+    for (const bad of ["https://relay.test", "relay.test:443", "a/b", "a b"])
+      expect(() =>
+        parseChallengeHostnames(bad, { allowLocal: true }),
+      ).toThrow();
   });
 });
 
@@ -242,6 +340,7 @@ describe("登录与接受链接的次序", () => {
     });
     h.context.challenge = createChallengeGate({
       siteKey: "site",
+      hostnames: ["relay.test"],
       scope: parseChallengeScope(scope),
       verifier: fake.verifier,
       now: h.context.now,

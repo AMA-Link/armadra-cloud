@@ -71,6 +71,7 @@
 | `--challenge` / `RELAY_CHALLENGE`                             |      | 人机挑战：`turnstile` / `off`（缺省）；开了以后 `platform.info` 报 `challenge`，登录缺令牌答 `400 challenge_required`（契约 §16） |
 | `--turnstile-site-key` / `RELAY_TURNSTILE_SITE_KEY`           |      | Turnstile 站点密钥（不是秘密）；`--challenge turnstile` 必填                                                                      |
 | `--turnstile-secret-file` / `RELAY_TURNSTILE_SECRET_FILE`     |      | Turnstile secret 文件（compose 用 secret 挂载）；`--challenge turnstile` 必填                                                     |
+| `--turnstile-hostnames` / `RELAY_TURNSTILE_HOSTNAMES`         |      | siteverify 答复里允许的主机名，逗号分隔；空 = 拒绝一切；有 https 的 `--public-origin` 时不得含本机地址                            |
 | `--challenge-scope` / `RELAY_CHALLENGE_SCOPE`                 |      | 要挑战的 procedure，`auth.login`（缺省）、`links.accept`，逗号分隔                                                                |
 
 限流额度也可写在状态文件 `settings.rateLimits`（`anonymous`、`preflight`、`token`、`account`，都是 1–1000000 的整数，可省略），优先级：命令行 > 环境变量 > 状态文件 > 缺省；改动后重启 `serve` 生效。登录、链接接受与隧道登记的限流不可配。

@@ -33,15 +33,22 @@ Workers Free 没有付费用量，超了额度是请求直接失败（不是账�
 
 Workers 中继：
 
-1. 面板 Turnstile → Add widget：主机名填 `relay.armadra.com` 与 `relay-staging.armadra.com`，模式选 **Invisible**（无交互时不显示）。
-2. 站点密钥不是秘密：填进 `apps/relay-workers/wrangler.jsonc` 对应环境的 `vars.RELAY_TURNSTILE_SITE_KEY`，部署（`pnpm exec wrangler deploy --env staging`）。这时还不要求挑战。
-3. `pnpm exec wrangler secret put RELAY_TURNSTILE_SECRET --env staging`，粘贴 secret。录了 secret 才要求挑战；**站点密钥为空时录 secret 是配错**，整个 Worker 答 503 `unavailable`（`wrangler tail` 有「配置不对」），先补站点密钥。
+1. 面板里已建两个 Turnstile 组件（Managed 模式，主机名含 `armadra.com`）：staging 对应 `relay-staging.armadra.com`，生产对应 `relay.armadra.com`。站点密钥不是秘密，已写进 `apps/relay-workers/wrangler.jsonc`（顶层 = 生产，`env.staging` = staging）的 `vars.RELAY_TURNSTILE_SITE_KEY`，同处的 `vars.RELAY_TURNSTILE_HOSTNAMES` 是 siteverify 答复里允许的主机名（逗号分隔；空 = 拒绝一切；https 的 issuer 下不得含 localhost / 127.0.0.1）。部署（`pnpm exec wrangler deploy --env staging`）后还不要求挑战。
+2. 录 secret（只有用户本人执行，粘贴到提示里，不进命令行参数、聊天或仓库）：
+   - staging：`pnpm exec wrangler secret put RELAY_TURNSTILE_SECRET --env staging`
+   - 生产：`pnpm exec wrangler secret put RELAY_TURNSTILE_SECRET`
+
+   录了 secret 才要求挑战；**站点密钥为空时录 secret 是配错**，整个 Worker 答 503 `unavailable`（`wrangler tail` 有「配置不对」），先补站点密钥。
+
+3. 客户端：Turnstile 小组件渲染时必须传 `action: "armadra-login"`（`data-action`）；中继在 siteverify 的答复里核对 `action`，对不上即 `challenge_invalid`（`links.accept` 对应 `armadra-accept`）。
 4. 验证：`curl https://relay-staging.armadra.com/.well-known/armadra-platform` 里有 `"challenge":{"provider":"turnstile",…}` 与能力 `challenge.turnstile`；不带令牌登录答 `400 challenge_required`；页面与桌面的中转账号登录框能正常登录。
-5. 去掉 `--env staging` 对生产重复。关掉挑战：`wrangler secret delete RELAY_TURNSTILE_SECRET`。
+5. 对生产重复第 2、4 步（去掉 `--env staging`）。关掉挑战：`wrangler secret delete RELAY_TURNSTILE_SECRET`。
 
-Node 中继（49 的 `cn.relay.armadra.com`，缺省关）：secret 写进文件（0600），`personal serve` 加 `--challenge turnstile --turnstile-site-key <站点密钥> --turnstile-secret-file <文件>`（或 `RELAY_CHALLENGE` / `RELAY_TURNSTILE_SITE_KEY` / `RELAY_TURNSTILE_SECRET_FILE`，compose 里用 secret 挂载）。Turnstile 小组件的主机名里要加 `cn.relay.armadra.com`。
+服务端校验（Cloudflare existing-widget flow）：令牌缺失、非字符串、空或超过 2048 字符直接拒绝；向 `https://challenges.cloudflare.com/turnstile/v0/siteverify` 以表单 POST `secret`、`response`、`remoteip`，10 秒超时；失败一律关闭（网络错、非 2xx、答复解析失败都答 `400 challenge_invalid`）；要求 `success === true`、`action` 等于入口的 action、`hostname` 在 `RELAY_TURNSTILE_HOSTNAMES` 内。令牌一次性由 Turnstile 保证（重放答 `timeout-or-duplicate`）。
 
-挑战先于口令校验，挑战失败不计入登录失败次数；同一个令牌用第二次直接 `challenge_invalid`；Turnstile 没答（超时、5xx）同一个幂等键重试一次，仍不行答 `challenge_invalid`，客户端换新令牌重来。日志只记「人机挑战没通过」与原因码，不记令牌。
+Node 中继（49 的 `cn.relay.armadra.com`，缺省关）：secret 写进文件（0600），`personal serve` 加 `--challenge turnstile --turnstile-site-key <站点密钥> --turnstile-secret-file <文件> --turnstile-hostnames <主机名,…>`（或 `RELAY_CHALLENGE` / `RELAY_TURNSTILE_SITE_KEY` / `RELAY_TURNSTILE_SECRET_FILE` / `RELAY_TURNSTILE_HOSTNAMES`，compose 里用 secret 挂载）。Turnstile 小组件的主机名里要加 `cn.relay.armadra.com`。
+
+挑战先于口令校验，挑战失败不计入登录失败次数；同一个令牌用第二次直接 `challenge_invalid`（本地另留 300 秒防重放表省一次往返）；Turnstile 没答（超时、5xx）同一个幂等键重试一次，仍不行答 `challenge_invalid`，客户端换新令牌重来。日志只记「人机挑战没通过」与原因码，不记令牌。
 
 ## 区域规则（Terraform）
 
