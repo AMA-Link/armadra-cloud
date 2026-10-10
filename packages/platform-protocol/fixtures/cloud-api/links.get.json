@@ -7,6 +7,10 @@
     "label": "For Alice",
     "role": "editor",
     "sourceName": "Workstation",
+    "scope": {
+      "workspaceId": "ws_01",
+      "readOnly": true
+    },
     "expiresAtMs": 1760604800000,
     "exhausted": false,
     "requiresAccount": true

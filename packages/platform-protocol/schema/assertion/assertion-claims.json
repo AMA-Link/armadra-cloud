@@ -69,6 +69,43 @@
         "role"
       ]
     },
+    "team": {
+      "type": "object",
+      "properties": {
+        "teamId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "lead",
+            "member"
+          ]
+        }
+      },
+      "required": [
+        "teamId",
+        "role"
+      ]
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "viewer",
+        "editor",
+        "operator",
+        "driver"
+      ]
+    },
+    "scp": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(?:ws:[A-Za-z0-9_.:-]{1,128}|sess:[A-Za-z0-9_.:-]{1,128}|ro)$"
+      }
+    },
     "link": {
       "type": "object",
       "properties": {

@@ -8,13 +8,17 @@
  * 每一步的响应都对协议包契约的 output schema 校验；最后核对日志里没有口令、令牌、秘密与正文。
  */
 import { once } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:https";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createLogger } from "@armadra/cloud-shared/log";
+import {
+  assertionClaimsSchema,
+  relayTokenClaimsSchema,
+} from "@armadra/platform-protocol/assertion";
 import {
   cloudContract,
   meStreamEventSchema,
@@ -137,6 +141,12 @@ function Procedures(domain: keyof Procedures, key: PropertyKey) {
 function errorCode(reply: Reply): string {
   return wireErrorSchema.parse(reply.body).code;
 }
+
+/** 令牌载荷（只拆不验；验签在中继与 core）。 */
+const payloadOf = (token: string): Record<string, unknown> =>
+  JSON.parse(
+    Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"),
+  ) as Record<string, unknown>;
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
@@ -509,6 +519,116 @@ describe("个人中转端到端", () => {
       headers: bearer(ownerSession.accessToken),
     });
     expect(errorCode(tooLong)).toBe("bad_request");
+  });
+
+  it("工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；边缘只放行读与身份域；范围落进状态文件", async () => {
+    const created = output(
+      "links",
+      "create",
+      await call("POST", `${issuer}/v1/links`, {
+        body: {
+          kind: "source_invite",
+          sourceId: SOURCE_ID,
+          invitationId: "inv_scoped",
+          label: "只看一个工作区",
+          role: "viewer",
+          expiresAtMs: Date.now() + 3600_000,
+          scope: { workspaceId: "ws_e2e", readOnly: true },
+        },
+        headers: bearer(ownerSession.accessToken),
+      }),
+    ) as { linkId: string; secret: string };
+    secrets.push(created.secret);
+    const landing = output(
+      "links",
+      "get",
+      await call("GET", `${issuer}/v1/links/${created.linkId}`),
+    ) as { scope?: unknown };
+    expect(landing.scope).toEqual({ workspaceId: "ws_e2e", readOnly: true });
+    const state = JSON.parse(
+      readFileSync(join(root, "data", "state.json"), "utf8"),
+    ) as { links: { linkId: string; scope?: unknown }[] };
+    expect(
+      state.links.find((row) => row.linkId === created.linkId)?.scope,
+    ).toEqual({ workspaceId: "ws_e2e", readOnly: true });
+
+    const scoped = output(
+      "links",
+      "accept",
+      await call("POST", `${issuer}/v1/links/${created.linkId}/accept`, {
+        body: { secret: created.secret, device: DEVICE },
+      }),
+    ) as {
+      assertion: string;
+      relayToken: string;
+      guestSession: { accessToken: string; refreshToken?: string };
+    };
+    secrets.push(
+      scoped.assertion,
+      scoped.relayToken,
+      scoped.guestSession.accessToken,
+      scoped.guestSession.refreshToken as string,
+    );
+    const assertion = assertionClaimsSchema.parse(payloadOf(scoped.assertion));
+    expect(assertion.scp).toEqual(["ws:ws_e2e", "ro"]);
+    expect(assertion.link?.invitationId).toBe("inv_scoped");
+    expect(relayTokenClaimsSchema.parse(payloadOf(scoped.relayToken)).ro).toBe(
+      true,
+    );
+
+    const token = { "armadra-relay-token": scoped.relayToken };
+    const read = await call("GET", `${relayBaseUrl}/echo-request`, {
+      headers: token,
+    });
+    expect(read.status).toBe(200);
+    const before = core.requests;
+    const write = await call("POST", `${relayBaseUrl}/echo`, {
+      body: { text: MARKER },
+      headers: token,
+    });
+    expect(write.status).toBe(403);
+    expect(errorCode(write)).toBe("forbidden");
+    expect(core.requests).toBe(before);
+    // 身份域照常进隧道（假 core 不认识这条路径，答 404）。
+    const login = await call(
+      "POST",
+      `${relayBaseUrl}/api/identity/cloud/login`,
+      {
+        body: {},
+        headers: token,
+      },
+    );
+    expect(login.status).toBe(404);
+    expect(core.requests).toBe(before + 1);
+    // 再要断言仍带同一份范围。
+    const again = output(
+      "sources",
+      "assertion",
+      await call("POST", `${issuer}/v1/sources/${SOURCE_ID}/assertion`, {
+        body: {},
+        headers: bearer(scoped.guestSession.accessToken),
+      }),
+    ) as { assertion: string; relayToken: string };
+    secrets.push(again.assertion, again.relayToken);
+    expect(payloadOf(again.assertion).scp).toEqual(["ws:ws_e2e", "ro"]);
+    expect(payloadOf(again.relayToken).ro).toBe(true);
+
+    const badScope = await call("POST", `${issuer}/v1/links`, {
+      body: {
+        kind: "source_invite",
+        sourceId: SOURCE_ID,
+        invitationId: "inv_bad",
+        label: "",
+        role: "viewer",
+        expiresAtMs: Date.now() + 3600_000,
+        scope: { sessionId: "sess_1" },
+      },
+      headers: bearer(ownerSession.accessToken),
+    });
+    expect(errorCode(badScope)).toBe("bad_request");
+    await call("DELETE", `${issuer}/v1/links/${created.linkId}`, {
+      headers: bearer(ownerSession.accessToken),
+    });
   });
 
   it("撤销链接：访客 WS 断开，访客的中继令牌与会话立即失效，owner 不受影响", async () => {

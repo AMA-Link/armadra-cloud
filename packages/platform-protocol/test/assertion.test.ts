@@ -9,11 +9,17 @@ import {
 import {
   accessClaimsSchema,
   assertionClaimsSchema,
+  parseScopeClaims,
   relayTokenClaimsSchema,
+  scopeClaims,
   sourceJwsClaimsSchema,
   TOKEN_TYPES,
   tunnelTokenClaimsSchema,
 } from "../src/assertion/claims.ts";
+import {
+  isIdentityPath,
+  isReadOnlyAllowed,
+} from "../src/assertion/read-only.ts";
 import {
   buildSigningInput,
   joinCompactJws,
@@ -253,5 +259,104 @@ describe("ReplayCache", () => {
   it("参数必须为正", () => {
     expect(() => new ReplayCache(0)).toThrow(RangeError);
     expect(() => new ReplayCache(1, 0)).toThrow(RangeError);
+  });
+});
+
+describe("协议 1.1：断言范围与只读令牌", () => {
+  it("scoped-session.jwt：scp 是工作空间 + 会话 + 只读", () => {
+    const claims = assertionClaimsSchema.parse(
+      verified("scoped-session").payload,
+    );
+    expect(claims.scp).toEqual(["ws:ws_01", "sess:sess_01", "ro"]);
+    expect(parseScopeClaims(claims.scp)).toEqual({
+      workspaceIds: ["ws_01"],
+      sessionIds: ["sess_01"],
+      readOnly: true,
+    });
+    expect(claims.role).toBeUndefined();
+  });
+
+  it("team-grant.jwt：org、team、role 与多个工作空间", () => {
+    const claims = assertionClaimsSchema.parse(verified("team-grant").payload);
+    expect(claims.team).toEqual({
+      teamId: "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      role: "member",
+    });
+    expect(claims.role).toBe("editor");
+    expect(parseScopeClaims(claims.scp).workspaceIds).toEqual([
+      "ws_01",
+      "ws_02",
+    ]);
+  });
+
+  it("旧断言没有 scp / role / team：解析出整台、可写", () => {
+    const claims = assertionClaimsSchema.parse(verified("valid").payload);
+    expect(claims.scp).toBeUndefined();
+    expect(parseScopeClaims(claims.scp)).toEqual({
+      workspaceIds: [],
+      sessionIds: [],
+      readOnly: false,
+    });
+  });
+
+  it("relay-token-ro.jwt 与 tunnel-token-org.jwt；旧令牌没有 ro / org", () => {
+    const ro = relayTokenClaimsSchema.parse(verified("relay-token-ro").payload);
+    expect(ro.ro).toBe(true);
+    expect(ro.org).toBe("org_01JAAAAAAAAAAAAAAAAAAAAAAA");
+    const old = relayTokenClaimsSchema.parse(verified("relay-token").payload);
+    expect(old.ro).toBeUndefined();
+    expect(old.org).toBeUndefined();
+    expect(
+      tunnelTokenClaimsSchema.parse(verified("tunnel-token-org").payload).org,
+    ).toBe("org_01JAAAAAAAAAAAAAAAAAAAAAAA");
+  });
+
+  it("scp 的项只认 ws: / sess: / ro；role 只认四档", () => {
+    const base = assertionClaimsSchema.parse(verified("valid").payload);
+    for (const bad of [["admin"], ["ws:"], ["ws:a b"], ["sess:x/y"]])
+      expect(
+        assertionClaimsSchema.safeParse({ ...base, scp: bad }).success,
+        bad.join(),
+      ).toBe(false);
+    expect(
+      assertionClaimsSchema.safeParse({ ...base, role: "owner" }).success,
+    ).toBe(false);
+  });
+
+  it("scopeClaims：顺序固定；会话范围总是带 ro；整台答空", () => {
+    expect(scopeClaims(undefined)).toEqual([]);
+    expect(scopeClaims({})).toEqual([]);
+    expect(scopeClaims({ readOnly: false })).toEqual([]);
+    expect(scopeClaims({ workspaceId: "w" })).toEqual(["ws:w"]);
+    expect(scopeClaims({ readOnly: true })).toEqual(["ro"]);
+    expect(scopeClaims({ workspaceId: "w", sessionId: "s" })).toEqual([
+      "ws:w",
+      "sess:s",
+      "ro",
+    ]);
+  });
+
+  it("isReadOnlyAllowed：安全方法与规范的身份域路径", () => {
+    for (const method of ["GET", "HEAD", "OPTIONS", "get"])
+      expect(isReadOnlyAllowed(method, "/api/workspaces")).toBe(true);
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"])
+      expect(isReadOnlyAllowed(method, "/api/workspaces")).toBe(false);
+    for (const path of [
+      "/api/identity/cloud/login",
+      "/api/identity/ws-ticket?x=1",
+      "/api/rpc/identity/session/refresh",
+    ])
+      expect(isReadOnlyAllowed("POST", path), path).toBe(true);
+    for (const path of [
+      "/api/identity",
+      "/api/identityx/login",
+      "/api/identity/../terminals",
+      "/api/identity/./x",
+      "/api/identity//x",
+      "/api/identity/%2e%2e/terminals",
+      "/api/identity\\..\\terminals",
+      "/x/api/identity/login",
+    ])
+      expect(isIdentityPath(path), path).toBe(false);
   });
 });

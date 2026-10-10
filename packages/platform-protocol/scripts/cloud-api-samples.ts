@@ -68,6 +68,7 @@ const link = {
   label: "For Alice",
   role: "editor",
   sourceId: SOURCE_ID,
+  scope: { workspaceId: "ws_01", readOnly: true },
   url: `${ISSUER}/j/lnk_01JAAAAAAAAAAAAAAAAAAAAAAA`,
   uses: 1,
   maxUses: 5,
@@ -341,6 +342,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       role: "editor",
       expiresAtMs: NOW + 7 * 86_400_000,
       maxUses: 5,
+      scope: { workspaceId: "ws_01", readOnly: true },
     },
     output: {
       linkId: link.linkId,
@@ -355,6 +357,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       label: "For Alice",
       role: "editor",
       sourceName: "Workstation",
+      scope: { workspaceId: "ws_01", readOnly: true },
       expiresAtMs: link.expiresAtMs,
       exhausted: false,
       requiresAccount: true,

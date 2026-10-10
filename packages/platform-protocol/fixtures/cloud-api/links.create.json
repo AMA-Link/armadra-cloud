@@ -6,7 +6,11 @@
     "label": "For Alice",
     "role": "editor",
     "expiresAtMs": 1760604800000,
-    "maxUses": 5
+    "maxUses": 5,
+    "scope": {
+      "workspaceId": "ws_01",
+      "readOnly": true
+    }
   },
   "output": {
     "linkId": "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",

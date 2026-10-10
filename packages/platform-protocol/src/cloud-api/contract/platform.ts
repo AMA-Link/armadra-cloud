@@ -5,7 +5,7 @@ import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_1 } from "../meta.ts";
 import { empty, protocolVersionSchema } from "../schemas.ts";
 
-/** capabilities 只增不删。personal 报 `auth.password`、`links.source-invite`、`links.update`、`me.stream`。 */
+/** capabilities 只增不删。personal 报 `auth.password`、`links.source-invite`、`links.update`、`links.scope`、`me.stream`。 */
 export const PLATFORM_CAPABILITIES = [
   "auth.password",
   "auth.passkey",
@@ -17,6 +17,8 @@ export const PLATFORM_CAPABILITIES = [
   "links.org-join",
   /** `links.update`（改备注，0.2.0 起）。 */
   "links.update",
+  /** `links.create` 收 `scope`（工作空间 / 会话 / 只读，0.3.0 起）；不报的中继会丢掉 `scope`。 */
+  "links.scope",
   "sources.hosted",
   "billing",
   "me.stream",

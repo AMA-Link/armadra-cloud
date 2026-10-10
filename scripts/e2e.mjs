@@ -900,6 +900,124 @@ async function main() {
   );
 
   await report.step(
+    "工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；只读访客能登录、读与开事件流，写被边缘挡下",
+    async () => {
+      const invitation = await adminCall("POST", "/api/identity/invitations", {
+        role: "viewer",
+        targetWorkspaceId: state.workspaceId,
+        ttlMs: 3_600_000,
+      });
+      expect(
+        invitation.status < 300,
+        `core 邀请：HTTP ${invitation.status} ${JSON.stringify(invitation.body).slice(0, 200)}`,
+      );
+      const invitationToken = secret(invitation.body.token);
+      const invitationId =
+        invitation.body.invitationId ??
+        invitation.body.id ??
+        invitationToken.split(".")[0];
+      const info = ok(
+        await v1("GET", "/.well-known/armadra-platform"),
+        "平台信息",
+      );
+      expect(
+        (info.capabilities ?? []).includes("links.scope"),
+        "中继报 links.scope",
+      );
+      const created = ok(
+        await v1(
+          "POST",
+          "/v1/links",
+          {
+            kind: "source_invite",
+            sourceId: state.sourceId,
+            invitationId,
+            label: "e2e-scoped",
+            role: "viewer",
+            expiresAtMs: Date.now() + 3_600_000,
+            scope: { workspaceId: state.workspaceId, readOnly: true },
+          },
+          state.relayAccess,
+        ),
+        "links.create（带范围）",
+      );
+      secret(created.secret, "链接秘密");
+      const landing = ok(
+        await v1("GET", `/v1/links/${created.linkId}`),
+        "links.get",
+      );
+      expectEqual(
+        JSON.stringify(landing.scope),
+        JSON.stringify({ workspaceId: state.workspaceId, readOnly: true }),
+        "links.get.scope",
+      );
+      const accepted = ok(
+        await v1("POST", `/v1/links/${created.linkId}/accept`, {
+          secret: created.secret,
+          device: { platform: "browser", name: "e2e-scoped" },
+        }),
+        "links.accept",
+      );
+      secret(accepted.assertion, "断言");
+      secret(accepted.relayToken, "中继令牌");
+      secret(accepted.guestSession.accessToken);
+      secret(accepted.guestSession.refreshToken);
+      const claims = (token) =>
+        JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+      expectEqual(
+        JSON.stringify(claims(accepted.assertion).scp),
+        JSON.stringify([`ws:${state.workspaceId}`, "ro"]),
+        "断言 scp",
+      );
+      expectEqual(claims(accepted.relayToken).ro, true, "中继令牌 ro");
+      const scoped = {
+        relayToken: accepted.relayToken,
+        baseUrl: accepted.relayBaseUrl,
+        access: "",
+        refresh: "",
+      };
+      // 只读令牌下 core 的 cloud/login（身份域 POST）照常通过。
+      const login = await coreLogin(
+        scoped,
+        accepted.assertion,
+        invitationToken,
+      );
+      expectEqual(login.created, true, "范围访客账号是新建的");
+      const workspaces = ok(
+        await viaRelay(scoped, "GET", "/api/workspaces"),
+        "范围访客列工作空间",
+      );
+      expect(
+        JSON.stringify(workspaces).includes(state.workspaceId),
+        "范围访客看得到被分享的工作空间",
+      );
+      const write = await viaRelay(scoped, "POST", "/api/terminals", {
+        workspaceId: state.workspaceId,
+        cwd: "/data/e2e-ws",
+        shell: "/bin/sh",
+      });
+      expectEqual(write.status, 403, "只读令牌的写请求");
+      expectEqual(write.body?.code, "forbidden", "只读令牌的写请求 code");
+      const events = await openWs(
+        scoped,
+        `/api/workspaces/${state.workspaceId}/events`,
+      );
+      wsToClose.push(events.socket);
+      expectEqual(events.status, 101, "范围访客事件流升级");
+      events.socket.close();
+      ok(
+        await v1(
+          "DELETE",
+          `/v1/links/${created.linkId}`,
+          undefined,
+          state.relayAccess,
+        ),
+        "撤销范围链接",
+      );
+    },
+  );
+
+  await report.step(
     "撤销链接：访客的流被断开、令牌作废，链接不能再兑换",
     async () => {
       const started = Date.now();

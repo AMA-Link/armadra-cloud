@@ -172,14 +172,14 @@
 
 单人中转（`armadra-relay personal`）实现 `/v1/*` 的一个子集，形状与 saas 完全相同；不实现的路由（包括契约里的组织、计费、设备码、passkey、TOTP）答 `404 not_found`。`/v1/*` 与 `/.well-known/*` 允许任意来源跨源调用（只认 `Authorization` 头，不用 Cookie），登录类答案总是带 `refreshToken`。
 
-| procedure                                                                                        | 说明                                                                                                                                                                         |
-| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `platform.info`、`platform.jwks`                                                                 | `mode: "personal"`、`relay.addressing: "path"`、`capabilities: ["auth.password", "links.source-invite", "links.update", "me.stream"]`；有页面产物时 `webApp = <issuer>/app/` |
-| `auth.login`、`auth.refresh`、`auth.logout`                                                      | `account` 是账号名；会话的 `accountId` 是 `acct:<账号名>`，`email` 为 `null`                                                                                                 |
-| `me.get`、`me.sources`、`me.devices`、`me.deviceRevoke`、`me.streamTicket` + `GET /v1/me/stream` | 访客（`guest:<linkId>:<随机>`）只看到链接指向的那个源                                                                                                                        |
-| `sources.registrationToken`、`sources.register`、`sources.heartbeatHint`                         | 注册令牌只有账号本人能要（访客答 `403 forbidden`）                                                                                                                           |
-| `sources.list`、`sources.get`、`sources.revoke`、`sources.assertion`                             | `relayBaseUrl = <issuer>/s/<sourceId>`；撤销即断开隧道与经中继的 WS，`me/stream` 发 `sourceRevoked`                                                                          |
-| `links.create`、`links.get`、`links.accept`、`links.list`、`links.update`、`links.revoke`        | 只有 `source_invite`；`accept` 匿名；`update` 只改备注（去首尾空白，已撤销的也能改）；撤销即作废该链接的全部访客设备并断开其 WS                                              |
+| procedure                                                                                        | 说明                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform.info`、`platform.jwks`                                                                 | `mode: "personal"`、`relay.addressing: "path"`、`capabilities: ["auth.password", "links.source-invite", "links.update", "links.scope", "me.stream"]`；有页面产物时 `webApp = <issuer>/app/` |
+| `auth.login`、`auth.refresh`、`auth.logout`                                                      | `account` 是账号名；会话的 `accountId` 是 `acct:<账号名>`，`email` 为 `null`                                                                                                                |
+| `me.get`、`me.sources`、`me.devices`、`me.deviceRevoke`、`me.streamTicket` + `GET /v1/me/stream` | 访客（`guest:<linkId>:<随机>`）只看到链接指向的那个源                                                                                                                                       |
+| `sources.registrationToken`、`sources.register`、`sources.heartbeatHint`                         | 注册令牌只有账号本人能要（访客答 `403 forbidden`）                                                                                                                                          |
+| `sources.list`、`sources.get`、`sources.revoke`、`sources.assertion`                             | `relayBaseUrl = <issuer>/s/<sourceId>`；撤销即断开隧道与经中继的 WS，`me/stream` 发 `sourceRevoked`                                                                                         |
+| `links.create`、`links.get`、`links.accept`、`links.list`、`links.update`、`links.revoke`        | 只有 `source_invite`；`create` 收 `scope`（§14）；`accept` 匿名；`update` 只改备注（去首尾空白，已撤销的也能改）；撤销即作废该链接的全部访客设备并断开其 WS                                 |
 
 - 账号：一个；口令策略与 scrypt 参数取协议包 `identity-vectors`，策略码与 core 相同（`password_too_short` 等）。
 - 防暴力破解：按 IP 每分钟 20 次（`rate_limited`）；按账号连续 5 次失败锁 1 分钟、每次翻倍、15 分钟封顶、最后一次失败一小时后清零。锁定时答 `429 account_locked`，`details.retryAfterMs` 与 `Retry-After` 头给出剩余时间。
@@ -206,3 +206,36 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **兑票**：`GET` / `HEAD <源地址>/_relay/m/<票>`，不要令牌。票不认识、过期、不是这个源或签票令牌已撤销 → 按 IP 严格限流后 `404 not_found`；其它方法 `400 bad_request`；认得的票按签票令牌的 `jti` 与账号 `sub` 计数（§7 同一组桶），源离线 `503 source_offline`。转给源的请求与 §7 的 HTTP 转发相同（剥逐跳头、加 `X-Forwarded-*`，`Range` 等原样），路径换成签票时的 `path`；源的响应原样透传。
 - **票**：只在这个中继进程的内存里（saas 多节点时只在签票的那个节点有效），32 字节随机、base64url；绑源、单个路径与签票的中继令牌。可多次使用（播放器拖动是一串 `Range` 请求），闲置 5 分钟或签出 30 分钟作废；签票令牌被撤销后作废；中继重启全部作废。
 - **日志**：与 §7 一样不记路径与头——地址里的票与签票体里的路径都不进日志与指标。
+
+## §14 断言范围与团队声明
+
+协议 1.1（协议包 0.3.0）。全部是可选的新声明与字段：缺省时签出的令牌与 1.0 逐字同形，core 按 1.0 处理（老中继签的断言照常可用）。core 是最终判定点，中继边缘的只读门只是纵深防御。
+
+**断言**（`aud = sourceId`）新增：
+
+| 声明   | 形状                                                                                                          | 含义                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `scp`  | `string[]`，每项 `ws:<workspaceId>`、`sess:<sessionId>` 或 `ro`（id 为 `[A-Za-z0-9_.:-]{1,128}`，最多 64 项） | 范围：列出的工作空间 / 会话；`ro` = 只读。缺省或空 = 整台主机、按角色可写         |
+| `role` | `viewer` / `editor` / `operator` / `driver`                                                                   | 主机授予的角色（SaaS 按 `source_grants` 合成）；缺省时 core 按邀请 / 本地设置决定 |
+| `team` | `{ teamId, role: "lead" \| "member" }`                                                                        | 经团队授予时的团队；`org`（已有，`{ orgId, role }`）不变                          |
+
+`scp` 的顺序固定为 `ws:`、`sess:`、`ro`；会话项总是伴随它所在的工作空间项与 `ro`。协议包的 `scopeClaims(scope)` / `parseScopeClaims(scp)` 是两个方向的唯一实现。
+
+**中继令牌**（`aud = "relay"`）新增 `org`（源所属组织，限流与计量；personal 不发）与 `ro`（`true` = 只读）。**隧道令牌**（`aud = "relay-tunnel"`）新增 `org`。
+
+**只读门**：中继令牌带 `ro: true` 时，边缘按转给源的路径（不含 `/s/<id>` 前缀，只看 `?` 之前）放行：
+
+- `GET`、`HEAD`、`OPTIONS`（WebSocket 升级总是 `GET`）；
+- 媒体票的签票 `POST /_relay/media-tickets` 与兑票（§12，都是读）；
+- 身份域的任意方法：`/api/identity/` 与 `/api/rpc/identity/` 之下（登录、刷新、WS 票、登出）；路径含 `.` / `..` 段、`//`、`%` 或 `\` 的不算身份域。
+
+其余 HTTP 答 `403 forbidden`（不进隧道），WebSocket 以 4403 关闭。判定函数是协议包的 `isReadOnlyAllowed(method, path)`，常量在 `schema/constants.json` 的 `tokens.readOnly`。
+
+**分享范围**：`links.create { kind: "source_invite", …, scope?: { workspaceId?, sessionId?, readOnly? } }`。
+
+- 都缺省、`{}` 或只有 `readOnly: false` = 整台、按角色（不存、不回显）；
+- `sessionId` 必须同时给 `workspaceId`，会话范围总是只读，显式 `readOnly: false` 答 `400 bad_request`；
+- `links.get` 与 `links.list` / `links.update` 的摘要带规范化后的 `scope`（整台时不出现）；
+- `links.accept` 与访客之后的 `sources.assertion` 签出的断言带 `scp`，只读时中继令牌带 `ro: true`；owner 的令牌没有范围。
+
+服务端报能力 `links.scope` 才认 `scope`；不报的中继（0.2.x）会把它当未知字段丢掉、签出整台的断言，客户端在 `platform.info.capabilities` 里没看到它时不要提供范围分享，core 侧的邀请 `target_workspace_id` 仍按原样生效。

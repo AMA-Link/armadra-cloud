@@ -24,6 +24,7 @@ export const PERSONAL_CAPABILITIES = [
   "auth.password",
   "links.source-invite",
   "links.update",
+  "links.scope",
   "me.stream",
 ] as const;
 

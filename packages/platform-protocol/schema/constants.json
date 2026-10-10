@@ -1,7 +1,7 @@
 {
   "protocol": {
     "major": 1,
-    "minor": 0
+    "minor": 1
   },
   "paths": {
     "tunnel": "/t/v1",
@@ -30,7 +30,25 @@
       "relay": "relay",
       "tunnel": "relay-tunnel"
     },
-    "claimsVersion": 1
+    "claimsVersion": 1,
+    "scope": {
+      "prefix": {
+        "workspace": "ws:",
+        "session": "sess:"
+      },
+      "readOnly": "ro"
+    },
+    "readOnly": {
+      "safeMethods": [
+        "GET",
+        "HEAD",
+        "OPTIONS"
+      ],
+      "identityPrefixes": [
+        "/api/identity/",
+        "/api/rpc/identity/"
+      ]
+    }
   },
   "tunnel": {
     "limits": {
