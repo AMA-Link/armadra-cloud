@@ -100,6 +100,7 @@ export { createLinkInputSchema } from "./contract/links.ts";
 export { meDeviceSchema } from "./contract/me.ts";
 export {
   PLATFORM_CAPABILITIES,
+  PLATFORM_NAME_MAX,
   platformHealthSchema,
   platformInfoSchema,
   platformModeSchema,
