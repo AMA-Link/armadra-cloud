@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 人机验证（Turnstile）改为可选、缺省关闭：wrangler.jsonc 站点密钥缺省为空，bootstrap-production.sh 仅在设置 `ARMADRA_RELAY_TURNSTILE_SITE_KEY` 时读取并上传 Turnstile secret。 / Turnstile is now opt-in and off by default.
+
 ### 新增 / Added
 
 - Cloudflare 中继只保留生产环境 relay.armadra.com（仅文档与配置，cloud 各包版本不变；Refs Armadra#256）：`wrangler.jsonc` 删掉 `env.staging`，站点密钥换成新组件的值；`scripts/kill-switch.mjs` 去掉 `--env`；Terraform 的中继主机集合与 DNS 去掉 staging 与 `cn.relay`（49 服务器不再承载任何 Armadra 服务，app / status 记录改为可选、缺省不建，控制面部署位置待定）；新增一次性初始化脚本 `apps/relay-workers/scripts/bootstrap-production.sh`；部署文档改为引用它，并补充本机代理假 IP 解析导致 relay.armadra.com 连不上时让 armadra.com 走直连的说明。
