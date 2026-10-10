@@ -68,6 +68,21 @@ export interface TunnelHooks {
 
 export type TunnelState = "open" | "draining" | "closed";
 
+/**
+ * 隧道的信用与流表（运行时把对象「休眠」前存下、唤醒后还原，Workers 的 DO 用）。只在
+ * `open` 时能存；流本身的状态由运行时各自存（{@link Tunnel.restore} 的 `adopt` 还原）。
+ */
+export interface TunnelSnapshot {
+  tunnelId: string;
+  sourceId: string;
+  coreVersion: string;
+  nextStreamId: number;
+  sendCredit: number;
+  recvRemaining: number;
+  recvUnacked: number;
+  streams: number[];
+}
+
 export class TunnelUnavailableError extends Error {
   readonly reason: "draining" | "closed" | "max_streams";
   constructor(reason: "draining" | "closed" | "max_streams") {
@@ -127,6 +142,68 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
 
   get streamCount(): number {
     return this.streams.size;
+  }
+
+  /** 流表里的流（快照与断开用）。 */
+  streamList(): S[] {
+    return [...this.streams.values()];
+  }
+
+  /** 存下信用与流号（只在 `open` 时，否则答 null）。 */
+  snapshot(): TunnelSnapshot | null {
+    if (this.state !== "open") return null;
+    return {
+      tunnelId: this.tunnelId,
+      sourceId: this.sourceId,
+      coreVersion: this.coreVersion,
+      nextStreamId: this.nextStreamId,
+      sendCredit: this.sendPool.available,
+      recvRemaining: this.recvRemaining,
+      recvUnacked: this.recvUnacked,
+      streams: [...this.streams.keys()],
+    };
+  }
+
+  /**
+   * 从 {@link snapshot} 还原一条隧道（不发任何帧、不起心跳）。`adopt` 按流号还原运行时的流
+   * （拿到宿主与流选项，自己恢复信用）；答 null 的流对端还以为开着，这里发 `RST clientGone`
+   * 让它释放。
+   */
+  static restore<S extends StreamEndpoint>(
+    snapshot: TunnelSnapshot,
+    transport: TunnelTransport,
+    limits: TunnelLimitsConfig,
+    hooks: TunnelHooks,
+    streamFactory: StreamFactory<S>,
+    adopt: (
+      streamId: number,
+      host: StreamHost<S>,
+      options: { streamWindow: number; maxDataChunk: number },
+    ) => S | null,
+  ): Tunnel<S> {
+    const tunnel = new Tunnel<S>(
+      snapshot.tunnelId,
+      snapshot.sourceId,
+      snapshot.coreVersion,
+      transport,
+      limits,
+      hooks,
+      streamFactory,
+    );
+    tunnel.nextStreamId = snapshot.nextStreamId;
+    tunnel.sendPool.available = snapshot.sendCredit;
+    tunnel.recvRemaining = snapshot.recvRemaining;
+    tunnel.recvUnacked = snapshot.recvUnacked;
+    const options = {
+      streamWindow: limits.streamWindow,
+      maxDataChunk: limits.maxDataChunk,
+    };
+    for (const streamId of snapshot.streams) {
+      const stream = adopt(streamId, tunnel.host, options);
+      if (stream) tunnel.streams.set(streamId, stream);
+      else tunnel.send({ type: "rst", streamId, code: RST.clientGone });
+    }
+    return tunnel;
   }
 
   /** 能否再开流（`open` 且没到 `maxStreams`）。 */
