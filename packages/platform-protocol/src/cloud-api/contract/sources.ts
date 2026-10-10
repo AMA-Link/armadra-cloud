@@ -18,6 +18,11 @@ import {
 const session = { scope: ["session"], since: SINCE_0_1 } as const;
 const owner = { scope: ["owner"], since: SINCE_0_1 } as const;
 
+/**
+ * 隧道节点（cloud-api §17）：`url` 是完整的 WebSocket 地址，可以带路径与 query（Workers 中继
+ * 答 `wss://<域>/t/v1?src=<sourceId>`，靠 query 在握手前把隧道路由到这个源的对象），客户端原样
+ * 连接；没有路径时补 `/t/v1`。
+ */
 export const relayNodeSchema = z.object({
   url: z.string().regex(/^wss?:\/\//),
   region: z.string().optional(),

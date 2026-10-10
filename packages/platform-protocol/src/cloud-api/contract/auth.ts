@@ -3,6 +3,7 @@ import { z } from "zod";
 import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_1 } from "../meta.ts";
 import {
+  challengeTokenSchema,
   deviceInputSchema,
   empty,
   mfaChallengeResultSchema,
@@ -73,6 +74,8 @@ export const auth = {
         "account_locked",
         "account_disabled",
         "rate_limited",
+        "challenge_required",
+        "challenge_invalid",
       ),
     )
     .input(
@@ -81,6 +84,8 @@ export const auth = {
         account: z.string().min(1),
         password: z.string(),
         device: deviceInputSchema,
+        /** 挑战令牌（cloud-api §16，0.3.5 起）：`platform.info.challenge.scope` 含 `auth.login` 时必带。 */
+        challenge: challengeTokenSchema.optional(),
       }),
     )
     .output(z.union([sessionResultSchema, mfaChallengeResultSchema])),

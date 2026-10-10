@@ -12,6 +12,8 @@ minimumReleaseAgeExclude:
 
 allowBuilds:
   esbuild: true
+  # Workers 中继的本地运行时（wrangler dev / vitest 插件）：安装脚本只核对平台二进制。
+  workerd: true
 
 storeDir: .pnpm-store
 

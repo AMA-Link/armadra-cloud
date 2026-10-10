@@ -3,6 +3,7 @@ import { z } from "zod";
 import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_1, SINCE_0_2 } from "../meta.ts";
 import {
+  challengeTokenSchema,
   deviceInputSchema,
   linkKindSchema,
   linkScopeSchema,
@@ -85,6 +86,8 @@ export const links = {
         "link_exhausted",
         "link_secret_invalid",
         "rate_limited",
+        "challenge_required",
+        "challenge_invalid",
       ),
     )
     .input(
@@ -92,6 +95,8 @@ export const links = {
         linkId: z.string(),
         secret: z.string().optional(),
         device: deviceInputSchema.optional(),
+        /** 挑战令牌（cloud-api §16，0.3.5 起）：`platform.info.challenge.scope` 含 `links.accept` 时必带。 */
+        challenge: challengeTokenSchema.optional(),
       }),
     )
     .output(

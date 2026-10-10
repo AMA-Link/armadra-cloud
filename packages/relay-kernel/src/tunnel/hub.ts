@@ -52,7 +52,7 @@ export interface TunnelHubOptions<S extends StreamEndpoint> {
 }
 
 /** 与 `Buffer#toString("utf8")` 同义：坏字节换 U+FFFD，不吞 BOM。 */
-const utf8 = new TextDecoder("utf-8", { ignoreBOM: true });
+const utf8 = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 
 export class TunnelHub<S extends StreamEndpoint> {
   /** sourceId → 当前隧道。 */

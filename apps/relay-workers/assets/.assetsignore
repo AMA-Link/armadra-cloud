@@ -1,0 +1,2 @@
+# 页面产物由 scripts/build.mjs 拷进来；这个文件本身不发布。
+.assetsignore

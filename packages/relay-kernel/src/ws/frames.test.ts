@@ -206,3 +206,27 @@ describe("ws/frames：黄金夹具", () => {
     ).toThrow(RangeError);
   });
 });
+
+describe("WsFrameDecoder.idle", () => {
+  it("半帧、未收完的分片时不空闲；收全后空闲", () => {
+    const decoder = new WsFrameDecoder({ masked: "forbidden" });
+    expect(decoder.idle).toBe(true);
+    const first = encodeWsFrame({
+      opcode: OPCODE.text,
+      payload: new TextEncoder().encode("ab"),
+      fin: false,
+    });
+    decoder.feed(first.subarray(0, 2));
+    expect(decoder.idle).toBe(false);
+    decoder.feed(first.subarray(2));
+    expect(decoder.idle).toBe(false);
+    const events = decoder.feed(
+      encodeWsFrame({
+        opcode: OPCODE.continuation,
+        payload: new TextEncoder().encode("c"),
+      }),
+    );
+    expect(events).toHaveLength(1);
+    expect(decoder.idle).toBe(true);
+  });
+});

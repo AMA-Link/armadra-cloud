@@ -14,6 +14,9 @@ coverage/
 .env.*
 !.env.example
 .data/
+# Workers 中继：wrangler dev 的本地 secret 与状态
+.dev.vars
+.wrangler/
 
 *.log
 deploy/personal/relay_password.txt

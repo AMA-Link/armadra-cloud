@@ -114,6 +114,22 @@ export interface StreamSink {
   reset(error: StreamResetError): void;
 }
 
+/**
+ * 一条流的信用与结束标记（运行时把对象「休眠」前存下、唤醒后还原，Workers 的 DO 用）。
+ * 队列与在途的写不在其中：只有 {@link StreamCore.idle} 时才能存。
+ */
+export interface StreamCoreState {
+  sendCredit: number;
+  recvRemaining: number;
+  unacked: number;
+  remoteEnded: boolean;
+  eofPushed: boolean;
+  localEnded: boolean;
+  peerReset: boolean;
+  bytesIn: number;
+  bytesOut: number;
+}
+
 interface PendingWrite {
   chunk: Uint8Array;
   offset: number;
@@ -160,6 +176,40 @@ export class StreamCore<S = unknown> {
     this.sink = sink;
     this.sendCredit = options.streamWindow;
     this.recvRemaining = options.streamWindow;
+  }
+
+  /** 没有排队待交的字节、也没有在途的写（此时 {@link snapshot} 才完整）。 */
+  get idle(): boolean {
+    return this.queue.length === 0 && this.pending === null;
+  }
+
+  /** 存下信用与结束标记（{@link idle} 为假时抛错：队列与在途的写不进快照）。 */
+  snapshot(): StreamCoreState {
+    if (!this.idle) throw new Error("流还有排队或在途的字节，不能存快照");
+    return {
+      sendCredit: this.sendCredit,
+      recvRemaining: this.recvRemaining,
+      unacked: this.unacked,
+      remoteEnded: this.remoteEnded,
+      eofPushed: this.eofPushed,
+      localEnded: this.localEnded,
+      peerReset: this.peerReset,
+      bytesIn: this.bytesIn,
+      bytesOut: this.bytesOut,
+    };
+  }
+
+  /** 还原 {@link snapshot}（刚构造、还没收发过帧时调用）。 */
+  restore(state: StreamCoreState): void {
+    this.sendCredit = state.sendCredit;
+    this.recvRemaining = state.recvRemaining;
+    this.unacked = state.unacked;
+    this.remoteEnded = state.remoteEnded;
+    this.eofPushed = state.eofPushed;
+    this.localEnded = state.localEnded;
+    this.peerReset = state.peerReset;
+    this.bytesIn = state.bytesIn;
+    this.bytesOut = state.bytesOut;
   }
 
   // ------------------------------------------------------------ 来自对端的帧

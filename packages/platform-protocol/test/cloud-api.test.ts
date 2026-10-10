@@ -11,13 +11,14 @@ import {
   meStreamClientMessageSchema,
   meStreamEventSchema,
 } from "../src/cloud-api/events.ts";
-import { isErrorCode } from "../src/errors/registry.ts";
+import { errorStatus, isErrorCode } from "../src/errors/registry.ts";
+import { PROTOCOL_VERSION } from "../src/version.ts";
 import { listFixtures, readJsonFixture } from "../src/fixtures/index.ts";
 
 const procedures = listProcedures(cloudContract);
 
 describe("契约结构", () => {
-  it("覆盖设计 §5 的七个域", () => {
+  it("覆盖设计 §5 的七个域与节点回报（§17）", () => {
     expect(Object.keys(cloudContract)).toEqual([
       "platform",
       "auth",
@@ -26,6 +27,7 @@ describe("契约结构", () => {
       "links",
       "orgs",
       "billing",
+      "relay",
     ]);
     expect(procedures.length).toBeGreaterThanOrEqual(50);
   });
@@ -138,5 +140,131 @@ describe("me.stream 事件", () => {
     expect(meStreamClientMessageSchema.parse({ type: "ping" })).toEqual({
       type: "ping",
     });
+  });
+});
+
+describe("挑战（§16）与节点回报（§17）", () => {
+  const input = (key: string) =>
+    procedures.find((entry) => entry.key === key)?.procedure["~orpc"]
+      .inputSchema as z.ZodType;
+  const output = (key: string) =>
+    procedures.find((entry) => entry.key === key)?.procedure["~orpc"]
+      .outputSchema as z.ZodType;
+  const device = { platform: "desktop", name: "Laptop" };
+
+  it("协议 1.2：挑战与节点回报的错误码登记在注册表里", () => {
+    expect(PROTOCOL_VERSION).toEqual({ major: 1, minor: 2 });
+    expect(errorStatus("challenge_required")).toBe(400);
+    expect(errorStatus("challenge_invalid")).toBe(400);
+    expect(errorStatus("storage_unavailable")).toBe(503);
+    expect(errorStatus("not_initialized")).toBe(503);
+  });
+
+  it("auth.login 与 links.accept 的 challenge 可选，只认 turnstile", () => {
+    const login = input("auth.login");
+    const base = { account: "owner", password: "pw", device };
+    expect(login.safeParse(base).success).toBe(true);
+    expect(
+      login.safeParse({
+        ...base,
+        challenge: { provider: "turnstile", token: "t" },
+      }).success,
+    ).toBe(true);
+    expect(
+      login.safeParse({ ...base, challenge: { provider: "other", token: "t" } })
+        .success,
+    ).toBe(false);
+    expect(
+      login.safeParse({
+        ...base,
+        challenge: { provider: "turnstile", token: "" },
+      }).success,
+    ).toBe(false);
+    const accept = input("links.accept");
+    expect(
+      accept.safeParse({
+        linkId: "0123456789abcdef",
+        challenge: { provider: "turnstile", token: "x".repeat(2048) },
+      }).success,
+    ).toBe(true);
+    expect(
+      accept.safeParse({
+        linkId: "0123456789abcdef",
+        challenge: { provider: "turnstile", token: "x".repeat(2049) },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("platform.info.challenge 可选，scope 至少一条", () => {
+    const info = output("platform.info");
+    const base = {
+      mode: "personal",
+      issuer: "https://relay.armadra.test",
+      protocol: { major: 1, minor: 2 },
+      capabilities: ["challenge.turnstile"],
+      relay: { addressing: "path" },
+      webApp: null,
+    };
+    expect(info.safeParse(base).success).toBe(true);
+    expect(
+      info.safeParse({
+        ...base,
+        challenge: {
+          provider: "turnstile",
+          siteKey: "k",
+          scope: ["auth.login"],
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      info.safeParse({
+        ...base,
+        challenge: { provider: "turnstile", siteKey: "k", scope: [] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("节点地址可带 query；节点回报的事件 1–256 条、ttlMs 10 秒到 10 分钟", () => {
+    const hint = output("sources.heartbeatHint");
+    const limits = {
+      maxStreams: 256,
+      streamWindow: 262_144,
+      tunnelWindow: 8_388_608,
+      maxFrameBytes: 1_048_576,
+    };
+    expect(
+      hint.safeParse({
+        tunnelToken: "t",
+        expiresAtMs: 1,
+        nodes: [
+          {
+            url: "wss://relay.armadra.test/t/v1?src=0123456789abcdef0123456789abcdef",
+            weight: 1,
+          },
+        ],
+        limits,
+      }).success,
+    ).toBe(true);
+    const presence = input("relay.nodePresence");
+    const event = {
+      type: "sourceOffline",
+      sourceId: "0123456789abcdef0123456789abcdef",
+      tunnelId: "fedcba9876543210fedcba9876543210",
+      atMs: 1,
+    };
+    expect(
+      presence.safeParse({ node: "cf", ttlMs: 120_000, events: [event] })
+        .success,
+    ).toBe(true);
+    expect(
+      presence.safeParse({ node: "cf", ttlMs: 120_000, events: [] }).success,
+    ).toBe(false);
+    expect(
+      presence.safeParse({ node: "cf", ttlMs: 5_000, events: [event] }).success,
+    ).toBe(false);
+    expect(
+      presence.safeParse({ node: "CF", ttlMs: 120_000, events: [event] })
+        .success,
+    ).toBe(false);
   });
 });

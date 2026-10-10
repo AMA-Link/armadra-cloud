@@ -1,10 +1,10 @@
 {
   "name": "@armadra/cloud-shared",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "armadra-cloud 内部共享：配置、日志、健康检查、极小 HTTP、JWS 校验、PostgreSQL 与 Redis 客户端（不发布）",
+  "description": "armadra-cloud 内部共享：配置、日志、健康检查、极小 HTTP、JWS 校验、中继自有页面、PostgreSQL 与 Redis 客户端（不发布）",
   "exports": {
     "./config": "./src/config.ts",
     "./log": "./src/log.ts",
@@ -12,7 +12,8 @@
     "./http": "./src/http/index.ts",
     "./db": "./src/db/client.ts",
     "./redis": "./src/redis.ts",
-    "./jwt": "./src/jwt.ts"
+    "./jwt": "./src/jwt.ts",
+    "./pages": "./src/pages.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",

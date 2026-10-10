@@ -46,6 +46,7 @@ import {
   MediaTickets,
   mediaTargetPath,
   redeemTicketOf,
+  type MediaTicketStore,
 } from "./media-tickets.ts";
 
 /** 运行时交给边缘的一个请求（HTTP 或 WS 升级）的元数据；不含正文。 */
@@ -73,6 +74,8 @@ export interface EdgePolicyOptions<S extends StreamEndpoint> {
   corsOrigins?: (sourceId: string) => readonly string[];
   /** 媒体票的时钟（测试用）。 */
   now?: () => number;
+  /** 媒体票的存放；缺省进程内存（Workers 的 SourceDO 给 DO 存储版）。 */
+  mediaTickets?: MediaTicketStore;
 }
 
 const WS_CLOSE: Partial<Record<ErrorCode, number>> = {
@@ -170,12 +173,12 @@ function single(value: string | string[] | undefined): string | undefined {
 /** `C` 是运行时里一条已升级连接的句柄（Node 是 socket）。 */
 export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
   private readonly options: EdgePolicyOptions<S>;
-  private readonly media: MediaTickets;
+  private readonly media: MediaTicketStore;
   private readonly connections = new Map<C, EdgeConnection>();
 
   constructor(options: EdgePolicyOptions<S>) {
     this.options = options;
-    this.media = new MediaTickets(options.now);
+    this.media = options.mediaTickets ?? new MediaTickets(options.now);
   }
 
   resolve(req: EdgeRequest): AddressTarget | null {

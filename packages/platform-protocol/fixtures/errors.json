@@ -128,6 +128,18 @@
   "bad_gateway": {
     "status": 502
   },
+  "storage_unavailable": {
+    "status": 503
+  },
+  "not_initialized": {
+    "status": 503
+  },
+  "challenge_required": {
+    "status": 400
+  },
+  "challenge_invalid": {
+    "status": 400
+  },
   "cloud_not_registered": {
     "status": 401
   },

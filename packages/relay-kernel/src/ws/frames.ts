@@ -173,7 +173,7 @@ export interface WsFrameDecoderOptions {
 }
 
 const DEFAULT_MAX_MESSAGE = 16 * 1024 * 1024;
-const utf8 = new TextDecoder("utf-8", { ignoreBOM: true });
+const utf8 = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 
 function concat(parts: readonly Uint8Array[], total: number): Uint8Array {
   if (parts.length === 1) return parts[0] as Uint8Array;
@@ -202,6 +202,11 @@ export class WsFrameDecoder {
       maxMessageBytes: DEFAULT_MAX_MESSAGE,
       ...options,
     };
+  }
+
+  /** 没有半帧、也没有没收完的分片消息（运行时据此判断能不能让对象休眠）。 */
+  get idle(): boolean {
+    return this.buffered.length === 0 && this.fragmentBinary === null;
   }
 
   feed(chunk: Uint8Array): WsEvent[] {

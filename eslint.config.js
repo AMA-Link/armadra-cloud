@@ -107,6 +107,42 @@ const kernelPortablePatterns = [
   },
 ];
 
+/**
+ * Workers 运行时：跑在 workerd 上，只许 `node:crypto` / `node:buffer`（`nodejs_compat` 原生支持）；
+ * 不带 `ws`、HTTP 外壳、Node 运行时与 PostgreSQL / Redis，`node:sqlite` 版存储的打开与迁移读目录
+ * 也不能进来（DO SQLite 只复用端口、行映射与迁移对账）。
+ */
+const workersRuntimePatterns = [
+  {
+    regex: "^node:(?!(crypto|buffer)$)",
+    message:
+      "relay-runtime-workers 跑在 workerd 上：只许 node:crypto / node:buffer。",
+  },
+  {
+    regex: "^(ws|postgres|redis)$",
+    message:
+      "relay-runtime-workers 不带 ws 与 PostgreSQL / Redis：客户端 WS 由 workerd 终止，存储是 DO SQLite。",
+  },
+  {
+    group: [
+      "@armadra/cloud-shared/db",
+      "@armadra/cloud-shared/redis",
+      "@armadra/cloud-shared/http",
+      "@armadra/cloud-shared/config",
+      "@armadra/relay-runtime-node",
+      "@armadra/relay-runtime-node/*",
+      "@armadra/control-store-sqlite/open",
+      "@armadra/control-store-sqlite/migrate",
+      "@armadra/relay",
+      "@armadra/relay/*",
+      "@armadra/cloud",
+      "@armadra/cloud/*",
+    ],
+    message:
+      "relay-runtime-workers 只装配内核、控制核与可移植的 SQLite 端口；Node 专有的部分不进 Worker。",
+  },
+];
+
 /** 控制核只经端口读写状态，且与传输无关。 */
 const controlCorePatterns = [
   {
@@ -220,6 +256,17 @@ export default tseslint.config(
       ...relayPatterns,
       ...kernelPatterns,
       ...kernelPortablePatterns,
+    ),
+  },
+  {
+    files: [
+      "packages/relay-runtime-workers/src/**/*.ts",
+      "apps/relay-workers/src/**/*.ts",
+    ],
+    rules: restrictImports(
+      orpcPattern,
+      armadraSourcePattern,
+      ...workersRuntimePatterns,
     ),
   },
   {

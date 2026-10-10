@@ -11,7 +11,8 @@ import type {
   SourceRecord,
 } from "@armadra/control-core/ports";
 
-import type { Database, Row, SqlValue } from "./open.ts";
+import type { SqlDatabase as Database, KeyWrap, Row, SqlValue } from "./db.ts";
+import { SqliteStoreError } from "./errors.ts";
 
 const text = (value: SqlValue | undefined): string => String(value ?? "");
 const int = (value: SqlValue | undefined): number => Number(value ?? 0);
@@ -81,10 +82,35 @@ export function writeAccount(
 
 // ------------------------------------------------------------ 签名钥
 
-export function toSigningKey(row: Row): SigningKeyRecord {
+/** 没包裹的私钥列值（Node 中继）。 */
+export const KEY_WRAP_NONE = "none";
+
+/**
+ * 读签名钥：`private_key_wrap` 是 `none` 原样取；是别的就要同名的 {@link KeyWrap} 解开，
+ * 没有或认不出 → 拒绝（不把密文当私钥用，也不回退成明文）。
+ */
+export function toSigningKey(row: Row, wrap?: KeyWrap): SigningKeyRecord {
+  const stored = text(row.private_key_pkcs8);
+  const kind = text(row.private_key_wrap) || KEY_WRAP_NONE;
+  let privateKeyPkcs8 = stored;
+  if (kind !== KEY_WRAP_NONE) {
+    if (wrap?.name !== kind)
+      throw new SqliteStoreError(
+        "unknown",
+        `签名钥的包裹方式不认识，拒绝启动：${kind}`,
+      );
+    try {
+      privateKeyPkcs8 = wrap.open(stored);
+    } catch {
+      throw new SqliteStoreError(
+        "corrupt",
+        "签名钥解不开（主密钥不对或数据已损坏），拒绝启动",
+      );
+    }
+  }
   return {
     kid: text(row.kid),
-    privateKeyPkcs8: text(row.private_key_pkcs8),
+    privateKeyPkcs8,
     publicJwk: json(row.public_jwk_json),
     activeFromMs: int(row.active_from_ms),
     retiredAtMs: nullableInt(row.retired_at_ms),
@@ -95,13 +121,15 @@ export function insertSigningKey(
   db: Database,
   tenantId: string,
   key: SigningKeyRecord,
+  wrap?: KeyWrap,
 ): void {
   db.run(
     `INSERT INTO signing_keys (tenant_id, kid, private_key_pkcs8, private_key_wrap, public_jwk_json,
-       active_from_ms, retired_at_ms) VALUES (?, ?, ?, 'none', ?, ?, ?)`,
+       active_from_ms, retired_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     tenantId,
     key.kid,
-    key.privateKeyPkcs8,
+    wrap ? wrap.seal(key.privateKeyPkcs8) : key.privateKeyPkcs8,
+    wrap ? wrap.name : KEY_WRAP_NONE,
     JSON.stringify(key.publicJwk),
     key.activeFromMs,
     key.retiredAtMs,

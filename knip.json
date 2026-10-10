@@ -13,6 +13,10 @@
       "entry": ["src/cli.ts", "scripts/build.mjs"],
       "project": ["src/**/*.ts"]
     },
+    "apps/relay-workers": {
+      "project": ["src/**/*.ts", "test/**/*.ts"],
+      "ignoreDependencies": ["cloudflare"]
+    },
     "packages/cloud-shared": {
       "project": ["src/**/*.ts"]
     },
@@ -34,6 +38,11 @@
     },
     "packages/relay-runtime-node": {
       "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/relay-runtime-workers": {
+      "entry": ["test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"],
+      "ignoreDependencies": ["cloudflare", "wrangler"]
     }
   }
 }

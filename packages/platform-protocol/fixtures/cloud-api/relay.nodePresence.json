@@ -1,0 +1,24 @@
+{
+  "input": {
+    "node": "cf",
+    "ttlMs": 120000,
+    "events": [
+      {
+        "type": "sourceOnline",
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "tunnelId": "fedcba9876543210fedcba9876543210",
+        "coreVersion": "0.2.0",
+        "atMs": 1760000000000
+      },
+      {
+        "type": "sourceOffline",
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "tunnelId": "0123456789abcdef0123456789abcdef",
+        "atMs": 1759999999000
+      }
+    ]
+  },
+  "output": {
+    "accepted": 2
+  }
+}

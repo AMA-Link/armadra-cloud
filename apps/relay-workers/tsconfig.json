@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": [
+      "@cloudflare/workers-types/experimental",
+      "@cloudflare/vitest-plugin/types",
+      "node"
+    ]
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "*.mts",
+    "../../packages/relay-runtime-workers/src/modules.d.ts"
+  ]
+}

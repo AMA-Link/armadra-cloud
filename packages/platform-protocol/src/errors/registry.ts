@@ -55,6 +55,15 @@ export const ERRORS = {
   limit_reached: { status: 429 },
   /** 源的 HTTP 响应不合法（状态行、头、定界或分块错），中继重置流并答 502（0.3.4 起）。 */
   bad_gateway: { status: 502 },
+  /** 中继的存储打不开、认不出或迁移账本对不上：拒绝服务，绝不自动重建（0.3.5 起）。 */
+  storage_unavailable: { status: 503 },
+  /** 中继还没初始化（Workers 个人中转缺账号 / 口令 secret）（0.3.5 起）。 */
+  not_initialized: { status: 503 },
+  // 挑战（cloud-api §16，0.3.5 起）
+  /** 服务端要求挑战令牌（`platform.info.challenge`）而请求没带。 */
+  challenge_required: { status: 400 },
+  /** 挑战令牌无效、过期或已用过。 */
+  challenge_invalid: { status: 400 },
   // core §31–§33（core 自己答；登记在这里是为了两仓用同一份表）
   cloud_not_registered: { status: 401 },
   cloud_account_unlinked: { status: 401 },

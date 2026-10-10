@@ -18,6 +18,21 @@ export {
 export const sourceIdSchema = hex32Schema;
 export const empty = z.object({});
 
+/** 挑战的提供方（cloud-api §16，0.3.5 起）。 */
+export const challengeProviderSchema = z.enum(["turnstile"]);
+/** 要挑战的 procedure（`platform.info.challenge.scope`）。 */
+export const challengeScopeSchema = z.enum(["auth.login", "links.accept"]);
+
+/**
+ * 请求里带的挑战令牌（`auth.login` / `links.accept` 的可选 `challenge`，0.3.5 起）：页面或
+ * 手机的挑战组件交回的一次性令牌。服务端在 `platform.info.challenge.scope` 列了这条 procedure
+ * 时才要求；缺失答 `challenge_required`，无效 / 过期 / 用过答 `challenge_invalid`。
+ */
+export const challengeTokenSchema = z.object({
+  provider: challengeProviderSchema,
+  token: z.string().min(1).max(2048),
+});
+
 export const deviceInputSchema = z.object({
   platform: devicePlatformSchema,
   name: z.string().min(1).max(128),
@@ -137,6 +152,7 @@ export const orgMemberSchema = z.object({
 });
 
 export type DeviceInput = z.infer<typeof deviceInputSchema>;
+export type ChallengeToken = z.infer<typeof challengeTokenSchema>;
 export type Session = z.infer<typeof sessionSchema>;
 export type SessionResult = z.infer<typeof sessionResultSchema>;
 export type SourceSummary = z.infer<typeof sourceSummarySchema>;

@@ -1,27 +1,23 @@
 /**
  * 迁移：读 `@armadra/control-store-sql/migrations/NNNN_*.sql`，对账 `relay_migrations`，在一个
- * `BEGIN IMMEDIATE` 事务里补跑没跑过的（多进程同时打开时只有一个真正执行）。
+ * `BEGIN IMMEDIATE` 事务里补跑没跑过的（多进程同时打开时只有一个真正执行）。对账与执行在
+ * `apply.ts`（与运行时无关，Workers 的 DO SQLite 共用）；这里只管从目录读文件。
  *
  * 迁移目录的位置：打成单文件时在 `out/migrations/`（构建脚本拷过去），源码运行时在
  * `packages/control-store-sql/migrations/`。
  */
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  LEDGER_DDL,
-  LedgerError,
   parseMigrationName,
-  pendingMigrations,
-  type AppliedMigration,
   type MigrationFile,
 } from "@armadra/control-store-sql/ledger";
 
-import { SqliteStoreError } from "./errors.ts";
-import type { Database } from "./open.ts";
+import { applyMigrations, migrationFile } from "./apply.ts";
+import type { SqlDatabase } from "./db.ts";
 
 function hasMigrations(dir: string): boolean {
   return (
@@ -44,74 +40,15 @@ export function loadMigrations(dir = defaultMigrationsDir()): MigrationFile[] {
     .map((file) => ({ file, parsed: parseMigrationName(file) }))
     .filter((entry) => entry.parsed !== null)
     .sort((left, right) => left.file.localeCompare(right.file));
-  return files.map(({ file, parsed }) => {
-    const bytes = readFileSync(join(dir, file));
-    return {
-      id: parsed?.id ?? 0,
-      name: parsed?.name ?? file,
-      sha384: createHash("sha384").update(bytes).digest("hex"),
-      sql: bytes.toString("utf8"),
-    };
-  });
-}
-
-function hasTable(db: Database, name: string): boolean {
-  return (
-    db.get(
-      "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?",
-      name,
-    ) !== undefined
+  return files.map(
+    ({ file }) =>
+      migrationFile(file, readFileSync(join(dir, file))) as MigrationFile,
   );
 }
 
-function applied(db: Database): AppliedMigration[] {
-  return db
-    .all("SELECT id, name, sha384 FROM relay_migrations ORDER BY id")
-    .map((row) => ({
-      id: Number(row.id),
-      name: String(row.name),
-      sha384: String(row.sha384),
-    }));
-}
-
-/** 跑到最新；答这次跑了几个。 */
-export function migrate(
-  db: Database,
+/** 跑到最新；答这次跑了几个（实现在 `apply.ts`，Workers 共用）。 */
+export const migrate: (
+  db: SqlDatabase,
   migrations: readonly MigrationFile[],
-  now: () => number = Date.now,
-): number {
-  try {
-    return db.transaction(() => {
-      if (!hasTable(db, "relay_migrations")) {
-        const tables = db.get(
-          "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'",
-        );
-        if (Number(tables?.n ?? 0) > 0)
-          throw new SqliteStoreError(
-            "unknown",
-            `数据库没有迁移账本，拒绝启动：${db.path}`,
-          );
-        db.exec(LEDGER_DDL);
-      }
-      const pending = pendingMigrations(applied(db), migrations);
-      for (const migration of pending) {
-        db.exec(migration.sql);
-        db.run(
-          "INSERT INTO relay_migrations (id, name, sha384, applied_at_ms) VALUES (?, ?, ?, ?)",
-          migration.id,
-          migration.name,
-          migration.sha384,
-          now(),
-        );
-      }
-      return pending.length;
-    });
-  } catch (error) {
-    if (error instanceof LedgerError)
-      throw new SqliteStoreError(
-        error.problem === "newer" ? "newer" : "unknown",
-        `${error.message}，拒绝启动：${db.path}`,
-      );
-    throw error;
-  }
-}
+  now?: () => number,
+) => number = applyMigrations;

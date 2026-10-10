@@ -39,6 +39,35 @@ it("SQLite 存储源码不 import 中继内核、app、网络与别的存储客�
   expect(offenders).toEqual([]);
 });
 
+/** Workers 的 DO SQLite 直接复用的模块：只许 `node:crypto`（Workers 的 `nodejs_compat` 原生支持）。 */
+const PORTABLE = [
+  "apply.ts",
+  "db.ts",
+  "errors.ts",
+  "keys.ts",
+  "ports.ts",
+  "rows.ts",
+  "tenants.ts",
+];
+
+it("可移植的模块不 import Node 专有模块（只许 node:crypto），也不经 open.ts / migrate.ts 间接带进来", () => {
+  const offenders = PORTABLE.flatMap((name) => {
+    const text = readFileSync(join(SRC, name), "utf8");
+    const found: string[] = [];
+    for (const match of text.matchAll(
+      /(?:from\s+|import\(\s*)["']([^"']+)["']/g,
+    )) {
+      const specifier = match[1] ?? "";
+      if (specifier.startsWith("node:") && specifier !== "node:crypto")
+        found.push(`${name}: ${specifier}`);
+      if (/^\.\/(?:open|migrate)\.ts$/.test(specifier))
+        found.push(`${name}: ${specifier}`);
+    }
+    return found;
+  });
+  expect(offenders).toEqual([]);
+});
+
 it("清单只依赖控制核与 SQL 包", () => {
   const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")) as {
     dependencies?: Record<string, string>;

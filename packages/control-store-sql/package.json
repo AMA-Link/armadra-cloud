@@ -1,13 +1,14 @@
 {
   "name": "@armadra/control-store-sql",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "license": "MIT",
   "description": "控制面存储的 SQL：SQLite（Node `node:sqlite` 与 DO SQLite 共用）的编号迁移与账本判定（不发布）",
   "exports": {
     "./ledger": "./src/ledger.ts",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./migrations/*": "./migrations/*"
   },
   "files": [
     "migrations",

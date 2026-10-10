@@ -1,6 +1,6 @@
 # armadra-cloud
 
-Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`，以及两仓共用的协议包 `@armadra/platform-protocol`。MIT 许可。
+Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`（Node）与 `apps/relay-workers`（Cloudflare Workers），以及两仓共用的协议包 `@armadra/platform-protocol`。MIT 许可。
 
 中继有两种运行模式：
 
@@ -9,18 +9,22 @@ Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`，以�
 
 ## 目录
 
-| 路径                          | 内容                                                           |
-| ----------------------------- | -------------------------------------------------------------- |
-| `apps/cloud`                  | 控制面（`armadra-cloud`）                                      |
-| `apps/relay`                  | 中继（`armadra-relay`）                                        |
-| `packages/platform-protocol`  | 协议包：隧道帧、断言、`/v1` 契约、错误码、身份参数、夹具       |
-| `packages/relay-kernel`       | 中继内核：隧道、边缘判定、限流、令牌校验（运行时无关）         |
-| `packages/relay-runtime-node` | 中继的 Node 运行时：`ws`、HTTP 外壳、clientIp、`startRelay`    |
-| `packages/control-core`       | 控制核：存储端口、账号 / 会话 / 源 / 链接服务、`/v1` 路由      |
-| `packages/cloud-shared`       | 内部共享：配置、日志、健康检查、HTTP、JWS、PostgreSQL 与 Redis |
-| `deploy/`                     | compose 与部署说明（[deploy/README.md](deploy/README.md)）     |
-| `docs/`                       | 契约与运维文档（[索引](docs/README.md)）                       |
-| `tools/`                      | 仓库校验、契约生成、工作流校验、第三方声明                     |
+| 路径                             | 内容                                                                   |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| `apps/cloud`                     | 控制面（`armadra-cloud`）                                              |
+| `apps/relay`                     | 中继（`armadra-relay`）                                                |
+| `packages/platform-protocol`     | 协议包：隧道帧、断言、`/v1` 契约、错误码、身份参数、夹具               |
+| `packages/relay-kernel`          | 中继内核：隧道、边缘判定、限流、令牌校验（运行时无关）                 |
+| `packages/relay-runtime-node`    | 中继的 Node 运行时：`ws`、HTTP 外壳、clientIp、`startRelay`            |
+| `packages/relay-runtime-workers` | 中继的 Workers 运行时：Worker 入口、`SourceDO`、`ControlDO`、DO SQLite |
+| `apps/relay-workers`             | Workers 中继的 wrangler 项目（`relay.armadra.com`）                    |
+| `packages/control-store-sql`     | SQLite 迁移与账本判定（Node 与 DO SQLite 共用）                        |
+| `packages/control-store-sqlite`  | 控制核端口的 SQLite 实现（`node:sqlite`，可移植部分 Workers 复用）     |
+| `packages/control-core`          | 控制核：存储端口、账号 / 会话 / 源 / 链接服务、`/v1` 路由              |
+| `packages/cloud-shared`          | 内部共享：配置、日志、健康检查、HTTP、JWS、PostgreSQL 与 Redis         |
+| `deploy/`                        | compose 与部署说明（[deploy/README.md](deploy/README.md)）             |
+| `docs/`                          | 契约与运维文档（[索引](docs/README.md)）                               |
+| `tools/`                         | 仓库校验、契约生成、工作流校验、第三方声明                             |
 
 ## 准备
 
@@ -49,6 +53,18 @@ Armadra 的页面产物（`apps/web/dist`）在 `ARMADRA_WEB_DIST` 或 `../Armad
 
 容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/owlbay/armadra-relay:local .`，之后 `docker run --rm ghcr.io/owlbay/armadra-relay:local personal --help`；部署按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。
 
+## Cloudflare Workers 上的个人中转
+
+同一套协议跑在 Workers + Durable Objects 上（`relay.armadra.com`，一源一个 `SourceDO`、一租户一个 `ControlDO`，状态在 DO SQLite）。本地只用 workerd，不连 Cloudflare 账号：
+
+```sh
+pnpm --filter @armadra/relay-runtime-workers test   # vitest 的 Workers 插件：握手、转发、休眠后唤醒、判死、撤销、闸门
+pnpm --filter @armadra/relay-workers dev            # wrangler dev --local
+pnpm e2e --mode personal-workers                    # 本地 workerd 上的端到端
+```
+
+部署（维护者执行）见 [deploy/cloudflare/README.md](deploy/cloudflare/README.md)，运维见[运维手册](docs/runbooks/relay-on-cloudflare.md)。
+
 ## SaaS 本地开发
 
 ```sh
@@ -71,6 +87,7 @@ pnpm test              # 全部单测
 pnpm test:integration  # 集成测试，需要 pnpm dev:up；见下
 pnpm images:build      # 本地构建两个镜像（不推送）
 pnpm e2e --mode personal  # 跨仓端到端：个人中转 + Armadra 服务器壳 + Node 客户端，需要 Docker，见下
+pnpm e2e --mode personal-workers  # 本地 workerd 上的 Workers 中继对假 core 与 Node 客户端，不需要 Docker
 pnpm db:migrate        # 执行数据库迁移（读 .env.dev）
 pnpm protocol:pack     # 协议包打成 tgz（.data/pack/），核对内容，不发布
 ```

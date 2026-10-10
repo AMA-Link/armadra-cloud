@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import {
   changePassword,
@@ -29,6 +28,7 @@ import {
 } from "../../test/personal.ts";
 import { STORE_KINDS } from "./store-types.ts";
 import {
+  commonPasswordsFile,
   hashPassword,
   passwordViolation,
   verifyPassword,
@@ -85,10 +85,7 @@ describe.each(STORE_KINDS)("%s 存储", (store) => {
     });
 
     it("常见口令表与 core 那份同格式（# 注释、小写、≥10 字）", () => {
-      const text = readFileSync(
-        fileURLToPath(new URL("./common-passwords.txt", import.meta.url)),
-        "utf8",
-      );
+      const text = readFileSync(commonPasswordsFile(), "utf8");
       const entries = text
         .split(/\r?\n/)
         .filter((line) => line.trim() !== "" && !line.startsWith("#"));

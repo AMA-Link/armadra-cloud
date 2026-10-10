@@ -7,3 +7,5 @@
 .env*
 .git
 *.tgz
+**/.dev.vars
+**/.wrangler

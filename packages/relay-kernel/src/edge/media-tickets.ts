@@ -30,12 +30,23 @@ export interface MediaGrant {
   readonly jti: string;
 }
 
+/**
+ * 票的存放（{@link MediaTickets} 是进程内存版；Workers 的 SourceDO 用 DO 存储，休眠后照样认）。
+ * 同步接口：两种实现都是同步读写。
+ */
+export interface MediaTicketStore {
+  issue(grant: MediaGrant): { ticket: string; expiresAtMs: number };
+  /** 认一张票并续上闲置期；过期或不认识答 `undefined`。 */
+  use(ticket: string): MediaGrant | undefined;
+  forget(ticket: string): void;
+}
+
 interface Entry extends MediaGrant {
   readonly issuedAtMs: number;
   lastUsedAtMs: number;
 }
 
-export class MediaTickets {
+export class MediaTickets implements MediaTicketStore {
   private readonly tickets = new Map<string, Entry>();
   private readonly now: () => number;
 

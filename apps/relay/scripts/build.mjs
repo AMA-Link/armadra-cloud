@@ -19,7 +19,10 @@ await build({
   logLevel: "info",
 });
 copyFileSync(
-  new URL("../src/personal/common-passwords.txt", import.meta.url),
+  new URL(
+    "../../../packages/control-core/src/common-passwords.txt",
+    import.meta.url,
+  ),
   new URL("../out/common-passwords.txt", import.meta.url),
 );
 // SQLite 迁移（control-store-sqlite 先找单文件旁的 migrations/）。

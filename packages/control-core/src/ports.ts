@@ -296,4 +296,9 @@ export interface ControlContext extends EventBus {
   relay: RelayPort;
   passwordPolicy: PasswordPolicy;
   now: () => number;
+  /**
+   * 源连隧道的节点地址（`sources.heartbeatHint` 的 `nodes[].url`，cloud-api §17）；缺省是
+   * issuer 的 `wss://…/t/v1`。Workers 中继答 `…/t/v1?src=<sourceId>`，把隧道路由到源的对象。
+   */
+  tunnelUrl?: (sourceId: string) => string;
 }
