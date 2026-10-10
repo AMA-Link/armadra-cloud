@@ -1,12 +1,12 @@
 // 拉闸（中继设计 §4.5；运维手册 docs/runbooks/cloudflare-protection.md）：账单失控或被打时，一条命令
-// 把 relay.armadra.com（--env staging 时 relay-staging）的 Worker Custom Domain 切走，止血后再切回。
+// 把 relay.armadra.com的 Worker Custom Domain 切走，止血后再切回。
 //
-//   node scripts/kill-switch.mjs <动作> [--env production|staging] [--apply]
+//   node scripts/kill-switch.mjs <动作> [--apply]
 //
 //   status       看这个主机现在挂在哪个 Worker 上
 //   maintenance  切到维护页 Worker（armadra-relay-maintenance，要预先部署），所有请求答 503
 //   disable      删掉 Custom Domain：主机不再解析，Worker 一个请求都收不到（恢复要重新挂、重新签证书）
-//   restore      切回中继 Worker（armadra-relay / armadra-relay-staging）
+//   restore      切回中继 Worker（armadra-relay）
 //
 // 缺省是演练：只打印要发的请求，不读令牌、不连网络。加 --apply 才真的调 Cloudflare API，令牌只从
 // 环境变量 CLOUDFLARE_API_TOKEN 读（Workers Scripts:Edit、Workers Routes:Edit），不收命令行明文、
@@ -18,12 +18,9 @@ export const DEFAULT_ACCOUNT = "a27d9dab9190150768845b62cfd57cfe";
 export const ZONE_NAME = "armadra.com";
 export const MAINTENANCE_SERVICE = "armadra-relay-maintenance";
 
-export const ENVIRONMENTS = {
-  production: { hostname: "relay.armadra.com", service: "armadra-relay" },
-  staging: {
-    hostname: "relay-staging.armadra.com",
-    service: "armadra-relay-staging",
-  },
+export const TARGET = {
+  hostname: "relay.armadra.com",
+  service: "armadra-relay",
 };
 
 export const ACTIONS = ["status", "maintenance", "disable", "restore"];
@@ -36,7 +33,6 @@ export const USAGE = `用法: node scripts/kill-switch.mjs <动作> [选项]
   restore      切回中继 Worker
 
 选项:
-  --env E        production（缺省，relay.armadra.com）| staging（relay-staging.armadra.com）
   --account ID   Cloudflare 账号 id（或 CLOUDFLARE_ACCOUNT_ID），缺省 ${DEFAULT_ACCOUNT}
   --apply        真的执行；不加就只演练、打印要发的请求
   --help         打印用法
@@ -53,7 +49,6 @@ export class UsageError extends Error {
 export function parseArgs(argv, env = {}) {
   const options = {
     action: undefined,
-    env: "production",
     account: env.CLOUDFLARE_ACCOUNT_ID || DEFAULT_ACCOUNT,
     apply: false,
     help: false,
@@ -62,11 +57,11 @@ export function parseArgs(argv, env = {}) {
     const arg = argv[index];
     if (arg === "--apply") options.apply = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
-    else if (arg === "--env" || arg === "--account") {
+    else if (arg === "--account") {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith("--"))
         throw new UsageError(`${arg} 缺少取值`);
-      options[arg.slice(2)] = value;
+      options.account = value;
       index += 1;
     } else if (arg.startsWith("--")) throw new UsageError(`未知选项：${arg}`);
     else if (options.action === undefined) options.action = arg;
@@ -79,8 +74,6 @@ export function parseArgs(argv, env = {}) {
     throw new UsageError(
       `动作只能是 ${ACTIONS.join(" | ")}：${options.action}`,
     );
-  if (!Object.hasOwn(ENVIRONMENTS, options.env))
-    throw new UsageError(`--env 只能是 production 或 staging：${options.env}`);
   if (!/^[0-9a-f]{32}$/.test(options.account))
     throw new UsageError(`--account 不是账号 id：${options.account}`);
   return options;
@@ -90,7 +83,7 @@ export function parseArgs(argv, env = {}) {
  * 要发的请求（与令牌无关、纯函数）。`{id}` 是要先从列表里查出来的 Custom Domain id（只有 disable 用）。
  */
 export function planKillSwitch(options) {
-  const target = ENVIRONMENTS[options.env];
+  const target = TARGET;
   const base = `/accounts/${options.account}/workers/domains`;
   const list = {
     method: "GET",

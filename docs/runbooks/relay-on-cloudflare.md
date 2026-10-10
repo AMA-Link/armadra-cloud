@@ -37,7 +37,7 @@
 ## 部署、回滚与重启
 
 - 每次部署重启全部 DO、断开全部 WS，core 按退避自动重连；发布窗口里客户端会看到几秒到一分钟的 `source_offline`。
-- 代码回滚：`pnpm exec wrangler rollback [--env staging]`。DO 数据不随代码回滚变化，迁移只追加，老代码遇到新 schema 要么能读、要么按上一节拒绝服务。
+- 代码回滚：`pnpm exec wrangler rollback`。DO 数据不随代码回滚变化，迁移只追加，老代码遇到新 schema 要么能读、要么按上一节拒绝服务。
 - DO 类（`SourceDO`、`ControlDO`）只在首版建一次，不改名、不删。
 
 ## 排障

@@ -22,7 +22,7 @@ Workers Free 没有付费用量，超了额度是请求直接失败（不是账�
 
 1. 面板 Manage Account → Billing → **Budget alerts**：确认已开启（PAYG 账号 2026-06-15 起缺省开），加两档阈值，例如 **$15** 与 **$30 / 月**，收件人填维护者邮箱。预算告警只发邮件、**不封顶**，第二天才生效。
 2. Notifications → Add：加「Workers 用量」类通知（单产品指标阈值，Paid 才有），阈值取 Workers Paid 内含额度的 70%（1,000 万请求 / 月 → 700 万）。
-3. `wrangler.jsonc` 改成配置 P：`RELAY_ALARM_MS = 60000`、`RELAY_DAILY_REQUEST_BUDGET = 2000000`、取消注释 `limits.cpu_ms = 5000`，先 `--env staging` 部署验证再生产。
+3. `wrangler.jsonc` 改成配置 P：`RELAY_ALARM_MS = 60000`、`RELAY_DAILY_REQUEST_BUDGET = 2000000`、取消注释 `limits.cpu_ms = 5000`，部署后用 `/health`、`/ready` 验证。
 4. 记一下当月基线：`/metrics` 的 `relay_budget_used{kind="requests"}` 每天截一次，告警来了能对上是哪天开始涨的。
 
 告警邮件到了先看 [被打时的处置](#被打时的处置)；确认是正常增长就调高阈值，不是就拉闸。
@@ -33,20 +33,18 @@ Workers Free 没有付费用量，超了额度是请求直接失败（不是账�
 
 Workers 中继：
 
-1. 面板里已建两个 Turnstile 组件（Managed 模式，主机名含 `armadra.com`）：staging 对应 `relay-staging.armadra.com`，生产对应 `relay.armadra.com`。站点密钥不是秘密，已写进 `apps/relay-workers/wrangler.jsonc`（顶层 = 生产，`env.staging` = staging）的 `vars.RELAY_TURNSTILE_SITE_KEY`，同处的 `vars.RELAY_TURNSTILE_HOSTNAMES` 是 siteverify 答复里允许的主机名（逗号分隔；空 = 拒绝一切；https 的 issuer 下不得含 localhost / 127.0.0.1）。部署（`pnpm exec wrangler deploy --env staging`）后还不要求挑战。
-2. 录 secret（只有用户本人执行，粘贴到提示里，不进命令行参数、聊天或仓库）：
-   - staging：`pnpm exec wrangler secret put RELAY_TURNSTILE_SECRET --env staging`
-   - 生产：`pnpm exec wrangler secret put RELAY_TURNSTILE_SECRET`
+1. 面板里已建生产的 Turnstile 组件（Managed 模式，主机名 `relay.armadra.com`）。站点密钥不是秘密，已写进 `apps/relay-workers/wrangler.jsonc` 的 `vars.RELAY_TURNSTILE_SITE_KEY`，同处的 `vars.RELAY_TURNSTILE_HOSTNAMES` 是 siteverify 答复里允许的主机名（逗号分隔；空 = 拒绝一切；https 的 issuer 下不得含 localhost / 127.0.0.1）。部署后还不要求挑战。
+2. 录 secret（只有用户本人执行，粘贴到提示里，不进命令行参数、聊天或仓库）：`pnpm exec wrangler secret put RELAY_TURNSTILE_SECRET`（首次初始化由 `bootstrap-production.sh` 一并完成）。
 
    录了 secret 才要求挑战；**站点密钥为空时录 secret 是配错**，整个 Worker 答 503 `unavailable`（`wrangler tail` 有「配置不对」），先补站点密钥。
 
 3. 客户端：Turnstile 小组件渲染时必须传 `action: "armadra-login"`（`data-action`）；中继在 siteverify 的答复里核对 `action`，对不上即 `challenge_invalid`（`links.accept` 对应 `armadra-accept`）。
-4. 验证：`curl https://relay-staging.armadra.com/.well-known/armadra-platform` 里有 `"challenge":{"provider":"turnstile",…}` 与能力 `challenge.turnstile`；不带令牌登录答 `400 challenge_required`；页面与桌面的中转账号登录框能正常登录。
-5. 对生产重复第 2、4 步（去掉 `--env staging`）。关掉挑战：`wrangler secret delete RELAY_TURNSTILE_SECRET`。
+4. 验证：`curl https://relay.armadra.com/.well-known/armadra-platform` 里有 `"challenge":{"provider":"turnstile",…}` 与能力 `challenge.turnstile`；不带令牌登录答 `400 challenge_required`；页面与桌面的中转账号登录框能正常登录。
+5. 关掉挑战：`wrangler secret delete RELAY_TURNSTILE_SECRET`。
 
 服务端校验（Cloudflare existing-widget flow）：令牌缺失、非字符串、空或超过 2048 字符直接拒绝；向 `https://challenges.cloudflare.com/turnstile/v0/siteverify` 以表单 POST `secret`、`response`、`remoteip`，10 秒超时；失败一律关闭（网络错、非 2xx、答复解析失败都答 `400 challenge_invalid`）；要求 `success === true`、`action` 等于入口的 action、`hostname` 在 `RELAY_TURNSTILE_HOSTNAMES` 内。令牌一次性由 Turnstile 保证（重放答 `timeout-or-duplicate`）。
 
-Node 中继（49 的 `cn.relay.armadra.com`，缺省关）：secret 写进文件（0600），`personal serve` 加 `--challenge turnstile --turnstile-site-key <站点密钥> --turnstile-secret-file <文件> --turnstile-hostnames <主机名,…>`（或 `RELAY_CHALLENGE` / `RELAY_TURNSTILE_SITE_KEY` / `RELAY_TURNSTILE_SECRET_FILE` / `RELAY_TURNSTILE_HOSTNAMES`，compose 里用 secret 挂载）。Turnstile 小组件的主机名里要加 `cn.relay.armadra.com`。
+自托管的 Node 中继（缺省关）：secret 写进文件（0600），`personal serve` 加 `--challenge turnstile --turnstile-site-key <站点密钥> --turnstile-secret-file <文件> --turnstile-hostnames <主机名,…>`（或 `RELAY_CHALLENGE` / `RELAY_TURNSTILE_SITE_KEY` / `RELAY_TURNSTILE_SECRET_FILE` / `RELAY_TURNSTILE_HOSTNAMES`，compose 里用 secret 挂载）。Turnstile 小组件的主机名里要加该中继的主机名。
 
 挑战先于口令校验，挑战失败不计入登录失败次数；同一个令牌用第二次直接 `challenge_invalid`（本地另留 300 秒防重放表省一次往返）；Turnstile 没答（超时、5xx）同一个幂等键重试一次，仍不行答 `challenge_invalid`，客户端换新令牌重来。日志只记「人机挑战没通过」与原因码，不记令牌。
 
@@ -57,8 +55,8 @@ Node 中继（49 的 `cn.relay.armadra.com`，缺省关）：secret 写进文件
 
    ```sh
    terraform init
-   terraform plan -var origin_ipv4=<49 的公网 IPv4>        # 不给 origin_ipv4 就不建 cn.relay / app / status 记录
-   terraform apply -var origin_ipv4=<49 的公网 IPv4>
+   terraform plan -var origin_ipv4=<控制面服务器的公网 IPv4>        # 缺省不建 app / status 记录；控制面部署位置待定（Render 或 Cloudflare），定了再给
+   terraform apply -var origin_ipv4=<控制面服务器的公网 IPv4>
    ```
 
    第一次 `init` 生成的 `.terraform.lock.hcl` 提交进仓库；state（`terraform.tfstate`）留在本机、不提交，备份到自己的私有位置。要多人共用就换成 R2 的 `s3` 后端（`backend "s3"` 指向 R2 的 S3 端点，`skip_credentials_validation` 等按 R2 文档配）。
@@ -78,15 +76,15 @@ Node 中继（49 的 `cn.relay.armadra.com`，缺省关）：secret 写进文件
 
 4. 变量（都有缺省）：`zone_plan`（`free` / `pro`；`pro` 时限速改 1 分钟窗、封 10 分钟、按主机收窄）、`enable_paid_managed_waf`（Pro 才能开 Cloudflare Managed + OWASP）、`blocked_countries`、`login_requests_per_period`（缺省每 IP 每 10 秒 10 次）、`manage_ddos_override` 与 `ddos_sensitivity`、`status_proxied`、`enable_saas_wildcard`（SaaS 上线、订了 Advanced Certificate Manager 之后）。
 
-Worker 的 Custom Domain（`relay`、`relay-staging`）由 wrangler 建记录与证书，Terraform 不管，不要在面板或 Terraform 里手建同名记录。
+Worker 的 Custom Domain（`relay`）由 wrangler 建记录与证书，Terraform 不管，不要在面板或 Terraform 里手建同名记录。
 
 ## 回滚
 
 | 要回滚的    | 怎么做                                                                                                                                                         |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker 代码 | `pnpm exec wrangler rollback [--env staging]`（保留 100 个版本，`wrangler versions list` 查）。DO 数据不随代码变，跨 DO 类生命周期的变更不能回滚               |
+| Worker 代码 | `pnpm exec wrangler rollback`（保留 100 个版本，`wrangler versions list` 查）。DO 数据不随代码变，跨 DO 类生命周期的变更不能回滚                               |
 | `vars` 改错 | 改回 `wrangler.jsonc` 再部署；或 `wrangler rollback` 到改之前的版本                                                                                            |
-| 挑战误伤    | `wrangler secret delete RELAY_TURNSTILE_SECRET [--env staging]`，立即不再要求（Node 中继去掉 `--challenge` 重启）                                              |
+| 挑战误伤    | `wrangler secret delete RELAY_TURNSTILE_SECRET`，立即不再要求（Node 中继去掉 `--challenge` 重启）                                                              |
 | 区域规则    | `git checkout <上一个提交> -- deploy/cloudflare/terraform && terraform apply`；紧急时 `terraform apply -var enable_managed_waf=false` 之类的变量开关先关掉一项 |
 | 拉闸之后    | `node scripts/kill-switch.mjs restore --apply`                                                                                                                 |
 
@@ -105,7 +103,6 @@ pnpm exec wrangler deploy -c wrangler.maintenance.jsonc
 node scripts/kill-switch.mjs status                      # 演练：打印要发的请求
 CLOUDFLARE_API_TOKEN=… node scripts/kill-switch.mjs status --apply
 CLOUDFLARE_API_TOKEN=… node scripts/kill-switch.mjs maintenance --apply             # 生产切维护页
-CLOUDFLARE_API_TOKEN=… node scripts/kill-switch.mjs maintenance --env staging --apply
 CLOUDFLARE_API_TOKEN=… node scripts/kill-switch.mjs restore --apply                 # 切回中继
 CLOUDFLARE_API_TOKEN=… node scripts/kill-switch.mjs disable --apply                 # 最后手段：摘掉 Custom Domain
 ```
@@ -123,15 +120,15 @@ CLOUDFLARE_API_TOKEN=… node scripts/kill-switch.mjs disable --apply           
 4. **不要开 I'm Under Attack / Bot Fight Mode**：它们给所有请求加 JS 挑战，原生 App、core 的隧道与 `/v1` 全部失败，等于自己拉闸。
 5. **日配额先兜住**：Workers Free 上超了额度是请求直接失败；日配额（`RELAY_DAILY_REQUEST_BUDGET`）让源地址与新隧道先答 429，`/v1` 与已建立的东西尽量照常。必要时临时调低它再部署。
 6. **账单失控或扛不住**：`kill-switch.mjs maintenance --apply`；仍有大量请求打到 Worker（例如对方直接打 Custom Domain 的 IP）就 `disable`。
-7. **恢复**：攻击停了先 `restore` 到 staging 验证（`--env staging`），再恢复生产；回头把临时规则写进 Terraform 或删掉，Issue 里记一笔（时间线、规则、用量）。
+7. **恢复**：攻击停了`restore` 切回生产并用 `/health` 确认；回头把临时规则写进 Terraform 或删掉，Issue 里记一笔（时间线、规则、用量）。
 
 ## 演练清单
 
-部署之后、每次改防护设置之后各走一遍（staging 上）：
+部署之后、每次改防护设置之后各走一遍（生产上，维护窗口内）：
 
-- [ ] `node scripts/kill-switch.mjs maintenance --env staging`（演练）打印的主机与 Worker 名对；`--apply` 后 `curl -i https://relay-staging.armadra.com/health` 答 503 且带 `Retry-After`；`restore --apply` 后答 200。
+- [ ] `node scripts/kill-switch.mjs maintenance`（演练）打印的主机与 Worker 名对；`--apply` 后 `curl -i https://relay.armadra.com/health` 答 503 且带 `Retry-After`；`restore --apply` 后答 200。
 - [ ] `terraform plan` 没有意外的增删；面板 Security → WAF 里看得到 `armadra custom rules` 与 `armadra rate limits`；同一 IP 10 秒内连续 11 次登录被区域规则挡下。
 - [ ] Bot Fight Mode 是关的（Security → Bots）。
 - [ ] 开了挑战时：`platform.info` 报 `challenge`；不带令牌登录 `400 challenge_required`；桌面中转账号登录框、页面 `/app/` 登录正常；删 secret 后不再要求。
 - [ ] Workers Paid 时：预算告警的两档阈值与收件人在；Notifications 里有 Workers 用量通知。
-- [ ] `wrangler rollback --env staging` 能回到上一版，再部署回来。
+- [ ] `wrangler rollback` 能回到上一版，再部署回来。

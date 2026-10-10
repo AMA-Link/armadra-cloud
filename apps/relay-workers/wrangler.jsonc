@@ -1,8 +1,7 @@
 // Armadra 中继（Cloudflare Workers）。中继设计 §2、§4.5；部署步骤见 deploy/cloudflare/README.md。
 //
 // - 只在本仓里描述，**不在这里部署**：`wrangler deploy` / `wrangler secret put` 由维护者在本机执行。
-// - 缺省（顶层）是生产 relay.armadra.com，`--env staging` 是 relay-staging.armadra.com；两个环境的
-//   Durable Object 与 Rate Limiting 命名空间各自独立。
+// - 只有生产环境 relay.armadra.com，没有 staging。
 // - 按 Workers Free 配置（§4.6 配置 F）：检查周期 120 秒、日配额 8 万次请求。升 Workers Paid 后把
 //   RELAY_ALARM_MS 改回 60000、RELAY_DAILY_REQUEST_BUDGET 改成 2000000，并打开 limits.cpu_ms。
 // - secret 只经 `wrangler secret put` 录入，这里只列名字（secrets.required）；其余可选 secret 见
@@ -81,7 +80,7 @@
     },
   ],
   // Workers Paid：单次调用的 CPU 上限（防失控循环；转发是 I/O 型，正常远低于此）。Free 固定 10 ms、
-  // 不能配，先注释；升 Paid 时取消注释（env.staging 继承顶层的 limits）。
+  // 不能配，先注释；升 Paid 时取消注释。
   // "limits": { "cpu_ms": 5000 },
   "observability": { "logs": { "enabled": true } },
   "vars": {
@@ -94,75 +93,9 @@
     "RELAY_DAILY_TUNNEL_BYTES_BUDGET": "53687091200",
     "RELAY_CONTROL_LOCATION": "apac",
     "RELAY_LOG_LEVEL": "info",
-    "RELAY_TURNSTILE_SITE_KEY": "0x4AAAAAAFTBoO_2VzgHU0n9",
+    "RELAY_TURNSTILE_SITE_KEY": "0x4AAAAAAFTEevK9h0keZPRh",
     "RELAY_TURNSTILE_HOSTNAMES": "relay.armadra.com",
     "RELAY_CHALLENGE_SCOPE": "auth.login",
   },
   "secrets": { "required": ["RELAY_MASTER_KEY"] },
-  "env": {
-    "staging": {
-      "name": "armadra-relay-staging",
-      "routes": [
-        { "pattern": "relay-staging.armadra.com", "custom_domain": true },
-      ],
-      "durable_objects": {
-        "bindings": [
-          { "name": "SOURCE", "class_name": "SourceDO" },
-          { "name": "CONTROL", "class_name": "ControlDO" },
-        ],
-      },
-      "ratelimits": [
-        {
-          "name": "LIMIT_LOGIN",
-          "namespace_id": "2001",
-          "simple": { "limit": 20, "period": 60 },
-        },
-        {
-          "name": "LIMIT_LINK_ACCEPT",
-          "namespace_id": "2002",
-          "simple": { "limit": 20, "period": 60 },
-        },
-        {
-          "name": "LIMIT_REGISTER",
-          "namespace_id": "2003",
-          "simple": { "limit": 10, "period": 60 },
-        },
-        {
-          "name": "LIMIT_TUNNEL",
-          "namespace_id": "2004",
-          "simple": { "limit": 10, "period": 60 },
-        },
-        {
-          "name": "LIMIT_MEDIA",
-          "namespace_id": "2005",
-          "simple": { "limit": 60, "period": 60 },
-        },
-        {
-          "name": "LIMIT_ANONYMOUS",
-          "namespace_id": "2006",
-          "simple": { "limit": 60, "period": 60 },
-        },
-        {
-          "name": "LIMIT_PREFLIGHT",
-          "namespace_id": "2007",
-          "simple": { "limit": 1200, "period": 60 },
-        },
-      ],
-      "secrets": { "required": ["RELAY_MASTER_KEY"] },
-      "vars": {
-        "RELAY_MODE": "personal",
-        "RELAY_ISSUER": "https://relay-staging.armadra.com",
-        "RELAY_HEARTBEAT_MS": "45000",
-        "RELAY_ALARM_MS": "120000",
-        "RELAY_CLIENT_IDLE_MS": "120000",
-        "RELAY_DAILY_REQUEST_BUDGET": "80000",
-        "RELAY_DAILY_TUNNEL_BYTES_BUDGET": "53687091200",
-        "RELAY_CONTROL_LOCATION": "apac",
-        "RELAY_LOG_LEVEL": "info",
-        "RELAY_TURNSTILE_SITE_KEY": "0x4AAAAAAFTBmc_rfjSRpzbt",
-        "RELAY_TURNSTILE_HOSTNAMES": "relay-staging.armadra.com",
-        "RELAY_CHALLENGE_SCOPE": "auth.login",
-      },
-    },
-  },
 }
