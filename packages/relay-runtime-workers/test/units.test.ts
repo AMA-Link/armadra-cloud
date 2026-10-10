@@ -137,6 +137,7 @@ describe("日配额", () => {
 describe("闸的归类", () => {
   it("/v1：登录、接受链接、注册令牌与登记；其余不过闸", () => {
     expect(apiGate("POST", "/v1/auth/login")).toBe("LIMIT_LOGIN");
+    expect(apiGate("POST", "/v1/auth/password")).toBe("LIMIT_LOGIN");
     expect(apiGate("POST", "/v1/links/0123456789abcdef/accept")).toBe(
       "LIMIT_LINK_ACCEPT",
     );

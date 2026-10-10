@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
-import { base, SINCE_0_1 } from "../meta.ts";
+import { base, SINCE_0_1, SINCE_0_3_10 } from "../meta.ts";
 import {
   challengeTokenSchema,
   deviceInputSchema,
@@ -176,6 +176,33 @@ export const auth = {
     .errors(errors.pick("mfa_invalid"))
     .input(z.object({ code: z.string() }))
     .output(z.object({ disabled: z.literal(true) })),
+  /**
+   * 改口令（cloud-api §18，0.3.10 起）：要有效会话与旧口令；新口令过同一套策略。成功后撤销账号
+   * 本人除当前设备以外的全部设备（访客不受影响），当前设备的刷新令牌也换新，答当前设备的新会话。
+   */
+  changePassword: base
+    .route({ method: "POST", path: "/v1/auth/password" })
+    .meta({ scope: ["session"], since: SINCE_0_3_10 })
+    .errors({
+      ...errors.pick(
+        "credentials_invalid",
+        "account_locked",
+        "rate_limited",
+        "forbidden",
+        "challenge_required",
+        "challenge_invalid",
+      ),
+      ...passwordErrors,
+    })
+    .input(
+      z.object({
+        password: z.string(),
+        newPassword: z.string(),
+        /** 挑战令牌：`platform.info.challenge.scope` 含 `auth.changePassword` 时必带。 */
+        challenge: challengeTokenSchema.optional(),
+      }),
+    )
+    .output(sessionResultSchema),
   recoveryCodesRotate: base
     .route({ method: "POST", path: "/v1/auth/recovery-codes/rotate" })
     .meta(session)

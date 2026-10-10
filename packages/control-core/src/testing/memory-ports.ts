@@ -103,7 +103,7 @@ export function createMemoryPorts(): MemoryPorts {
           fn(row(draft.accounts, (a) => a.accountId === accountId)),
         );
       },
-      async resetPassword(tenantId, accountId, password, nowMs) {
+      async resetPassword(tenantId, accountId, password, nowMs, options) {
         return mutate(tenants, tenantId, (draft) => {
           const account = row(draft.accounts, (a) => a.accountId === accountId);
           if (!account) return false;
@@ -114,7 +114,11 @@ export function createMemoryPorts(): MemoryPorts {
             lockedUntilMs: 0,
           });
           for (const device of draft.devices)
-            if (device.subject === accountId && device.revokedAtMs === null)
+            if (
+              device.subject === accountId &&
+              device.revokedAtMs === null &&
+              device.deviceId !== options?.keepDeviceId
+            )
               device.revokedAtMs = nowMs;
           return true;
         });

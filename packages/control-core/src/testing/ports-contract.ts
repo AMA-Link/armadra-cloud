@@ -207,6 +207,24 @@ export function portsContract(
       ).toBe(false);
     });
 
+    it("resetPassword：keepDeviceId 留下当前设备，其余本人设备照样撤销", async () => {
+      const ports = fresh();
+      ports.addAccount("t1", account("alice", "u-1"));
+      await ports.devices.insert("t1", device(D1, "u-1"), NOW);
+      await ports.devices.insert("t1", device(D2, "u-1"), NOW);
+      await ports.devices.insert("t1", device(D3, `guest:${L1}:ab`), NOW);
+      const next = { ...PASSWORD, salt: "bmV3", hash: "bmV3aGFzaA==" };
+      expect(
+        await ports.accounts.resetPassword("t1", "u-1", next, NOW, {
+          keepDeviceId: D2,
+        }),
+      ).toBe(true);
+      expect((await ports.devices.get("t1", D1))?.revokedAtMs).toBe(NOW);
+      expect((await ports.devices.get("t1", D2))?.revokedAtMs).toBeNull();
+      expect((await ports.devices.get("t1", D3))?.revokedAtMs).toBeNull();
+      expect((await ports.accounts.get("t1", "u-1"))?.password).toEqual(next);
+    });
+
     it("设备：按创建顺序列出；新增时清掉早已失效的；update 与 touch 只往后推", async () => {
       const ports = fresh();
       const stale = device(D3, "u-1", {

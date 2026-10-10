@@ -26,6 +26,7 @@ export interface CloudMeta {
 export const SINCE_0_1 = "0.1.0";
 export const SINCE_0_2 = "0.2.0";
 export const SINCE_0_3_5 = "0.3.5";
+export const SINCE_0_3_10 = "0.3.10";
 
 /** 契约构建器：每条 procedure 都必须 `.meta({ scope, since })`。 */
 export const base = oc.$meta<CloudMeta>({ scope: [], since: "" });

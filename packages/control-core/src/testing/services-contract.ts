@@ -170,6 +170,134 @@ export function servicesContract(
         ).toBe("not_found");
       });
 
+      describe("改口令（cloud-api §18）", () => {
+        const NEXT = "saffron-glacier-meadow-77";
+        const policy = {
+          passwordPolicy: (value: string) =>
+            value.length < 12 ? ("password_too_short" as const) : undefined,
+        };
+        const signIn = (h: MemoryHarness, secret = PASSWORD) =>
+          createAccounts(h.context).login(
+            { account: "alice", password: secret, device: DEVICE },
+            "198.51.100.1",
+          );
+        const callerOf = (h: MemoryHarness, accessToken: string) =>
+          createAuthenticator(h.context).authenticate(`Bearer ${accessToken}`);
+
+        it("旧口令不对：credentials_invalid，计入锁定计数，连错 5 次锁定", async () => {
+          const h = harness(policy);
+          const owner = await ownerOf(h);
+          const accounts = createAccounts(h.context);
+          expect(
+            await codeOf(() =>
+              accounts.changePassword(
+                owner,
+                { password: "wrong-old-password", newPassword: NEXT },
+                "ip",
+              ),
+            ),
+          ).toBe("credentials_invalid");
+          expect((await h.ports.accounts.get("t1", "u-1"))?.failures).toBe(1);
+          for (let attempt = 0; attempt < 4; attempt += 1)
+            await codeOf(() =>
+              accounts.changePassword(
+                owner,
+                { password: "wrong-old-password", newPassword: NEXT },
+                "ip",
+              ),
+            );
+          expect(
+            await codeOf(() =>
+              accounts.changePassword(
+                owner,
+                { password: PASSWORD, newPassword: NEXT },
+                "ip",
+              ),
+            ),
+          ).toBe("account_locked");
+          // 口令没换：锁着时新口令也登不上。
+          expect(await codeOf(() => signIn(h, NEXT))).toBe("account_locked");
+          expect((await h.ports.accounts.get("t1", "u-1"))?.password.hash).toBe(
+            password?.hash,
+          );
+        });
+
+        it("新口令不合策略：答策略码，什么也不改", async () => {
+          const h = harness(policy);
+          const owner = await ownerOf(h);
+          expect(
+            await codeOf(() =>
+              createAccounts(h.context).changePassword(
+                owner,
+                { password: PASSWORD, newPassword: "short" },
+                "ip",
+              ),
+            ),
+          ).toBe("password_too_short");
+          expect(await codeOf(() => signIn(h))).toBe("ok");
+          expect(
+            (await h.ports.devices.get("t1", owner.deviceId))?.revokedAtMs,
+          ).toBeNull();
+        });
+
+        it("成功：其它设备与刷新令牌失效，当前设备保留并换新刷新令牌，旧口令登不上", async () => {
+          const h = harness(policy);
+          h.ports.addAccount("t1", account("alice", "u-1"));
+          const current = await signIn(h);
+          const other = await signIn(h);
+          const caller = await callerOf(h, current.accessToken);
+          const session = await createAccounts(h.context).changePassword(
+            caller,
+            { password: PASSWORD, newPassword: NEXT },
+            "ip",
+          );
+          expect(session.device.deviceId).toBe(current.device.deviceId);
+          expect(session.refreshToken).not.toBe(current.refreshToken);
+          // 当前设备：访问令牌照样认，新刷新令牌能用；旧刷新令牌作废但不撤销这台。
+          expect(await codeOf(() => callerOf(h, current.accessToken))).toBe(
+            "ok",
+          );
+          expect(
+            await codeOf(() =>
+              refresh(h.context, current.refreshToken as string),
+            ),
+          ).toBe("session_revoked");
+          const next = await refresh(h.context, session.refreshToken as string);
+          expect(next.device.deviceId).toBe(current.device.deviceId);
+          // 其它设备：访问令牌与刷新令牌都失效。
+          expect(await codeOf(() => callerOf(h, other.accessToken))).toBe(
+            "unauthenticated",
+          );
+          expect(
+            await codeOf(() =>
+              refresh(h.context, other.refreshToken as string),
+            ),
+          ).toBe("session_revoked");
+          // 旧口令登不上，新口令能登。
+          expect(await codeOf(() => signIn(h))).toBe("credentials_invalid");
+          expect(await codeOf(() => signIn(h, NEXT))).toBe("ok");
+        });
+
+        it("访客不能改口令", async () => {
+          const h = harness(policy);
+          await ownerOf(h);
+          expect(
+            await codeOf(() =>
+              createAccounts(h.context).changePassword(
+                {
+                  subject: `guest:${"a".repeat(16)}:x`,
+                  deviceId: "d",
+                  role: "guest",
+                  linkId: "a".repeat(16),
+                },
+                { password: PASSWORD, newPassword: NEXT },
+                "ip",
+              ),
+            ),
+          ).toBe("forbidden");
+        });
+      });
+
       it("限流来自 RateLimiter 端口", async () => {
         const h = harness({
           limit: () => ({ allowed: false, retryAfterMs: 1234 }),

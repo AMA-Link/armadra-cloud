@@ -7,7 +7,7 @@
 - 第一次打到 `/v1/*`、`/.well-known/*` 或 `/ready` 的请求让 `ControlDO` 建库：跑与 Node 中继同一份 SQL 迁移（`packages/control-store-sql/migrations/`，账本 `relay_migrations` 记 SHA-384），用 secret `RELAY_PERSONAL_ACCOUNT` / `RELAY_PERSONAL_PASSWORD` 建账号（口令策略与 Node 中继相同、scrypt 哈希），生成第一把签名钥（用 `RELAY_MASTER_KEY` 做 AES-256-GCM 包裹后落盘）。
 - 缺 `RELAY_MASTER_KEY`（或不是 64 位十六进制）、缺账号 / 口令、口令不合策略：`/v1` 与 `/ready` 答 503 `not_initialized`，什么也不建；`wrangler tail` 里有一行「还没初始化」带原因码（`missing_credentials`、`password_too_short`……）。
 - 初始化成功后删掉两个初始化 secret；还在的话每次对象启动记一行提醒。之后改这两个 secret 不会改账号。
-- 改口令、轮换签名钥：Workers 版暂时没有入口（Node 中继的 `personal passwd` / `rotate-key` 对应的管理接口在后续批次）。
+- 改口令（cloud-api §18）：账号本人的会话 + 旧口令调 `POST /v1/auth/password`（桌面「设置 → 远程访问」，或本机运行 `apps/relay-workers/scripts/rotate-password.sh`）；成功后撤销其它设备、当前设备换新刷新令牌。轮换签名钥：Workers 版暂时没有入口（Node 中继的 `rotate-key` 对应的管理接口在后续批次）。
 
 ## 心跳与检查周期
 

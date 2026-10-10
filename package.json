@@ -1,6 +1,6 @@
 {
   "name": "armadra-cloud",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -18,7 +18,7 @@
     "test": "pnpm libs:build && pnpm -r --if-present test",
     "test:integration": "pnpm -r --if-present test:integration",
     "repo:check": "node tools/repo-check.mjs",
-    "repo:test": "node --test tools/*.test.mjs tools/ci/*.test.mjs tools/contract/*.test.mjs scripts/*.test.mjs",
+    "repo:test": "node --test tools/*.test.mjs tools/ci/*.test.mjs tools/contract/*.test.mjs scripts/*.test.mjs apps/relay-workers/scripts/*.test.mjs",
     "contract:check": "node tools/contract/generate.mjs --check",
     "contract:generate": "node tools/contract/generate.mjs",
     "protocol:check": "pnpm --filter @armadra/platform-protocol fixtures:check && pnpm --filter @armadra/platform-protocol schema:check && node scripts/gen-vectors.mjs --check",

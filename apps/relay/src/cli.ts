@@ -69,7 +69,7 @@ serve:
   --turnstile-site-key K   Turnstile 站点密钥（或 RELAY_TURNSTILE_SITE_KEY），不是秘密
   --turnstile-secret-file F Turnstile secret 文件（或 RELAY_TURNSTILE_SECRET_FILE）
   --turnstile-hostnames L  允许的 siteverify 主机名，逗号分隔（或 RELAY_TURNSTILE_HOSTNAMES）；空 = 拒绝一切；https 公网地址下不得含本机
-  --challenge-scope LIST   要挑战的 procedure：auth.login、links.accept，逗号分隔（或 RELAY_CHALLENGE_SCOPE），默认 auth.login`;
+  --challenge-scope LIST   要挑战的 procedure：auth.login、links.accept、auth.changePassword，逗号分隔（或 RELAY_CHALLENGE_SCOPE），默认 auth.login`;
 
 function onSignal(stop: () => Promise<void>): void {
   const handler = () => {

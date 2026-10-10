@@ -131,7 +131,7 @@ export function createSqlitePorts(db: Database): ControlPorts {
           fn,
         );
       },
-      async resetPassword(tenantId, accountId, password, nowMs) {
+      async resetPassword(tenantId, accountId, password, nowMs, options) {
         return db.transaction(() => {
           const row = account(tenantId, accountId);
           if (!row) return false;
@@ -143,10 +143,11 @@ export function createSqlitePorts(db: Database): ControlPorts {
             lockedUntilMs: 0,
           });
           db.run(
-            "UPDATE devices SET revoked_at_ms = ? WHERE tenant_id = ? AND subject = ? AND revoked_at_ms IS NULL",
+            "UPDATE devices SET revoked_at_ms = ? WHERE tenant_id = ? AND subject = ? AND revoked_at_ms IS NULL AND device_id <> ?",
             nowMs,
             tenantId,
             accountId,
+            options?.keepDeviceId ?? "",
           );
           bumpRevision(db, tenantId);
           return true;

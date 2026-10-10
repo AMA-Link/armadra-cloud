@@ -58,6 +58,14 @@ describe("挑战配置", () => {
         RELAY_CHALLENGE_SCOPE: "auth.login,links.accept",
       }).challenge?.scope,
     ).toEqual(["auth.login", "links.accept"]);
+    expect(
+      readConfig({
+        ...base,
+        RELAY_TURNSTILE_SECRET: "s",
+        RELAY_TURNSTILE_SITE_KEY: "k",
+        RELAY_CHALLENGE_SCOPE: "auth.login,auth.changePassword",
+      }).challenge?.scope,
+    ).toEqual(["auth.login", "auth.changePassword"]);
     // https 的 issuer（生产）不得含本机地址；http 的本地开发可以
     expect(() =>
       readConfig({

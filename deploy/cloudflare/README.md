@@ -60,10 +60,17 @@ curl -s --doh-url https://cloudflare-dns.com/dns-query https://relay.armadra.com
 pnpm exec wrangler tail --format pretty                        # 看日志（不含路径、头、令牌）
 ```
 
-之后的代码更新只需 `pnpm exec wrangler deploy`。验证：桌面「远程访问」登记一个中转账号（地址 `https://relay.armadra.com`），等隧道在线；手机或第二台桌面经它访问；撤销源后连接即时断开。
+之后的代码更新只需 `pnpm exec wrangler deploy`。
+
+**改口令**（cloud-api §18，中继 0.3.10 起）：桌面「设置 → 远程访问」的中转账号行可以直接改；也可以在本机终端运行 [rotate-password.sh](../../apps/relay-workers/scripts/rotate-password.sh)——用当前口令登录、本机生成新口令、调改口令接口、登出，新口令只在你的终端显示一次；账号在其它设备上的登录全部失效。中继要求人机验证时，脚本给出 `/app/challenge?mode=copy` 的地址，在浏览器里完成验证后把令牌粘回终端（需要页面产物是支持 `mode=copy` 的 Armadra 版本）。
+
+````sh
+bash scripts/rotate-password.sh                                # ARMADRA_RELAY_ORIGIN / ARMADRA_RELAY_ACCOUNT 可改地址与账号
+```验证：桌面「远程访问」登记一个中转账号（地址 `https://relay.armadra.com`），等隧道在线；手机或第二台桌面经它访问；撤销源后连接即时断开。
 
 **桌面端网络**：本机代理（如 Clash 的 fake-ip 模式）可能把 `relay.armadra.com` 解析成假 IP 而连不上。让 `armadra.com` 走直连并使用正常 DNS（代理规则里加 `DOMAIN-SUFFIX,armadra.com,DIRECT`，并把它从 fake-ip 过滤里排除）。
 
 - 每次 `wrangler deploy` 都会重启全部 DO、断开全部 WS：core 1–60 秒退避重连，客户端会短暂看到 `source_offline`。
 - 回滚：`pnpm exec wrangler rollback`（保留 100 个版本）。DO 类只在首版建一次，跨类生命周期的变更不能回滚；schema 只经对象内的迁移账本追加。
 - 本地：`pnpm --filter @armadra/relay-workers dev`（`wrangler dev --local`，secret 放 `apps/relay-workers/.dev.vars`，不提交）；`pnpm e2e --mode personal-workers` 起本地 workerd 跑一遍端到端。
+````

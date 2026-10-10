@@ -420,6 +420,63 @@ describe("登录与接受链接的次序", () => {
     ).toBe("challenge_required");
   });
 
+  it("改口令只在 scope 含 auth.changePassword 时要挑战；action 是 armadra-password，失败不计数", async () => {
+    const NEXT = "saffron-glacier-meadow-77";
+    const owner = async (h: Awaited<ReturnType<typeof harness>>["h"]) => {
+      const session = await createAccounts(h.context).login(
+        {
+          account: "alice",
+          password: PASSWORD,
+          device: DEVICE,
+          challenge: turnstile(`good-${Math.random()}`),
+        },
+        "ip",
+      );
+      return {
+        subject: "u-1",
+        deviceId: session.device.deviceId,
+        role: "owner" as const,
+        linkId: null,
+      };
+    };
+    const plain = await harness("auth.login");
+    const caller = await owner(plain.h);
+    const done = await createAccounts(plain.h.context).changePassword(
+      caller,
+      { password: PASSWORD, newPassword: NEXT },
+      "ip",
+    );
+    expect(done.device.deviceId).toBe(caller.deviceId);
+
+    const gated = await harness("auth.login,auth.changePassword");
+    const who = await owner(gated.h);
+    const accounts = createAccounts(gated.h.context);
+    expect(
+      await codeOf(() =>
+        accounts.changePassword(
+          who,
+          { password: "wrong", newPassword: NEXT },
+          "ip",
+        ),
+      ),
+    ).toBe("challenge_required");
+    expect(
+      (await gated.h.ports.accounts.get(gated.h.context.tenantId, "u-1"))
+        ?.failures,
+    ).toBe(0);
+    await accounts.changePassword(
+      who,
+      {
+        password: PASSWORD,
+        newPassword: NEXT,
+        challenge: turnstile("good-pw"),
+      },
+      "ip",
+    );
+    expect(gated.calls.at(-1)?.action).toBe("armadra-password");
+    expect(CHALLENGE_ACTIONS["auth.changePassword"]).toBe("armadra-password");
+  });
+
   it("没配挑战：platform.info 不报，带不带 challenge 行为都不变", async () => {
     const h = memoryHarness();
     const { handlers } = createPersonalProcedures(h.context, {

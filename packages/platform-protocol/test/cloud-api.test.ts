@@ -4,6 +4,7 @@ import type { z } from "zod";
 import {
   cloudContract,
   listProcedures,
+  PLATFORM_CAPABILITIES,
   sectionOf,
   SCOPES,
 } from "../src/cloud-api/index.ts";
@@ -193,6 +194,39 @@ describe("挑战（§16）与节点回报（§17）", () => {
         challenge: { provider: "turnstile", token: "x".repeat(2049) },
       }).success,
     ).toBe(false);
+  });
+
+  it("auth.changePassword（0.3.10）：会话、旧口令 + 新口令、可选挑战，答当前设备的会话", () => {
+    const entry = listProcedures().find(
+      (one) => one.key === "auth.changePassword",
+    );
+    expect(entry).toMatchObject({
+      method: "POST",
+      path: "/v1/auth/password",
+      meta: { scope: ["session"], since: "0.3.10" },
+    });
+    expect(entry?.errorCodes).toEqual(
+      expect.arrayContaining([
+        "credentials_invalid",
+        "account_locked",
+        "password_too_short",
+        "challenge_required",
+      ]),
+    );
+    expect(sectionOf("auth.changePassword")).toBe("§18");
+    const change = input("auth.changePassword");
+    expect(change.safeParse({ password: "a", newPassword: "b" }).success).toBe(
+      true,
+    );
+    expect(change.safeParse({ newPassword: "b" }).success).toBe(false);
+    expect(
+      change.safeParse({
+        password: "a",
+        newPassword: "b",
+        challenge: { provider: "turnstile", token: "t" },
+      }).success,
+    ).toBe(true);
+    expect(PLATFORM_CAPABILITIES).toContain("auth.password-change");
   });
 
   it("platform.info.challenge 可选，scope 至少一条", () => {

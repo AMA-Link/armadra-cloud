@@ -34,10 +34,11 @@ export const GATE_PERIOD_S: Record<GateName, number> = {
   LIMIT_PREFLIGHT: 60,
 };
 
-/** `/v1` 的闸：登录、接受链接、注册令牌与登记。 */
+/** `/v1` 的闸：登录与改口令（同一个闸）、接受链接、注册令牌与登记。 */
 export function apiGate(method: string, path: string): GateName | null {
   if (method !== "POST") return null;
-  if (path === "/v1/auth/login") return "LIMIT_LOGIN";
+  if (path === "/v1/auth/login" || path === "/v1/auth/password")
+    return "LIMIT_LOGIN";
   if (/^\/v1\/links\/[^/]+\/accept$/.test(path)) return "LIMIT_LINK_ACCEPT";
   if (
     path === "/v1/sources/registration-tokens" ||
