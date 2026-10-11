@@ -56,10 +56,18 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 
 迁入：停掉所有节点，`personal migrate --data-dir /data --to postgres --database-url …`（`state.json` 或 `relay.db` 整份写进库、读回比对，原文件改名留作回退）。迁出：`--to sqlite` 或 `--to file`，库里的数据原样保留（不删），只把 `postgres.json` 改名。PostgreSQL 的备份用库自己的（`pg_dump` 或托管服务的快照），`personal backup` 会提示。
 
+## 流量统计
+
+`serve` 按「源 × 账号 / 访客 × 设备 × 类别 × 小时」累计经中继的连接数与两个方向的字节（cloud-api §19），在内存里累加，每 60 秒与停服时批量写进存储的 `relay_traffic_buckets`（SQLite 迁移 0002、PostgreSQL 迁移 0003），不按帧写库；不记路径、头、IP 与正文。
+
+- 保留：`--traffic-retention-days`（或 `RELAY_TRAFFIC_RETENTION_DAYS`），缺省 90 天；启动时与之后每天清一次更早的桶。`0` = 不记录。
+- 查看：`personal traffic --data-dir /data [--since 7d] [--source <id>]` 按源、账号、设备、类别合计成表；客户端与网页经 `GET /v1/me/traffic`（账号本人看全部源，访客只看自己）。刚发生的流量最多晚一分钟才查得到。
+- 状态文件存储（`--store file`）：统计只在 `serve` 的内存里，接口照常答，重启归零，`personal traffic` 读不到；迁到 SQLite 后才落盘。`personal migrate` 不搬运统计。
+
 ## 升级与降级
 
 - 升级：新版本打开 `relay.db` 时自动补跑新迁移（`packages/control-store-sql/migrations/`，账本 `relay_migrations` 记编号与 SHA-384）。升级前先备份。
-- 降级：旧程序看到库里记着它不认识的迁移会拒绝启动。从升级前的备份恢复，或用新版本 `migrate --to file` 导出后再降级。
+- 降级：旧程序看到库里记着它不认识的迁移会拒绝启动。从升级前的备份恢复，或用新版本 `migrate --to file` 导出后再降级。加了流量统计表（SQLite 0002 / PostgreSQL 0003）的版本同样如此。
 
 ## 体检
 

@@ -23,6 +23,12 @@
 - 看用量：`curl -H "Authorization: Bearer <指标令牌>" https://relay.armadra.com/metrics`，`relay_budget_used{kind="requests"}` 与 `relay_budget_limit`。连续几天超过七成考虑升 Workers Paid（配置 P）。
 - 计数按对象各自攒一批才报，Worker 入口的 Rate Limiting 绑定按 Cloudflare 节点各自计数：都是近似值，账单的真相看 Cloudflare 面板。
 
+## 流量统计
+
+- 每个 `SourceDO` 在内存里按「账号 / 访客 × 设备 × 类别 × 小时」累计经它的连接数与字节（cloud-api §19），攒下新行后 30 秒与每个检查周期写进自己的 DO SQLite（同一份迁移的 `relay_traffic_buckets`）；不按帧写库，不记路径、头、IP 与正文。等待写入的这 30 秒里对象不休眠（计数不会随休眠丢掉），之后照常休眠。
+- `GET /v1/me/traffic` 由 `ControlDO` 按登记过的源逐个对象取回合并；查询前对象先把内存里的写掉。
+- 保留 `RELAY_TRAFFIC_RETENTION_DAYS`（缺省 90，`0` = 不记录），各对象写入或被查询时一天最多清一次更早的桶；长期没有流量也没人查的源，旧桶留到它下次被唤醒。
+
 ## 撤销即时生效
 
 - 撤销源：先以 4403 断开经它的客户端 WS，再以 4492 关隧道；之后这个源换不到隧道令牌（410 `source_revoked`），已签出的中继令牌 401。
