@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.10（2026-10-11）
 
 - 人机验证（Turnstile）改为可选、缺省关闭：wrangler.jsonc 站点密钥缺省为空，bootstrap-production.sh 仅在设置 `ARMADRA_RELAY_TURNSTILE_SITE_KEY` 时读取并上传 Turnstile secret。 / Turnstile is now opt-in and off by default.
 
