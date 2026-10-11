@@ -22,6 +22,7 @@ import {
   type OpenPayload,
 } from "@armadra/platform-protocol/tunnel";
 
+import type { TrafficCounter } from "../traffic.ts";
 import {
   CreditPool,
   type StreamEndpoint,
@@ -98,6 +99,8 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
   state: TunnelState = "open";
   replaced = false;
   private readonly streams = new Map<number, S>();
+  /** 流号 → 流量统计句柄（开流时给了才有）。 */
+  private readonly counters = new Map<number, TrafficCounter>();
   private nextStreamId = 1;
   private readonly sendPool: CreditPool;
   private recvRemaining: number;
@@ -225,8 +228,11 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
     this.heartbeat.unref?.();
   }
 
-  /** 为一条边缘连接开流：发 OPEN。草稿态、满流时抛 {@link TunnelUnavailableError}。 */
-  openStream(open: OpenPayload): S {
+  /**
+   * 为一条边缘连接开流：发 OPEN。草稿态、满流时抛 {@link TunnelUnavailableError}。给了 `counter`
+   * 就把这条流两个方向的 `DATA` 载荷记到它上面（流量统计）。
+   */
+  openStream(open: OpenPayload, counter?: TrafficCounter): S {
     if (this.state !== "open") throw new TunnelUnavailableError(this.state);
     if (this.streams.size >= this.limits.maxStreams)
       throw new TunnelUnavailableError("max_streams");
@@ -238,7 +244,13 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
       maxDataChunk: this.limits.maxDataChunk,
     });
     this.streams.set(streamId, stream);
+    if (counter) this.counters.set(streamId, counter);
     return stream;
+  }
+
+  /** 给已有的流挂上流量统计句柄（休眠唤醒后还原的流用）。 */
+  meter(streamId: number, counter: TrafficCounter): void {
+    if (this.streams.has(streamId)) this.counters.set(streamId, counter);
   }
 
   /** 收到一条二进制消息。 */
@@ -269,6 +281,7 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
         }
         this.recvRemaining -= length;
         this.hooks.onBytes?.("to_client", length);
+        this.counters.get(frame.streamId)?.bytes("to_client", length);
         const stream = this.streams.get(frame.streamId);
         if (!stream) {
           this.consumed(length);
@@ -352,6 +365,7 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
     for (const stream of [...this.streams.values()])
       stream.receiveRst(RST.sourceGone);
     this.streams.clear();
+    this.counters.clear();
     this.hooks.onClose?.({ code, reason, replaced: this.replaced });
     for (const resolve of this.closedWaiters.splice(0)) resolve();
   }
@@ -370,8 +384,10 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
 
   private send(frame: Frame): void {
     if (this.state === "closed") return;
-    if (frame.type === "data")
+    if (frame.type === "data") {
       this.hooks.onBytes?.("to_source", frame.bytes.length);
+      this.counters.get(frame.streamId)?.bytes("to_source", frame.bytes.length);
+    }
     this.transport.send(encodeFrame(frame));
   }
 
@@ -391,8 +407,10 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
   }
 
   private release(stream: S): void {
-    if (this.streams.get(stream.streamId) === stream)
+    if (this.streams.get(stream.streamId) === stream) {
       this.streams.delete(stream.streamId);
+      this.counters.delete(stream.streamId);
+    }
     this.closeIfDrained();
   }
 

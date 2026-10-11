@@ -27,6 +27,8 @@ export interface MediaGrant {
   readonly path: string;
   /** 签票的中继令牌：限流按它与账号计，撤销了票跟着失效。 */
   readonly subject: string;
+  /** 签票令牌的 `dev`（流量统计；没带时缺省）。 */
+  readonly deviceId?: string;
   readonly jti: string;
 }
 
