@@ -43,6 +43,7 @@ docs(contract): cloud-api §12 媒体票
 
 ## 提交 PR / Opening pull requests
 
+- 只改 Markdown 与 `docs/`（契约等生成物除外）的 PR，CI 只跑轻量的 `docs` 作业；代码审查不自动触发，需要时由维护者评论 `@codex review`。 / Docs-only PRs run only the light `docs` CI job; code review is not automatic — a maintainer comments `@codex review` when wanted.
 - 从 `main` 拉出按用途命名的分支，例如 `fix/relay-keepalive-limits`、`docs/github-community-files`。 / Branch from `main` with a purpose-based name.
 - PR 标题沿用提交信息格式；正文按模板填写，不适用的小节写「无 / None」。 / The PR title follows the commit format; fill in the template and write "无 / None" for sections that do not apply.
 - 用 `Closes #N` 关联 issue。 / Link issues with `Closes #N`.
