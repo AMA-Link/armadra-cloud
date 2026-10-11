@@ -39,6 +39,10 @@
       "types": "./dist/identity-vectors/index.d.ts",
       "default": "./dist/identity-vectors/index.js"
     },
+    "./e2e": {
+      "types": "./dist/e2e/index.d.ts",
+      "default": "./dist/e2e/index.js"
+    },
     "./http1": {
       "types": "./dist/http1/index.d.ts",
       "default": "./dist/http1/index.js"

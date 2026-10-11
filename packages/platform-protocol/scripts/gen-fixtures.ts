@@ -40,6 +40,7 @@ import { challengeSigningInput } from "../src/tunnel/handshake.ts";
 import { LIMITS } from "../src/tunnel/limits.ts";
 import { PROTOCOL_VERSION } from "../src/version.ts";
 import { CLOUD_API_SAMPLES } from "./cloud-api-samples.ts";
+import { E2E_VECTOR_INPUTS, e2eVector } from "./e2e-vectors.ts";
 import { wireFixtures } from "./wire-fixtures.ts";
 
 const ROOT = fileURLToPath(new URL("../fixtures/", import.meta.url));
@@ -403,6 +404,17 @@ put(
 for (const [key, sample] of Object.entries(CLOUD_API_SAMPLES))
   put(`cloud-api/${key}.json`, json(sample));
 put("errors.json", json(ERRORS));
+
+// ------------------------------------------------------------------ e2e
+
+put(
+  "e2e/handshake.json",
+  json({
+    $comment:
+      "armadra-e2e/1 握手与记录层的黄金向量：由 scripts/e2e-vectors.ts 用 node:crypto 独立算出（不经 src/e2e/）。种子与秘密公开，只用于测试。字节都是小写 hex。",
+    vectors: E2E_VECTOR_INPUTS.map(e2eVector),
+  }),
+);
 
 // ------------------------------------------------------------------ http1 / ws
 

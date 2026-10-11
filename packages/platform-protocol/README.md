@@ -10,6 +10,7 @@ Armadra 平台的协议包：core、页面、手机、控制面与中继共用�
 | `./cloud-api`        | `/v1/*` 契约 `cloudContract`（oRPC）、共用形状、`/v1/me/stream` 事件                                |
 | `./core-api`         | core 契约 §31–§33 的请求 / 响应 schema                                                              |
 | `./errors`           | 错误码注册表与线上错误形状 `{ code, message, requestId?, details? }`                                |
+| `./e2e`              | 端到端通道 `armadra-e2e/1`：握手（X25519 + HKDF-SHA256 + Ed25519 转录签名）、AES-256-GCM 记录层、r0 |
 | `./http1`            | HTTP/1.1 请求编码与响应增量解析（中继与经端到端通道发请求的页面共用）                               |
 | `./ws-frames`        | WebSocket 帧编解码（RFC 6455）：编帧、增量解帧、帧边界跟踪                                          |
 | `./identity-vectors` | 口令策略、scrypt 参数、令牌哈希前缀、限流常量与测试向量                                             |
@@ -20,4 +21,4 @@ Armadra 平台的协议包：core、页面、手机、控制面与中继共用�
 - `zod` 4 是 peer 依赖；`@orpc/contract` 1.15.4 是运行时依赖。
 - 除 `./fixtures` 外不 import `node:*`，页面与手机可以直接用。
 - JWT 的 `iat` / `exp` / `nbf` 是整数秒；其余时间字段是毫秒（`…Ms`）。
-- 签名与验签不在包里：各仓用 `node:crypto` 的 Ed25519。
+- 令牌的签名与验签不在包里：各仓用 `node:crypto` 的 Ed25519。端到端通道（`./e2e`）例外：原语全部来自 WebCrypto（`crypto.subtle`），页面、手机、Node 与 Workers 同一份代码，不自己实现算法。

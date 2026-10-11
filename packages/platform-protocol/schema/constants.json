@@ -98,6 +98,43 @@
       "tunnelGoaway": 4492
     }
   },
+  "e2e": {
+    "version": 1,
+    "protocol": "armadra-e2e/1",
+    "subprotocol": "armadra-e2e.1",
+    "path": "/_relay/e2e",
+    "capability": "e2e",
+    "flags": {
+      "padding": 1
+    },
+    "labels": {
+      "handshakeClientToCore": "armadra-e2e/1 hs c2s",
+      "handshakeCoreToClient": "armadra-e2e/1 hs s2c",
+      "clientToCore": "armadra-e2e/1 c2s",
+      "coreToClient": "armadra-e2e/1 s2c",
+      "sas": "armadra-e2e/1 sas",
+      "proof": "armadra-e2e/1 proof",
+      "coreSignature": "armadra-e2e/1 core",
+      "deviceSignature": "armadra-e2e/1 device"
+    },
+    "limits": {
+      "recordHeaderBytes": 4,
+      "tagBytes": 16,
+      "maxRecordPlaintext": 65536,
+      "maxRecordCiphertext": 65552,
+      "maxRecordEntries": 65532,
+      "maxInnerFrameBytes": 65528,
+      "maxInnerDataChunk": 65523,
+      "maxHandshakeMessageBytes": 1024,
+      "maxRecordsPerDirection": 4294967296,
+      "maxChannelAgeMs": 3600000,
+      "handshakeTimeoutMs": 10000,
+      "pingIntervalMs": 20000,
+      "padBlock": 64,
+      "platformMaxBytes": 32,
+      "nameMaxBytes": 64
+    }
+  },
   "identity": {
     "ASSERTION": {
       "ttlMs": 300000,
