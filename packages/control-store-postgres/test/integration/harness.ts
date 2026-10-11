@@ -18,6 +18,7 @@ const PORTS = [
   "registrations",
   "links",
   "tenants",
+  "traffic",
 ] as const;
 
 export interface ContractDatabase {

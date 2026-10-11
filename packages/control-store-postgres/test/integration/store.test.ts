@@ -157,7 +157,9 @@ describe("迁移", () => {
       const migrations = loadMigrations();
       expect(await migratePostgres(sql, migrations.slice(0, 1))).toBe(1);
       // 账本前缀：补跑新的。
-      expect(await migratePostgres(sql, migrations)).toBe(1);
+      expect(await migratePostgres(sql, migrations)).toBe(
+        migrations.length - 1,
+      );
       // 库比程序新。
       const error = await migratePostgres(sql, migrations.slice(0, 1)).catch(
         (caught: unknown) => caught,
@@ -173,7 +175,7 @@ describe("迁移", () => {
       });
       expect(
         (await sql`SELECT count(*)::int AS n FROM cloud_migrations`)[0]?.n,
-      ).toBe(2);
+      ).toBe(migrations.length);
     } finally {
       await sql.end({ timeout: 5 });
     }
@@ -200,7 +202,7 @@ describe("迁移", () => {
       expect(row?.name).toBe(schema.name);
       expect(
         (await db.sql`SELECT count(*)::int AS n FROM cloud_migrations`)[0]?.n,
-      ).toBe(2);
+      ).toBe(loadMigrations().length);
     } finally {
       await db.close();
       // 不是经 tempSchema 建的：手动删。
@@ -285,5 +287,67 @@ describe("租户与签名钥", () => {
       (await ports.accounts.get(DEFAULT_TENANT, account.accountId))?.failures,
     ).toBe(20);
     expect(writes).toHaveLength(20);
+  });
+});
+
+describe("流量统计", () => {
+  it("0003 之前的库升级后有流量表；几个节点并发写重叠的桶不丢计数、不死锁、不动修订号", async () => {
+    const schema = fresh();
+    await schema.create();
+    const sql = connectPostgres({
+      url: schema.url,
+      schema: schema.name,
+      max: 8,
+    });
+    try {
+      const migrations = loadMigrations();
+      const before = migrations.filter((row) => row.id < 3);
+      expect(await migratePostgres(sql, before)).toBe(before.length);
+      expect(await migratePostgres(sql, migrations)).toBe(
+        migrations.length - before.length,
+      );
+      await importTenant(sql, DEFAULT_TENANT, snapshot());
+      const revision = await readRevision(sql, DEFAULT_TENANT);
+      const keys = ["ws", "http", "media", "e2e"] as const;
+      const row = (kind: (typeof keys)[number], subject: string) => ({
+        bucketStartMs: NOW - (NOW % 3_600_000),
+        node: "n1",
+        sourceId: "0".repeat(32),
+        subject,
+        deviceId: "",
+        kind,
+        connections: 1,
+        bytesToSource: 3,
+        bytesToClient: 5,
+      });
+      const nodes = Array.from({ length: 4 }, () => createPostgresPorts(sql));
+      await Promise.all(
+        nodes.flatMap((ports, node) =>
+          Array.from({ length: 10 }, (_, round) => {
+            const batch = keys.flatMap((kind) =>
+              ["acct:a", "acct:b"].map((subject) => row(kind, subject)),
+            );
+            if ((node + round) % 2 === 1) batch.reverse();
+            return ports.traffic.upsert(DEFAULT_TENANT, batch);
+          }),
+        ),
+      );
+      const rows = await nodes[0]!.traffic.query(DEFAULT_TENANT, {
+        fromMs: 0,
+        toMs: Number.MAX_SAFE_INTEGER,
+        granularity: "hour",
+        limit: 100,
+      });
+      expect(rows).toHaveLength(8);
+      for (const one of rows)
+        expect(one).toMatchObject({
+          connections: 40,
+          bytesToSource: 120,
+          bytesToClient: 200,
+        });
+      expect(await readRevision(sql, DEFAULT_TENANT)).toBe(revision);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
   });
 });

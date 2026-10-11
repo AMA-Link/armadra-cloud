@@ -48,6 +48,7 @@ const PORTABLE = [
   "ports.ts",
   "rows.ts",
   "tenants.ts",
+  "traffic.ts",
 ];
 
 it("可移植的模块不 import Node 专有模块（只许 node:crypto），也不经 open.ts / migrate.ts 间接带进来", () => {
