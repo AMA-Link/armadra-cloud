@@ -5,10 +5,12 @@
  * - `relay_tunnels`、`relay_streams`：当前值。
  * - `relay_bytes_total{direction}`：`to_source`（客户端 → 源）/ `to_client`（源 → 客户端）。
  * - `relay_edge_connections_total{result}`、`relay_handshake_total{result}`：按结果计数。
+ * - `relay_edge_streams_total{kind}`：边缘开出的流，按 `OPEN.kind`（`http` / `ws` / `e2e`）。
  * - `relay_heartbeat_miss_total`：心跳超时断开的隧道数。
  * - `relay_handshake_seconds`：握手耗时直方图。
  */
 export type ByteDirection = "to_source" | "to_client";
+export type EdgeStreamKind = "http" | "ws" | "e2e";
 
 const HANDSHAKE_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
@@ -18,6 +20,7 @@ export class RelayMetrics {
     to_client: 0,
   };
   private readonly edge = new Map<string, number>();
+  private readonly edgeStreams = new Map<EdgeStreamKind, number>();
   private readonly handshakes = new Map<string, number>();
   private heartbeatMisses = 0;
   private readonly handshakeBuckets = HANDSHAKE_BUCKETS.map(() => 0);
@@ -35,6 +38,10 @@ export class RelayMetrics {
 
   edgeConnection(result: string): void {
     this.edge.set(result, (this.edge.get(result) ?? 0) + 1);
+  }
+
+  edgeStream(kind: EdgeStreamKind): void {
+    this.edgeStreams.set(kind, (this.edgeStreams.get(kind) ?? 0) + 1);
   }
 
   handshake(result: string, seconds?: number): void {
@@ -58,6 +65,7 @@ export class RelayMetrics {
       ...this.gauges(),
       bytes: { ...this.bytes },
       edge: Object.fromEntries(this.edge),
+      edgeStreams: Object.fromEntries(this.edgeStreams),
       handshakes: Object.fromEntries(this.handshakes),
       heartbeatMisses: this.heartbeatMisses,
     };
@@ -82,6 +90,13 @@ export class RelayMetrics {
     );
     for (const [result, value] of [...this.edge].sort())
       lines.push(`relay_edge_connections_total{result="${result}"} ${value}`);
+    family(
+      "relay_edge_streams_total",
+      "counter",
+      "Streams opened at the edge by kind.",
+    );
+    for (const [kind, value] of [...this.edgeStreams].sort())
+      lines.push(`relay_edge_streams_total{kind="${kind}"} ${value}`);
     family("relay_handshake_total", "counter", "Tunnel handshakes by result.");
     for (const [result, value] of [...this.handshakes].sort())
       lines.push(`relay_handshake_total{result="${result}"} ${value}`);

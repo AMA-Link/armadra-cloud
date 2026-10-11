@@ -76,6 +76,8 @@ export interface TunnelSnapshot {
   tunnelId: string;
   sourceId: string;
   coreVersion: string;
+  /** 源在 `hello.capabilities` 里报的项（1.3 起；老快照没有 = 空）。 */
+  capabilities?: string[];
   nextStreamId: number;
   sendCredit: number;
   recvRemaining: number;
@@ -110,6 +112,11 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
   readonly tunnelId: string;
   readonly sourceId: string;
   readonly coreVersion: string;
+  /**
+   * 源在 `hello.capabilities` 里报的项（握手就绪时由运行时填）。边缘据它决定开不开可选的面
+   * （`e2e`：`_relay/e2e`）。
+   */
+  capabilities: ReadonlySet<string> = new Set();
   private readonly transport: TunnelTransport;
   private readonly limits: TunnelLimitsConfig;
   private readonly hooks: TunnelHooks;
@@ -156,6 +163,7 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
       tunnelId: this.tunnelId,
       sourceId: this.sourceId,
       coreVersion: this.coreVersion,
+      capabilities: [...this.capabilities],
       nextStreamId: this.nextStreamId,
       sendCredit: this.sendPool.available,
       recvRemaining: this.recvRemaining,
@@ -190,6 +198,7 @@ export class Tunnel<S extends StreamEndpoint = WebTunnelStream> {
       hooks,
       streamFactory,
     );
+    tunnel.capabilities = new Set(snapshot.capabilities ?? []);
     tunnel.nextStreamId = snapshot.nextStreamId;
     tunnel.sendPool.available = snapshot.sendCredit;
     tunnel.recvRemaining = snapshot.recvRemaining;
