@@ -5295,6 +5295,9 @@
                     "orgId": {
                       "type": "string"
                     },
+                    "identityFp": {
+                      "type": "string"
+                    },
                     "guestSession": {
                       "type": "object",
                       "properties": {

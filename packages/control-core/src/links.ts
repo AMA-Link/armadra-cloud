@@ -13,6 +13,7 @@
  * - `scope`（0.3.0 起，SaaS 设计 §3.3 (b)）：工作空间 / 会话 / 只读。访客的断言带 `scp`，
  *   只读时中继令牌带 `ro: true`（边缘不据它过滤，读写由 core 判定）。缺省 = 整台、按角色（旧行为）。
  */
+import { identityFingerprint } from "@armadra/platform-protocol/e2e";
 import type {
   ChallengeToken,
   DeviceInput,
@@ -247,6 +248,11 @@ export function createLinks(context: ControlContext, sources: Sources) {
         relayBaseUrl: granted.relayBaseUrl,
         assertion: granted.assertion,
         relayToken: granted.relayToken,
+        // cloud-api §20：源登记的公钥就是它端到端通道的身份；只是提示，链接片段
+        // 第三段（源自己给的）才是访客钉扎的依据。
+        identityFp: await identityFingerprint(
+          new Uint8Array(Buffer.from(source.publicJwk.x, "base64url")),
+        ),
         guestSession: await sessionFor(
           context,
           created.device,
