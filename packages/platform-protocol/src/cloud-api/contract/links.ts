@@ -107,6 +107,11 @@ export const links = {
         assertion: z.string().optional(),
         relayToken: z.string().optional(),
         orgId: z.string().optional(),
+        /**
+         * 源端到端通道的身份公钥指纹（`base32(SHA-256(pub))`，52 字符；cloud-api §20，
+         * 0.5.0 起）。只是提示：访客按链接片段第三段（源自己给的指纹前缀）钉扎。
+         */
+        identityFp: z.string().optional(),
         guestSession: sessionSchema.optional(),
       }),
     ),

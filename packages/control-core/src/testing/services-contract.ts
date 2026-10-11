@@ -5,6 +5,7 @@
  * 用法：在实现包的测试里 `servicesContract("SQLite 端口", () => 新建端口())`；端口要支持测试装配的
  * `addTenant` / `addAccount`（{@link MemoryPorts}）。
  */
+import { identityFingerprint } from "@armadra/platform-protocol/e2e";
 import { TEST_KEYS } from "@armadra/platform-protocol/fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -372,6 +373,12 @@ export function servicesContract(
           "ip",
         );
         expect(guest.guestSession.account.displayName).toBe("guest");
+        // cloud-api §20：源登记的公钥的指纹（访客按链接片段钉扎，这里只是提示）。
+        expect(guest.identityFp).toBe(
+          await identityFingerprint(
+            new Uint8Array(Buffer.from(SOURCE_X, "base64url")),
+          ),
+        );
         expect(
           await codeOf(() =>
             links.accept(
