@@ -14,7 +14,34 @@ env:
   NODE_VERSION: "24"
 
 jobs:
+  # 定时触发时，main 的提交与上次成功的 nightly 相同就跳过（workspace#9）；手动触发照跑。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.last.outputs.run }}
+    steps:
+      - id: last
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=true
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""')
+            if [ "$last" = "$GITHUB_SHA" ]; then
+              run=false
+              echo "::notice::main 自上次成功的 nightly 以来没有新提交，跳过"
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   hygiene:
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     name: hygiene
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -34,6 +61,8 @@ jobs:
         run: pnpm audit --prod --audit-level=high
 
   e2e:
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     name: e2e-personal (${{ matrix.server }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -83,6 +112,8 @@ jobs:
   # Workers 中继（本地 workerd，`wrangler dev --local`，不连 Cloudflare 账号）对假 core：
   # 只依赖本仓，不要 Armadra 主仓。
   e2e-workers:
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     name: e2e-personal-workers
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -112,6 +143,8 @@ jobs:
   # 分享链接（含只读范围）、媒体票 Range、撤销。要 Armadra 主仓的只读检出
   # （ARMADRA_REPO_TOKEN）；没配时只说明并跳过，不算失败。
   e2e-workers-armadra:
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     name: e2e-personal-workers (Armadra core)
     runs-on: ubuntu-latest
     timeout-minutes: 45
