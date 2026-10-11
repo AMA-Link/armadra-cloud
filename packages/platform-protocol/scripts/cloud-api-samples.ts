@@ -274,6 +274,29 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     input: { deviceId: "dev_01JBBBBBBBBBBBBBBBBBBBBBBB" },
     output: {},
   },
+  "me.traffic": {
+    input: {
+      fromMs: NOW - 86_400_000,
+      toMs: NOW,
+      sourceId: SOURCE_ID,
+      granularity: "hour",
+    },
+    output: {
+      buckets: [
+        {
+          bucketStartMs: NOW - 3_600_000,
+          node: "relay-1",
+          sourceId: SOURCE_ID,
+          subject: "acct:owner",
+          deviceId: "",
+          kind: "ws",
+          connections: 3,
+          bytesToSource: 18_432,
+          bytesToClient: 2_621_440,
+        },
+      ],
+    },
+  },
   "me.streamTicket": {
     input: {},
     output: { ticket: "test-ticket", expiresAtMs: NOW + 30_000 },
