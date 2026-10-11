@@ -2,21 +2,29 @@
 import { CLOSE } from "@armadra/platform-protocol/tunnel";
 import { describe, expect, it } from "vitest";
 
-import { SOURCE_ID, testControlPlane } from "../../test/tokens.ts";
+import { fakeTunnel } from "../../test/fake-transport.ts";
+import { relayToken, SOURCE_ID, testControlPlane } from "../../test/tokens.ts";
 import { createAuthContext } from "../auth/context.ts";
 import { RelayMetrics } from "../metrics.ts";
+import type { Tunnel } from "../tunnel/tunnel.ts";
+import type { WebTunnelStream } from "../tunnel/web-stream.ts";
 import { pathAddressing } from "./addressing.ts";
-import { EdgePolicy, wsCloseCode, type EdgeRequest } from "./policy.ts";
+import {
+  EdgePolicy,
+  isE2ePath,
+  wsCloseCode,
+  type EdgeRequest,
+} from "./policy.ts";
 
-function policy() {
+function policy(tunnel: Tunnel<WebTunnelStream> | null = null) {
   const control = testControlPlane();
   const metrics = new RelayMetrics(() => ({ tunnels: 0, streams: 0 }));
-  const edge = new EdgePolicy<never, string>({
+  const edge = new EdgePolicy<WebTunnelStream, string>({
     nodeId: "relay-1",
     addressing: pathAddressing(),
     auth: createAuthContext(control),
     control,
-    lookup: async () => null,
+    lookup: async () => tunnel,
     metrics,
     corsOrigins: () => ["https://app.example"],
   });
@@ -80,6 +88,95 @@ describe("EdgePolicy", () => {
     expect(wsCloseCode("relay_token_invalid")).toBe(CLOSE.unauthenticated);
     expect(wsCloseCode("source_offline")).toBe(CLOSE.sourceOffline);
     expect(wsCloseCode("not_found")).toBeUndefined();
+  });
+
+  it("_relay/e2e：只认 WS 升级，普通 HTTP 答 404（不进隧道）", async () => {
+    const { edge } = policy();
+    expect(isE2ePath("/_relay/e2e")).toBe(true);
+    expect(isE2ePath("/_relay/e2e?v=1")).toBe(true);
+    expect(isE2ePath("/_relay/e2ex")).toBe(false);
+    expect(
+      await edge.decideRequest(request({ url: `/s/${SOURCE_ID}/_relay/e2e` })),
+    ).toMatchObject({ kind: "error", code: "not_found", drain: true });
+  });
+
+  it("_relay/e2e 升级：令牌先验；缺版本子协议 4409；源没报 e2e 4404（原因 e2e_unsupported）；报了才接受，带 dev", async () => {
+    const { tunnel } = fakeTunnel();
+    const { edge, metrics } = policy(tunnel);
+    const upgrade = (protocols: string) =>
+      edge.decideUpgrade(
+        request({
+          url: `/s/${SOURCE_ID}/_relay/e2e`,
+          headers: {
+            host: "relay",
+            upgrade: "websocket",
+            "sec-websocket-protocol": protocols,
+          },
+        }),
+      );
+    const token = relayToken({ dev: "dev_1" });
+    expect(await upgrade("armadra-e2e.1")).toMatchObject({
+      kind: "refuse",
+      code: "relay_token_invalid",
+    });
+    expect(await upgrade(`armadra-relay.${token}`)).toMatchObject({
+      kind: "refuse",
+      code: "protocol_unsupported",
+    });
+    expect(wsCloseCode("protocol_unsupported")).toBe(CLOSE.protocolUnsupported);
+    expect(await upgrade(`armadra-e2e.1, armadra-relay.${token}`)).toEqual({
+      kind: "refuse",
+      code: "source_offline",
+      sourceId: SOURCE_ID,
+      reason: "e2e_unsupported",
+    });
+    tunnel.capabilities = new Set(["e2e"]);
+    const accepted = await upgrade(`armadra-e2e.1, armadra-relay.${token}`);
+    expect(accepted).toMatchObject({
+      kind: "accept",
+      mode: "e2e",
+      subject: "acct_test",
+      subprotocols: ["armadra-e2e.1"],
+      device: "dev_1",
+    });
+    if (accepted.kind !== "accept") throw new Error("应当接受");
+    const opened = edge.openE2e(
+      tunnel,
+      request({ headers: { host: "relay", origin: "https://app.example" } }),
+      "203.0.113.7",
+    );
+    expect(opened.ok).toBe(true);
+    expect(
+      tunnel.snapshot()?.capabilities,
+      "能力随快照存下（休眠后还原）",
+    ).toEqual(["e2e"]);
+    expect(metrics.render()).toContain(
+      'relay_edge_streams_total{kind="e2e"} 1',
+    );
+    edge.releaseUpgrade(accepted.subject);
+    tunnel.close(CLOSE.normal, "done");
+  });
+
+  it("普通 WS 升级：mode ws，子协议原样转给源；老令牌没有 dev", async () => {
+    const { tunnel } = fakeTunnel();
+    const { edge } = policy(tunnel);
+    const decision = await edge.decideUpgrade(
+      request({
+        url: `/s/${SOURCE_ID}/api/ws`,
+        headers: {
+          host: "relay",
+          upgrade: "websocket",
+          "sec-websocket-protocol": `armadra-ticket.t, armadra-relay.${relayToken()}`,
+        },
+      }),
+    );
+    expect(decision).toMatchObject({
+      kind: "accept",
+      mode: "ws",
+      subprotocols: ["armadra-ticket.t"],
+    });
+    expect(decision).not.toHaveProperty("device");
+    tunnel.close(CLOSE.normal, "done");
   });
 
   it("已升级连接：按源 / 账号前缀摘出", () => {

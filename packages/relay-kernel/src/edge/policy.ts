@@ -12,11 +12,20 @@
  * WS 先完成升级再以关闭码结束（浏览器读不到升级失败的状态码）：令牌 4401 / 4403、
  * 限流 4429、源离线 4404（{@link wsCloseCode}）。
  *
+ * 端到端通道（协议 1.3，cloud-api §20）：`_relay/e2e` 只认 WS 升级（HTTP 答 404），要带子协议
+ * `armadra-e2e.1`（缺了 4409），源要在 `hello.capabilities` 报过 `e2e`（没报 4404，原因
+ * `e2e_unsupported`）；开的是 `OPEN kind: "e2e"`，之后字节两边透传，中继不解析。
+ *
  * 只读中继令牌（`ro: true`，协议 1.1）在边缘不再单独过滤（0.3.11 起）：core 的 RPC 一律
  * `POST`，按方法挡会把只读访客整个挡在 RPC 之外；读写只由 core 按自己的授予判定。
  *
  * 不解析正文、不缓存、不记路径与头。
  */
+import {
+  E2E_CAPABILITY,
+  E2E_PATH,
+  E2E_SUBPROTOCOL,
+} from "@armadra/platform-protocol/e2e";
 import type { ErrorCode } from "@armadra/platform-protocol/errors";
 import { CLOSE, LIMITS } from "@armadra/platform-protocol/tunnel";
 
@@ -84,7 +93,13 @@ const WS_CLOSE: Partial<Record<ErrorCode, number>> = {
   limit_reached: CLOSE.limitReached,
   source_offline: CLOSE.sourceOffline,
   bad_request: CLOSE.badFrame,
+  protocol_unsupported: CLOSE.protocolUnsupported,
 };
+
+/** 端到端通道的边缘路径（地址解析之后、转给源之前的路径；可以带 query）。 */
+export function isE2ePath(path: string): boolean {
+  return path === E2E_PATH || path.startsWith(`${E2E_PATH}?`);
+}
 
 /** 升级被拒时用来关 WS 的关闭码；没有对应码（如 `not_found`）答 undefined，改答 HTTP。 */
 export function wsCloseCode(code: ErrorCode): number | undefined {
@@ -99,6 +114,8 @@ export type Admission<S extends StreamEndpoint> =
       subject: string;
       jti: string;
       remoteIp: string;
+      /** 中继令牌的 `dev`（1.3，可选；只计数）。 */
+      device?: string;
     }
   | {
       ok: false;
@@ -134,15 +151,25 @@ export type RequestDecision<S extends StreamEndpoint> =
 
 /** WS 升级的下一步。 */
 export type UpgradeDecision<S extends StreamEndpoint> =
-  | { kind: "refuse"; code: ErrorCode; sourceId?: string }
+  | {
+      kind: "refuse";
+      code: ErrorCode;
+      sourceId?: string;
+      /** 关闭原因（缺省就是 `code`）。 */
+      reason?: string;
+    }
   | {
       kind: "accept";
+      /** `ws`：普通 WebSocket，升级请求转给源；`e2e`：端到端通道，中继自己终止 WS。 */
+      mode: "ws" | "e2e";
       target: AddressTarget;
       tunnel: Tunnel<S>;
       subject: string;
       remoteIp: string;
-      /** 剥掉中继令牌后的子协议（转给源）。 */
+      /** `ws`：剥掉中继令牌后的子协议（转给源）；`e2e`：中继答复时选的子协议。 */
       subprotocols: string[];
+      /** 中继令牌的 `dev`（1.3，可选；只计数）。 */
+      device?: string;
     };
 
 /** {@link EdgePolicy.disconnect} 的条件：都给时要同时满足。 */
@@ -188,6 +215,16 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
   async decideRequest(req: EdgeRequest): Promise<RequestDecision<S>> {
     if (isPreflight(req)) return this.preflight(req);
     const addressed = this.resolve(req);
+    if (addressed && isE2ePath(addressed.path)) {
+      // 端到端通道只认 WS 升级。
+      this.options.metrics.edgeConnection("not_found");
+      return {
+        kind: "error",
+        code: "not_found",
+        cors: this.errorCors(req, addressed.sourceId),
+        drain: true,
+      };
+    }
     if (addressed?.path.startsWith(MEDIA_REDEEM_PREFIX))
       return this.redeemMedia(req, addressed, redeemTicketOf(addressed.path));
     const admission = await this.admit(req, relayTokenFromHeaders(req.headers));
@@ -210,7 +247,10 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     };
   }
 
-  /** WS 升级：令牌（子协议）、按账号的并发上限。 */
+  /**
+   * WS 升级：令牌（子协议）、按账号的并发上限。`_relay/e2e` 另要版本子协议与源的 `e2e`
+   * 能力（令牌先验，未授权的请求看不到源支不支持）。
+   */
   async decideUpgrade(req: EdgeRequest): Promise<UpgradeDecision<S>> {
     const { token, rest } = splitRelaySubprotocol(
       single(req.headers["sec-websocket-protocol"]),
@@ -224,7 +264,25 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
         sourceId: admission.sourceId,
       };
     }
-    const { target, tunnel, subject, remoteIp } = admission;
+    const { target, tunnel, subject, remoteIp, device } = admission;
+    const e2e = isE2ePath(target.path);
+    if (e2e && !rest.includes(E2E_SUBPROTOCOL)) {
+      this.options.metrics.edgeConnection("protocol_unsupported");
+      return {
+        kind: "refuse",
+        code: "protocol_unsupported",
+        sourceId: target.sourceId,
+      };
+    }
+    if (e2e && !tunnel.capabilities.has(E2E_CAPABILITY)) {
+      this.options.metrics.edgeConnection("source_offline");
+      return {
+        kind: "refuse",
+        code: "source_offline",
+        sourceId: target.sourceId,
+        reason: "e2e_unsupported",
+      };
+    }
     const concurrent = await this.options.control.limits.hit(
       "edge.concurrent.acct",
       subject,
@@ -239,11 +297,13 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     }
     return {
       kind: "accept",
+      mode: e2e ? "e2e" : "ws",
       target,
       tunnel,
       subject,
       remoteIp,
-      subprotocols: rest,
+      subprotocols: e2e ? [E2E_SUBPROTOCOL] : rest,
+      ...(device === undefined ? {} : { device }),
     };
   }
 
@@ -424,6 +484,9 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       subject,
       jti: verified.claims.jti,
       remoteIp,
+      ...(verified.claims.dev === undefined
+        ? {}
+        : { device: verified.claims.dev }),
     };
   }
 
@@ -441,15 +504,44 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
   ): { ok: true; stream: S } | { ok: false; code: ErrorCode } {
     if (headersBytes(headers) > LIMITS.openHeadersMaxBytes)
       return { ok: false, code: "bad_request" };
+    return this.openStream(tunnel, kind, req.method, target.path, headers, {
+      clientOrigin: originOf(req),
+      remoteIp,
+    });
+  }
+
+  /**
+   * 开端到端通道的流：`OPEN { kind: "e2e", method: "GET", path: "/_relay/e2e", headers: [] }`
+   * （子协议、令牌、头一概不转；地址里的 query 也不转）。
+   */
+  openE2e(
+    tunnel: Tunnel<S>,
+    req: EdgeRequest,
+    remoteIp: string,
+  ): { ok: true; stream: S } | { ok: false; code: ErrorCode } {
+    return this.openStream(tunnel, "e2e", "GET", E2E_PATH, [], {
+      clientOrigin: originOf(req),
+      remoteIp,
+    });
+  }
+
+  private openStream(
+    tunnel: Tunnel<S>,
+    kind: "http" | "ws" | "e2e",
+    method: string,
+    path: string,
+    headers: HeaderPair[],
+    client: { clientOrigin: string | null; remoteIp: string },
+  ): { ok: true; stream: S } | { ok: false; code: ErrorCode } {
     let stream: S;
     try {
       stream = tunnel.openStream({
         kind,
-        method: req.method,
-        path: target.path,
+        method,
+        path,
         headers,
-        clientOrigin: originOf(req),
-        remoteIp,
+        clientOrigin: client.clientOrigin,
+        remoteIp: client.remoteIp,
         relayNode: this.options.nodeId,
       });
     } catch (error) {
@@ -462,6 +554,7 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       throw error;
     }
     this.options.metrics.edgeConnection("ok");
+    this.options.metrics.edgeStream(kind);
     return { ok: true, stream };
   }
 

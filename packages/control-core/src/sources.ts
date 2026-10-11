@@ -108,7 +108,8 @@ export function createSources(context: ControlContext) {
 
   /**
    * 签断言 + 中继令牌（owner 或访客，已核过可见性）。`scope`（链接的分享范围）→ 断言 `scp`；
-   * 只读 → 中继令牌 `ro: true`。没有范围时两者都不出现（与 0.2.x 签出的字节同形）。
+   * 只读 → 中继令牌 `ro: true`。没有范围时两者都不出现（与 0.2.x 签出的字节同形）。中继令牌
+   * 带 `dev`（1.3）：这台设备的 id，与断言的 `device.deviceId` 相同，中继只用它计数。
    */
   async function grant(
     source: SourceRecord,
@@ -146,6 +147,7 @@ export function createSources(context: ControlContext) {
         aud: AUDIENCES.relay,
         src: source.sourceId,
         ...(readOnly ? { ro: true } : {}),
+        dev: device.deviceId,
       },
       {
         ttlMs: RELAY_TOKEN.ttlMs,

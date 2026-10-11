@@ -225,6 +225,7 @@ export class TunnelHub<S extends StreamEndpoint> {
       },
       options.streams,
     );
+    tunnel.capabilities = new Set(step.hello.capabilities);
     const previous = this.current.get(sourceId);
     this.current.set(sourceId, tunnel);
     this.all.add(tunnel);

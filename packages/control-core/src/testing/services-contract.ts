@@ -460,6 +460,14 @@ export function servicesContract(
         const mine = await sources.assertion(owner, SOURCE_ID, undefined);
         expect(payloadOf(mine.assertion).scp).toBeUndefined();
         expect(payloadOf(mine.relayToken).ro).toBeUndefined();
+        // 协议 1.3：中继令牌的 dev 就是断言里的设备 id（owner 与访客都带）。
+        const device = (
+          payloadOf(mine.assertion).device as { deviceId: string }
+        ).deviceId;
+        expect(payloadOf(mine.relayToken).dev).toBe(device);
+        expect(payloadOf(again.relayToken).dev).toBe(
+          (payloadOf(again.assertion).device as { deviceId: string }).deviceId,
+        );
       });
 
       it("缺省 scope = 旧行为：断言没有 scp、中继令牌没有 ro，摘要没有 scope；可写的工作空间范围不带 ro", async () => {

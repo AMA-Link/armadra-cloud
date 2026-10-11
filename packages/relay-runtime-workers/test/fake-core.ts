@@ -12,6 +12,7 @@
  * - 其余 `POST` / `PUT` / `DELETE`：`{ ok: true }`（只读令牌透传的测试）。
  * - WS 任意路径：选 `armadra-ticket.*` 子协议；`whoami` 答 `{ url, protocol }`；`bye` 以 4000 关闭；
  *   `ping-me` 发一个 ping 并记下中继代答的 pong；其余回显。
+ * - `OPEN kind: "e2e"`（连接时报了 `e2e` 能力才会有）：字节原样回显，中继 END 后也 END。
  */
 import { createHash, randomBytes, sign } from "node:crypto";
 
@@ -152,6 +153,8 @@ interface CoreStream {
   ws: WsFrameDecoder | null;
   /** 写一块（拿到信用后完成）。 */
   write(bytes: Uint8Array): Promise<void>;
+  /** e2e 流：回显按顺序排队。 */
+  echoed: Promise<void>;
 }
 
 export class FakeCore {
@@ -163,6 +166,8 @@ export class FakeCore {
   readonly opens: OpenPayload[] = [];
   /** 中继代客户端答的 pong 次数。 */
   pongsFromRelay = 0;
+  /** e2e 流收到的字节数。 */
+  e2eBytes = 0;
   /** 响应写完之前就收到中继 END 的次数（源不允许半关闭时会截断响应，应为 0）。 */
   endedBeforeResponse = 0;
   private readonly streams = new Map<number, CoreStream>();
@@ -206,7 +211,7 @@ export class FakeCore {
   async connect(
     nodeUrl: string,
     tunnelToken: string,
-    options: { sourceId?: string } = {},
+    options: { sourceId?: string; capabilities?: string[] } = {},
   ): Promise<{ ready?: Ready; reject?: Reject; closeCode?: number }> {
     const response = await SELF.fetch(nodeUrl.replace(/^ws/, "http"), {
       headers: { upgrade: "websocket", "cf-connecting-ip": "192.0.2.10" },
@@ -269,7 +274,7 @@ export class FakeCore {
         protocol: PROTOCOL_VERSION,
         sourceId,
         coreVersion: "0.2.0-test",
-        capabilities: [],
+        capabilities: options.capabilities ?? [],
         tunnelToken,
         nonce,
       }),
@@ -346,6 +351,7 @@ export class FakeCore {
       open,
       reader: new RequestReader(),
       ws: null,
+      echoed: Promise.resolve(),
     } as unknown as CoreStream;
     const core = new StreamCore<CoreStream>(
       streamId,
@@ -362,6 +368,8 @@ export class FakeCore {
         },
         eof: () => {
           stream.remoteEnded = true;
+          if (open.kind === "e2e")
+            void stream.echoed.then(() => this.finish(stream));
         },
         reset: () => core.destroy(6),
       },
@@ -374,6 +382,12 @@ export class FakeCore {
   }
 
   private onBytes(stream: CoreStream, chunk: Uint8Array): void {
+    if (stream.open.kind === "e2e") {
+      this.e2eBytes += chunk.length;
+      const copy = chunk.slice();
+      stream.echoed = stream.echoed.then(() => stream.write(copy));
+      return;
+    }
     if (stream.ws) {
       void this.onWsBytes(stream, chunk);
       return;

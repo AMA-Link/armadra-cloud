@@ -6,13 +6,17 @@
  *   源的响应由 Node 解析后写回客户端（客户端侧保持 keep-alive；流上一条流一个请求）。
  * - WS：升级请求序列化进流，之后两个方向字节透传（`ws-downstream.ts` 只跟踪帧边界）。
  *   被拒时先完成升级再以关闭码结束（浏览器读不到升级失败的状态码）。
+ * - 端到端通道（`_relay/e2e`，cloud-api §20）：中继自己完成升级（选 `armadra-e2e.1`），开
+ *   `OPEN kind: "e2e"`，二进制消息与流字节两边透传（`e2e-pipe.ts`），不解析。
  *
  * 不解析正文、不缓存、不记路径与头。
  */
 import { request, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 
+import { E2E_SUBPROTOCOL } from "@armadra/platform-protocol/e2e";
 import type { ErrorCode } from "@armadra/platform-protocol/errors";
+import { LIMITS } from "@armadra/platform-protocol/tunnel";
 import type { AuthContext } from "@armadra/relay-kernel/auth/context";
 import type { ControlPlane } from "@armadra/relay-kernel/control/types";
 import type {
@@ -32,6 +36,7 @@ import {
   type EdgeConnectionFilter,
   type EdgeRefusal,
   type EdgeRequest,
+  type UpgradeDecision,
 } from "@armadra/relay-kernel/edge/policy";
 import { errorName, type RelayLog } from "@armadra/relay-kernel/log";
 import type { RelayMetrics } from "@armadra/relay-kernel/metrics";
@@ -39,6 +44,7 @@ import type { Tunnel } from "@armadra/relay-kernel/tunnel/tunnel";
 import { WebSocketServer } from "ws";
 
 import { createClientIp, type ClientIp } from "./client-ip.ts";
+import { pipeE2e } from "./e2e-pipe.ts";
 import { rawErrorBytes, rejectUpgrade, sendRelayError } from "./errors.ts";
 import type { TunnelStream } from "./stream.ts";
 import { WsDownstream } from "./ws-downstream.ts";
@@ -95,6 +101,15 @@ export class Edge {
     perMessageDeflate: false,
     // 只为发关闭码而完成升级：回选客户端给的第一个子协议，浏览器才会接受这次握手。
     handleProtocols: (protocols) => protocols.values().next().value ?? false,
+  });
+
+  /** 端到端通道：中继自己是 WS 的服务端，只选 `armadra-e2e.1`。 */
+  private readonly e2eWss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,
+    maxPayload: LIMITS.maxFrameBytes,
+    handleProtocols: (protocols) =>
+      protocols.has(E2E_SUBPROTOCOL) ? E2E_SUBPROTOCOL : false,
   });
 
   private readonly options: EdgeOptions;
@@ -245,12 +260,17 @@ export class Edge {
         head,
         decision.code,
         decision.sourceId,
+        decision.reason,
       );
       return;
     }
     const { target, tunnel, subject, remoteIp } = decision;
     socket.once("close", () => this.policy.releaseUpgrade(subject));
     if (socket.destroyed) return;
+    if (decision.mode === "e2e") {
+      this.e2e(req, socket, head, edgeRequest, decision);
+      return;
+    }
     const headers = forwardRequestHeaders(req.rawHeaders, {
       remoteIp,
       upgrade: { subprotocols: decision.subprotocols },
@@ -309,6 +329,53 @@ export class Edge {
     });
   }
 
+  /** 端到端通道：开 `OPEN kind: "e2e"`，完成升级，两边字节透传。 */
+  private e2e(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    edgeRequest: EdgeRequest,
+    accepted: Extract<UpgradeDecision<TunnelStream>, { kind: "accept" }>,
+  ): void {
+    const { target, tunnel, subject, remoteIp } = accepted;
+    const opened = this.policy.openE2e(tunnel, edgeRequest, remoteIp);
+    if (!opened.ok) {
+      this.refuseUpgrade(
+        req,
+        edgeRequest,
+        socket,
+        head,
+        opened.code,
+        target.sourceId,
+      );
+      return;
+    }
+    const stream = opened.stream;
+    stream.on("error", () => {
+      // 由 pipeE2e 处理；这里只防止未处理的 error 事件。
+    });
+    this.policy.track(socket, target.sourceId, subject);
+    try {
+      this.e2eWss.handleUpgrade(req, socket, head, (ws) => {
+        pipeE2e(ws, stream, {
+          sourceId: target.sourceId,
+          pingMs: this.options.wsPingMs ?? 30_000,
+          idleMs: this.options.wsIdleMs ?? 60_000,
+          log: this.options.log,
+          done: () => this.policy.untrack(socket),
+        });
+      });
+    } catch {
+      stream.destroy();
+      this.policy.untrack(socket);
+      rejectUpgrade(
+        socket,
+        "bad_request",
+        this.policy.errorCors(edgeRequest, target.sourceId),
+      );
+    }
+  }
+
   /**
    * 签媒体票：令牌已验过。只认 POST；体 `{ path }` 交给内核签，答
    * `{ ticket, path: "/_relay/m/<票>", expiresAt }`。
@@ -359,6 +426,7 @@ export class Edge {
     head: Buffer,
     code: ErrorCode,
     sourceId?: string,
+    reason?: string,
   ): void {
     const closeCode = wsCloseCode(code);
     const cors = () => this.policy.errorCors(edgeRequest, sourceId);
@@ -371,7 +439,7 @@ export class Edge {
     }
     try {
       this.wss.handleUpgrade(req, socket, head, (ws) => {
-        ws.close(closeCode, code);
+        ws.close(closeCode, reason ?? code);
       });
     } catch {
       rejectUpgrade(socket, code, cors());

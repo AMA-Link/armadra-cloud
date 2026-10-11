@@ -5,6 +5,7 @@
 //   2. 账号口令登录 → 注册令牌 → 登记源 → 源 JWS 换隧道令牌，节点地址带 `?src=`；
 //   3. 假 core（relay-runtime-node 的测试件，真 `ws` 客户端与真 HTTP 解析）连隧道：握手、45 秒心跳；
 //   4. 经中继的 HTTP（剥令牌、X-Forwarded-*、1 MiB 大体）与 WebSocket（子协议、回显）；
+//      端到端通道 `_relay/e2e`（假 core 报 `e2e`）：10 MB 随机字节双向原样；
 //   5. 撤销源：隧道 4492、客户端 WS 断开、旧中继令牌 401；
 //   6. 中继日志里查不到任何秘密。
 //
@@ -14,7 +15,12 @@
 // 与 `--mode personal` 的差别：服务器壳（真 core）对 workerd 的场景要 TLS 与容器可达的 issuer，
 // 留给 Workers 探针批次；这里覆盖中继这一侧的线上行为。
 import { spawn } from "node:child_process";
-import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  sign,
+} from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -296,6 +302,7 @@ export async function runWorkersE2e({ root, report }) {
           sourceId: source.sourceId,
           sourceKey: source.privateKey,
           token: () => source.hint.tunnelToken,
+          capabilities: ["e2e"],
         });
         const outcome = await core.connect();
         expect(outcome.ready, `握手被拒：${JSON.stringify(outcome)}`);
@@ -369,6 +376,46 @@ export async function runWorkersE2e({ root, report }) {
       expectEqual(data.toString(), "hello", "回显");
       ws = socket;
     });
+
+    await report.step(
+      "端到端通道 _relay/e2e：选 armadra-e2e.1，10 MB 随机字节双向原样",
+      async () => {
+        const url = `${origin.replace(/^http/, "ws")}/s/${source.sourceId}/_relay/e2e`;
+        const socket = await openWs(url, [
+          "armadra-e2e.1",
+          `armadra-relay.${relayToken}`,
+        ]);
+        expectEqual(socket.protocol, "armadra-e2e.1", "子协议");
+        const total = 10 * 1024 * 1024;
+        const sent = createHash("sha256");
+        const got = createHash("sha256");
+        let received = 0;
+        socket.on("message", (data) => {
+          got.update(data);
+          received += data.length;
+        });
+        for (let offset = 0; offset < total; ) {
+          const size = Math.min(total - offset, 48 * 1024);
+          const chunk = randomBytes(size);
+          sent.update(chunk);
+          socket.send(chunk);
+          offset += size;
+          if (socket.bufferedAmount > 4 * 1024 * 1024)
+            await until(
+              "客户端缓冲排空",
+              () => socket.bufferedAmount < 1024 * 1024,
+            );
+        }
+        await until("回显收全", () => received >= total, 60_000, 50);
+        expectEqual(received, total, "回显字节数");
+        expectEqual(got.digest("hex"), sent.digest("hex"), "回显内容");
+        const closed = closeOf(socket);
+        socket.close(1000);
+        await closed;
+        const unsupported = await openWs(url, [`armadra-relay.${relayToken}`]);
+        expectEqual(await closeOf(unsupported), 4409, "缺版本子协议");
+      },
+    );
 
     await report.step(
       "撤销源：隧道 4492、客户端 WS 断开、旧中继令牌 401",

@@ -12,7 +12,7 @@ export interface RelayLogFields {
   tunnelId?: string;
   streamId?: number;
   node?: string;
-  kind?: "http" | "ws";
+  kind?: "http" | "ws" | "e2e";
   result?: string;
   code?: number | string;
   reason?: string;

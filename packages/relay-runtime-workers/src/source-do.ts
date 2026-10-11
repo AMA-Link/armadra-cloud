@@ -8,7 +8,8 @@
  *   检查周期（alarm，缺省 60 秒）看 `lastHeardAtMs`，超过 `2 × heartbeatMs` 就关。同源新隧道就绪 →
  *   旧的 `GOAWAY replaced`。握手里的 `sourceId` 必须是这个对象的源（`?src=` 只是路由提示）。
  * - **客户端**：判定在内核的 `EdgePolicy`（地址、令牌、限流、媒体票、CORS 预检）；字节在
- *   `http-forward.ts` 与 `ws-bridge.ts`。媒体票落在 DO 的同步 KV 里，休眠后照样认。
+ *   `http-forward.ts` 与 `ws-bridge.ts`；端到端通道（`_relay/e2e`）在 `e2e-bridge.ts`，WS 消息与
+ *   `DATA` 原样互转、不经 `http-forward`。媒体票落在 DO 的同步 KV 里，休眠后照样认。
  * - **休眠**：隧道与客户端 WS 都经 Hibernation API 接受；热状态写进 WS 附件（`hibernation.ts`），
  *   唤醒时在构造函数里还原。
  * - **控制面**：personal 的 JWKS、撤销判断、可信来源与在线事件都经 RPC 问同一个 `ControlDO`（结果
@@ -24,6 +25,7 @@ import { DurableObject } from "cloudflare:workers";
 import { PROTOCOL_VERSION, TUNNEL_PATH } from "@armadra/platform-protocol";
 import type { JwkSet } from "@armadra/platform-protocol/assertion";
 import type { ErrorCode } from "@armadra/platform-protocol/errors";
+import { E2E_SUBPROTOCOL } from "@armadra/platform-protocol/e2e";
 import { CLOSE, LIMITS, type Ready } from "@armadra/platform-protocol/tunnel";
 import type { AuthContext } from "@armadra/relay-kernel/auth/context";
 import { JwksCache } from "@armadra/relay-kernel/auth/jwks";
@@ -89,6 +91,7 @@ import { workersRelayLog } from "./log.ts";
 import { KvMediaTickets } from "./media-tickets.ts";
 import { isUpgrade, refuseWithClose, relayError } from "./responses.ts";
 import { cloudJwks, reportPresence } from "./saas.ts";
+import { E2eBridge } from "./e2e-bridge.ts";
 import { WsBridge } from "./ws-bridge.ts";
 
 /** 中继节点名：Workers 上没有「节点」概念，路由的 `node` 固定是 `cf`。 */
@@ -121,7 +124,7 @@ interface PendingHandshake {
 }
 
 interface BridgeRecord {
-  bridge: WsBridge;
+  bridge: WsBridge | E2eBridge;
   attachment: ClientAttachment;
 }
 
@@ -419,6 +422,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
           endpoints((endpoint) => this.touched(endpoint)),
         ),
     );
+    record.tunnel.capabilities = new Set(step.hello.capabilities);
     this.settleHandshake(ws, "ok");
     const previous = this.current;
     this.current = record;
@@ -593,10 +597,11 @@ export class SourceDO extends DurableObject<RelayEnv> {
     edgeRequest: EdgeRequest,
     code: ErrorCode,
     sourceId?: string,
+    reason?: string,
   ): Response {
     const closeCode = wsCloseCode(code);
     if (closeCode !== undefined && request.headers.has("sec-websocket-key"))
-      return refuseWithClose(request, closeCode, code);
+      return refuseWithClose(request, closeCode, reason ?? code);
     return relayError(code, {
       cors: this.policy.errorCors(edgeRequest, sourceId),
     });
@@ -613,6 +618,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
         edgeRequest,
         decision.code,
         decision.sourceId,
+        decision.reason,
       );
     const { target, tunnel, subject, remoteIp } = decision;
     const release = () => this.policy.releaseUpgrade(subject);
@@ -624,6 +630,39 @@ export class SourceDO extends DurableObject<RelayEnv> {
         "limit_reached",
         target.sourceId,
       );
+    }
+    if (decision.mode === "e2e") {
+      const opened = this.policy.openE2e(tunnel, edgeRequest, remoteIp);
+      if (!opened.ok) {
+        release();
+        return this.refuseUpgrade(
+          request,
+          edgeRequest,
+          opened.code,
+          target.sourceId,
+        );
+      }
+      const pair = new WebSocketPair();
+      const [client, server] = [pair[0], pair[1]];
+      this.ctx.acceptWebSocket(server, ["client"]);
+      const record = this.bridgeRecord(server, opened.stream, {
+        kind: "client",
+        mode: "e2e",
+        sourceId: target.sourceId,
+        tunnelId: tunnel.tunnelId,
+        streamId: opened.stream.streamId,
+        subject,
+        lastActivityMs: Date.now(),
+        core: null,
+      });
+      record.bridge.start();
+      this.persist();
+      void this.ensureAlarm();
+      return new Response(null, {
+        status: 101,
+        webSocket: client,
+        headers: { "sec-websocket-protocol": E2E_SUBPROTOCOL },
+      });
     }
     // 不协商扩展：中继自己解帧，`permessage-deflate` 的 RSV 位会被当成协议错误。
     const headers = forwardRequestHeaders(
@@ -704,23 +743,27 @@ export class SourceDO extends DurableObject<RelayEnv> {
     endpoint: TunnelEndpoint,
     attachment: ClientAttachment,
   ): BridgeRecord {
+    const hooks = {
+      activity: () => {
+        attachment.lastActivityMs = Date.now();
+        this.dirty.add(record);
+        this.persist();
+      },
+      closed: () => {
+        this.bridges.delete(ws);
+        this.bridgeOf.delete(endpoint);
+        this.dirty.delete(record);
+        this.policy.untrack(ws);
+        this.policy.releaseUpgrade(attachment.subject);
+        this.persist();
+      },
+    };
     const record: BridgeRecord = {
       attachment,
-      bridge: new WsBridge(ws, endpoint, {
-        activity: () => {
-          attachment.lastActivityMs = Date.now();
-          this.dirty.add(record);
-          this.persist();
-        },
-        closed: () => {
-          this.bridges.delete(ws);
-          this.bridgeOf.delete(endpoint);
-          this.dirty.delete(record);
-          this.policy.untrack(ws);
-          this.policy.releaseUpgrade(attachment.subject);
-          this.persist();
-        },
-      }),
+      bridge:
+        attachment.mode === "e2e"
+          ? new E2eBridge(ws, endpoint, hooks)
+          : new WsBridge(ws, endpoint, hooks),
     };
     this.bridges.set(ws, record);
     this.bridgeOf.set(endpoint, record);
