@@ -140,6 +140,20 @@ const openWs: Frame = {
     relayNode: "relay-1",
   },
 };
+/** 协议 1.3：端到端通道，中继把子协议剥光，headers 恒空。 */
+const openE2e: Frame = {
+  type: "open",
+  streamId: 5,
+  open: {
+    kind: "e2e",
+    method: "GET",
+    path: "/_relay/e2e",
+    headers: [],
+    clientOrigin: "https://app.armadra.test",
+    remoteIp: "203.0.113.7",
+    relayNode: "relay-1",
+  },
+};
 const data64k = new Uint8Array(LIMITS.maxDataChunk);
 for (let index = 0; index < data64k.length; index += 1)
   data64k[index] = (index * 31 + 7) & 0xff;
@@ -147,6 +161,7 @@ for (let index = 0; index < data64k.length; index += 1)
 const single: Record<string, Frame> = {
   "open-http": openHttp,
   "open-ws": openWs,
+  "open-e2e": openE2e,
   "data-64k": { type: "data", streamId: 1, bytes: data64k },
   end: { type: "end", streamId: 1 },
   "rst-3": { type: "rst", streamId: 1, code: 3 },
@@ -332,6 +347,17 @@ const tokens: Record<string, string> = {
     ver: 1,
     org: "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
     ro: true,
+  }),
+  /** 协议 1.3：带 issuer 侧设备 id 的中继令牌。 */
+  "relay-token-dev": jwt(header(TOKEN_TYPES.relay), {
+    iss: ISSUER,
+    sub: ACCOUNT_ID,
+    aud: "relay",
+    src: SOURCE_ID,
+    ...times(RELAY_TOKEN.ttlMs),
+    jti: "jti-relay-dev-0001",
+    ver: 1,
+    dev: device.deviceId,
   }),
   "tunnel-token": tunnelToken,
   /** 协议 1.1：属于组织的源的隧道令牌。 */

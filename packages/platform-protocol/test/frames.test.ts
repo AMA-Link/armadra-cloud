@@ -118,6 +118,19 @@ describe("黄金字节", () => {
       reason: "shutdown",
       graceMs: LIMITS.goawayGraceMs,
     },
+    "tunnel/open-e2e.bin": {
+      type: "open",
+      streamId: 5,
+      open: {
+        kind: "e2e",
+        method: "GET",
+        path: "/_relay/e2e",
+        headers: [],
+        clientOrigin: "https://app.armadra.test",
+        remoteIp: "203.0.113.7",
+        relayNode: "relay-1",
+      },
+    },
   };
 
   it.each(Object.entries(expected))(
@@ -133,7 +146,7 @@ describe("黄金字节", () => {
     const names = listFixtures("tunnel").filter(
       (name) => name.endsWith(".bin") && !name.includes("sequence"),
     );
-    expect(names.length).toBe(10);
+    expect(names.length).toBe(11);
     for (const name of names) {
       const bytes = readFixture(name);
       expect(encodeFrame(decodeFrame(bytes)), name).toEqual(bytes);
@@ -276,6 +289,26 @@ describe("拒绝", () => {
         encodeFrame({ ...open, open: { ...open.open, headers } }),
       ).code,
     ).toBe("bad_open");
+  });
+
+  it("协议 1.3：e2e 的 OPEN 只能是 GET /_relay/e2e、不带头 → 否则 bad_open", () => {
+    const e2e: Frame = {
+      type: "open",
+      streamId: 9,
+      open: { ...open.open, kind: "e2e", path: "/_relay/e2e", headers: [] },
+    };
+    expect(decodeFrame(encodeFrame(e2e))).toEqual(e2e);
+    for (const change of [
+      { headers: [["host", "a"]] as [string, string][] },
+      { method: "POST" },
+      { path: "/api/x" },
+    ])
+      expect(
+        frameError(() =>
+          encodeFrame({ ...e2e, open: { ...e2e.open, ...change } }),
+        ).code,
+        JSON.stringify(change),
+      ).toBe("bad_open");
   });
 
   it("GOAWAY 原因未知 → bad_frame；PING 的 ts 不是有限数 → bad_frame", () => {

@@ -49,7 +49,7 @@ describe("隧道", () => {
       },
     ]);
     expect(core.ready?.heartbeatMs).toBe(45_000);
-    expect(core.ready?.protocol).toEqual({ major: 1, minor: 2 });
+    expect(core.ready?.protocol).toEqual({ major: 1, minor: 3 });
     await core.ping();
   });
 

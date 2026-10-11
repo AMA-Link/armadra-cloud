@@ -154,7 +154,7 @@ describe("挑战（§16）与节点回报（§17）", () => {
   const device = { platform: "desktop", name: "Laptop" };
 
   it("协议 1.2：挑战与节点回报的错误码登记在注册表里", () => {
-    expect(PROTOCOL_VERSION).toEqual({ major: 1, minor: 2 });
+    expect(PROTOCOL_VERSION).toEqual({ major: 1, minor: 3 });
     expect(errorStatus("challenge_required")).toBe(400);
     expect(errorStatus("challenge_invalid")).toBe(400);
     expect(errorStatus("storage_unavailable")).toBe(503);

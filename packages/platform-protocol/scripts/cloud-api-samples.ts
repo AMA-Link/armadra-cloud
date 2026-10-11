@@ -114,7 +114,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       {
         mode: "personal",
         issuer: RELAY_ORIGIN,
-        protocol: { major: 1, minor: 2 },
+        protocol: { major: 1, minor: 3 },
         capabilities: ["auth.password", "me.stream", "challenge.turnstile"],
         relay: { addressing: "path" },
         webApp: `${RELAY_ORIGIN}/app/`,

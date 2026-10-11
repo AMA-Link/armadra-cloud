@@ -188,6 +188,11 @@ export const relayTokenClaimsSchema = z.object({
   org: z.string().min(1).optional(),
   /** 0.3.0 起：只读。0.3.11 起边缘不再据它过滤，读写由 core 判定。 */
   ro: z.boolean().optional(),
+  /**
+   * 1.3 起：issuer 侧的设备 id（签发这张令牌的会话所属设备）。边缘只用它计数「来自哪些
+   * 设备」，不参与鉴权；缺省 = 老令牌或不按设备计。
+   */
+  dev: z.string().min(1).max(64).optional(),
 });
 
 export const tunnelTokenClaimsSchema = z.object({

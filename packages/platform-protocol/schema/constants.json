@@ -1,7 +1,7 @@
 {
   "protocol": {
     "major": 1,
-    "minor": 2
+    "minor": 3
   },
   "paths": {
     "tunnel": "/t/v1",

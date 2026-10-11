@@ -311,6 +311,18 @@ describe("协议 1.1：断言范围与只读令牌", () => {
     ).toBe("org_01JAAAAAAAAAAAAAAAAAAAAAAA");
   });
 
+  it("协议 1.3：relay-token-dev.jwt 带 dev；老令牌没有；dev 不能是空串", () => {
+    const withDev = relayTokenClaimsSchema.parse(
+      verified("relay-token-dev").payload,
+    );
+    expect(withDev.dev).toBe("dev_01JAAAAAAAAAAAAAAAAAAAAAAA");
+    const old = relayTokenClaimsSchema.parse(verified("relay-token").payload);
+    expect(old.dev).toBeUndefined();
+    expect(relayTokenClaimsSchema.safeParse({ ...old, dev: "" }).success).toBe(
+      false,
+    );
+  });
+
   it("scp 的项只认 ws: / sess: / ro；role 只认四档", () => {
     const base = assertionClaimsSchema.parse(verified("valid").payload);
     for (const bad of [["admin"], ["ws:"], ["ws:a b"], ["sess:x/y"]])
