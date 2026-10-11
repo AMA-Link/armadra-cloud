@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
 import { pathAddressing } from "@armadra/relay-kernel/edge/addressing";
+import type { TrafficRow } from "@armadra/relay-kernel/traffic";
 import {
   relayToken,
   SOURCE_ID,
@@ -1261,5 +1262,162 @@ describe("端到端通道 _relay/e2e（cloud-api §20）", () => {
     await once(ws, "open");
     expect(h.relay.disconnect({ sourceId: SOURCE_ID })).toBe(1);
     await once(ws, "close");
+  });
+});
+
+describe("流量统计（cloud-api §19）", () => {
+  function recording() {
+    const rows: TrafficRow[] = [];
+    return {
+      rows,
+      traffic: {
+        write: async (batch: TrafficRow[]) => {
+          rows.push(...batch.map((row) => ({ ...row })));
+        },
+        // 用例里手动 flush。
+        flushMs: 3_600_000,
+      },
+    };
+  }
+
+  const sum = (rows: TrafficRow[], field: keyof TrafficRow) =>
+    rows.reduce((total, row) => total + Number(row[field]), 0);
+
+  it("HTTP、下载与 WebSocket 按 sub × 类别记连接与字节，总数与 relay_bytes_total 相等；不记路径", async () => {
+    const record = recording();
+    const h = await harness({ traffic: record.traffic });
+    await connected(h);
+    const alice = relayToken({ sub: "acct:alice" });
+    const guest = relayToken({ sub: "guest:0123456789abcdef:aa" });
+    for (let index = 0; index < 5; index += 1) {
+      const response = await fetch(`${h.base}/echo`, {
+        method: "POST",
+        headers: auth(alice),
+        body: `${MARKER}-${index}`,
+      });
+      await response.text();
+    }
+    const big = await fetch(`${h.base}/big?bytes=1000000`, {
+      headers: auth(guest),
+    });
+    expect((await big.arrayBuffer()).byteLength).toBe(1_000_000);
+    const ws = new WebSocket(`${h.base.replace("http", "ws")}/api/events`, [
+      "armadra-ticket.t1",
+      `armadra-relay.${alice}`,
+    ]);
+    cleanups.push(() => ws.terminate());
+    await once(ws, "open");
+    let replies = 0;
+    ws.on("message", () => (replies += 1));
+    for (let index = 0; index < 20; index += 1) ws.send(`${MARKER}-${index}`);
+    await waitFor(() => replies === 20);
+    ws.close();
+    await once(ws, "close");
+    await waitFor(() => h.relay.tunnels.counts().streams === 0);
+    await h.relay.traffic?.flush();
+
+    const of = (subject: string, kind: string) =>
+      record.rows.filter((row) => row.subject === subject && row.kind === kind);
+    expect(sum(of("acct:alice", "http"), "connections")).toBe(5);
+    expect(sum(of("acct:alice", "ws"), "connections")).toBe(1);
+    expect(sum(of("guest:0123456789abcdef:aa", "http"), "connections")).toBe(1);
+    expect(
+      sum(of("guest:0123456789abcdef:aa", "http"), "bytesToClient"),
+    ).toBeGreaterThan(1_000_000);
+    for (const row of record.rows)
+      expect(row).toMatchObject({
+        node: "relay-test",
+        sourceId: SOURCE_ID,
+        deviceId: "",
+      });
+    const metered = h.relay.metrics.snapshot().bytes;
+    expect(sum(record.rows, "bytesToSource")).toBe(metered.to_source);
+    expect(sum(record.rows, "bytesToClient")).toBe(metered.to_client);
+    const text = JSON.stringify(record.rows);
+    expect(text).not.toContain("/echo");
+    expect(text).not.toContain("127.0.0.1");
+    expect(text).not.toContain(MARKER);
+  });
+
+  it("端到端通道记为 e2e：字节是边缘 WS 载荷之和，设备取令牌的 dev", async () => {
+    const record = recording();
+    const h = await harness({ traffic: record.traffic });
+    await connected(h, h.core({ capabilities: ["e2e"] }));
+    const ws = new WebSocket(`${h.base.replace("http", "ws")}/_relay/e2e`, [
+      "armadra-e2e.1",
+      `armadra-relay.${relayToken({ sub: "acct:alice", dev: "dev_1" })}`,
+    ]);
+    cleanups.push(() => ws.terminate());
+    await once(ws, "open");
+    let received = 0;
+    ws.on("message", (data: Buffer) => (received += data.length));
+    for (let index = 0; index < 10; index += 1) ws.send(Buffer.alloc(1000, 7));
+    await waitFor(() => received >= 10_000);
+    ws.close();
+    await once(ws, "close");
+    await waitFor(() => h.relay.tunnels.counts().streams === 0);
+    await h.relay.traffic?.flush();
+    expect(record.rows).toEqual([
+      expect.objectContaining({
+        subject: "acct:alice",
+        deviceId: "dev_1",
+        kind: "e2e",
+        connections: 1,
+        bytesToSource: 10_000,
+        bytesToClient: 10_000,
+      }),
+    ]);
+  });
+
+  it("每 flushMs 自动落库，关闭时把剩下的写掉；没开统计不写", async () => {
+    const record = recording();
+    const h = await harness({
+      traffic: { ...record.traffic, flushMs: 50 },
+    });
+    await connected(h);
+    await (await fetch(`${h.base}/echo-request`, { headers: auth() })).text();
+    await waitFor(() => record.rows.length === 1);
+    await (await fetch(`${h.base}/echo-request`, { headers: auth() })).text();
+    await h.relay.close(0);
+    expect(sum(record.rows, "connections")).toBe(2);
+
+    const off = await harness();
+    await connected(off);
+    await (await fetch(`${off.base}/echo-request`, { headers: auth() })).text();
+    expect(off.relay.traffic).toBeUndefined();
+  });
+
+  it("开销：开不开统计，往返延迟与下载耗时没有明显差别", async () => {
+    const measure = async (h: Harness) => {
+      const token = relayToken();
+      const latencies: number[] = [];
+      for (let index = 0; index < 200; index += 1) {
+        const started = performance.now();
+        await (
+          await fetch(`${h.base}/echo-request`, { headers: auth(token) })
+        ).text();
+        latencies.push(performance.now() - started);
+      }
+      latencies.sort((a, b) => a - b);
+      const started = performance.now();
+      await (
+        await fetch(`${h.base}/big?bytes=20000000`, { headers: auth(token) })
+      ).arrayBuffer();
+      return {
+        medianMs: latencies[100] ?? 0,
+        downloadMs: performance.now() - started,
+      };
+    };
+    const plain = await harness();
+    await connected(plain);
+    const metered = await harness({ traffic: recording().traffic });
+    await connected(metered);
+    // 预热一轮，再各测一轮。
+    await measure(plain);
+    await measure(metered);
+    const without = await measure(plain);
+    const withTraffic = await measure(metered);
+    expect(withTraffic.medianMs).toBeLessThan(without.medianMs * 1.5 + 1);
+    expect(withTraffic.downloadMs).toBeLessThan(without.downloadMs * 1.5 + 50);
   });
 });

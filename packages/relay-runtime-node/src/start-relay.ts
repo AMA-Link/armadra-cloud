@@ -22,6 +22,11 @@ import type { Addressing } from "@armadra/relay-kernel/edge/addressing";
 import { errorName } from "@armadra/relay-kernel/log";
 import { createRelayCore } from "@armadra/relay-kernel/main";
 import type { RelayMetrics } from "@armadra/relay-kernel/metrics";
+import {
+  TRAFFIC_FLUSH_MS,
+  TrafficMeter,
+  type TrafficWriter,
+} from "@armadra/relay-kernel/traffic";
 import type { TunnelLimitsConfig } from "@armadra/relay-kernel/tunnel/tunnel";
 
 import type { ClientIp } from "./client-ip.ts";
@@ -70,6 +75,16 @@ export interface RelayOptions {
   /** 给了就监听 HTTPS（personal 的自签 CA / ACME / 文件证书）。 */
   tls?: TlsPair;
   now?: () => number;
+  /**
+   * 流量统计（cloud-api §19）：在内存里累加，每 `flushMs`（缺省 60 秒）与关闭时把攒下的行交给
+   * `write`（存储的批量 upsert）。不给就不统计。
+   */
+  traffic?: {
+    write: TrafficWriter;
+    flushMs?: number;
+    /** 写失败（`dropped` 是因积压超限丢掉的行数）。 */
+    onError?: (error: unknown, dropped: number) => void;
+  };
 }
 
 export interface RunningRelay {
@@ -77,6 +92,8 @@ export interface RunningRelay {
   metricsUrl?: string;
   tunnels: TunnelServer;
   metrics: RelayMetrics;
+  /** 流量统计的累加器（没开时为 undefined）；`flush()` 立即落库。 */
+  traffic?: TrafficMeter;
   /** 换证书（叶证书续期、文件热加载）；明文监听上是空操作。 */
   setTls(tls: TlsPair): void;
   /** 断开匹配的客户端 WS（撤销源、撤销访客时用）；HTTP 请求逐个验令牌，不需要断。 */
@@ -96,6 +113,14 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     now: options.now,
   });
   const counts = (): { tunnels: number; streams: number } => tunnels.counts();
+  const traffic = options.traffic
+    ? new TrafficMeter({
+        node: options.nodeId,
+        write: options.traffic.write,
+        onError: options.traffic.onError,
+        ...(options.now ? { now: options.now } : {}),
+      })
+    : undefined;
   const tunnelServer = new TunnelServer(tunnels);
   const edge = new Edge({
     nodeId: options.nodeId,
@@ -110,6 +135,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     corsOrigins: options.corsOrigins,
     clientIp: options.clientIp,
     now: options.now,
+    traffic,
   });
   const router = createRelayRouter({
     mode: options.mode,
@@ -164,12 +190,20 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
       throw error;
     }
   }
+  const trafficTimer = traffic
+    ? setInterval(
+        () => void traffic.flush(),
+        options.traffic?.flushMs ?? TRAFFIC_FLUSH_MS,
+      )
+    : undefined;
+  trafficTimer?.unref();
   let closing: Promise<void> | undefined;
   return {
     url: server.url,
     metricsUrl: metricsServer?.url,
     tunnels: tunnelServer,
     metrics,
+    ...(traffic ? { traffic } : {}),
     setTls(tls) {
       server.setTls?.(tls);
     },
@@ -180,6 +214,8 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
         edge.closeAll();
         await server.close();
         await metricsServer?.close();
+        clearInterval(trafficTimer);
+        await traffic?.flush();
       })();
       return closing;
     },

@@ -19,10 +19,7 @@ import type { ErrorCode } from "@armadra/platform-protocol/errors";
 import { LIMITS } from "@armadra/platform-protocol/tunnel";
 import type { AuthContext } from "@armadra/relay-kernel/auth/context";
 import type { ControlPlane } from "@armadra/relay-kernel/control/types";
-import type {
-  Addressing,
-  AddressTarget,
-} from "@armadra/relay-kernel/edge/addressing";
+import type { Addressing } from "@armadra/relay-kernel/edge/addressing";
 import {
   flatten,
   forwardRequestHeaders,
@@ -37,9 +34,12 @@ import {
   type EdgeRefusal,
   type EdgeRequest,
   type UpgradeDecision,
+  type RequestDecision,
+  type TrafficIdentity,
 } from "@armadra/relay-kernel/edge/policy";
 import { errorName, type RelayLog } from "@armadra/relay-kernel/log";
 import type { RelayMetrics } from "@armadra/relay-kernel/metrics";
+import type { TrafficMeter } from "@armadra/relay-kernel/traffic";
 import type { Tunnel } from "@armadra/relay-kernel/tunnel/tunnel";
 import { WebSocketServer } from "ws";
 
@@ -71,6 +71,8 @@ export interface EdgeOptions {
   clientIp?: ClientIp;
   /** 媒体票的时钟（测试用）。 */
   now?: () => number;
+  /** 流量统计（cloud-api §19）；不给就不统计。 */
+  traffic?: TrafficMeter;
 }
 
 /** 读一个小 JSON 体；超长、不是 JSON 答 `undefined`。 */
@@ -127,6 +129,7 @@ export class Edge {
       metrics: options.metrics,
       corsOrigins: options.corsOrigins,
       now: options.now,
+      traffic: options.traffic,
     });
     this.clientIp = options.clientIp ?? createClientIp();
   }
@@ -158,14 +161,7 @@ export class Edge {
       case "issue":
         return this.issueMedia(req, res, edgeRequest, decision.admission);
       case "forward":
-        this.forward(
-          req,
-          res,
-          edgeRequest,
-          decision.target,
-          decision.tunnel,
-          decision.remoteIp,
-        );
+        this.forward(req, res, edgeRequest, decision);
         return;
     }
   }
@@ -187,10 +183,9 @@ export class Edge {
     req: IncomingMessage,
     res: ServerResponse,
     edgeRequest: EdgeRequest,
-    target: AddressTarget,
-    tunnel: Tunnel<TunnelStream>,
-    remoteIp: string,
+    decision: Extract<RequestDecision<TunnelStream>, { kind: "forward" }>,
   ): void {
+    const { target, tunnel, remoteIp } = decision;
     const headers = forwardRequestHeaders(req.rawHeaders, { remoteIp });
     const opened = this.policy.open(
       tunnel,
@@ -199,6 +194,7 @@ export class Edge {
       target,
       headers,
       remoteIp,
+      decision.traffic,
     );
     if (!opened.ok) {
       sendRelayError(res, opened.code, {
@@ -265,10 +261,11 @@ export class Edge {
       return;
     }
     const { target, tunnel, subject, remoteIp } = decision;
+    const traffic = { subject, deviceId: decision.device ?? "" };
     socket.once("close", () => this.policy.releaseUpgrade(subject));
     if (socket.destroyed) return;
     if (decision.mode === "e2e") {
-      this.e2e(req, socket, head, edgeRequest, decision);
+      this.e2e(req, socket, head, edgeRequest, decision, traffic);
       return;
     }
     const headers = forwardRequestHeaders(req.rawHeaders, {
@@ -282,6 +279,7 @@ export class Edge {
       target,
       headers,
       remoteIp,
+      traffic,
     );
     if (!opened.ok) {
       this.refuseUpgrade(
@@ -336,9 +334,10 @@ export class Edge {
     head: Buffer,
     edgeRequest: EdgeRequest,
     accepted: Extract<UpgradeDecision<TunnelStream>, { kind: "accept" }>,
+    traffic: TrafficIdentity,
   ): void {
     const { target, tunnel, subject, remoteIp } = accepted;
-    const opened = this.policy.openE2e(tunnel, edgeRequest, remoteIp);
+    const opened = this.policy.openE2e(tunnel, edgeRequest, remoteIp, traffic);
     if (!opened.ok) {
       this.refuseUpgrade(
         req,
