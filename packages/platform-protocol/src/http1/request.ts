@@ -1,14 +1,15 @@
 /**
- * HTTP/1.1 请求的字节编码（中继设计 §2.4 的 `http1/request`），与运行时无关。运行时自己
- * 终止客户端 HTTP（Workers）时用它把请求写进隧道流：请求行 + 头（{@link serializeRequestHead}，
- * 头已经过 `forwardRequestHeaders` 剥掉逐跳头并加了 `connection: close`）+ 体。
+ * HTTP/1.1 请求的字节编码（中继设计 §2.4 的 `http1/request`），与运行时无关。自己终止客户端
+ * HTTP 的一方（Workers 中继、经端到端通道发请求的页面）用它把请求写进流：请求行 + 头
+ * （{@link serializeRequestHead}；中继写入前已剥掉逐跳头并加了 `connection: close`）+ 体。
  *
  * 体的定界：请求带合法的 `Content-Length` 就原样按长度写；有体而没有长度时加
  * `transfer-encoding: chunked`，每块用 {@link encodeChunk} 包一层，最后写 {@link LAST_CHUNK}；
  * 没有体什么都不加。切成 64 KiB `DATA` 与信用背压由隧道流负责。黄金字节在协议包的
  * `fixtures/http1/`。
  */
-import { serializeRequestHead, type HeaderPair } from "../edge/forward.ts";
+/** 一个头：`[名, 值]`，保留原始大小写与顺序。 */
+export type HeaderPair = [string, string];
 
 export type BodyFraming =
   | { kind: "none" }
@@ -57,6 +58,24 @@ export function encodeRequestHead(
       ? [...headers, ["transfer-encoding", "chunked"]]
       : headers,
   );
+}
+
+/**
+ * 请求行 + 头 + 空行。头值是 HTTP 解析器给的 latin1 字符串，按 latin1 写回（每个字符取低
+ * 8 位），字节原样；不用 `Buffer`，页面与手机里也能用。
+ */
+export function serializeRequestHead(
+  method: string,
+  path: string,
+  headers: readonly HeaderPair[],
+): Uint8Array {
+  let head = `${method} ${path} HTTP/1.1\r\n`;
+  for (const [name, value] of headers) head += `${name}: ${value}\r\n`;
+  head += "\r\n";
+  const out = new Uint8Array(head.length);
+  for (let index = 0; index < head.length; index += 1)
+    out[index] = head.charCodeAt(index) & 0xff;
+  return out;
 }
 
 const encoder = new TextEncoder();

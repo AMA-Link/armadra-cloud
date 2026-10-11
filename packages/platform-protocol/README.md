@@ -10,6 +10,8 @@ Armadra 平台的协议包：core、页面、手机、控制面与中继共用�
 | `./cloud-api`        | `/v1/*` 契约 `cloudContract`（oRPC）、共用形状、`/v1/me/stream` 事件                                |
 | `./core-api`         | core 契约 §31–§33 的请求 / 响应 schema                                                              |
 | `./errors`           | 错误码注册表与线上错误形状 `{ code, message, requestId?, details? }`                                |
+| `./http1`            | HTTP/1.1 请求编码与响应增量解析（中继与经端到端通道发请求的页面共用）                               |
+| `./ws-frames`        | WebSocket 帧编解码（RFC 6455）：编帧、增量解帧、帧边界跟踪                                          |
 | `./identity-vectors` | 口令策略、scrypt 参数、令牌哈希前缀、限流常量与测试向量                                             |
 | `./fixtures`         | 黄金夹具（帧、握手、令牌、`/v1` 样例、HTTP/1.1 与 WebSocket 线上字节），**Node 专用、只在测试里用** |
 

@@ -39,6 +39,14 @@
       "types": "./dist/identity-vectors/index.d.ts",
       "default": "./dist/identity-vectors/index.js"
     },
+    "./http1": {
+      "types": "./dist/http1/index.d.ts",
+      "default": "./dist/http1/index.js"
+    },
+    "./ws-frames": {
+      "types": "./dist/ws-frames/index.d.ts",
+      "default": "./dist/ws-frames/index.js"
+    },
     "./fixtures": {
       "types": "./dist/fixtures/index.d.ts",
       "default": "./dist/fixtures/index.js"

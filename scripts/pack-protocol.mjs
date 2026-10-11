@@ -47,6 +47,8 @@ const REQUIRED = [
   "package/dist/cloud-api/index.js",
   "package/dist/core-api/index.js",
   "package/dist/errors/index.js",
+  "package/dist/http1/index.js",
+  "package/dist/ws-frames/index.js",
   "package/dist/identity-vectors/index.js",
   "package/dist/identity-vectors/vectors.json",
   "package/dist/fixtures/index.js",

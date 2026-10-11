@@ -4,9 +4,9 @@
  *
  * - {@link FrameBoundaryTracker}：只读帧头、数出帧边界，不看载荷。Node 边缘对 WS 是字节
  *   透传，在帧边界上插 `ping`、发关闭帧时用它。
- * - {@link encodeWsFrame} / {@link WsFrameDecoder}：运行时自己终止客户端 WS（Workers）时，
- *   在「隧道流里的字节」与「消息」之间转换：下行切帧、合并分片、去掩码；上行打成带掩码的帧
- *   （客户端帧必须带掩码，§5.1）。
+ * - {@link encodeWsFrame} / {@link WsFrameDecoder}：自己终止客户端 WS 的一方（Workers 中继、
+ *   经端到端通道开 WS 的页面）在「流里的字节」与「消息」之间转换：下行切帧、合并分片、
+ *   去掩码；上行打成带掩码的帧（客户端帧必须带掩码，§5.1）。
  *
  * 不协商扩展：RSV 位一律视为协议错误（中继与 core 都关了 `permessage-deflate`）。
  */
@@ -27,16 +27,13 @@ const encoder = new TextEncoder();
 
 /**
  * 不带掩码的关闭帧（服务端 → 客户端）：状态码 + UTF-8 原因；原因须短于 124 字节
- * （控制帧载荷上限 125）。答 `Buffer`（全局对象，Workers 的 `nodejs_compat` 也有），
- * 直接写给 Node socket。
+ * （控制帧载荷上限 125）。
  */
-export function closeFrame(code: number, reason: string): Buffer {
-  return Buffer.from(
-    encodeWsFrame({
-      opcode: OPCODE.close,
-      payload: closePayload(code, reason),
-    }),
-  );
+export function closeFrame(code: number, reason: string): Uint8Array {
+  return encodeWsFrame({
+    opcode: OPCODE.close,
+    payload: closePayload(code, reason),
+  });
 }
 
 /** 只读帧头、数出帧边界的跟踪器。 */

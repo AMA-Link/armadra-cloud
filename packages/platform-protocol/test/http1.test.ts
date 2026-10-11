@@ -1,23 +1,20 @@
-import {
-  readFixture,
-  readJsonFixture,
-} from "@armadra/platform-protocol/fixtures";
+import { readFixture, readJsonFixture } from "../src/fixtures/index.ts";
 import { describe, expect, it } from "vitest";
 
-import { fixtureBytes, joinBytes, type FixtureBytes } from "../../test/wire.ts";
+import { fixtureBytes, joinBytes, type FixtureBytes } from "./wire.ts";
 import {
   encodeChunk,
   encodeRequestHead,
   LAST_CHUNK,
   requestFraming,
   Http1RequestError,
-} from "./request.ts";
+} from "../src/http1/request.ts";
 import {
   Http1ParseError,
   ResponseParser,
   type ResponseEvent,
   type ResponseHead,
-} from "./response.ts";
+} from "../src/http1/response.ts";
 
 interface ResponseCase {
   name: string;
