@@ -122,13 +122,14 @@ describe("迁移", () => {
         migratePostgres(sql),
         migratePostgres(sql),
       ]);
-      expect(counts.sort()).toEqual([0, 0, 2]);
+      expect(counts.sort()).toEqual([0, 0, 3]);
       expect(await migratePostgres(sql)).toBe(0);
       const ledger =
         await sql`SELECT id, name FROM cloud_migrations ORDER BY id`;
       expect(ledger.map((row) => row.name)).toEqual([
         "0001_control_init",
         "0002_relay_control",
+        "0003_traffic",
       ]);
     } finally {
       await sql.end({ timeout: 5 });

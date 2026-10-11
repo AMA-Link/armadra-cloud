@@ -6,10 +6,14 @@
 import type { MigrationFile } from "@armadra/control-store-sql/ledger";
 import { migrationFile } from "@armadra/control-store-sqlite/apply";
 import init from "@armadra/control-store-sql/migrations/0001_init.sql";
+import traffic from "@armadra/control-store-sql/migrations/0002_traffic.sql";
 
 const encoder = new TextEncoder();
 
-const BUNDLED: readonly [string, string][] = [["0001_init.sql", init]];
+const BUNDLED: readonly [string, string][] = [
+  ["0001_init.sql", init],
+  ["0002_traffic.sql", traffic],
+];
 
 export function bundledMigrations(): MigrationFile[] {
   return BUNDLED.map(

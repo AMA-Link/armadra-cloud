@@ -70,19 +70,24 @@ describe("DoSqlDatabase", () => {
 
   it("账本：与 Node 中继同一份迁移、SHA-384 一致；控制面的库里记着它们", async () => {
     const migrations = bundledMigrations();
-    expect(BUNDLED_MIGRATION_FILES).toEqual(["0001_init.sql"]);
-    expect(migrations.map((m) => m.id)).toEqual([1]);
+    expect(BUNDLED_MIGRATION_FILES).toEqual([
+      "0001_init.sql",
+      "0002_traffic.sql",
+    ]);
+    expect(migrations.map((m) => m.id)).toEqual([1, 2]);
     // 打进 Worker 的字节与 migrations.lock 记的一致（lock 记 SHA-256，由 repo:check 守）。
     const lock = JSON.parse(
       String((await import("../../../migrations.lock?raw")).default),
     ) as Record<string, Record<string, string>>;
     const recorded = lock["packages/control-store-sql/migrations"] ?? {};
     expect(Object.keys(recorded)).toEqual([...BUNDLED_MIGRATION_FILES]);
-    expect(
-      createHash("sha256")
-        .update(new TextEncoder().encode(migrations[0]?.sql ?? ""))
-        .digest("hex"),
-    ).toBe(recorded["0001_init.sql"]);
+    BUNDLED_MIGRATION_FILES.forEach((file, index) =>
+      expect(
+        createHash("sha256")
+          .update(new TextEncoder().encode(migrations[index]?.sql ?? ""))
+          .digest("hex"),
+      ).toBe(recorded[file]),
+    );
     await login();
     const ledger = await runInDurableObject(control(), (_instance, state) =>
       state.storage.sql
@@ -95,6 +100,7 @@ describe("DoSqlDatabase", () => {
     );
     expect(ledger).toEqual([
       { id: 1, name: "0001_init", sha384: migrations[0]?.sha384 },
+      { id: 2, name: "0002_traffic", sha384: migrations[1]?.sha384 },
     ]);
   });
 });
@@ -151,7 +157,9 @@ describe("存储认不出就拒绝服务", () => {
   it("账本的 SHA-384 被改：/v1 与 /ready 答 503 storage_unavailable，数据一行不动", async () => {
     await login();
     await runInDurableObject(control(), (_instance, state) => {
-      state.storage.sql.exec("UPDATE relay_migrations SET sha384 = 'tampered'");
+      state.storage.sql.exec(
+        "UPDATE relay_migrations SET sha384 = 'tampered' WHERE id = 1",
+      );
     });
     await evictDurableObject(control());
     const info = await call("/.well-known/armadra-platform");
@@ -170,7 +178,7 @@ describe("存储认不出就拒绝服务", () => {
         .exec("SELECT count(*) AS n FROM accounts")
         .one().n,
       ledger: state.storage.sql
-        .exec("SELECT sha384 FROM relay_migrations")
+        .exec("SELECT sha384 FROM relay_migrations WHERE id = 1")
         .one().sha384,
     }));
     expect(rows).toEqual({ tenants: 1, accounts: 1, ledger: "tampered" });

@@ -31,6 +31,7 @@ it("随包的迁移从 0001 起连续", () => {
   expect(listMigrations(defaultMigrationsDir())).toEqual([
     "0001_control_init.sql",
     "0002_relay_control.sql",
+    "0003_traffic.sql",
   ]);
 });
 
