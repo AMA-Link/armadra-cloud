@@ -30,8 +30,10 @@ export interface ClientAttachment {
   sourceId: string;
   tunnelId: string;
   streamId: number;
-  /** 中继令牌的 `sub`（按账号并发、按访客前缀断开）。 */
+  /** 中继令牌的 `sub`（按账号并发、按访客前缀断开、流量统计）。 */
   subject: string;
+  /** 中继令牌的 `dev`（流量统计；旧附件没有）。 */
+  deviceId?: string;
   /** 最近一次任一方向有字节。 */
   lastActivityMs: number;
   /** 流的信用；有排队或在途字节时是 null（那时对象不休眠）。 */

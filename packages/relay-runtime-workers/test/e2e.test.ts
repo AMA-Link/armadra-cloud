@@ -3,7 +3,12 @@
  * `OPEN kind: "e2e"` 的 `DATA` 原样互转，不经 HTTP 转发；拒绝路径与 Node 中继相同。
  */
 import { CLOSE } from "@armadra/platform-protocol/tunnel";
-import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
+import {
+  env,
+  evictDurableObject,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { sourceObjectName } from "../src/env.ts";
@@ -149,6 +154,8 @@ describe("端到端通道", () => {
     const stub = env.SOURCE.get(
       env.SOURCE.idFromName(sourceObjectName(source.sourceId)),
     );
+    // 攒着没写的流量统计会让对象留在内存里等定时写（不带着计数休眠）：先让检查周期写掉。
+    await runDurableObjectAlarm(stub);
     await evictDurableObject(stub, { webSockets: "hibernate" });
     expect(
       await runInDurableObject(stub, (instance: SourceDO) => instance.stats()),

@@ -15,12 +15,25 @@
  * - **控制面**：personal 的 JWKS、撤销判断、可信来源与在线事件都经 RPC 问同一个 `ControlDO`（结果
  *   短缓存，撤销 / 改设置时 `ControlDO` 调 {@link SourceDO.invalidate} 立即作废）；saas 的 JWKS 从
  *   cloud 拉，在线事件经 `relay.nodePresence` 报给 cloud（cloud-api §17）。
+ * - **流量统计**（cloud-api §19）：内核的 `TrafficMeter` 在内存里累加，攒下新行后
+ *   {@link TRAFFIC_FLUSH_DELAY_MS} 与检查周期各写一次进本对象的 DO SQLite（同一份迁移的
+ *   `relay_traffic_buckets`）；定时器在，对象就不会带着没写的计数休眠。`ControlDO` 查询时经
+ *   {@link SourceDO.trafficQuery} 逐源取回合并。
  *
  * 日志只记元数据（内核白名单）；不记路径、头、令牌、正文。
  */
 import { randomBytes } from "node:crypto";
 
 import { DurableObject } from "cloudflare:workers";
+
+import {
+  DEFAULT_TENANT,
+  type TrafficQuery,
+  type TrafficRow,
+  type TrafficStore,
+} from "@armadra/control-core/ports";
+import { applyMigrations } from "@armadra/control-store-sqlite/apply";
+import { createSqliteTraffic } from "@armadra/control-store-sqlite/traffic";
 
 import { PROTOCOL_VERSION, TUNNEL_PATH } from "@armadra/platform-protocol";
 import type { JwkSet } from "@armadra/platform-protocol/assertion";
@@ -54,6 +67,7 @@ import {
 import { errorName, type RelayLog } from "@armadra/relay-kernel/log";
 import { DEFAULT_TUNNEL_LIMITS } from "@armadra/relay-kernel/main";
 import { RelayMetrics } from "@armadra/relay-kernel/metrics";
+import { TrafficMeter } from "@armadra/relay-kernel/traffic";
 import {
   Handshake,
   rejectStep,
@@ -92,6 +106,8 @@ import { KvMediaTickets } from "./media-tickets.ts";
 import { isUpgrade, refuseWithClose, relayError } from "./responses.ts";
 import { cloudJwks, reportPresence } from "./saas.ts";
 import { E2eBridge } from "./e2e-bridge.ts";
+import { DoSqlDatabase } from "./store-do-sqlite/database.ts";
+import { bundledMigrations } from "./store-do-sqlite/migrations.ts";
 import { WsBridge } from "./ws-bridge.ts";
 
 /** 中继节点名：Workers 上没有「节点」概念，路由的 `node` 固定是 `cf`。 */
@@ -108,6 +124,10 @@ const CORS_CACHE_MS = 60_000;
 const JWKS_CACHE_MS = 60_000;
 const SOURCE_ID = /^[0-9a-f]{32}$/;
 const META_SOURCE = "meta:sourceId";
+/** 攒下新的统计行之后多久写库（定时器在，对象不休眠，计数不会随休眠丢掉）。 */
+export const TRAFFIC_FLUSH_DELAY_MS = 30_000;
+const TRAFFIC_PRUNED = "traffic:prunedAtMs";
+const DAY_MS = 86_400_000;
 
 interface TunnelRecord {
   ws: WebSocket;
@@ -189,6 +209,10 @@ export class SourceDO extends DurableObject<RelayEnv> {
   >();
   private cors: { origins: string[]; atMs: number } | null = null;
   private persistQueued = false;
+  private readonly traffic: TrafficMeter | undefined;
+  /** 本对象的 DO SQLite 里的流量表；undefined = 还没开，null = 开不了（不统计，不影响转发）。 */
+  private trafficStore: TrafficStore | null | undefined;
+  private trafficTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(ctx: DurableObjectState, env: RelayEnv) {
     super(ctx, env);
@@ -221,6 +245,19 @@ export class SourceDO extends DurableObject<RelayEnv> {
       now: Date.now,
     };
     this.tickets = new KvMediaTickets(ctx.storage.kv);
+    this.traffic =
+      config && config.trafficRetentionDays > 0
+        ? new TrafficMeter({
+            node: WORKERS_NODE,
+            write: (rows) => this.writeTraffic(rows),
+            onRow: () => this.scheduleTrafficFlush(),
+            onError: (error, dropped) =>
+              this.log.warn("流量统计写入失败", {
+                error: errorName(error),
+                result: dropped > 0 ? "dropped" : "retry",
+              }),
+          })
+        : undefined;
     this.addressing =
       saas && config?.domain ? hostAddressing(config.domain) : pathAddressing();
     this.policy = new EdgePolicy<TunnelEndpoint, WebSocket>({
@@ -232,6 +269,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
       metrics: this.metrics,
       corsOrigins: () => this.cors?.origins ?? [],
       mediaTickets: this.tickets,
+      traffic: this.traffic,
     });
     this.budget = new BudgetMeter((delta) => this.flushBudget(delta));
     this.sourceId = ctx.storage.kv.get<string>(META_SOURCE) ?? null;
@@ -588,6 +626,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
           remoteIp: decision.remoteIp,
           policy: this.policy,
           log: this.log,
+          traffic: decision.traffic,
         });
     }
   }
@@ -621,6 +660,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
         decision.reason,
       );
     const { target, tunnel, subject, remoteIp } = decision;
+    const deviceId = decision.device ?? "";
     const release = () => this.policy.releaseUpgrade(subject);
     if (this.ctx.getWebSockets().length >= MAX_OBJECT_SOCKETS) {
       release();
@@ -632,7 +672,10 @@ export class SourceDO extends DurableObject<RelayEnv> {
       );
     }
     if (decision.mode === "e2e") {
-      const opened = this.policy.openE2e(tunnel, edgeRequest, remoteIp);
+      const opened = this.policy.openE2e(tunnel, edgeRequest, remoteIp, {
+        subject,
+        deviceId,
+      });
       if (!opened.ok) {
         release();
         return this.refuseUpgrade(
@@ -652,6 +695,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
         tunnelId: tunnel.tunnelId,
         streamId: opened.stream.streamId,
         subject,
+        ...(deviceId ? { deviceId } : {}),
         lastActivityMs: Date.now(),
         core: null,
       });
@@ -679,6 +723,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
       target,
       headers,
       remoteIp,
+      { subject, deviceId },
     );
     if (!opened.ok) {
       release();
@@ -724,6 +769,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
       tunnelId: tunnel.tunnelId,
       streamId: endpoint.streamId,
       subject,
+      ...(deviceId ? { deviceId } : {}),
       lastActivityMs: Date.now(),
       core: null,
     };
@@ -838,6 +884,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
         record.bridge.disconnect(4000, "idle");
     const tickets = this.tickets.sweep();
     await this.budget.flush();
+    await this.flushTraffic();
     if (config.mode === "saas" && this.current)
       this.publish({
         type: "sourceOnline",
@@ -948,6 +995,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
         continue;
       }
       this.sourceId ??= attachment.sourceId;
+      const adopted: { streamId: number; client: ClientAttachment }[] = [];
       const record = this.tunnelRecord(ws, attachment, (hooks) =>
         Tunnel.restore<TunnelEndpoint>(
           snapshot,
@@ -975,10 +1023,23 @@ export class SourceDO extends DurableObject<RelayEnv> {
               found.attachment.subject,
             );
             bridge.bridge.start();
+            adopted.push({ streamId, client: found.attachment });
             return endpoint;
           },
         ),
       );
+      // 统计句柄在内存里，休眠丢了：按还原的连接接回去（不再计一次连接）。
+      for (const { streamId, client } of adopted)
+        if (this.traffic)
+          record.tunnel.meter(
+            streamId,
+            this.traffic.counter({
+              sourceId: client.sourceId,
+              subject: client.subject,
+              deviceId: client.deviceId ?? "",
+              kind: client.mode === "e2e" ? "e2e" : "ws",
+            }),
+          );
       this.current = record;
     }
     // 没对上隧道的客户端：源已经不在这条隧道上了。
@@ -1087,6 +1148,65 @@ export class SourceDO extends DurableObject<RelayEnv> {
   invalidate(): void {
     this.revocations.clear();
     this.cors = null;
+  }
+
+  /** 流量统计（`ControlDO` 合并查询用）：先把内存里攒的写掉、过了一天先清保留期，再查本对象的表。 */
+  async trafficQuery(query: TrafficQuery): Promise<TrafficRow[]> {
+    await this.flushTraffic();
+    const store = this.trafficTable();
+    if (!store) return [];
+    await this.pruneTraffic(store);
+    return store.query(DEFAULT_TENANT, query);
+  }
+
+  /** 本对象的流量表（第一次用时跑迁移）；开不了答 null 并记一次日志，转发不受影响。 */
+  private trafficTable(): TrafficStore | null {
+    if (this.trafficStore !== undefined) return this.trafficStore;
+    try {
+      const db = new DoSqlDatabase(this.ctx.storage, "source");
+      applyMigrations(db, bundledMigrations());
+      this.trafficStore = createSqliteTraffic(db);
+    } catch (error) {
+      this.log.error("流量统计的存储打不开，不再统计", {
+        error: errorName(error),
+      });
+      this.trafficStore = null;
+    }
+    return this.trafficStore;
+  }
+
+  private async writeTraffic(rows: TrafficRow[]): Promise<void> {
+    const store = this.trafficTable();
+    if (!store) return;
+    await store.upsert(DEFAULT_TENANT, rows);
+    await this.pruneTraffic(store);
+  }
+
+  /** 一天最多一次：删掉桶起点早于保留期的行。 */
+  private async pruneTraffic(store: TrafficStore): Promise<void> {
+    const days = this.config?.trafficRetentionDays ?? 0;
+    if (days <= 0) return;
+    const now = Date.now();
+    const last = this.ctx.storage.kv.get<number>(TRAFFIC_PRUNED) ?? 0;
+    if (now - last < DAY_MS) return;
+    await store.prune(DEFAULT_TENANT, now - days * DAY_MS);
+    this.ctx.storage.kv.put(TRAFFIC_PRUNED, now);
+  }
+
+  /** 攒下了新行：定时写（定时器在，对象就不休眠，计数不会随休眠丢掉）。 */
+  private scheduleTrafficFlush(): void {
+    if (this.trafficTimer !== undefined) return;
+    this.trafficTimer = setTimeout(
+      () => void this.flushTraffic(),
+      TRAFFIC_FLUSH_DELAY_MS,
+    );
+  }
+
+  /** 现在就写（定时器、检查周期与查询都走这里）；写完撤掉定时器，对象可以休眠。 */
+  private async flushTraffic(): Promise<void> {
+    clearTimeout(this.trafficTimer);
+    this.trafficTimer = undefined;
+    await this.traffic?.flush();
   }
 
   stats(): {

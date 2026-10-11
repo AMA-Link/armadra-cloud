@@ -68,6 +68,9 @@ function open(ticket: string, sealed: string): MediaGrant | undefined {
       sourceId: grant.sourceId,
       path: grant.path,
       subject: grant.subject,
+      ...(typeof grant.deviceId === "string"
+        ? { deviceId: grant.deviceId }
+        : {}),
       jti: grant.jti,
     };
   } catch {

@@ -4,6 +4,9 @@
  * 限流（登录与接受链接按 IP，内存桶；Worker 入口另有 Rate Limiting 绑定）→ 在线总线（`SourceDO`
  * 推过来）→ 中继端口（RPC 到 `SourceDO`）→ `createPersonalProcedures` + `createCloudRouter`。
  *
+ * 流量统计（cloud-api §19）在各 `SourceDO` 自己的 DO SQLite 里：`traffic.query` 按租户的源逐个对象取回，
+ * 合并、排序、截断（`me.traffic` 的可见范围由控制核在调用前定好）。
+ *
  * 首次初始化：库里还没有租户时，用 secret `RELAY_PERSONAL_ACCOUNT` / `RELAY_PERSONAL_PASSWORD` 建
  * 账号（口令过 identity-vectors 策略、scrypt 哈希）与第一把签名钥；之后这两个 secret 就该删掉。
  */
@@ -22,10 +25,14 @@ import {
   type ControlContext,
   type ControlPorts,
   type PresenceEvent,
+  type TrafficQuery,
+  type TrafficRow,
+  type TrafficStore,
 } from "@armadra/control-core/ports";
 import { generateSigningKey, Signer } from "@armadra/control-core/signer";
 import { trustedOriginsOf } from "@armadra/control-core/sources";
 import { ownerSubject } from "@armadra/control-core/subjects";
+import { rollUp } from "@armadra/control-core/traffic";
 import type { KeyWrap } from "@armadra/control-store-sqlite/db";
 import {
   addSigningKey,
@@ -60,6 +67,33 @@ export interface SourceObjects {
   closeTunnel(sourceId: string): void;
   disconnect(sourceId: string, filter: ConnectionFilter): void;
   invalidate(sourceIds: readonly string[]): void;
+  /** 一个源对象里的流量统计（取不到答空）。 */
+  traffic(sourceId: string, query: TrafficQuery): Promise<TrafficRow[]>;
+}
+
+/**
+ * `traffic.query` 改成逐源取回合并：只问租户登记过的源（含已撤销的，历史还在），不为任意 id 建对象。
+ * 每个对象答的是它自己排好序的前 `limit` 行，合并后再排序截断就是全局的前 `limit` 行。
+ */
+export function sourceTraffic(
+  ports: ControlPorts,
+  sources: SourceObjects,
+): TrafficStore {
+  return {
+    ...ports.traffic,
+    async query(tenantId, query) {
+      const ids = (await ports.sources.list(tenantId))
+        .map((row) => row.sourceId)
+        .filter(
+          (sourceId) =>
+            query.sourceId === undefined || sourceId === query.sourceId,
+        );
+      const parts = await Promise.all(
+        ids.map((sourceId) => sources.traffic(sourceId, query)),
+      );
+      return rollUp(parts.flat(), query.granularity).slice(0, query.limit);
+    },
+  };
 }
 
 export interface PersonalControl {
@@ -101,7 +135,11 @@ export function openPersonal(input: PersonalInput): PersonalControl | null {
   const signer = new Signer(keys, now);
 
   let pendingInvalidate = false;
-  const raw = createSqlitePorts(db);
+  const sqlite = createSqlitePorts(db);
+  const raw: ControlPorts = {
+    ...sqlite,
+    traffic: sourceTraffic(sqlite, sources),
+  };
   const ports = watchRevocations(raw, () => {
     if (pendingInvalidate) return;
     pendingInvalidate = true;

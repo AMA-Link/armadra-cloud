@@ -36,6 +36,7 @@ import {
 import type {
   EdgePolicy,
   EdgeRequest,
+  TrafficIdentity,
 } from "@armadra/relay-kernel/edge/policy";
 import { errorName, type RelayLog } from "@armadra/relay-kernel/log";
 import type { Tunnel } from "@armadra/relay-kernel/tunnel/tunnel";
@@ -259,6 +260,8 @@ export interface HttpForwardInput {
   remoteIp: string;
   policy: EdgePolicy<TunnelEndpoint, WebSocket>;
   log: RelayLog;
+  /** 流量统计记到谁名下（判定答的）。 */
+  traffic?: TrafficIdentity;
 }
 
 export async function forwardHttp(input: HttpForwardInput): Promise<Response> {
@@ -286,6 +289,7 @@ export async function forwardHttp(input: HttpForwardInput): Promise<Response> {
     target,
     headers,
     remoteIp,
+    input.traffic,
   );
   if (!opened.ok) return relayError(opened.code, { cors });
   const endpoint = opened.stream;

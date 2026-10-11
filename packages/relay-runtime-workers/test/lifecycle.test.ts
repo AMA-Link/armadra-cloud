@@ -59,6 +59,8 @@ describe("休眠", () => {
     ws.send("before");
     expect(await nextMessage(ws)).toBe("before");
 
+    // 攒着没写的流量统计会让对象留在内存里等定时写（不带着计数休眠）：先让检查周期写掉。
+    await runDurableObjectAlarm(stubOf(source.sourceId));
     await evictDurableObject(stubOf(source.sourceId), {
       webSockets: "hibernate",
     });
