@@ -64,6 +64,11 @@ export interface TrafficMeterOptions {
   now?: () => number;
   /** 写失败时报告（`dropped` = 因积压超限丢掉的行数，0 表示已并回内存）。 */
   onError?: (error: unknown, dropped: number) => void;
+  /**
+   * 攒下了新的一行（上次 flush 之后第一次见到这个桶与键）：运行时据此安排一次延后的 flush
+   * （Workers 的对象会休眠，不能只等检查周期）。热路径上不调。
+   */
+  onRow?: () => void;
   maxPendingRows?: number;
 }
 
@@ -125,6 +130,7 @@ export class TrafficMeter implements TrafficSink {
   private chain: Promise<void> = Promise.resolve();
   private readonly write: TrafficWriter;
   private readonly onError: TrafficMeterOptions["onError"];
+  private readonly onRow: TrafficMeterOptions["onRow"];
   private readonly maxPendingRows: number;
 
   constructor(options: TrafficMeterOptions) {
@@ -132,6 +138,7 @@ export class TrafficMeter implements TrafficSink {
     this.write = options.write;
     this.now = options.now ?? Date.now;
     this.onError = options.onError;
+    this.onRow = options.onRow;
     this.maxPendingRows = options.maxPendingRows ?? TRAFFIC_MAX_PENDING_ROWS;
   }
 
@@ -182,6 +189,7 @@ export class TrafficMeter implements TrafficSink {
         bytesToClient: 0,
       };
       this.rows.set(id, row);
+      this.onRow?.();
     }
     return row;
   }

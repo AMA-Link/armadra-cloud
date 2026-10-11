@@ -141,6 +141,24 @@ describe("批量写", () => {
     expect(traffic.pending).toBe(0);
   });
 
+  it("新的一行才通知（运行时据此安排延后的 flush），同一行再加不通知", async () => {
+    let rows = 0;
+    const traffic = new TrafficMeter({
+      node: "n",
+      now: () => T0,
+      write: async () => {},
+      onRow: () => (rows += 1),
+    });
+    const counter = traffic.counter(KEY);
+    counter.connection();
+    counter.bytes("to_source", 1);
+    traffic.counter({ ...KEY, kind: "ws" }).connection();
+    expect(rows).toBe(2);
+    await traffic.flush();
+    counter.bytes("to_client", 1);
+    expect(rows).toBe(3);
+  });
+
   it("写失败：并回内存，下次连同新的一起写；积压超限丢掉这一批并报告", async () => {
     let failing = true;
     const { traffic, batches, errors } = meter({
