@@ -80,7 +80,7 @@ describe("运维端点", () => {
       ok: true,
       mode: "personal",
       node: "cf",
-      version: "0.3.11",
+      version: "0.4.0",
     });
     expect(health.headers.get("armadra-protocol")).toBe("1.3");
     const ready = await call("/ready");
