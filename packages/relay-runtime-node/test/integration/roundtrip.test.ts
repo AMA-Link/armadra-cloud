@@ -1072,86 +1072,32 @@ describe("媒体票（cloud-api §12）", () => {
 describe("只读中继令牌（ro，协议 1.1）", () => {
   const readOnly = () => relayToken({ ro: true });
 
-  it("安全方法照常转发；写方法答 403 forbidden、不进隧道", async () => {
+  it("边缘不按方法过滤：写方法与 RPC 照常转给源，读写由 core 判定", async () => {
     const h = await harness();
     const core = await connected(h);
     const token = readOnly();
-    const got = await fetch(`${h.base}/echo-request?q=1`, {
-      headers: auth(token),
-    });
-    expect(got.status).toBe(200);
-    const head = await fetch(`${h.base}/echo-request`, {
-      method: "HEAD",
-      headers: auth(token),
-    });
-    expect(head.status).toBe(200);
-    // 不是预检的 OPTIONS 也是安全方法，照常转给源。
-    const options = await fetch(`${h.base}/echo-request`, {
-      method: "OPTIONS",
-      headers: auth(token),
-    });
-    expect(options.status).toBe(200);
     const before = core.requests;
-    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
-      const refused = await fetch(`${h.base}/echo`, {
+    const posted = await fetch(`${h.base}/echo`, {
+      method: "POST",
+      headers: { ...auth(token), "content-type": "text/plain" },
+      body: MARKER,
+    });
+    expect(await posted.text()).toBe(MARKER);
+    for (const method of ["PUT", "PATCH", "DELETE"]) {
+      const echoed = await fetch(`${h.base}/echo-request`, {
         method,
-        headers: { ...auth(token), "content-type": "text/plain" },
-        body: `${MARKER}-${method}`,
-      });
-      expect(refused.status).toBe(403);
-      expect(await refused.json()).toEqual({
-        code: "forbidden",
-        message: expect.any(String),
-      });
-    }
-    expect(core.requests).toBe(before);
-  });
-
-  it("身份域路径任意方法放行；带 ..、//、% 的写法不算身份域", async () => {
-    const h = await harness();
-    const core = await connected(h);
-    const token = readOnly();
-    const before = core.requests;
-    for (const path of [
-      "/api/identity/cloud/login",
-      "/api/identity/ws-ticket",
-      "/api/rpc/identity/session/refresh",
-    ]) {
-      const response = await fetch(`${h.base}${path}`, {
-        method: "POST",
         headers: auth(token),
-        body: "{}",
       });
-      // 假 core 不认识这些路径，答 404：说明边缘放行了。
-      expect(response.status).toBe(404);
+      expect(((await echoed.json()) as { method: string }).method).toBe(method);
     }
-    expect(core.requests).toBe(before + 3);
-    for (const path of [
-      "/api/identity/../echo",
-      "/api/identity//x",
-      "/api/identity/%2e%2e/echo",
-      "/api/identityx/login",
-    ]) {
-      const response = await new Promise<number>((resolve, reject) => {
-        // fetch 会把 .. 规范化掉，这里用原始请求行。
-        const req = request(
-          `${h.base}/placeholder`,
-          {
-            method: "POST",
-            path: `/s/${SOURCE_ID}${path}`,
-            headers: auth(token),
-          },
-          (res) => {
-            res.resume();
-            resolve(res.statusCode ?? 0);
-          },
-        );
-        req.on("error", reject);
-        req.end("{}");
-      });
-      expect(response).toBe(403);
-    }
-    expect(core.requests).toBe(before + 3);
+    // core 的 RPC 一律 POST；假 core 不认识这条路径，答 404：说明边缘放行了。
+    const rpc = await fetch(`${h.base}/api/rpc/system/hello`, {
+      method: "POST",
+      headers: { ...auth(token), "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(rpc.status).toBe(404);
+    expect(core.requests).toBe(before + 5);
   });
 
   it("不带 ro 的令牌写方法照常；ro 令牌的 WS 升级与媒体票照常", async () => {

@@ -12,13 +12,11 @@
  * WS 先完成升级再以关闭码结束（浏览器读不到升级失败的状态码）：令牌 4401 / 4403、
  * 限流 4429、源离线 4404（{@link wsCloseCode}）。
  *
- * 只读中继令牌（`ro: true`，协议 1.1）：只放行安全方法与身份域路径（协议包
- * `isReadOnlyAllowed`），其余 HTTP 答 403 `forbidden`、WS 以 4403 关闭；媒体票的签票与兑票
- * 是读，照常放行。纵深防御，core 仍按自己的授予判定。
+ * 只读中继令牌（`ro: true`，协议 1.1）在边缘不再单独过滤（0.3.11 起）：core 的 RPC 一律
+ * `POST`，按方法挡会把只读访客整个挡在 RPC 之外；读写只由 core 按自己的授予判定。
  *
  * 不解析正文、不缓存、不记路径与头。
  */
-import { isReadOnlyAllowed } from "@armadra/platform-protocol/assertion";
 import type { ErrorCode } from "@armadra/platform-protocol/errors";
 import { CLOSE, LIMITS } from "@armadra/platform-protocol/tunnel";
 
@@ -101,8 +99,6 @@ export type Admission<S extends StreamEndpoint> =
       subject: string;
       jti: string;
       remoteIp: string;
-      /** 中继令牌带 `ro: true`。 */
-      readOnly: boolean;
     }
   | {
       ok: false;
@@ -188,7 +184,7 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     });
   }
 
-  /** HTTP 请求：预检、兑票、签票、只读门与转发的判定（指标在这里计）。 */
+  /** HTTP 请求：预检、兑票、签票与转发的判定（指标在这里计）。 */
   async decideRequest(req: EdgeRequest): Promise<RequestDecision<S>> {
     if (isPreflight(req)) return this.preflight(req);
     const addressed = this.resolve(req);
@@ -206,15 +202,6 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       };
     }
     if (isIssuePath(admission.target.path)) return { kind: "issue", admission };
-    if (this.readOnlyRefused(req, admission)) {
-      this.options.metrics.edgeConnection("forbidden");
-      return {
-        kind: "error",
-        code: "forbidden",
-        cors: this.errorCors(req, admission.target.sourceId),
-        drain: true,
-      };
-    }
     return {
       kind: "forward",
       target: admission.target,
@@ -223,7 +210,7 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     };
   }
 
-  /** WS 升级：令牌（子协议）、只读门、按账号的并发上限。 */
+  /** WS 升级：令牌（子协议）、按账号的并发上限。 */
   async decideUpgrade(req: EdgeRequest): Promise<UpgradeDecision<S>> {
     const { token, rest } = splitRelaySubprotocol(
       single(req.headers["sec-websocket-protocol"]),
@@ -235,14 +222,6 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
         kind: "refuse",
         code: admission.code,
         sourceId: admission.sourceId,
-      };
-    }
-    if (this.readOnlyRefused(req, admission)) {
-      this.options.metrics.edgeConnection("forbidden");
-      return {
-        kind: "refuse",
-        code: "forbidden",
-        sourceId: admission.target.sourceId,
       };
     }
     const { target, tunnel, subject, remoteIp } = admission;
@@ -398,17 +377,6 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     return errorCorsHeaders(originOf(req), trusted);
   }
 
-  /** 只读令牌下不放行的请求（方法不安全且不在身份域）。 */
-  private readOnlyRefused(
-    req: EdgeRequest,
-    admission: Extract<Admission<S>, { ok: true }>,
-  ): boolean {
-    return (
-      admission.readOnly &&
-      !isReadOnlyAllowed(req.method, admission.target.path)
-    );
-  }
-
   /** 解析源 → 中继令牌（无效按 IP 限流；有效按令牌与账号限流）→ 找隧道。 */
   private async admit(
     req: EdgeRequest,
@@ -456,7 +424,6 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       subject,
       jti: verified.claims.jti,
       remoteIp,
-      readOnly: verified.claims.ro === true,
     };
   }
 

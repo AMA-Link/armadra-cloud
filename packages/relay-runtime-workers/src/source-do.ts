@@ -7,7 +7,7 @@
  *   下发 `heartbeatMs`（缺省 45 秒），源发 `PING`、中继立即回 `PONG`，自己不起定时器（会阻止休眠）；
  *   检查周期（alarm，缺省 60 秒）看 `lastHeardAtMs`，超过 `2 × heartbeatMs` 就关。同源新隧道就绪 →
  *   旧的 `GOAWAY replaced`。握手里的 `sourceId` 必须是这个对象的源（`?src=` 只是路由提示）。
- * - **客户端**：判定在内核的 `EdgePolicy`（地址、令牌、限流、只读门、媒体票、CORS 预检）；字节在
+ * - **客户端**：判定在内核的 `EdgePolicy`（地址、令牌、限流、媒体票、CORS 预检）；字节在
  *   `http-forward.ts` 与 `ws-bridge.ts`。媒体票落在 DO 的同步 KV 里，休眠后照样认。
  * - **休眠**：隧道与客户端 WS 都经 Hibernation API 接受；热状态写进 WS 附件（`hibernation.ts`），
  *   唤醒时在构造函数里还原。

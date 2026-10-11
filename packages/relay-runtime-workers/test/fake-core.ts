@@ -9,7 +9,7 @@
  * - `GET /chunked`：分块响应。
  * - `GET /media`：1000 字节的资源，认 `Range: bytes=a-b`（206）。
  * - `GET /bad`：不合法的响应（中继应答 502）。
- * - 其余 `POST` / `PUT` / `DELETE`：`{ ok: true }`（只读门的测试）。
+ * - 其余 `POST` / `PUT` / `DELETE`：`{ ok: true }`（只读令牌透传的测试）。
  * - WS 任意路径：选 `armadra-ticket.*` 子协议；`whoami` 答 `{ url, protocol }`；`bye` 以 4000 关闭；
  *   `ping-me` 发一个 ping 并记下中继代答的 pong；其余回显。
  */

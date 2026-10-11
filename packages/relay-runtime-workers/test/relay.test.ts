@@ -231,7 +231,7 @@ describe("媒体票", () => {
 });
 
 describe("只读令牌（ro）", () => {
-  it("只放行安全方法与身份域；写方法 403 不进隧道", async () => {
+  it("边缘不按方法过滤：写方法照常转给源，读写由 core 判定", async () => {
     const created = await postJson(
       "/v1/links",
       {
@@ -264,9 +264,9 @@ describe("只读令牌（ro）", () => {
       method: "POST",
       body: "{}",
     });
-    expect(write.status).toBe(403);
-    expect((await json(write)).code).toBe("forbidden");
-    expect(core.requests.length).toBe(before);
+    expect(write.status).toBe(200);
+    await write.arrayBuffer();
+    expect(core.requests.length).toBe(before + 1);
     const identity = await viaRelay(source.sourceId, "/api/identity/login", {
       token: guest.relayToken,
       method: "POST",

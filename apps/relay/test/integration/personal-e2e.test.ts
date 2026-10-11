@@ -528,7 +528,7 @@ describe("个人中转端到端", () => {
     expect(errorCode(tooLong)).toBe("bad_request");
   });
 
-  it("工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；边缘只放行读与身份域；范围落进存储", async () => {
+  it("工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；边缘不按 ro 过滤；范围落进存储", async () => {
     const created = output(
       "links",
       "create",
@@ -593,9 +593,9 @@ describe("个人中转端到端", () => {
       body: { text: MARKER },
       headers: token,
     });
-    expect(write.status).toBe(403);
-    expect(errorCode(write)).toBe("forbidden");
-    expect(core.requests).toBe(before);
+    // 边缘不按 ro 过滤（0.3.11）：写方法照常进隧道，读写由 core 判定。
+    expect(write.status).toBe(200);
+    expect(core.requests).toBe(before + 1);
     // 身份域照常进隧道（假 core 不认识这条路径，答 404）。
     const login = await call(
       "POST",
@@ -606,7 +606,7 @@ describe("个人中转端到端", () => {
       },
     );
     expect(login.status).toBe(404);
-    expect(core.requests).toBe(before + 1);
+    expect(core.requests).toBe(before + 2);
     // 再要断言仍带同一份范围。
     const again = output(
       "sources",
