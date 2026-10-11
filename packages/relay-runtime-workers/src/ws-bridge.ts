@@ -1,6 +1,6 @@
 /**
  * DO 里的客户端 WebSocket（中继设计 §2.5）：客户端 WS 由 Workers 运行时终止（拿到的是消息，
- * 不是帧），所以中继在「隧道流里的字节」与「消息」之间转换（内核 `ws/frames`）：
+ * 不是帧），所以中继在「隧道流里的字节」与「消息」之间转换（协议包 `ws-frames`）：
  *
  * - 下行（core → 客户端）：解帧（服务端帧不带掩码）、合并分片，`ws.send`；`close` 帧 →
  *   `ws.close(code, reason)`；core 发来的 `ping` 由中继代答带掩码的 `pong`（客户端那边的活性由
@@ -20,7 +20,7 @@ import {
   OPCODE,
   WsFrameDecoder,
   WsFrameError,
-} from "@armadra/relay-kernel/ws/frames";
+} from "@armadra/platform-protocol/ws-frames";
 
 import type { EndpointHandler, TunnelEndpoint } from "./endpoint.ts";
 

@@ -1,6 +1,6 @@
 /**
  * DO 里的客户端 HTTP 转发（中继设计 §2.4）：Workers 没有可以挂到自定义连接上的 HTTP 客户端，
- * 请求由内核的 `http1/request` 写成 HTTP/1.1 字节进隧道流，源的响应由 `http1/response` 增量解析
+ * 请求由协议包的 `http1` 写成 HTTP/1.1 字节进隧道流，源的响应由同一模块的 `ResponseParser` 增量解析
  * 成 `Response`。判定（地址、令牌、限流、开流）在内核的 `EdgePolicy`，这里只管字节。
  *
  * - 请求头：`forwardRequestHeaders`（剥令牌与逐跳头、`X-Forwarded-*`、`connection: close`），再剥掉
@@ -14,6 +14,17 @@
  *
  * 不解析正文、不缓存、不记路径与头。
  */
+import {
+  encodeChunk,
+  encodeRequestHead,
+  Http1ParseError,
+  Http1RequestError,
+  LAST_CHUNK,
+  requestFraming,
+  ResponseParser,
+  type ResponseEvent,
+  type ResponseHead,
+} from "@armadra/platform-protocol/http1";
 import { RST } from "@armadra/platform-protocol/tunnel";
 import type { AddressTarget } from "@armadra/relay-kernel/edge/addressing";
 import {
@@ -26,19 +37,6 @@ import type {
   EdgePolicy,
   EdgeRequest,
 } from "@armadra/relay-kernel/edge/policy";
-import {
-  encodeChunk,
-  encodeRequestHead,
-  Http1RequestError,
-  LAST_CHUNK,
-  requestFraming,
-} from "@armadra/relay-kernel/http1/request";
-import {
-  Http1ParseError,
-  ResponseParser,
-  type ResponseEvent,
-  type ResponseHead,
-} from "@armadra/relay-kernel/http1/response";
 import { errorName, type RelayLog } from "@armadra/relay-kernel/log";
 import type { Tunnel } from "@armadra/relay-kernel/tunnel/tunnel";
 

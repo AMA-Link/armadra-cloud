@@ -11,6 +11,7 @@
  */
 import { z } from "zod";
 
+import { E2E_CAPABILITY } from "../e2e/constants.ts";
 import { utf8 } from "../internal/bytes.ts";
 
 export const hex32Schema = z
@@ -29,6 +30,12 @@ export const protocolVersionSchema = z.object({
   major: z.number().int().nonnegative(),
   minor: z.number().int().nonnegative(),
 });
+
+/**
+ * `hello.capabilities` 里有协议含义的项（其余项由 core 自定，中继忽略）：
+ * - `e2e`（1.3）：源能接端到端通道，中继才对它开 `_relay/e2e`。
+ */
+export const TUNNEL_CAPABILITIES = { e2e: E2E_CAPABILITY } as const;
 
 export const helloSchema = z.object({
   type: z.literal("hello"),

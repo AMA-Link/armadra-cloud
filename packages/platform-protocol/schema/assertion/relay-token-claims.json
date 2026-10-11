@@ -49,6 +49,11 @@
     },
     "ro": {
       "type": "boolean"
+    },
+    "dev": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
     }
   },
   "required": [

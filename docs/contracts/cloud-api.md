@@ -156,6 +156,7 @@
 - 流控：`ready.limits` 给出的窗口即初始信用；接收方把交给上层的字节累计到窗口一半时用 `WINDOW` 补回。对端超发 → `RST 5` 并关 4400。只有中继发 `OPEN`，源发来的 `OPEN` 答 `RST 1`。
 - 只为客户端的真请求开流：CORS 预检由中继在边缘回答（§7），不产生 `OPEN`，源收不到预检。
 - HTTP 流：`DATA` 里是完整的 HTTP/1.1 请求字节，末尾带 `connection: close`，一条流只跑一个请求；源答完响应后结束流。
+- 端到端通道流（协议 1.3）：`OPEN.kind = "e2e"`，`DATA` 里是 `armadra-e2e/1` 的密文单元，只开给 `hello.capabilities` 含 `e2e` 的源（§20）。
 
 ## §9 计费（预留）
 
@@ -291,3 +292,15 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
 <!-- rpc:end -->
+
+## §20 端到端通道
+
+协议 1.3（协议包 0.4.0）。客户端与源（core）之间经中继建一条端到端加密的通道 `armadra-e2e/1`，中继只转发密文，看不到方法、路径、头与正文。没有遗留兼容的问题：源不报能力 `e2e` 就不开这条面，明文路径（§7）在过渡期照旧可用。
+
+- **边缘面**：saas `wss://<sourceId>.src.<域>/_relay/e2e`，personal `wss://<中继>/s/<sourceId>/_relay/e2e`。`_relay/` 是中继的保留段（与 §12 媒体票相同），不进隧道。只认 WebSocket 升级；普通 HTTP 请求答 `404 not_found`。
+- **子协议**：`armadra-e2e.1`（版本，中继选它答复）+ `armadra-relay.<中继令牌>`（与 §7 相同，中继剥掉）。缺版本子协议或版本不认识以 4409 关闭。
+- **判定**：令牌校验、限流、按 `sourceId` 路由与 §7 相同（同一张拒绝表，WebSocket 一列）；源在线但隧道 `hello.capabilities` 没报 `e2e` → 4404，原因 `e2e_unsupported`（错误码仍是 `source_offline`）。中继令牌的 `ro` 对这条面不生效（中继看不到内层请求），读写由源判定。
+- **隧道侧**：中继开一条流 `OPEN { kind: "e2e", method: "GET", path: "/_relay/e2e", headers: [], clientOrigin, remoteIp, relayNode }`，此后客户端 WebSocket 的二进制消息原样写进 `DATA`，`DATA` 原样作为二进制消息发回客户端；文本消息以 4400 关闭。消息边界不保证（中继可以合并或切分），通道自己按长度切单元。客户端关闭 → `END`；源 `END` / `RST` → 以 1000 / 4404 关闭；窗口与背压同隧道。`e2e` 流计入同一账号的并发 WebSocket 上限（256）。
+- **中继令牌 `dev`**：可选声明，issuer 侧签发这张令牌的会话所属设备 id；中继只用它计数「来自哪些设备」，不参与鉴权。老令牌没有它。
+- **通道格式**：以协议包 `./e2e` 为准（握手三条消息、AES-256-GCM 记录、r0 `accept`），黄金向量在 `packages/platform-protocol/fixtures/e2e/handshake.json`。中继不解析它。
+- **日志与指标**：只记 `{ sourceId, sub, dev, node, bytesUp, bytesDown, durationMs, closeCode }`；指标 `kind` 标签多一个 `e2e`。

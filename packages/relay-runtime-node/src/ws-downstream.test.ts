@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 
-import { closeFrame } from "@armadra/relay-kernel/ws/frames";
+import { closeFrame } from "@armadra/platform-protocol/ws-frames";
 import { describe, expect, it } from "vitest";
 
 import { WsDownstream } from "./ws-downstream.ts";
@@ -60,7 +60,7 @@ describe("WS 帧边界", () => {
       Buffer.concat(written).subarray(
         -closeFrame(4404, "source_offline").length,
       ),
-    ).toEqual(closeFrame(4404, "source_offline"));
+    ).toEqual(Buffer.from(closeFrame(4404, "source_offline")));
   });
 
   it("还没收到升级响应时源下线：答 503", async () => {

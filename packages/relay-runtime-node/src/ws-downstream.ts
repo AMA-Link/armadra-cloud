@@ -2,7 +2,7 @@
  * WS 升级之后「源 → 客户端」方向的写出端（中继设计 §3.2、§4.5）。
  *
  * 中继对 WS 是字节透传：不解压、不改帧。但有两件事要在帧边界上做，所以这里只跟踪
- * 帧头（长度，内核 `ws/frames.ts` 的 {@link FrameBoundaryTracker}），从不看载荷：
+ * 帧头（长度，协议包 `ws-frames` 的 {@link FrameBoundaryTracker}），从不看载荷：
  *
  * - 对客户端每 `pingMs` 插一个 `ping` 帧（浏览器自动回 `pong`）；`idleMs` 内客户端
  *   一个字节都没发来就断开。客户端回的 `pong` 原样流到源，源的 WS 实现会忽略不请自来的
@@ -20,7 +20,7 @@ import {
   closeFrame,
   FrameBoundaryTracker,
   PING_FRAME,
-} from "@armadra/relay-kernel/ws/frames";
+} from "@armadra/platform-protocol/ws-frames";
 
 const HEAD_LIMIT = 64 * 1024;
 

@@ -1,10 +1,7 @@
-import {
-  readFixture,
-  readJsonFixture,
-} from "@armadra/platform-protocol/fixtures";
+import { readFixture, readJsonFixture } from "../src/fixtures/index.ts";
 import { describe, expect, it } from "vitest";
 
-import { fixtureBytes, joinBytes, type FixtureBytes } from "../../test/wire.ts";
+import { fixtureBytes, joinBytes, type FixtureBytes } from "./wire.ts";
 import {
   closeFrame,
   closePayload,
@@ -15,7 +12,7 @@ import {
   WsFrameDecoder,
   WsFrameError,
   type WsEvent,
-} from "./frames.ts";
+} from "../src/ws-frames/frames.ts";
 
 describe("WS 帧边界", () => {
   const frame = (payload: number, masked = false) => {
@@ -166,7 +163,7 @@ describe("ws/frames：黄金夹具", () => {
 
   it("closeFrame 与关闭帧夹具逐字节相同；PING_FRAME 是空 ping", () => {
     expect(closeFrame(4404, "source_offline")).toEqual(
-      Buffer.from(readFixture("ws/close-source-offline.bin")),
+      readFixture("ws/close-source-offline.bin"),
     );
     expect(
       encodeWsFrame({ opcode: OPCODE.ping, payload: new Uint8Array(0) }),

@@ -40,6 +40,7 @@ import { challengeSigningInput } from "../src/tunnel/handshake.ts";
 import { LIMITS } from "../src/tunnel/limits.ts";
 import { PROTOCOL_VERSION } from "../src/version.ts";
 import { CLOUD_API_SAMPLES } from "./cloud-api-samples.ts";
+import { E2E_VECTOR_INPUTS, e2eVector } from "./e2e-vectors.ts";
 import { wireFixtures } from "./wire-fixtures.ts";
 
 const ROOT = fileURLToPath(new URL("../fixtures/", import.meta.url));
@@ -139,6 +140,20 @@ const openWs: Frame = {
     relayNode: "relay-1",
   },
 };
+/** 协议 1.3：端到端通道，中继把子协议剥光，headers 恒空。 */
+const openE2e: Frame = {
+  type: "open",
+  streamId: 5,
+  open: {
+    kind: "e2e",
+    method: "GET",
+    path: "/_relay/e2e",
+    headers: [],
+    clientOrigin: "https://app.armadra.test",
+    remoteIp: "203.0.113.7",
+    relayNode: "relay-1",
+  },
+};
 const data64k = new Uint8Array(LIMITS.maxDataChunk);
 for (let index = 0; index < data64k.length; index += 1)
   data64k[index] = (index * 31 + 7) & 0xff;
@@ -146,6 +161,7 @@ for (let index = 0; index < data64k.length; index += 1)
 const single: Record<string, Frame> = {
   "open-http": openHttp,
   "open-ws": openWs,
+  "open-e2e": openE2e,
   "data-64k": { type: "data", streamId: 1, bytes: data64k },
   end: { type: "end", streamId: 1 },
   "rst-3": { type: "rst", streamId: 1, code: 3 },
@@ -332,6 +348,17 @@ const tokens: Record<string, string> = {
     org: "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
     ro: true,
   }),
+  /** 协议 1.3：带 issuer 侧设备 id 的中继令牌。 */
+  "relay-token-dev": jwt(header(TOKEN_TYPES.relay), {
+    iss: ISSUER,
+    sub: ACCOUNT_ID,
+    aud: "relay",
+    src: SOURCE_ID,
+    ...times(RELAY_TOKEN.ttlMs),
+    jti: "jti-relay-dev-0001",
+    ver: 1,
+    dev: device.deviceId,
+  }),
   "tunnel-token": tunnelToken,
   /** 协议 1.1：属于组织的源的隧道令牌。 */
   "tunnel-token-org": jwt(header(TOKEN_TYPES.tunnel), {
@@ -403,6 +430,17 @@ put(
 for (const [key, sample] of Object.entries(CLOUD_API_SAMPLES))
   put(`cloud-api/${key}.json`, json(sample));
 put("errors.json", json(ERRORS));
+
+// ------------------------------------------------------------------ e2e
+
+put(
+  "e2e/handshake.json",
+  json({
+    $comment:
+      "armadra-e2e/1 握手与记录层的黄金向量：由 scripts/e2e-vectors.ts 用 node:crypto 独立算出（不经 src/e2e/）。种子与秘密公开，只用于测试。字节都是小写 hex。",
+    vectors: E2E_VECTOR_INPUTS.map(e2eVector),
+  }),
+);
 
 // ------------------------------------------------------------------ http1 / ws
 

@@ -29,6 +29,7 @@ export {
   readySchema,
   rejectSchema,
   signatureSchema,
+  TUNNEL_CAPABILITIES,
   TUNNEL_REJECT_CODES,
   tunnelClientMessageSchema,
   tunnelLimitsSchema,

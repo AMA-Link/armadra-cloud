@@ -13,6 +13,7 @@
  */
 import { z } from "zod";
 
+import { E2E_PATH } from "../e2e/constants.ts";
 import { fromUtf8, utf8 } from "../internal/bytes.ts";
 import { FRAME_TYPE, type FrameTypeName } from "./codes.ts";
 import { LIMITS } from "./limits.ts";
@@ -33,8 +34,13 @@ export class FrameError extends Error {
 
 const headerPairSchema = z.tuple([z.string().min(1), z.string()]);
 
+/**
+ * `kind`：`http` 一条流跑一个 HTTP/1.1 请求，`ws` 一条 WebSocket；1.3 起 `e2e` 是一条
+ * 端到端通道（`DATA` 里是 `armadra-e2e/1` 的单元，中继看不懂），`method` 恒为 `GET`、`path`
+ * 恒为 `/_relay/e2e`、`headers` 恒空。中继只给在 `hello.capabilities` 里报了 `e2e` 的源开它。
+ */
 export const openPayloadSchema = z.object({
-  kind: z.enum(["http", "ws"]),
+  kind: z.enum(["http", "ws", "e2e"]),
   method: z.string().min(1).max(32),
   /** 含 query。 */
   path: z.string().startsWith("/"),
@@ -96,6 +102,16 @@ function parseOpen(value: unknown): OpenPayload {
   const result = openPayloadSchema.safeParse(value);
   if (!result.success)
     throw new FrameError("bad_open", "OPEN 载荷不符合 schema");
+  if (
+    result.data.kind === "e2e" &&
+    (result.data.method !== "GET" ||
+      result.data.path !== E2E_PATH ||
+      result.data.headers.length > 0)
+  )
+    throw new FrameError(
+      "bad_open",
+      "e2e 的 OPEN 只能是 GET /_relay/e2e、不带头",
+    );
   if (headersBytes(result.data.headers) > LIMITS.openHeadersMaxBytes) {
     throw new FrameError("bad_open", "OPEN 的 headers 超过上限");
   }

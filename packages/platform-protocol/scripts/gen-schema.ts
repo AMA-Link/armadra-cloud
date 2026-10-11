@@ -5,7 +5,8 @@
  * - `assertion/*.json`：五种令牌声明与公钥（zod 4 `z.toJSONSchema`）；
  * - `tunnel/*.json`：握手的 hello / challenge / auth / ready / reject 与帧里的 JSON 载荷；
  * - `errors.json`：错误码 → HTTP 状态码；
- * - `constants.json`：协议版本、路径、隧道限制与身份常量（identity-vectors）。
+ * - `e2e/accept.json`：端到端通道 r0 的 JSON；
+ * - `constants.json`：协议版本、路径、隧道限制、端到端通道常量与身份常量（identity-vectors）。
  *
  * `/v1` 契约的 OpenAPI（`schema/cloud-openapi.json`）由 `tools/contract/generate.mjs`
  * 一起写，这里只校验它在。字节由输入决定，重复运行不变。
@@ -59,6 +60,8 @@ import {
   rejectSchema,
 } from "../src/tunnel/handshake.ts";
 import { LIMITS } from "../src/tunnel/limits.ts";
+import { e2eAcceptSchema } from "../src/e2e/accept.ts";
+import * as e2e from "../src/e2e/constants.ts";
 import * as version from "../src/version.ts";
 
 const ROOT = fileURLToPath(new URL("../schema/", import.meta.url));
@@ -90,6 +93,7 @@ schema("tunnel/ready.json", readySchema);
 schema("tunnel/reject.json", rejectSchema);
 schema("tunnel/open-payload.json", openPayloadSchema);
 schema("tunnel/goaway-payload.json", goawayPayloadSchema);
+schema("e2e/accept.json", e2eAcceptSchema);
 
 // ------------------------------------------------------------ 错误码与常量
 
@@ -130,6 +134,16 @@ put("constants.json", {
     },
   },
   tunnel: { limits: LIMITS, frameTypes: FRAME_TYPE, rst: RST, close: CLOSE },
+  e2e: {
+    version: e2e.E2E_VERSION,
+    protocol: e2e.E2E_PROTOCOL,
+    subprotocol: e2e.E2E_SUBPROTOCOL,
+    path: e2e.E2E_PATH,
+    capability: e2e.E2E_CAPABILITY,
+    flags: e2e.E2E_FLAGS,
+    labels: e2e.E2E_LABELS,
+    limits: e2e.LIMITS_E2E,
+  },
   identity: constants,
 });
 

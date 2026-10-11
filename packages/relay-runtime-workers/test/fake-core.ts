@@ -37,7 +37,7 @@ import {
   encodeWsFrame,
   OPCODE,
   WsFrameDecoder,
-} from "@armadra/relay-kernel/ws/frames";
+} from "@armadra/platform-protocol/ws-frames";
 import { SELF } from "cloudflare:test";
 
 import type { TestSource } from "./api.ts";

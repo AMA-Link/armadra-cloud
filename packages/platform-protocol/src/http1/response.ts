@@ -14,9 +14,8 @@
  *
  * 头值按 latin1 解码（与 Node 的 HTTP 解析器相同），保留原始大小写与顺序。
  */
-import { LIMITS } from "@armadra/platform-protocol/tunnel";
-
-import type { HeaderPair } from "../edge/forward.ts";
+import { LIMITS } from "../tunnel/limits.ts";
+import type { HeaderPair } from "./request.ts";
 
 export interface ResponseHead {
   /** `1.0` 或 `1.1`。 */

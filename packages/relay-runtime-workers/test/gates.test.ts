@@ -80,9 +80,9 @@ describe("运维端点", () => {
       ok: true,
       mode: "personal",
       node: "cf",
-      version: "0.3.11",
+      version: "0.4.0",
     });
-    expect(health.headers.get("armadra-protocol")).toBe("1.2");
+    expect(health.headers.get("armadra-protocol")).toBe("1.3");
     const ready = await call("/ready");
     expect(ready.status).toBe(200);
     await ready.arrayBuffer();
@@ -104,7 +104,7 @@ describe("运维端点", () => {
       mode: "personal",
       name: "Test relay",
       issuer: "https://relay.armadra.test",
-      protocol: { major: 1, minor: 2 },
+      protocol: { major: 1, minor: 3 },
       relay: { addressing: "path" },
       webApp: "https://relay.armadra.test/app/",
     });
