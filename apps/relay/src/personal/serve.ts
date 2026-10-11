@@ -15,6 +15,7 @@ import {
   type ChallengeVerifier,
 } from "@armadra/control-core/challenge";
 import { createMeStreamCore } from "@armadra/control-core/me-stream";
+import { DEFAULT_TENANT } from "@armadra/control-core/ports";
 import { LAST_SEEN_FLUSH_MS } from "@armadra/control-core/sessions";
 import { trustedOriginsOf } from "@armadra/control-core/sources";
 import { guestPrefix } from "@armadra/control-core/subjects";
@@ -63,6 +64,7 @@ import {
   type TlsManager,
 } from "./tls.ts";
 import {
+  DEFAULT_TRAFFIC_RETENTION_DAYS,
   defaultIssuer,
   type PersonalServeOptions,
   type RateLimitOptions,
@@ -133,6 +135,28 @@ async function openOrInit(
       },
     );
   return store;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * 流量统计的保留期清理（cloud-api §19）：启动时与之后每天一次，删掉桶起点早于保留期的行。
+ * 答停止函数。
+ */
+export function startTrafficRetention(
+  store: PersonalStore,
+  days: number,
+  now: () => number,
+  onError: (error: unknown) => void,
+): () => void {
+  const prune = () =>
+    void store.ports.traffic
+      .prune(DEFAULT_TENANT, now() - days * DAY_MS)
+      .catch(onError);
+  prune();
+  const timer = setInterval(prune, DAY_MS);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 
 /** 边缘限流：命令行 / 环境变量 > 状态文件 > 缺省；登录等防暴力破解的规则不在其中。 */
@@ -302,6 +326,13 @@ async function startServing(
       : {}),
   });
 
+  const retentionDays =
+    options.trafficRetentionDays ?? DEFAULT_TRAFFIC_RETENTION_DAYS;
+  if (retentionDays > 0 && store.kind === "file")
+    log.info(
+      "状态文件存储：流量统计只在内存里累计，重启归零；可以用 personal migrate --to sqlite 迁到 SQLite",
+      { store: store.kind },
+    );
   const relay = await startRelay({
     mode: "personal",
     nodeId: options.host.slice(0, 64),
@@ -328,6 +359,18 @@ async function startServing(
       stream.handleUpgrade(req, socket, head),
     ...(tls ? { tls: tls.current() } : {}),
     now,
+    ...(retentionDays > 0
+      ? {
+          traffic: {
+            write: (rows) => store.ports.traffic.upsert(DEFAULT_TENANT, rows),
+            onError: (error, dropped) =>
+              log.warn("流量统计写入失败", {
+                error: errorName(error),
+                dropped,
+              }),
+          },
+        }
+      : {}),
   }).catch(async (error: unknown) => {
     await control.close();
     await acme?.close();
@@ -379,6 +422,12 @@ async function startServing(
     (error) => log.error("存储重新读取失败", { error: errorName(error) }),
   );
   const releaseRunLock = holdRunLock(options.dataDir);
+  const stopRetention =
+    retentionDays > 0
+      ? startTrafficRetention(store, retentionDays, now, (error) =>
+          log.warn("流量统计清理失败", { error: errorName(error) }),
+        )
+      : undefined;
 
   const stopTls = tls?.start(
     (material) => {
@@ -418,6 +467,7 @@ async function startServing(
     close() {
       closing ??= (async () => {
         clearInterval(flushTimer);
+        stopRetention?.();
         stopWatch();
         stopTls?.();
         offPresence();

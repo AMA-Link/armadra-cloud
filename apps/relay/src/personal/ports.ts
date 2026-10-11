@@ -3,7 +3,8 @@
  * `state.json`：每个写方法是一次 `StateStore.update`（目录锁内读盘 → 改副本 → 校验写回），
  * `fn` 抛错不写、没改不写；读方法读内存里的那份（`serve` 每秒看一眼文件，别人改过就重读）。
  *
- * 方法虽然是 async，读写都在调用的那一刻同步完成。
+ * 方法虽然是 async，读写都在调用的那一刻同步完成。流量统计不进状态文件：只在本进程内存里累计
+ * （`createMemoryTrafficStore`），重启归零。
  */
 import type {
   AccountRecord,
@@ -16,6 +17,7 @@ import type {
 import { sameHex } from "@armadra/control-core/secrets";
 import { isStaleDevice } from "@armadra/control-core/sessions";
 import { guestPrefix, ownerSubject } from "@armadra/control-core/subjects";
+import { createMemoryTrafficStore } from "@armadra/control-core/traffic";
 
 import type { State, StateStore } from "./state.ts";
 
@@ -249,5 +251,7 @@ export function createStatePorts(store: StateStore): ControlPorts {
         };
       },
     },
+
+    traffic: createMemoryTrafficStore(),
   };
 }

@@ -9,6 +9,8 @@ import {
   parsePersonalDoctor,
   parsePersonalInit,
   parsePersonalServe,
+  parseDuration,
+  parseTraffic,
   UsageError,
 } from "./args.ts";
 
@@ -361,5 +363,62 @@ describe("存储参数", () => {
       trustedProxy: "127.0.0.1/32",
       passwordFile: "/run/pw",
     });
+  });
+});
+
+describe("流量统计参数", () => {
+  const base = ["--data-dir", "d", "--host", "127.0.0.1"];
+  it("serve 保留天数：缺省 90；命令行优先于 RELAY_TRAFFIC_RETENTION_DAYS；0 = 不记录", () => {
+    expect(parsePersonalServe(base, {}, "/w").trafficRetentionDays).toBe(90);
+    expect(
+      parsePersonalServe(base, { RELAY_TRAFFIC_RETENTION_DAYS: "30" }, "/w")
+        .trafficRetentionDays,
+    ).toBe(30);
+    expect(
+      parsePersonalServe(
+        [...base, "--traffic-retention-days", "0"],
+        { RELAY_TRAFFIC_RETENTION_DAYS: "30" },
+        "/w",
+      ).trafficRetentionDays,
+    ).toBe(0);
+    expect(
+      parsePersonalServe(base, { RELAY_TRAFFIC_RETENTION_DAYS: "" }, "/w")
+        .trafficRetentionDays,
+    ).toBe(90);
+    for (const bad of ["-1", "1.5", "abc", "3651"])
+      expect(() =>
+        parsePersonalServe(
+          [...base, "--traffic-retention-days", bad],
+          {},
+          "/w",
+        ),
+      ).toThrow(UsageError);
+  });
+
+  it("traffic：--since 缺省 7 天，认 d / h / m；--source 要 32 位 hex", () => {
+    expect(parseTraffic(["--data-dir", "d"], {}, "/w")).toEqual({
+      dataDir: "/w/d",
+      sinceMs: 7 * 86_400_000,
+    });
+    expect(
+      parseTraffic(
+        ["--data-dir", "d", "--since", "24h", "--source", "a".repeat(32)],
+        {},
+        "/w",
+      ),
+    ).toEqual({
+      dataDir: "/w/d",
+      sinceMs: 86_400_000,
+      sourceId: "a".repeat(32),
+    });
+    expect(parseDuration("30m")).toBe(1_800_000);
+    for (const bad of ["0d", "7", "7w", "-1d"])
+      expect(parseDuration(bad)).toBeNull();
+    expect(() =>
+      parseTraffic(["--data-dir", "d", "--since", "week"], {}, "/w"),
+    ).toThrow(UsageError);
+    expect(() =>
+      parseTraffic(["--data-dir", "d", "--source", "nope"], {}, "/w"),
+    ).toThrow(UsageError);
   });
 });

@@ -11,7 +11,7 @@ import { RELAY_VERSION } from "./version.ts";
 
 export const USAGE = `用法: armadra-relay <模式> <子命令> [选项]
 
-  personal init|serve|status|passwd|rotate-key|links|migrate|backup|doctor
+  personal init|serve|status|passwd|rotate-key|links|traffic|migrate|backup|doctor
                                                        单人中转；缺省不带外部数据库，多节点可选 PostgreSQL / Redis
   saas serve                                           多租户中继（配置走 RELAY_* 环境变量）
   health                                               探活本机 /health（镜像的 HEALTHCHECK 用）
@@ -27,6 +27,7 @@ export const PERSONAL_USAGE = `用法: armadra-relay personal <子命令> [选�
   passwd       改口令并让账号的全部设备重新登录：--data-dir [--password-file F]
   rotate-key   启用新签名钥，旧钥一小时后退役：--data-dir
   links        list | revoke <linkId>：--data-dir
+  traffic      按源、账号、设备与类别合计中继流量：--data-dir [--since 7d] [--source <id>]
   migrate      换存储（先停 serve），原文件改名留作回退：--data-dir --to sqlite|file|postgres [--database-url URL]
   backup       在线备份存储到一个新文件：--data-dir --out F
   doctor       检查权限、存储完整性、监听地址、受信代理与口令：--data-dir，其余同 serve
@@ -69,7 +70,8 @@ serve:
   --turnstile-site-key K   Turnstile 站点密钥（或 RELAY_TURNSTILE_SITE_KEY），不是秘密
   --turnstile-secret-file F Turnstile secret 文件（或 RELAY_TURNSTILE_SECRET_FILE）
   --turnstile-hostnames L  允许的 siteverify 主机名，逗号分隔（或 RELAY_TURNSTILE_HOSTNAMES）；空 = 拒绝一切；https 公网地址下不得含本机
-  --challenge-scope LIST   要挑战的 procedure：auth.login、links.accept、auth.changePassword，逗号分隔（或 RELAY_CHALLENGE_SCOPE），默认 auth.login`;
+  --challenge-scope LIST   要挑战的 procedure：auth.login、links.accept、auth.changePassword，逗号分隔（或 RELAY_CHALLENGE_SCOPE），默认 auth.login
+  --traffic-retention-days N 流量统计保留天数（或 RELAY_TRAFFIC_RETENTION_DAYS），默认 90，0 = 不记录`;
 
 function onSignal(stop: () => Promise<void>): void {
   const handler = () => {
@@ -155,6 +157,12 @@ async function personal(
             print,
             options.database,
           );
+        return 0;
+      }
+      case "traffic": {
+        const { runTraffic } = await import("./personal/commands.ts");
+        const options = args.parseTraffic(rest, process.env);
+        await runTraffic(options, print, Date.now(), options.database);
         return 0;
       }
       case "migrate": {
