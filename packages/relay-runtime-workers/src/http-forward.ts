@@ -1,7 +1,7 @@
 /**
  * DO 里的客户端 HTTP 转发（中继设计 §2.4）：Workers 没有可以挂到自定义连接上的 HTTP 客户端，
  * 请求由内核的 `http1/request` 写成 HTTP/1.1 字节进隧道流，源的响应由 `http1/response` 增量解析
- * 成 `Response`。判定（地址、令牌、限流、只读门、开流）在内核的 `EdgePolicy`，这里只管字节。
+ * 成 `Response`。判定（地址、令牌、限流、开流）在内核的 `EdgePolicy`，这里只管字节。
  *
  * - 请求头：`forwardRequestHeaders`（剥令牌与逐跳头、`X-Forwarded-*`、`connection: close`），再剥掉
  *   Cloudflare 自己加的 `cf-*` / `cdn-loop` / `true-client-ip`（客户端 IP 已在 `OPEN.remoteIp`）。

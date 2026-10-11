@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 变更 / Changed
+
+- 中继边缘不再按只读中继令牌（`ro`）过滤（cloud 各包同版本 0.3.11，协议仍是 1.2，线上形状不变；Refs Armadra#309）：core 的 RPC 一律 `POST`，原来的只读门只放行安全方法与身份域，只读与会话分享的访客连 `system.hello` 都过不去。现在 `ro` 令牌的所有方法照常转给源，读写只由 core 按授予判定；令牌照旧签 `ro`，协议包的 `isReadOnlyAllowed` 保留但标为弃用。cloud-api §14「只读门」同步。
+  The relay edge no longer filters read-only relay tokens (`ro`) (all cloud packages at 0.3.11, protocol still 1.2, wire shapes unchanged; Refs Armadra#309): core RPCs are all `POST`, and the old read-only gate only let safe methods and the identity routes through, so read-only and session-share guests could not even reach `system.hello`. Every method on an `ro` token is now forwarded to the source and core alone decides reads and writes; tokens still carry `ro`, and the protocol package keeps `isReadOnlyAllowed` as deprecated. cloud-api §14 "read-only gate" is updated.
+
 ## 0.3.10（2026-10-11）
 
 - 人机验证（Turnstile）改为可选、缺省关闭：wrangler.jsonc 站点密钥缺省为空，bootstrap-production.sh 仅在设置 `ARMADRA_RELAY_TURNSTILE_SITE_KEY` 时读取并上传 Turnstile secret。 / Turnstile is now opt-in and off by default.
