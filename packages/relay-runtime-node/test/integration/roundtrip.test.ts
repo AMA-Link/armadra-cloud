@@ -1126,3 +1126,140 @@ describe("只读中继令牌（ro，协议 1.1）", () => {
     expect(issued.status).toBe(200);
   });
 });
+
+describe("端到端通道 _relay/e2e（cloud-api §20）", () => {
+  const e2eUrl = (h: Harness) => `${h.base.replace("http", "ws")}/_relay/e2e`;
+  function open(h: Harness, protocols: string[]) {
+    const ws = new WebSocket(e2eUrl(h), protocols);
+    cleanups.push(() => ws.terminate());
+    return ws;
+  }
+  const closeCode = async (ws: WebSocket) =>
+    ((await once(ws, "close")) as [number, Buffer]).map((value) =>
+      Buffer.isBuffer(value) ? value.toString() : value,
+    );
+
+  it("源报 e2e：OPEN kind e2e 不带头；随机字节双向 10 MB 原样回来；指标 kind=e2e；日志没有内容", async () => {
+    const h = await harness({ metricsListen: { host: "127.0.0.1", port: 0 } });
+    const core = await connected(h, h.core({ capabilities: ["e2e"] }));
+    const ws = open(h, [
+      "armadra-e2e.1",
+      `armadra-relay.${relayToken({ dev: "dev_1" })}`,
+    ]);
+    await once(ws, "open");
+    expect(ws.protocol).toBe("armadra-e2e.1");
+    await waitFor(() => core.e2eOpens.length === 1);
+    expect(core.e2eOpens[0]).toEqual({
+      kind: "e2e",
+      method: "GET",
+      path: "/_relay/e2e",
+      headers: [],
+      clientOrigin: null,
+      remoteIp: "127.0.0.1",
+      relayNode: "relay-test",
+    });
+    const total = 10 * 1024 * 1024;
+    const sent = createHash("sha256");
+    const got = createHash("sha256");
+    let received = 0;
+    ws.on("message", (data: Buffer) => {
+      got.update(data);
+      received += data.length;
+    });
+    // 中继可以合并或切分消息：只比字节流。
+    let seed = 1;
+    for (let offset = 0; offset < total; ) {
+      const size = Math.min(total - offset, 1 + (seed % 70_000));
+      const chunk = Buffer.alloc(size);
+      for (let index = 0; index < size; index += 1) {
+        seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff;
+        chunk[index] = seed & 0xff;
+      }
+      sent.update(chunk);
+      ws.send(chunk);
+      offset += size;
+      if (ws.bufferedAmount > 4 * 1024 * 1024)
+        await waitFor(() => ws.bufferedAmount < 1024 * 1024);
+    }
+    await waitFor(() => received >= total, 20, 30_000);
+    expect(received).toBe(total);
+    expect(got.digest("hex")).toBe(sent.digest("hex"));
+    const text = await (await fetch(`${h.relay.metricsUrl}/metrics`)).text();
+    expect(text).toContain('relay_edge_streams_total{kind="e2e"} 1');
+    ws.close(1000);
+    await once(ws, "close");
+    await waitFor(() => h.relay.tunnels.counts().streams === 0);
+    await waitFor(() => h.logs.some((line) => line.includes("端到端通道结束")));
+    const line = h.logs.find((entry) => entry.includes("端到端通道结束")) ?? "";
+    expect(line).toContain('"kind":"e2e"');
+    expect(line).not.toContain("dev_1");
+    expect(line).not.toContain("acct_test");
+  }, 60_000);
+
+  it("拒绝：令牌缺 4401、src 不符 4403、缺版本子协议 4409、源没报 e2e 4404 e2e_unsupported、源离线 4404；HTTP 404", async () => {
+    const h = await harness();
+    expect(
+      await closeCode(
+        open(h, ["armadra-e2e.1", `armadra-relay.${relayToken()}`]),
+      ),
+    ).toEqual([CLOSE.sourceOffline, "source_offline"]);
+    const core = await connected(h);
+    expect(await closeCode(open(h, ["armadra-e2e.1"]))).toEqual([
+      CLOSE.unauthenticated,
+      "relay_token_invalid",
+    ]);
+    expect(
+      await closeCode(
+        open(h, [
+          "armadra-e2e.1",
+          `armadra-relay.${relayToken({ src: "fedcba9876543210fedcba9876543210" })}`,
+        ]),
+      ),
+    ).toEqual([CLOSE.forbidden, "relay_source_mismatch"]);
+    expect(
+      await closeCode(
+        open(h, [`armadra-relay.${relayToken()}`, "armadra-ticket.t"]),
+      ),
+    ).toEqual([CLOSE.protocolUnsupported, "protocol_unsupported"]);
+    expect(
+      await closeCode(
+        open(h, ["armadra-e2e.1", `armadra-relay.${relayToken()}`]),
+      ),
+    ).toEqual([CLOSE.sourceOffline, "e2e_unsupported"]);
+    expect(core.e2eOpens).toHaveLength(0);
+    const plain = await fetch(`${h.base}/_relay/e2e`, { headers: auth() });
+    expect(plain.status).toBe(404);
+    expect(core.requests).toBe(0);
+  });
+
+  it("文本消息以 4400 关闭；源下线以 4404 结束；客户端关闭后流收尾", async () => {
+    const h = await harness();
+    const core = await connected(h, h.core({ capabilities: ["e2e"] }));
+    const text = open(h, ["armadra-e2e.1", `armadra-relay.${relayToken()}`]);
+    await once(text, "open");
+    text.send("plain");
+    expect((await closeCode(text))[0]).toBe(CLOSE.badFrame);
+    await waitFor(() => h.relay.tunnels.counts().streams === 0);
+    const ws = open(h, ["armadra-e2e.1", `armadra-relay.${relayToken()}`]);
+    await once(ws, "open");
+    const echoed = new Promise<Buffer>((resolve) =>
+      ws.once("message", (data: Buffer) => resolve(data)),
+    );
+    ws.send(Buffer.from([1, 2, 3]));
+    expect([...(await echoed)]).toEqual([1, 2, 3]);
+    core.terminate();
+    expect(await closeCode(ws)).toEqual([
+      CLOSE.sourceOffline,
+      "source_offline",
+    ]);
+  });
+
+  it("撤销源时 e2e 连接一起断开", async () => {
+    const h = await harness();
+    await connected(h, h.core({ capabilities: ["e2e"] }));
+    const ws = open(h, ["armadra-e2e.1", `armadra-relay.${relayToken()}`]);
+    await once(ws, "open");
+    expect(h.relay.disconnect({ sourceId: SOURCE_ID })).toBe(1);
+    await once(ws, "close");
+  });
+});

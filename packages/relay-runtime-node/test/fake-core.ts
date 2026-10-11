@@ -11,6 +11,7 @@
  * - `GET /big?bytes=N`：写 N 字节的确定序列（背压测试）。
  * - `GET /hold`：先写头，等 `release()` 才结束（GOAWAY 排空测试）。
  * - WS 任意路径：回显（文本 / 二进制），选 `armadra-ticket.*` 子协议。
+ * - `OPEN kind: "e2e"`（`capabilities` 含 `e2e` 时中继才会开）：字节原样回显（流接回自己）。
  */
 import { sign, type KeyObject } from "node:crypto";
 import { once } from "node:events";
@@ -26,6 +27,7 @@ import {
   readySchema,
   rejectSchema,
   type Frame,
+  type OpenPayload,
   type Ready,
   type Reject,
 } from "@armadra/platform-protocol/tunnel";
@@ -50,6 +52,8 @@ export interface FakeCoreOptions {
   token?: () => string;
   /** 连 `wss://` 时信任的 CA（personal 的自签 CA）。 */
   ca?: string;
+  /** `hello.capabilities`（缺省空）。 */
+  capabilities?: string[];
 }
 
 export interface Connected {
@@ -77,6 +81,8 @@ export class FakeCore {
   goaways: string[] = [];
   /** 收到的 HTTP 请求数（预检不该进隧道）。 */
   requests = 0;
+  /** 收到的端到端通道 `OPEN`。 */
+  readonly e2eOpens: OpenPayload[] = [];
   closeCode: number | undefined;
   readonly options: FakeCoreOptions;
 
@@ -221,7 +227,7 @@ export class FakeCore {
         protocol: PROTOCOL_VERSION,
         sourceId,
         coreVersion: "0.2.0-test",
-        capabilities: [],
+        capabilities: this.options.capabilities ?? [],
         tunnelToken: (this.options.token ?? (() => tunnelToken()))(),
         nonce,
       }),
@@ -299,6 +305,11 @@ export class FakeCore {
         });
         stream.on("error", () => {});
         this.streams.set(frame.streamId, stream);
+        if (frame.open.kind === "e2e") {
+          this.e2eOpens.push(frame.open);
+          stream.pipe(stream);
+          return;
+        }
         this.http.emit("connection", stream);
         return;
       }
