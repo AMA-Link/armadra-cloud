@@ -25,6 +25,8 @@ export interface TunnelAttachment {
 /** 客户端 WS 的附件（一条桥）。 */
 export interface ClientAttachment {
   kind: "client";
+  /** `e2e`：端到端通道（`e2e-bridge.ts`，字节透传）；缺省是普通 WS（解帧转发）。 */
+  mode?: "e2e";
   sourceId: string;
   tunnelId: string;
   streamId: number;
