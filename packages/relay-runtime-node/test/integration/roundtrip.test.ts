@@ -1391,7 +1391,7 @@ describe("流量统计（cloud-api §19）", () => {
     const measure = async (h: Harness) => {
       const token = relayToken();
       const latencies: number[] = [];
-      for (let index = 0; index < 200; index += 1) {
+      for (let index = 0; index < 100; index += 1) {
         const started = performance.now();
         await (
           await fetch(`${h.base}/echo-request`, { headers: auth(token) })
@@ -1401,10 +1401,10 @@ describe("流量统计（cloud-api §19）", () => {
       latencies.sort((a, b) => a - b);
       const started = performance.now();
       await (
-        await fetch(`${h.base}/big?bytes=20000000`, { headers: auth(token) })
+        await fetch(`${h.base}/big?bytes=5000000`, { headers: auth(token) })
       ).arrayBuffer();
       return {
-        medianMs: latencies[100] ?? 0,
+        medianMs: latencies[50] ?? 0,
         downloadMs: performance.now() - started,
       };
     };
@@ -1417,7 +1417,8 @@ describe("流量统计（cloud-api §19）", () => {
     await measure(metered);
     const without = await measure(plain);
     const withTraffic = await measure(metered);
-    expect(withTraffic.medianMs).toBeLessThan(without.medianMs * 1.5 + 1);
-    expect(withTraffic.downloadMs).toBeLessThan(without.downloadMs * 1.5 + 50);
-  });
+    // 宽松的门槛（CI 带覆盖率插桩、机器嘈杂）：只防退化成按帧写库这类数量级的开销。
+    expect(withTraffic.medianMs).toBeLessThan(without.medianMs * 2 + 2);
+    expect(withTraffic.downloadMs).toBeLessThan(without.downloadMs * 2 + 200);
+  }, 60_000);
 });
