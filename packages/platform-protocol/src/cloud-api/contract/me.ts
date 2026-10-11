@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { devicePlatformSchema } from "../../assertion/claims.ts";
 import { errors } from "../../errors/registry.ts";
-import { base, SINCE_0_1, SINCE_0_4 } from "../meta.ts";
+import { base, SINCE_0_1, SINCE_0_5 } from "../meta.ts";
 import {
   empty,
   meSchema,
@@ -92,12 +92,12 @@ export const me = {
     .input(empty)
     .output(z.object({ ticket: z.string(), expiresAtMs: z.number().int() })),
   /**
-   * 中继流量统计（cloud-api §19，0.4.0 起）：账号看自己能访问的源，访客只看自己的 `subject`。
+   * 中继流量统计（cloud-api §19，0.5.0 起）：账号看自己能访问的源，访客只看自己的 `subject`。
    * 能力 `me.traffic`。
    */
   traffic: base
     .route({ method: "GET", path: "/v1/me/traffic" })
-    .meta({ scope: ["session"], since: SINCE_0_4 })
+    .meta({ scope: ["session"], since: SINCE_0_5 })
     .errors(errors.pick("bad_request"))
     .input(trafficInputSchema)
     .output(z.object({ buckets: z.array(trafficBucketSchema) })),

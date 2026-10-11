@@ -31,7 +31,7 @@ export const PLATFORM_CAPABILITIES = [
   "challenge.turnstile",
   /** `auth.changePassword`（会话 + 旧口令改口令，cloud-api §18，0.3.10 起）。 */
   "auth.password-change",
-  /** `me.traffic`（中继流量统计，cloud-api §19，0.4.0 起）。 */
+  /** `me.traffic`（中继流量统计，cloud-api §19，0.5.0 起）。 */
   "me.traffic",
 ] as const;
 

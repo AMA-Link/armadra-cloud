@@ -230,12 +230,12 @@ describe("挑战（§16）与节点回报（§17）", () => {
     expect(PLATFORM_CAPABILITIES).toContain("auth.password-change");
   });
 
-  it("me.traffic（0.4.0）：会话、query 里的毫秒按数字收、粒度缺省按小时", () => {
+  it("me.traffic（0.5.0）：会话、query 里的毫秒按数字收、粒度缺省按小时", () => {
     const entry = listProcedures().find((one) => one.key === "me.traffic");
     expect(entry).toMatchObject({
       method: "GET",
       path: "/v1/me/traffic",
-      meta: { scope: ["session"], since: "0.4.0" },
+      meta: { scope: ["session"], since: "0.5.0" },
     });
     expect(entry?.errorCodes).toEqual(["bad_request"]);
     expect(sectionOf("me.traffic")).toBe("§19");
