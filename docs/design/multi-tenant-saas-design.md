@@ -289,7 +289,7 @@ CREATE TABLE client_source_routes (
 ### 3.5 数据面隔离与令牌 scope
 
 - 隧道按源：`route:src:<sourceId>`、`tunnel.connect.src`；一个源只属于一个租户（`sources.org_id`），跨租户没有共享隧道。
-- 中继令牌（`aud: "relay"`）加 `org`（租户）与 `ro`（只读）两个声明：`org` 用于 `edge.concurrent.org` / `edge.connect.org` 限流与计量；`ro` 时边缘只放行安全方法与身份域路径（`GET`/`HEAD`/`OPTIONS`，`/api/identity/*`、`/api/rpc/identity/*`、`/api/identity/ws-ticket`、WebSocket 升级），其余 `403 forbidden`——纵深防御，core 仍是判定点。
+- 中继令牌（`aud: "relay"`）加 `org`（租户）与 `ro`（只读）两个声明：`org` 用于 `edge.concurrent.org` / `edge.connect.org` 限流与计量；`ro` 时边缘只放行安全方法与身份域路径（`GET`/`HEAD`/`OPTIONS`，`/api/identity/*`、`/api/rpc/identity/*`、`/api/identity/ws-ticket`、WebSocket 升级），其余 `403 forbidden`——纵深防御，core 仍是判定点。（0.3.11 起停用：core 的 RPC 一律 `POST`，边缘不再按 `ro` 过滤，见 cloud-api §14。）
 - 断言加 `scp: string[]`（`ws:<id>`、`sess:<id>`、`ro`）、`role`、`org`、`team`；core 按 §3.3 编译。
 - SaaS 源地址用子域 `<sourceId>.src.<域>`：每个源一个浏览器来源，租户间的 localStorage / Cookie 天然隔离；个人中转的路径前缀 `/s/<id>/` 保持（单账号）。
 - 云端查询一律带 `org_id` / `account_id` 过滤（控制面设计 §7），审计不写令牌。

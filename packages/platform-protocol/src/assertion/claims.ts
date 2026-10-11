@@ -186,7 +186,7 @@ export const relayTokenClaimsSchema = z.object({
   ver: z.literal(CLAIMS_VERSION),
   /** 0.3.0 起：源所属的组织（限流与计量）；personal 不发。 */
   org: z.string().min(1).optional(),
-  /** 0.3.0 起：只读——边缘只放行安全方法与身份域路径（{@link isReadOnlyAllowed}）。 */
+  /** 0.3.0 起：只读。0.3.11 起边缘不再据它过滤，读写由 core 判定。 */
   ro: z.boolean().optional(),
 });
 

@@ -211,7 +211,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §14 断言范围与团队声明
 
-协议 1.1（协议包 0.3.0）。全部是可选的新声明与字段：缺省时签出的令牌与 1.0 逐字同形，core 按 1.0 处理（老中继签的断言照常可用）。core 是最终判定点，中继边缘的只读门只是纵深防御。
+协议 1.1（协议包 0.3.0）。全部是可选的新声明与字段：缺省时签出的令牌与 1.0 逐字同形，core 按 1.0 处理（老中继签的断言照常可用）。core 是唯一的读写判定点（0.3.11 起中继边缘不再按 `ro` 过滤，见下文「只读门」）。
 
 **断言**（`aud = sourceId`）新增：
 
@@ -225,13 +225,9 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 **中继令牌**（`aud = "relay"`）新增 `org`（源所属组织，限流与计量；personal 不发）与 `ro`（`true` = 只读）。**隧道令牌**（`aud = "relay-tunnel"`）新增 `org`。
 
-**只读门**：中继令牌带 `ro: true` 时，边缘按转给源的路径（不含 `/s/<id>` 前缀，只看 `?` 之前）放行：
+**只读门**（0.3.11 起停用）：中继令牌仍带 `ro: true`（形状不变，供观察与计量），但边缘不再据它过滤请求，所有方法照常转给源。core 的 RPC 一律 `POST`，按方法挡会把只读访客整个挡在 RPC 之外；读写只由 core 按授予判定（断言的 `scp` 与本机邀请）。
 
-- `GET`、`HEAD`、`OPTIONS`（WebSocket 升级总是 `GET`）；
-- 媒体票的签票 `POST /_relay/media-tickets` 与兑票（§12，都是读）；
-- 身份域的任意方法：`/api/identity/` 与 `/api/rpc/identity/` 之下（登录、刷新、WS 票、登出）；路径含 `.` / `..` 段、`//`、`%` 或 `\` 的不算身份域。
-
-其余 HTTP 答 `403 forbidden`（不进隧道），WebSocket 以 4403 关闭。判定函数是协议包的 `isReadOnlyAllowed(method, path)`，常量在 `schema/constants.json` 的 `tokens.readOnly`。
+0.3.0–0.3.10 的边缘对 `ro` 令牌只放行 `GET` / `HEAD` / `OPTIONS`、WebSocket 升级、媒体票（§12）与身份域 `/api/identity/`、`/api/rpc/identity/` 之下的路径，其余 HTTP 答 `403 forbidden`、WebSocket 以 4403 关闭。协议包的 `isReadOnlyAllowed(method, path)` 与 `schema/constants.json` 的 `tokens.readOnly` 保留（已弃用），中继不再调用。
 
 **分享范围**：`links.create { kind: "source_invite", …, scope?: { workspaceId?, sessionId?, readOnly? } }`。
 
