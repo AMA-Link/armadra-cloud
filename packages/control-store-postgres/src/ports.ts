@@ -42,6 +42,7 @@ import {
   writeLink,
   writeSource,
 } from "./rows.ts";
+import { createPostgresTraffic } from "./traffic.ts";
 
 const same = (left: unknown, right: unknown) =>
   JSON.stringify(left) === JSON.stringify(right);
@@ -334,5 +335,7 @@ export function createPostgresPorts(
     tenants: {
       get: (tenantId) => readTenantSettings(sql, tenantId),
     },
+
+    traffic: createPostgresTraffic(sql),
   };
 }

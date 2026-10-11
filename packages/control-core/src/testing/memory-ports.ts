@@ -24,6 +24,7 @@ import type {
 import { sameHex } from "../secrets.ts";
 import { isStaleDevice } from "../sessions.ts";
 import { generateSigningKey, Signer } from "../signer.ts";
+import { createMemoryTrafficStore } from "../traffic.ts";
 import { guestPrefix } from "../subjects.ts";
 
 interface TenantState {
@@ -253,6 +254,8 @@ export function createMemoryPorts(): MemoryPorts {
         return copy(read(tenantId).settings);
       },
     },
+
+    traffic: createMemoryTrafficStore(),
   };
 }
 

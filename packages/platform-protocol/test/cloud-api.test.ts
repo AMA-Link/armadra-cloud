@@ -7,6 +7,7 @@ import {
   PLATFORM_CAPABILITIES,
   sectionOf,
   SCOPES,
+  TRAFFIC_KINDS,
 } from "../src/cloud-api/index.ts";
 import {
   meStreamClientMessageSchema,
@@ -227,6 +228,50 @@ describe("挑战（§16）与节点回报（§17）", () => {
       }).success,
     ).toBe(true);
     expect(PLATFORM_CAPABILITIES).toContain("auth.password-change");
+  });
+
+  it("me.traffic（0.5.0）：会话、query 里的毫秒按数字收、粒度缺省按小时", () => {
+    const entry = listProcedures().find((one) => one.key === "me.traffic");
+    expect(entry).toMatchObject({
+      method: "GET",
+      path: "/v1/me/traffic",
+      meta: { scope: ["session"], since: "0.5.0" },
+    });
+    expect(entry?.errorCodes).toEqual(["bad_request"]);
+    expect(sectionOf("me.traffic")).toBe("§19");
+    const query = input("me.traffic");
+    expect(query.parse({ fromMs: "0", toMs: "3600000" })).toEqual({
+      fromMs: 0,
+      toMs: 3_600_000,
+      granularity: "hour",
+    });
+    expect(
+      query.safeParse({ fromMs: "1", toMs: "2", granularity: "week" }).success,
+    ).toBe(false);
+    expect(query.safeParse({ fromMs: "-1", toMs: "2" }).success).toBe(false);
+    expect(
+      query.safeParse({ fromMs: "1", toMs: "2", sourceId: "nope" }).success,
+    ).toBe(false);
+    const bucket = output("me.traffic");
+    expect(
+      bucket.safeParse({
+        buckets: [
+          {
+            bucketStartMs: 0,
+            node: "n",
+            sourceId: "s",
+            subject: "acct:a",
+            deviceId: "",
+            kind: "telnet",
+            connections: 0,
+            bytesToSource: 0,
+            bytesToClient: 0,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(TRAFFIC_KINDS).toEqual(["e2e", "http", "ws", "media"]);
+    expect(PLATFORM_CAPABILITIES).toContain("me.traffic");
   });
 
   it("platform.info.challenge 可选，scope 至少一条", () => {

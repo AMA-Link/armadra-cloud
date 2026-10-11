@@ -30,7 +30,10 @@ export const cloudContract = {
 };
 export type CloudContract = typeof cloudContract;
 
-/** `docs/contracts/cloud-api.md` 的节号：按顶层域，`me.streamTicket` 归 §6、`auth.changePassword` 归 §18。 */
+/**
+ * `docs/contracts/cloud-api.md` 的节号：按顶层域，`me.streamTicket` 归 §6、`auth.changePassword` 归 §18、
+ * `me.traffic` 归 §19。
+ */
 export const CONTRACT_SECTIONS: Record<string, string> = {
   platform: "§2",
   auth: "§2",
@@ -42,6 +45,7 @@ export const CONTRACT_SECTIONS: Record<string, string> = {
   billing: "§9",
   relay: "§17",
   "auth.changePassword": "§18",
+  "me.traffic": "§19",
 };
 
 export function sectionOf(key: string): string {
@@ -101,7 +105,15 @@ export {
 } from "./contract/auth.ts";
 export { billingPlanSchema, billingUsageSchema } from "./contract/billing.ts";
 export { createLinkInputSchema } from "./contract/links.ts";
-export { meDeviceSchema } from "./contract/me.ts";
+export {
+  meDeviceSchema,
+  TRAFFIC_GRANULARITIES,
+  TRAFFIC_KINDS,
+  TRAFFIC_MAX_ROWS,
+  trafficBucketSchema,
+  trafficInputSchema,
+  trafficKindSchema,
+} from "./contract/me.ts";
 export {
   PLATFORM_CAPABILITIES,
   PLATFORM_NAME_MAX,

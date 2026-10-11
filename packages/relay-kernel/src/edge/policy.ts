@@ -37,6 +37,7 @@ import {
 } from "../auth/relay-token.ts";
 import type { ControlPlane } from "../control/types.ts";
 import type { RelayMetrics } from "../metrics.ts";
+import type { TrafficCounter, TrafficKind, TrafficMeter } from "../traffic.ts";
 import type { StreamEndpoint } from "../tunnel/stream.ts";
 import { TunnelUnavailableError, type Tunnel } from "../tunnel/tunnel.ts";
 import type { Addressing, AddressTarget } from "./addressing.ts";
@@ -83,6 +84,15 @@ export interface EdgePolicyOptions<S extends StreamEndpoint> {
   now?: () => number;
   /** 媒体票的存放；缺省进程内存（Workers 的 SourceDO 给 DO 存储版）。 */
   mediaTickets?: MediaTicketStore;
+  /** 流量统计（cloud-api §19）；不给就不统计（保留期为 0）。 */
+  traffic?: TrafficMeter;
+}
+
+/** 一条流记到谁名下（流量统计）：中继令牌的 `sub` / `dev`；`kind` 缺省按开流的种类。 */
+export interface TrafficIdentity {
+  subject: string;
+  deviceId: string;
+  kind?: TrafficKind;
 }
 
 const WS_CLOSE: Partial<Record<ErrorCode, number>> = {
@@ -141,12 +151,13 @@ export type RequestDecision<S extends StreamEndpoint> =
   | { kind: "preflight"; headers: Record<string, string> }
   /** 签媒体票：运行时读小 JSON 体后调 {@link EdgePolicy.issueMedia}。 */
   | { kind: "issue"; admission: Extract<Admission<S>, { ok: true }> }
-  /** 开流转发（`target.path` 是转给源的路径）。 */
+  /** 开流转发（`target.path` 是转给源的路径）；`traffic` 交回 {@link EdgePolicy.open}。 */
   | {
       kind: "forward";
       target: AddressTarget;
       tunnel: Tunnel<S>;
       remoteIp: string;
+      traffic: TrafficIdentity;
     };
 
 /** WS 升级的下一步。 */
@@ -244,6 +255,10 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       target: admission.target,
       tunnel: admission.tunnel,
       remoteIp: admission.remoteIp,
+      traffic: {
+        subject: admission.subject,
+        deviceId: admission.device ?? "",
+      },
     };
   }
 
@@ -326,6 +341,7 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       sourceId: admission.target.sourceId,
       path,
       subject: admission.subject,
+      ...(admission.device === undefined ? {} : { deviceId: admission.device }),
       jti: admission.jti,
     });
     this.options.metrics.edgeConnection("ok");
@@ -391,6 +407,11 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       target: { sourceId: grant.sourceId, path: grant.path },
       tunnel,
       remoteIp,
+      traffic: {
+        subject: grant.subject,
+        deviceId: grant.deviceId ?? "",
+        kind: "media",
+      },
     };
   }
 
@@ -492,7 +513,8 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
 
   /**
    * 为一个请求开流（发 OPEN）。头超过 `openHeadersMaxBytes` 答 `bad_request`；隧道排空 /
-   * 关闭答 `source_offline`，满流答 `limit_reached`。开成了计一次 `ok`。
+   * 关闭答 `source_offline`，满流答 `limit_reached`。开成了计一次 `ok`；给了 `traffic`（判定答的
+   * {@link TrafficIdentity}）且开了统计，就记一次连接，这条流的字节随后由隧道记到同一行。
    */
   open(
     tunnel: Tunnel<S>,
@@ -501,28 +523,58 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     target: AddressTarget,
     headers: HeaderPair[],
     remoteIp: string,
+    traffic?: TrafficIdentity,
   ): { ok: true; stream: S } | { ok: false; code: ErrorCode } {
     if (headersBytes(headers) > LIMITS.openHeadersMaxBytes)
       return { ok: false, code: "bad_request" };
-    return this.openStream(tunnel, kind, req.method, target.path, headers, {
-      clientOrigin: originOf(req),
-      remoteIp,
-    });
+    const counter =
+      traffic && this.options.traffic
+        ? this.options.traffic.counter({
+            sourceId: target.sourceId,
+            subject: traffic.subject,
+            deviceId: traffic.deviceId,
+            kind: traffic.kind ?? kind,
+          })
+        : undefined;
+    return this.openStream(
+      tunnel,
+      kind,
+      req.method,
+      target.path,
+      headers,
+      { clientOrigin: originOf(req), remoteIp },
+      counter,
+    );
   }
 
   /**
    * 开端到端通道的流：`OPEN { kind: "e2e", method: "GET", path: "/_relay/e2e", headers: [] }`
-   * （子协议、令牌、头一概不转；地址里的 query 也不转）。
+   * （子协议、令牌、头一概不转；地址里的 query 也不转）。给了 `traffic` 就按 `e2e` 类别统计。
    */
   openE2e(
     tunnel: Tunnel<S>,
     req: EdgeRequest,
     remoteIp: string,
+    traffic?: TrafficIdentity,
   ): { ok: true; stream: S } | { ok: false; code: ErrorCode } {
-    return this.openStream(tunnel, "e2e", "GET", E2E_PATH, [], {
-      clientOrigin: originOf(req),
-      remoteIp,
-    });
+    const counter =
+      traffic && this.options.traffic
+        ? this.options.traffic.counter({
+            sourceId: tunnel.sourceId,
+            subject: traffic.subject,
+            deviceId: traffic.deviceId,
+            kind: "e2e",
+          })
+        : undefined;
+    return this.openStream(
+      tunnel,
+      "e2e",
+      "GET",
+      E2E_PATH,
+      [],
+      { clientOrigin: originOf(req), remoteIp },
+      counter,
+    );
   }
 
   private openStream(
@@ -532,18 +584,22 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     path: string,
     headers: HeaderPair[],
     client: { clientOrigin: string | null; remoteIp: string },
+    counter?: TrafficCounter,
   ): { ok: true; stream: S } | { ok: false; code: ErrorCode } {
     let stream: S;
     try {
-      stream = tunnel.openStream({
-        kind,
-        method,
-        path,
-        headers,
-        clientOrigin: client.clientOrigin,
-        remoteIp: client.remoteIp,
-        relayNode: this.options.nodeId,
-      });
+      stream = tunnel.openStream(
+        {
+          kind,
+          method,
+          path,
+          headers,
+          clientOrigin: client.clientOrigin,
+          remoteIp: client.remoteIp,
+          relayNode: this.options.nodeId,
+        },
+        counter,
+      );
     } catch (error) {
       if (error instanceof TunnelUnavailableError)
         return {
@@ -555,6 +611,7 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     }
     this.options.metrics.edgeConnection("ok");
     this.options.metrics.edgeStream(kind);
+    counter?.connection();
     return { ok: true, stream };
   }
 

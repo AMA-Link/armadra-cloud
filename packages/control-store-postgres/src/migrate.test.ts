@@ -13,6 +13,7 @@ it("随包的迁移编号从 1 起连续，SQL 不带事务语句", () => {
   expect(migrations.map((row) => row.name)).toEqual([
     "0001_control_init",
     "0002_relay_control",
+    "0003_traffic",
   ]);
   expect(() => checkAvailable(migrations)).not.toThrow();
   for (const migration of migrations) {

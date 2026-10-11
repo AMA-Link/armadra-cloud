@@ -24,6 +24,7 @@
 # 存储：新装缺省 SQLite（卷里的 relay.db）；卷里已有 state.json 的照旧用它，停服后
 #   docker compose -f deploy/personal/compose.yml run --rm relay personal migrate --data-dir /data --to sqlite
 # 迁过去（见 docs/runbooks/personal-storage.md）。检查：exec relay node /app/out/cli.js personal doctor --data-dir /data
+# 流量统计：RELAY_TRAFFIC_RETENTION_DAYS 保留天数，缺省 90，0 = 不记录；查看用 exec relay node /app/out/cli.js personal traffic --data-dir /data。
 # 页面：把 Armadra apps/web 的构建产物挂到 /app/web（或用带页面的镜像），否则 /app 答错误页。
 name: armadra-relay-personal
 
@@ -49,6 +50,7 @@ services:
       RELAY_TURNSTILE_SITE_KEY: "${RELAY_TURNSTILE_SITE_KEY:-}"
       RELAY_TURNSTILE_SECRET_FILE: "${RELAY_TURNSTILE_SECRET_FILE:-}"
       RELAY_CHALLENGE_SCOPE: "${RELAY_CHALLENGE_SCOPE:-}"
+      RELAY_TRAFFIC_RETENTION_DAYS: "${RELAY_TRAFFIC_RETENTION_DAYS:-}"
     secrets:
       - relay_password
     ports:

@@ -175,14 +175,15 @@
 
 单人中转（`armadra-relay personal`）实现 `/v1/*` 的一个子集，形状与 saas 完全相同；不实现的路由（包括契约里的组织、计费、设备码、passkey、TOTP）答 `404 not_found`。`/v1/*` 与 `/.well-known/*` 允许任意来源跨源调用（只认 `Authorization` 头，不用 Cookie），登录类答案总是带 `refreshToken`。
 
-| procedure                                                                                        | 说明                                                                                                                                                                                                                               |
-| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `platform.info`、`platform.jwks`                                                                 | `mode: "personal"`、`relay.addressing: "path"`、`capabilities: ["auth.password", "auth.password-change", "links.source-invite", "links.update", "links.scope", "me.stream"]`；有页面产物时 `webApp = <issuer>/app/`；`name` 见 §15 |
-| `auth.login`、`auth.refresh`、`auth.logout`、`auth.changePassword`                               | `account` 是账号名；会话的 `accountId` 是 `acct:<账号名>`，`email` 为 `null`；改口令见 §18                                                                                                                                         |
-| `me.get`、`me.sources`、`me.devices`、`me.deviceRevoke`、`me.streamTicket` + `GET /v1/me/stream` | 访客（`guest:<linkId>:<随机>`）只看到链接指向的那个源                                                                                                                                                                              |
-| `sources.registrationToken`、`sources.register`、`sources.heartbeatHint`                         | 注册令牌只有账号本人能要（访客答 `403 forbidden`）                                                                                                                                                                                 |
-| `sources.list`、`sources.get`、`sources.revoke`、`sources.assertion`                             | `relayBaseUrl = <issuer>/s/<sourceId>`；撤销即断开隧道与经中继的 WS，`me/stream` 发 `sourceRevoked`                                                                                                                                |
-| `links.create`、`links.get`、`links.accept`、`links.list`、`links.update`、`links.revoke`        | 只有 `source_invite`；`create` 收 `scope`（§14）；`accept` 匿名；`update` 只改备注（去首尾空白，已撤销的也能改）；撤销即作废该链接的全部访客设备并断开其 WS                                                                        |
+| procedure                                                                                        | 说明                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `platform.info`、`platform.jwks`                                                                 | `mode: "personal"`、`relay.addressing: "path"`、`capabilities: ["auth.password", "auth.password-change", "links.source-invite", "links.update", "links.scope", "me.stream", "me.traffic"]`；有页面产物时 `webApp = <issuer>/app/`；`name` 见 §15 |
+| `auth.login`、`auth.refresh`、`auth.logout`、`auth.changePassword`                               | `account` 是账号名；会话的 `accountId` 是 `acct:<账号名>`，`email` 为 `null`；改口令见 §18                                                                                                                                                       |
+| `me.get`、`me.sources`、`me.devices`、`me.deviceRevoke`、`me.streamTicket` + `GET /v1/me/stream` | 访客（`guest:<linkId>:<随机>`）只看到链接指向的那个源                                                                                                                                                                                            |
+| `me.traffic`                                                                                     | 流量统计（§19）：账号本人看全部源，访客只看自己的 `subject`                                                                                                                                                                                      |
+| `sources.registrationToken`、`sources.register`、`sources.heartbeatHint`                         | 注册令牌只有账号本人能要（访客答 `403 forbidden`）                                                                                                                                                                                               |
+| `sources.list`、`sources.get`、`sources.revoke`、`sources.assertion`                             | `relayBaseUrl = <issuer>/s/<sourceId>`；撤销即断开隧道与经中继的 WS，`me/stream` 发 `sourceRevoked`                                                                                                                                              |
+| `links.create`、`links.get`、`links.accept`、`links.list`、`links.update`、`links.revoke`        | 只有 `source_invite`；`create` 收 `scope`（§14）；`accept` 匿名；`update` 只改备注（去首尾空白，已撤销的也能改）；撤销即作废该链接的全部访客设备并断开其 WS                                                                                      |
 
 - 账号：一个；口令策略与 scrypt 参数取协议包 `identity-vectors`，策略码与 core 相同（`password_too_short` 等）。
 - 防暴力破解：按 IP 每分钟 20 次（`rate_limited`）；按账号连续 5 次失败锁 1 分钟、每次翻倍、15 分钟封顶、最后一次失败一小时后清零。锁定时答 `429 account_locked`，`details.retryAfterMs` 与 `Retry-After` 头给出剩余时间。
@@ -306,3 +307,26 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **日志与指标**：通道结束时记一条元数据（源、流号、两个方向的字节数、时长、关闭码），不记账号、设备、IP 与任何内容；指标 `relay_edge_streams_total{kind}` 按 `http` / `ws` / `e2e` 计开出的流。
 - **活性**：Node 中继每 30 秒发 `ping`、60 秒没有任何消息或 `pong` 即断开（与 §7 相同）；Workers 中继由检查周期按空闲时长断开。客户端的通道自己另有内层 `PING`（协议包 `LIMITS_E2E.pingIntervalMs`）。
 - **实现**：Node 中继（`relay-runtime-node` 的 `e2e-pipe.ts`）与 Workers 中继（`SourceDO` 的 `e2e-bridge.ts`，休眠后照样接上）行为相同；签发方从 0.4.0 起在中继令牌里带 `dev`。
+
+## §19 流量统计
+
+协议包 0.5.0（协议仍是 1.3）。服务端报能力 `me.traffic` 才有这条；不报的中继答 `404 not_found`，客户端不要提供入口。
+
+- **口径**：中继按「租户 × UTC 整小时 × 节点 × 源 × 中继令牌 `sub` × `dev` × 类别」累计连接数与两个方向的字节。字节是边缘经隧道流转的载荷（与 `/metrics` 的 `relay_bytes_total` 同源；明文 HTTP 含中继重新序列化的请求行与头，WebSocket 含帧头；端到端通道是记录层字节，与 core 的 `transport` 行相等）。`connections` 是开流次数：一个 HTTP 请求、一条 WebSocket、一次媒体票兑取或一条端到端通道各算一次。`dev` 是中继令牌的可选声明（0.4.0 起签发方都带），令牌没带时为空串。
+- **类别** `kind`：`e2e`（端到端通道）、`http`（明文 HTTP）、`ws`（明文 WebSocket）、`media`（媒体票，§12）。
+- **请求**：`GET /v1/me/traffic?fromMs&toMs&sourceId?&granularity=hour|day`，`Authorization: Bearer <accessToken>`。返回桶起点落在 `[fromMs, toMs)` 的行；`granularity=day` 按 UTC 自然日合并（缺省 `hour`）；`fromMs ≥ toMs` 答 `400 bad_request`。
+- **可见范围**：账号本人看本租户全部源的统计（含已撤销的源留下的历史）；访客只看 `subject` 等于自己的行。`sourceId` 只是过滤，看不到的源答空。
+- **答复**：`{ buckets: [{ bucketStartMs, node, sourceId, subject, deviceId, kind, connections, bytesToSource, bytesToClient }] }`，按 `bucketStartMs`、`node`、`sourceId`、`subject`、`deviceId`、`kind` 排序；超过 10 000 行答 `400 bad_request`，客户端缩小时间范围或按源过滤。
+- **时效**：中继在内存里累加，每 60 秒批量写一次（Workers 中继在攒下新行后 30 秒内写，查询前也先写），刚发生的流量最多晚这么久才查得到；不按帧写库。
+- **保留**：Node 中继 `--traffic-retention-days`（缺省 90，`0` = 不记录），Workers 中继 `RELAY_TRAFFIC_RETENTION_DAYS`（同义）；每天清一次早于保留期的桶。状态文件存储（`--store file`）只在内存里累计，接口照常答，重启归零。
+- **隐私**：只记上面的元数据，不记路径、query、头、IP 与正文；限流桶不入库。
+
+<!-- rpc:begin contract=§19 -->
+
+| procedure    | 方法与路径           | scope     | 错误码        |
+| ------------ | -------------------- | --------- | ------------- |
+| `me.traffic` | `GET /v1/me/traffic` | `session` | `bad_request` |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
+
+<!-- rpc:end -->

@@ -73,10 +73,11 @@
 | `--turnstile-secret-file` / `RELAY_TURNSTILE_SECRET_FILE`     |      | Turnstile secret 文件（compose 用 secret 挂载）；`--challenge turnstile` 必填                                                     |
 | `--turnstile-hostnames` / `RELAY_TURNSTILE_HOSTNAMES`         |      | siteverify 答复里允许的主机名，逗号分隔；空 = 拒绝一切；有 https 的 `--public-origin` 时不得含本机地址                            |
 | `--challenge-scope` / `RELAY_CHALLENGE_SCOPE`                 |      | 要挑战的 procedure，`auth.login`（缺省）、`links.accept`，逗号分隔                                                                |
+| `--traffic-retention-days` / `RELAY_TRAFFIC_RETENTION_DAYS`   |      | 流量统计保留天数，缺省 90，`0` = 不记录（契约 §19）                                                                               |
 
 限流额度也可写在状态文件 `settings.rateLimits`（`anonymous`、`preflight`、`token`、`account`，都是 1–1000000 的整数，可省略），优先级：命令行 > 环境变量 > 状态文件 > 缺省；改动后重启 `serve` 生效。登录、链接接受与隧道登记的限流不可配。
 
-其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`backup`、`doctor`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay node /app/out/cli.js personal …`），改动一秒内生效；`migrate --to sqlite|file|postgres` 要先停 `serve`（多节点要停掉所有节点）。数据目录用 PostgreSQL 时每个子命令都要连接串（参数或环境变量）。
+其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`traffic`、`backup`、`doctor`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay node /app/out/cli.js personal …`），改动一秒内生效；`migrate --to sqlite|file|postgres` 要先停 `serve`（多节点要停掉所有节点）。数据目录用 PostgreSQL 时每个子命令都要连接串（参数或环境变量）。
 
 存储（[运维手册](../docs/runbooks/personal-storage.md)）：
 

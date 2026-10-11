@@ -17,6 +17,8 @@ import type {
 import type {
   LinkScope,
   sourceKindSchema,
+  TRAFFIC_GRANULARITIES,
+  TRAFFIC_KINDS,
 } from "@armadra/platform-protocol/cloud-api";
 import type { z } from "zod";
 
@@ -226,6 +228,50 @@ export interface TenantStore {
   get(tenantId: string): Promise<TenantSettings>;
 }
 
+export type TrafficKind = (typeof TRAFFIC_KINDS)[number];
+
+/**
+ * 流量统计的一行（cloud-api §19）：一个 UTC 整小时桶 × 节点 × 源 × 中继令牌 `sub` × `dev` × 类别的
+ * 累计。只有元数据，没有路径、头、IP 与正文。
+ */
+export interface TrafficRow {
+  bucketStartMs: number;
+  node: string;
+  sourceId: string;
+  subject: string;
+  /** 中继令牌的 `dev`；令牌没带时为空串。 */
+  deviceId: string;
+  kind: TrafficKind;
+  connections: number;
+  bytesToSource: number;
+  bytesToClient: number;
+}
+
+export interface TrafficQuery {
+  /** 含：桶起点 ≥ fromMs。 */
+  fromMs: number;
+  /** 不含：桶起点 < toMs。 */
+  toMs: number;
+  sourceId?: string;
+  subject?: string;
+  /** `day` 时按 UTC 自然日合并。 */
+  granularity: (typeof TRAFFIC_GRANULARITIES)[number];
+  /** 最多答这么多行（合并之后）。 */
+  limit: number;
+}
+
+/**
+ * 流量统计的存储（不碰租户修订号：统计写入不算「状态被改」）。中继内核按批调 `upsert`，不按帧写。
+ */
+export interface TrafficStore {
+  /** 一个事务里逐行累加：同一桶与维度的行三个计数相加，没有就插入。 */
+  upsert(tenantId: string, rows: readonly TrafficRow[]): Promise<void>;
+  /** 按桶、节点、源、`sub`、`dev`、类别排序。 */
+  query(tenantId: string, query: TrafficQuery): Promise<TrafficRow[]>;
+  /** 删掉桶起点早于 `beforeMs` 的行（保留期），答删了几行。 */
+  prune(tenantId: string, beforeMs: number): Promise<number>;
+}
+
 /** 签名钥（同步读，实现自己缓存）。 */
 export interface KeyStore {
   issuer(): string;
@@ -239,6 +285,7 @@ export interface ControlPorts {
   registrations: RegistrationTokenStore;
   links: LinkStore;
   tenants: TenantStore;
+  traffic: TrafficStore;
 }
 
 // ------------------------------------------------------------ 中继侧端口

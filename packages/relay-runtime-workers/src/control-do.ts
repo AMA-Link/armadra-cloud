@@ -294,6 +294,16 @@ export class ControlDO extends DurableObject<RelayEnv> {
         for (const sourceId of sourceIds)
           background(this.sourceStub(sourceId).invalidate());
       },
+      traffic: async (sourceId, query) => {
+        try {
+          return await this.sourceStub(sourceId).trafficQuery(query);
+        } catch (error) {
+          this.log.warn("源对象的流量统计没取到", {
+            error: errorName(error),
+          });
+          return [];
+        }
+      },
     };
   }
 

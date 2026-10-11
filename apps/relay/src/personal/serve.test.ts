@@ -19,7 +19,7 @@ import {
   TEST_STORE_KINDS,
 } from "../../test/personal.ts";
 import type { PersonalServeOptions } from "./args.ts";
-import { runRotateKey } from "./commands.ts";
+import { runRotateKey, runTraffic } from "./commands.ts";
 import { edgeLimitRules, startPersonalRelay } from "./serve.ts";
 import { DEFAULT_TENANT } from "@armadra/control-core/ports";
 import { openDatabase } from "@armadra/control-store-sqlite/open";
@@ -400,5 +400,109 @@ it("受信代理：回环对端在列表内时按 XFF 的客户端 IP 分桶；�
     expect((await preflights(elsewhere.url, "198.51.100.2"))[0]).toBe(429);
   } finally {
     await elsewhere.close();
+  }
+});
+
+it.each(TEST_STORE_KINDS)(
+  "流量统计：启动时清掉保留期外的桶，关闭时把内存里的写进存储，personal traffic 读得出（%s）",
+  async (store) => {
+    const dataDir = join(root, `traffic-${store}`);
+    const pg = await databaseFor(store);
+    const nowMs = Date.UTC(2026, 9, 12, 9, 30);
+    const hour = (ms: number) => ms - (ms % 3_600_000);
+    const row = (bucketStartMs: number, subject: string) => ({
+      bucketStartMs,
+      node: "127.0.0.1",
+      sourceId: "a".repeat(32),
+      subject,
+      deviceId: "",
+      kind: "http" as const,
+      connections: 1,
+      bytesToSource: 100,
+      bytesToClient: 2048,
+    });
+    const first = await startPersonalRelay(
+      { ...base, dataDir, store, ...pg.options },
+      quiet,
+    );
+    await first.close();
+    if (store !== "file") {
+      const seeded = await openPersonalStore(
+        dataDir,
+        undefined,
+        pg.options.database,
+      );
+      await seeded.ports.traffic.upsert(DEFAULT_TENANT, [
+        row(hour(nowMs) - 31 * 86_400_000, "acct:old"),
+        row(hour(nowMs) - 86_400_000, "acct:me"),
+      ]);
+      await seeded.close();
+    }
+    const relay = await startPersonalRelay(
+      { ...base, dataDir, trafficRetentionDays: 30, ...pg.options },
+      { ...quiet, now: () => nowMs },
+    );
+    const meter = relay.relay.traffic;
+    expect(meter).toBeDefined();
+    meter?.add({
+      sourceId: "a".repeat(32),
+      subject: "acct:me",
+      deviceId: "",
+      kind: "ws",
+      connections: 1,
+      bytesToClient: 5000,
+    });
+    const ports = relay.store.ports;
+    await relay.close();
+    if (store === "file") {
+      // 状态文件：只在本进程内存里，CLI 读不到。
+      expect(
+        (
+          await ports.traffic.query(DEFAULT_TENANT, {
+            fromMs: 0,
+            toMs: nowMs + 1,
+            granularity: "hour",
+            limit: 10,
+          })
+        ).map((one) => one.kind),
+      ).toEqual(["ws"]);
+      await expect(
+        runTraffic({ dataDir, sinceMs: 86_400_000 }, () => {}, nowMs),
+      ).rejects.toThrow(/migrate --to sqlite/);
+      await pg.drop();
+      return;
+    }
+    const lines: string[] = [];
+    await runTraffic(
+      { dataDir, sinceMs: 7 * 86_400_000 },
+      (line) => lines.push(line),
+      nowMs,
+      pg.options.database,
+    );
+    try {
+      expect(lines[0]).toMatch(
+        /^源\s+账号\s+设备\s+类别\s+连接\s+上行\s+下行$/,
+      );
+      expect(lines.slice(1, -1)).toEqual([
+        expect.stringMatching(/acct:me\s+—\s+ws\s+1\s+0 B\s+4\.9 KiB$/),
+        expect.stringMatching(/acct:me\s+—\s+http\s+1\s+100 B\s+2\.0 KiB$/),
+      ]);
+      expect(lines.at(-1)).toMatch(/^合计\s+2\s+100 B\s+6\.9 KiB$/);
+      expect(lines.join("\n")).not.toContain("acct:old");
+    } finally {
+      await pg.drop();
+    }
+  },
+);
+
+it("保留天数为 0：不统计", async () => {
+  const relay = await startPersonalRelay(
+    { ...base, dataDir: join(root, "traffic-off"), trafficRetentionDays: 0 },
+    quiet,
+  );
+  try {
+    expect(relay.relay.traffic).toBeUndefined();
+  } finally {
+    await relay.close();
   }
 });

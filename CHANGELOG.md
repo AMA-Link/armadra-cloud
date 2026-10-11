@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 新增 / Added
+
+- 中继流量统计（cloud-api §19，Refs #44）：中继按「源 × 账号 / 访客 × 设备（中继令牌 `dev`）× 类别（`e2e` / `http` / `ws` / `media`）× UTC 小时」累计连接数与两个方向的字节，在内存里累加、每 60 秒批量写库（Workers 在攒下新行后 30 秒与检查周期写进各源对象的 DO SQLite），不按帧写库，不记路径、头、IP 与正文。新表 `relay_traffic_buckets`（SQLite 迁移 0002、PostgreSQL 迁移 0003）；`GET /v1/me/traffic`（能力 `me.traffic`，账号本人看全部源、访客只看自己）；`armadra-relay personal traffic` 出表；保留期 `--traffic-retention-days` / `RELAY_TRAFFIC_RETENTION_DAYS`，缺省 90 天，`0` 不记录。状态文件存储只在内存里累计。
+  Relay traffic statistics (cloud-api §19, Refs #44): the relay counts connections and bytes in both directions per source × account / guest × device (relay-token `dev`) × kind (`e2e` / `http` / `ws` / `media`) × UTC hour, accumulated in memory and upserted in batches every 60 s (Workers write into each source object's DO SQLite 30 s after new rows appear and on every check cycle) — never per frame, and without paths, headers, IPs or bodies. New table `relay_traffic_buckets` (SQLite migration 0002, PostgreSQL migration 0003); `GET /v1/me/traffic` (capability `me.traffic`; the account sees every source, guests only themselves); `armadra-relay personal traffic` prints a table; retention `--traffic-retention-days` / `RELAY_TRAFFIC_RETENTION_DAYS`, default 90 days, `0` disables recording. The state-file store keeps the counters in memory only.
+
 ## 0.4.0（2026-10-12）
 
 ### 新增 / Added

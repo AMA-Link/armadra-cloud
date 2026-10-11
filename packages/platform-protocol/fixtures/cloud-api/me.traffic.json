@@ -1,0 +1,23 @@
+{
+  "input": {
+    "fromMs": 1759913600000,
+    "toMs": 1760000000000,
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "granularity": "hour"
+  },
+  "output": {
+    "buckets": [
+      {
+        "bucketStartMs": 1759996400000,
+        "node": "relay-1",
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "subject": "acct:owner",
+        "deviceId": "",
+        "kind": "ws",
+        "connections": 3,
+        "bytesToSource": 18432,
+        "bytesToClient": 2621440
+      }
+    ]
+  }
+}

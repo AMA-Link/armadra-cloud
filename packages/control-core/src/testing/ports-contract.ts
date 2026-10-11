@@ -13,6 +13,8 @@ import type {
   PasswordRecord,
   SourceRecord,
   TenantSettings,
+  TrafficQuery,
+  TrafficRow,
 } from "../ports.ts";
 import { SESSION } from "@armadra/platform-protocol/identity-vectors";
 
@@ -364,6 +366,126 @@ export function portsContract(
       expect((await ports.devices.get("t1", D3))?.revokedAtMs).toBeNull();
       expect(await ports.links.revoke("t1", L1, NOW + 1)).toBeNull();
       expect(await ports.links.revoke("t2", L2, NOW)).toBeNull();
+    });
+  });
+
+  describe(`${label}：流量统计`, () => {
+    const HOUR = 3_600_000;
+    const T0 = Date.UTC(2026, 9, 10, 0);
+    const row = (overrides: Partial<TrafficRow> = {}): TrafficRow => ({
+      bucketStartMs: T0,
+      node: "n1",
+      sourceId: S1,
+      subject: "acct:alice",
+      deviceId: "",
+      kind: "ws",
+      connections: 1,
+      bytesToSource: 10,
+      bytesToClient: 100,
+      ...overrides,
+    });
+    const all: TrafficQuery = {
+      fromMs: 0,
+      toMs: Number.MAX_SAFE_INTEGER,
+      granularity: "hour",
+      limit: 1000,
+    };
+
+    it("同一桶与维度的行累加，不同维度各一行；租户隔离", async () => {
+      const ports = fresh();
+      await ports.traffic.upsert("t1", [row(), row({ kind: "http" })]);
+      await ports.traffic.upsert("t1", [
+        row({ connections: 2, bytesToSource: 5, bytesToClient: 7 }),
+      ]);
+      await ports.traffic.upsert("t2", [row({ connections: 9 })]);
+      await ports.traffic.upsert("t1", []);
+      expect(await ports.traffic.query("t1", all)).toEqual([
+        row({ kind: "http" }),
+        row({ connections: 3, bytesToSource: 15, bytesToClient: 107 }),
+      ]);
+      expect(await ports.traffic.query("t2", all)).toEqual([
+        row({ connections: 9 }),
+      ]);
+    });
+
+    it("超过 32 位的计数原样往返", async () => {
+      const ports = fresh();
+      const big = 2 ** 40 + 3;
+      await ports.traffic.upsert("t1", [row({ bytesToClient: big })]);
+      await ports.traffic.upsert("t1", [row({ bytesToClient: big })]);
+      const [only] = await ports.traffic.query("t1", all);
+      expect(only?.bytesToClient).toBe(2 * big);
+      expect(typeof only?.connections).toBe("number");
+    });
+
+    it("查询：桶起点 ∈ [fromMs, toMs)，按源与 sub 过滤，排序固定，limit 截断", async () => {
+      const ports = fresh();
+      await ports.traffic.upsert("t1", [
+        row({ bucketStartMs: T0 + 2 * HOUR, sourceId: S2 }),
+        row({ bucketStartMs: T0 + HOUR, subject: "guest:x:1" }),
+        row({ bucketStartMs: T0 + HOUR, node: "n0" }),
+        row({ bucketStartMs: T0 }),
+        row({ bucketStartMs: T0 + HOUR, deviceId: "dev-b" }),
+        row({ bucketStartMs: T0 + HOUR, deviceId: "dev-a" }),
+      ]);
+      const range = await ports.traffic.query("t1", {
+        ...all,
+        fromMs: T0 + HOUR,
+        toMs: T0 + 2 * HOUR,
+      });
+      expect(
+        range.map((r) => [r.node, r.subject, r.deviceId].join("/")),
+      ).toEqual([
+        "n0/acct:alice/",
+        "n1/acct:alice/dev-a",
+        "n1/acct:alice/dev-b",
+        "n1/guest:x:1/",
+      ]);
+      expect(
+        (await ports.traffic.query("t1", { ...all, sourceId: S2 })).map(
+          (r) => r.bucketStartMs,
+        ),
+      ).toEqual([T0 + 2 * HOUR]);
+      expect(
+        await ports.traffic.query("t1", { ...all, subject: "guest:x:1" }),
+      ).toEqual([row({ bucketStartMs: T0 + HOUR, subject: "guest:x:1" })]);
+      expect(await ports.traffic.query("t1", { ...all, limit: 2 })).toEqual([
+        row({ bucketStartMs: T0 }),
+        row({ bucketStartMs: T0 + HOUR, node: "n0" }),
+      ]);
+    });
+
+    it("按天合并：同一 UTC 日、同维度的小时桶相加", async () => {
+      const ports = fresh();
+      await ports.traffic.upsert("t1", [
+        row({ bucketStartMs: T0 + HOUR }),
+        row({ bucketStartMs: T0 + 23 * HOUR }),
+        row({ bucketStartMs: T0 + 24 * HOUR }),
+        row({ bucketStartMs: T0 + 5 * HOUR, kind: "media" }),
+      ]);
+      expect(
+        await ports.traffic.query("t1", { ...all, granularity: "day" }),
+      ).toEqual([
+        row({ kind: "media" }),
+        row({ connections: 2, bytesToSource: 20, bytesToClient: 200 }),
+        row({ bucketStartMs: T0 + 24 * HOUR }),
+      ]);
+    });
+
+    it("保留期：删掉桶起点早于界限的行，答删了几行；只动本租户", async () => {
+      const ports = fresh();
+      await ports.traffic.upsert("t1", [
+        row({ bucketStartMs: T0 }),
+        row({ bucketStartMs: T0 + HOUR }),
+        row({ bucketStartMs: T0 + 2 * HOUR }),
+      ]);
+      await ports.traffic.upsert("t2", [row({ bucketStartMs: T0 })]);
+      expect(await ports.traffic.prune("t1", T0 + 2 * HOUR)).toBe(2);
+      expect(await ports.traffic.prune("t1", T0 + 2 * HOUR)).toBe(0);
+      expect(
+        (await ports.traffic.query("t1", all)).map((r) => r.bucketStartMs),
+      ).toEqual([T0 + 2 * HOUR]);
+      expect(await ports.traffic.query("t2", all)).toHaveLength(1);
     });
   });
 }

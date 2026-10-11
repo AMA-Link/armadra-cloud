@@ -19,6 +19,7 @@ import {
   type Authenticator,
 } from "./sessions.ts";
 import { createSources } from "./sources.ts";
+import { createTraffic, type TrafficSummaryInput } from "./traffic.ts";
 
 /** personal 报的能力（契约 `PLATFORM_CAPABILITIES` 的子集）。 */
 export const PERSONAL_CAPABILITIES = [
@@ -28,6 +29,7 @@ export const PERSONAL_CAPABILITIES = [
   "links.update",
   "links.scope",
   "me.stream",
+  "me.traffic",
 ] as const;
 
 /** personal 实现的 procedure（平台设计 §17.3 的子集表）；其余答 404。 */
@@ -43,6 +45,7 @@ export const PERSONAL_PROCEDURES = [
   "me.devices",
   "me.deviceRevoke",
   "me.streamTicket",
+  "me.traffic",
   "sources.registrationToken",
   "sources.register",
   "sources.heartbeatHint",
@@ -79,6 +82,7 @@ export function createPersonalProcedures(
   const accounts = createAccounts(context);
   const sources = createSources(context);
   const links = createLinks(context, sources);
+  const traffic = createTraffic(context);
 
   const handlers: Record<PersonalProcedure, ProcedureHandler> = {
     "platform.info": () => {
@@ -167,6 +171,8 @@ export function createPersonalProcedures(
     },
     "me.streamTicket": async ({ caller }) =>
       options.stream.ticket(await caller()),
+    "me.traffic": async ({ input, caller }) =>
+      traffic.summary(await caller(), input as unknown as TrafficSummaryInput),
     "sources.registrationToken": async ({ caller }) =>
       sources.registrationToken(await caller()),
     "sources.register": ({ input, ip }) =>

@@ -490,6 +490,58 @@ describe("个人中转端到端", () => {
     await once(guestWs, "open");
   });
 
+  it("流量统计（§19）：owner 看到自己与访客经中继的连接与字节，访客只看到自己；不记路径", async () => {
+    await relay.relay.traffic?.flush();
+    const query = `fromMs=0&toMs=${Date.now() + 3_600_000}`;
+    const owned = output(
+      "me",
+      "traffic",
+      await call("GET", `${issuer}/v1/me/traffic?${query}`, {
+        headers: bearer(ownerSession.accessToken),
+      }),
+    ) as {
+      buckets: {
+        subject: string;
+        kind: string;
+        sourceId: string;
+        connections: number;
+        bytesToSource: number;
+        bytesToClient: number;
+      }[];
+    };
+    const of = (subject: string, kind: string) =>
+      owned.buckets.filter(
+        (row) => row.subject === subject && row.kind === kind,
+      );
+    expect(of("acct:me", "http").length).toBeGreaterThan(0);
+    expect(of("acct:me", "ws")[0]).toMatchObject({
+      sourceId: SOURCE_ID,
+      connections: 1,
+    });
+    const guestSubject = owned.buckets.find((row) =>
+      row.subject.startsWith(`guest:${linkId}:`),
+    )?.subject;
+    expect(guestSubject).toBeDefined();
+    expect(JSON.stringify(owned)).not.toContain("echo");
+    const mine = output(
+      "me",
+      "traffic",
+      await call("GET", `${issuer}/v1/me/traffic?${query}&granularity=day`, {
+        headers: bearer(guest.guestSession.accessToken),
+      }),
+    ) as { buckets: { subject: string }[] };
+    expect(mine.buckets.length).toBeGreaterThan(0);
+    expect(new Set(mine.buckets.map((row) => row.subject))).toEqual(
+      new Set([guestSubject]),
+    );
+    const backwards = await call(
+      "GET",
+      `${issuer}/v1/me/traffic?fromMs=10&toMs=5`,
+      { headers: bearer(ownerSession.accessToken) },
+    );
+    expect(errorCode(backwards)).toBe("bad_request");
+  });
+
   it("改备注：owner 经 PATCH 只改 label，落地信息跟着变；访客改不了", async () => {
     const updated = output(
       "links",

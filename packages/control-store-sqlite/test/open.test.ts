@@ -120,8 +120,11 @@ describe("拒绝启动，不动文件", () => {
     refusedUnchanged(file("ledgerless.db"), "unknown");
 
     const newer = seeded("newer.db");
-    newer.exec(
-      "INSERT INTO relay_migrations (id, name, sha384, applied_at_ms) VALUES (2, '0002_future', 'y', 0)",
+    const future = loadMigrations().length + 1;
+    newer.run(
+      "INSERT INTO relay_migrations (id, name, sha384, applied_at_ms) VALUES (?, ?, 'y', 0)",
+      future,
+      `${String(future).padStart(4, "0")}_future`,
     );
     newer.close();
     refusedUnchanged(file("newer.db"), "newer");
@@ -159,13 +162,16 @@ describe("迁移", () => {
     const dir = file("migrations");
     mkdirSync(dir);
     const bundled = defaultMigrationsDir();
-    copyFileSync(join(bundled, "0001_init.sql"), join(dir, "0001_init.sql"));
+    const shipped = loadMigrations(bundled).map((row) => `${row.name}.sql`);
+    for (const name of shipped)
+      copyFileSync(join(bundled, name), join(dir, name));
     openDatabase(file("upgrade.db"), {
       create: true,
       migrationsDir: dir,
     }).close();
+    const next = String(shipped.length + 1).padStart(4, "0");
     writeFileSync(
-      join(dir, "0002_extra.sql"),
+      join(dir, `${next}_extra.sql`),
       "CREATE TABLE extra (id INTEGER) STRICT;\n",
     );
     const db = openDatabase(file("upgrade.db"), { migrationsDir: dir });
@@ -173,14 +179,69 @@ describe("迁移", () => {
       db
         .all("SELECT name FROM relay_migrations ORDER BY id")
         .map((row) => row.name),
-    ).toEqual(["0001_init", "0002_extra"]);
+    ).toEqual([...shipped.map((name) => name.slice(0, -4)), `${next}_extra`]);
     db.close();
-    // 同一个库给只认识 0001 的程序：比程序新，拒绝。
+    // 同一个库给只认识随包迁移的程序：比程序新，拒绝。
     expect(codeOf(() => openDatabase(file("upgrade.db")))).toBe("newer");
-    writeFileSync(join(dir, "0004_gap.sql"), "SELECT 1;\n");
+    const gap = String(shipped.length + 3).padStart(4, "0");
+    writeFileSync(join(dir, `${gap}_gap.sql`), "SELECT 1;\n");
     expect(() =>
       openDatabase(file("gap.db"), { create: true, migrationsDir: dir }),
     ).toThrow(/不连续/);
+  });
+
+  it("0002_traffic：只跑过 0001 的库升级后有流量表，已有数据不动，主键冲突可累加", () => {
+    const dir = file("migrations-0001");
+    mkdirSync(dir);
+    copyFileSync(
+      join(defaultMigrationsDir(), "0001_init.sql"),
+      join(dir, "0001_init.sql"),
+    );
+    const old = openDatabase(file("traffic.db"), {
+      create: true,
+      migrationsDir: dir,
+    });
+    old.transaction(() => createTenant(old, DEFAULT_TENANT, SETTINGS));
+    old.close();
+    const db = openDatabase(file("traffic.db"));
+    expect(
+      db
+        .all("SELECT name FROM relay_migrations ORDER BY id")
+        .map((row) => row.name),
+    ).toEqual(["0001_init", "0002_traffic"]);
+    expect(
+      db.get("SELECT issuer FROM tenants WHERE tenant_id = ?", DEFAULT_TENANT)
+        ?.issuer,
+    ).toBe(SETTINGS.issuer);
+    const upsert = `INSERT INTO relay_traffic_buckets
+      (tenant_id, bucket_start_ms, node, source_id, subject, device_id, kind,
+       connections, bytes_to_source, bytes_to_client)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (tenant_id, bucket_start_ms, node, source_id, subject, device_id, kind)
+      DO UPDATE SET connections = connections + excluded.connections,
+        bytes_to_source = bytes_to_source + excluded.bytes_to_source,
+        bytes_to_client = bytes_to_client + excluded.bytes_to_client`;
+    for (let round = 0; round < 2; round += 1)
+      db.run(
+        upsert,
+        "default",
+        3_600_000,
+        "n1",
+        "s1",
+        "acct:a",
+        "",
+        "ws",
+        1,
+        10,
+        20,
+      );
+    expect({
+      ...db.get(
+        "SELECT connections, bytes_to_source, bytes_to_client FROM relay_traffic_buckets",
+      ),
+    }).toEqual({ connections: 2, bytes_to_source: 20, bytes_to_client: 40 });
+    expect(db.integrityCheck()).toEqual(["ok"]);
+    db.close();
   });
 });
 

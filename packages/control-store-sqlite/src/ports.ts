@@ -34,6 +34,7 @@ import {
   writeLink,
   writeSource,
 } from "./rows.ts";
+import { createSqliteTraffic } from "./traffic.ts";
 
 const same = (left: unknown, right: unknown) =>
   JSON.stringify(left) === JSON.stringify(right);
@@ -371,5 +372,7 @@ export function createSqlitePorts(db: Database): ControlPorts {
         return readTenantSettings(db, tenantId);
       },
     },
+
+    traffic: createSqliteTraffic(db),
   };
 }

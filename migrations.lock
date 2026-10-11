@@ -1,9 +1,11 @@
 {
   "packages/control-store-postgres/migrations": {
     "0001_control_init.sql": "9b3c961eccbafdbc3b13e7a03f9c639e31473b4021268fc9477e7834d25a9259",
-    "0002_relay_control.sql": "a4c5904211f5024e7bdb15100c5edce56e999bbe93cd7ca04521736b9f49cf71"
+    "0002_relay_control.sql": "a4c5904211f5024e7bdb15100c5edce56e999bbe93cd7ca04521736b9f49cf71",
+    "0003_traffic.sql": "56ac73f63e768d1ba9ea49dfdf272aa063ea4aa09982aa7e457f24c33dd9dce9"
   },
   "packages/control-store-sql/migrations": {
-    "0001_init.sql": "b72ee6d046fd94a97c62d0b187d1c4281fab922ad74eca498df2dd58afa8e64a"
+    "0001_init.sql": "b72ee6d046fd94a97c62d0b187d1c4281fab922ad74eca498df2dd58afa8e64a",
+    "0002_traffic.sql": "bcce49b52be65921255f3f1f7b463d176a432194ead3651edb610f59649e91ce"
   }
 }

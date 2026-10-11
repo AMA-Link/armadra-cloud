@@ -30,6 +30,8 @@ export interface RelayEnv {
   RELAY_DAILY_TUNNEL_BYTES_BUDGET?: string;
   /** 首次初始化时的可信来源（逗号分隔，之后以租户设置为准）。 */
   RELAY_TRUSTED_ORIGINS?: string;
+  /** 流量统计保留天数（cloud-api §19），0–3650，缺省 90；0 = 不记录。 */
+  RELAY_TRAFFIC_RETENTION_DAYS?: string;
   /** ControlDO 第一次创建时的位置提示（`apac`、`wnam`…），缺省 `apac`。 */
   RELAY_CONTROL_LOCATION?: string;
   /** saas：控制面的 issuer（JWKS 与节点回报都找它）。 */
@@ -83,6 +85,8 @@ export interface RelayConfig {
   dailyRequestBudget: number;
   dailyTunnelBytesBudget: number;
   trustedOrigins: string[];
+  /** 流量统计保留天数；0 = 不记录。 */
+  trafficRetentionDays: number;
   controlLocation: DurableObjectLocationHint;
   cloudIssuer: string | null;
   domain: string | null;
@@ -122,6 +126,7 @@ export const DEFAULT_ALARM_MS = 60_000;
 export const DEFAULT_CLIENT_IDLE_MS = 120_000;
 export const DEFAULT_DAILY_REQUEST_BUDGET = 2_000_000;
 export const DEFAULT_DAILY_TUNNEL_BYTES_BUDGET = 50 * 1024 ** 3;
+export const DEFAULT_TRAFFIC_RETENTION_DAYS = 90;
 
 function integer(
   value: string | undefined,
@@ -219,6 +224,13 @@ export function readConfig(env: RelayEnv): RelayConfig {
       Number.MAX_SAFE_INTEGER,
     ),
     trustedOrigins,
+    trafficRetentionDays: integer(
+      env.RELAY_TRAFFIC_RETENTION_DAYS,
+      "RELAY_TRAFFIC_RETENTION_DAYS",
+      DEFAULT_TRAFFIC_RETENTION_DAYS,
+      0,
+      3650,
+    ),
     controlLocation: location as DurableObjectLocationHint,
     cloudIssuer,
     domain,

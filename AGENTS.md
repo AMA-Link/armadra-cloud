@@ -8,7 +8,7 @@
 - `@orpc/*` 只能出现在 `packages/platform-protocol/src/cloud-api/`、`packages/control-core/src/router.ts`、`tools/contract/`（ESLint `no-restricted-imports` 守）。
 - 协议包只含 zod schema、类型、纯编解码与常量，不 import `node:*`（`src/fixtures/` 例外，只在测试里用）。
 - 错误码只从 `@armadra/platform-protocol/errors` 取；线上形状 `{ code, message, requestId?, details? }`，JSON camelCase。
-- relay 只经 `packages/control-store-postgres`（`--store postgres`）与 `relay-runtime-node` 的 `control/postgres.ts`（`--control postgres`）碰 PostgreSQL；personal 的状态缺省只在数据目录（`state.json` 或 `node:sqlite` 的 `relay.db`，经 `packages/control-store-sqlite`），显式选 `--store postgres` 时在库里（数据目录留 `postgres.json` 标记，不含连接串）；Workers 中继的状态只在 `ControlDO` 的 DO SQLite（同一份迁移与账本，签名私钥用 `RELAY_MASTER_KEY` 包裹）与 `SourceDO` 的 WS 附件 / 同步 KV（媒体票只存派生哈希与用票本身派生的密钥封起来的密文）。relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
+- relay 只经 `packages/control-store-postgres`（`--store postgres`）与 `relay-runtime-node` 的 `control/postgres.ts`（`--control postgres`）碰 PostgreSQL；personal 的状态缺省只在数据目录（`state.json` 或 `node:sqlite` 的 `relay.db`，经 `packages/control-store-sqlite`），显式选 `--store postgres` 时在库里（数据目录留 `postgres.json` 标记，不含连接串）；Workers 中继的状态只在 `ControlDO` 的 DO SQLite（同一份迁移与账本，签名私钥用 `RELAY_MASTER_KEY` 包裹）与 `SourceDO` 的 WS 附件 / 同步 KV（媒体票只存派生哈希与用票本身派生的密钥封起来的密文）/ DO SQLite（只有流量统计表 `relay_traffic_buckets`，同一份迁移）。relay 与 cloud 都不得持久化或记录任何流正文、终端输出、画布内容、口令、令牌明文。
 - `personal` 的缺省装配（file / sqlite 存储 + memory 控制面）不得静态依赖 PostgreSQL / Redis；`--store postgres` 与 `--control redis|postgres`（多节点）是显式选项，只经 `personal/store.ts`、`personal/control.ts` 的动态 import 加载，`@armadra/control-store-postgres` 是 `apps/relay` 的 `optionalDependencies`（`apps/relay/src/boundaries.test.ts` 沿静态 import 图连同内核、运行时与控制核一起走遍）。
 
 ## 范围与优先级

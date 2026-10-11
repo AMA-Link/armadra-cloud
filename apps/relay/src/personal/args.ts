@@ -336,6 +336,31 @@ export interface PersonalServeOptions extends Common {
   name?: string;
   /** 人机挑战（`--challenge turnstile`，cloud-api §16）；缺省不开。 */
   challenge?: ChallengeOptions;
+  /**
+   * 流量统计的保留天数（`--traffic-retention-days` / `RELAY_TRAFFIC_RETENTION_DAYS`，cloud-api §19）；
+   * 缺省 {@link DEFAULT_TRAFFIC_RETENTION_DAYS}，0 = 不记录。
+   */
+  trafficRetentionDays?: number;
+}
+
+export const DEFAULT_TRAFFIC_RETENTION_DAYS = 90;
+const TRAFFIC_RETENTION_MAX_DAYS = 3650;
+
+function trafficRetentionOf(values: Map<string, string>, env: Env): number {
+  const text =
+    values.get("traffic-retention-days") ??
+    (env.RELAY_TRAFFIC_RETENTION_DAYS || undefined);
+  if (text === undefined) return DEFAULT_TRAFFIC_RETENTION_DAYS;
+  const days = Number(text);
+  if (
+    !/^\d+$/.test(text) ||
+    !Number.isInteger(days) ||
+    days > TRAFFIC_RETENTION_MAX_DAYS
+  )
+    throw new UsageError(
+      `--traffic-retention-days 要是 0 到 ${TRAFFIC_RETENTION_MAX_DAYS} 的整数：${text}`,
+    );
+  return days;
 }
 
 export interface ChallengeOptions {
@@ -524,6 +549,7 @@ const SERVE_FLAGS = withDatabase(
   "turnstile-secret-file",
   "turnstile-hostnames",
   "challenge-scope",
+  "traffic-retention-days",
 );
 
 /** `--control`、`--redis-url` 与 `--node-id`。 */
@@ -625,6 +651,7 @@ export function parsePersonalServe(
   const store = storeOf(values, env);
   requirePostgres(store, common.database);
   const challenge = challengeOf(values, env, cwd);
+  const trafficRetentionDays = trafficRetentionOf(values, env);
   return {
     ...common,
     ...(store ? { store } : {}),
@@ -652,6 +679,7 @@ export function parsePersonalServe(
     ...(trustedProxy ? { trustedProxy } : {}),
     ...(name ? { name } : {}),
     ...(challenge ? { challenge } : {}),
+    trafficRetentionDays,
   };
 }
 
@@ -708,6 +736,50 @@ export function parseLinks(
     return { action, linkId, ...commonOf(values, env, cwd) };
   }
   throw new UsageError(`links 只有 list 与 revoke：${action ?? ""}`);
+}
+
+// ------------------------------------------------------------ 流量统计
+
+export interface PersonalTrafficOptions extends Common {
+  /** 从多久以前起（毫秒）。 */
+  sinceMs: number;
+  sourceId?: string;
+}
+
+/** `7d`、`24h`、`30m`：时长（毫秒）；不认识答 null。 */
+export function parseDuration(text: string): number | null {
+  const match = /^(\d{1,5})([dhm])$/.exec(text);
+  if (!match) return null;
+  const unit = { d: 86_400_000, h: 3_600_000, m: 60_000 }[
+    match[2] as "d" | "h" | "m"
+  ];
+  const value = Number(match[1]) * unit;
+  return value > 0 ? value : null;
+}
+
+export function parseTraffic(
+  argv: readonly string[],
+  env: Env,
+  cwd = process.cwd(),
+): PersonalTrafficOptions {
+  const { values } = parseFlags(
+    argv,
+    withDatabase("data-dir", "since", "source"),
+  );
+  const sinceText = values.get("since") ?? "7d";
+  const sinceMs = parseDuration(sinceText);
+  if (sinceMs === null)
+    throw new UsageError(
+      `--since 要是天、小时或分钟，例如 7d、24h：${sinceText}`,
+    );
+  const sourceId = values.get("source");
+  if (sourceId !== undefined && !/^[0-9a-f]{32}$/.test(sourceId))
+    throw new UsageError(`--source 要是一个源 id：${sourceId}`);
+  return {
+    ...commonOf(values, env, cwd),
+    sinceMs,
+    ...(sourceId ? { sourceId } : {}),
+  };
 }
 
 // ------------------------------------------------------------ 存储
