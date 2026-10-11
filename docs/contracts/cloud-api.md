@@ -301,6 +301,8 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **子协议**：`armadra-e2e.1`（版本，中继选它答复）+ `armadra-relay.<中继令牌>`（与 §7 相同，中继剥掉）。缺版本子协议或版本不认识以 4409 关闭。
 - **判定**：令牌校验、限流、按 `sourceId` 路由与 §7 相同（同一张拒绝表，WebSocket 一列）；源在线但隧道 `hello.capabilities` 没报 `e2e` → 4404，原因 `e2e_unsupported`（错误码仍是 `source_offline`）。中继令牌的 `ro` 对这条面不生效（中继看不到内层请求），读写由源判定。
 - **隧道侧**：中继开一条流 `OPEN { kind: "e2e", method: "GET", path: "/_relay/e2e", headers: [], clientOrigin, remoteIp, relayNode }`，此后客户端 WebSocket 的二进制消息原样写进 `DATA`，`DATA` 原样作为二进制消息发回客户端；文本消息以 4400 关闭。消息边界不保证（中继可以合并或切分），通道自己按长度切单元。客户端关闭 → `END`；源 `END` / `RST` → 以 1000 / 4404 关闭；窗口与背压同隧道。`e2e` 流计入同一账号的并发 WebSocket 上限（256）。
-- **中继令牌 `dev`**：可选声明，issuer 侧签发这张令牌的会话所属设备 id；中继只用它计数「来自哪些设备」，不参与鉴权。老令牌没有它。
+- **中继令牌 `dev`**：可选声明，issuer 侧签发这张令牌的会话所属设备 id（与断言的 `device.deviceId` 相同）；中继只用它计数「来自哪些设备」，不参与鉴权。老令牌没有它。
 - **通道格式**：以协议包 `./e2e` 为准（握手三条消息、AES-256-GCM 记录、r0 `accept`），黄金向量在 `packages/platform-protocol/fixtures/e2e/handshake.json`。中继不解析它。
-- **日志与指标**：只记 `{ sourceId, sub, dev, node, bytesUp, bytesDown, durationMs, closeCode }`；指标 `kind` 标签多一个 `e2e`。
+- **日志与指标**：通道结束时记一条元数据（源、流号、两个方向的字节数、时长、关闭码），不记账号、设备、IP 与任何内容；指标 `relay_edge_streams_total{kind}` 按 `http` / `ws` / `e2e` 计开出的流。
+- **活性**：Node 中继每 30 秒发 `ping`、60 秒没有任何消息或 `pong` 即断开（与 §7 相同）；Workers 中继由检查周期按空闲时长断开。客户端的通道自己另有内层 `PING`（协议包 `LIMITS_E2E.pingIntervalMs`）。
+- **实现**：Node 中继（`relay-runtime-node` 的 `e2e-pipe.ts`）与 Workers 中继（`SourceDO` 的 `e2e-bridge.ts`，休眠后照样接上）行为相同；签发方从 0.4.0 起在中继令牌里带 `dev`。
