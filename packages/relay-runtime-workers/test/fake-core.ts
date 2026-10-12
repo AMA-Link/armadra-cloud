@@ -274,7 +274,7 @@ export class FakeCore {
         protocol: PROTOCOL_VERSION,
         sourceId,
         coreVersion: "0.2.0-test",
-        capabilities: options.capabilities ?? [],
+        capabilities: options.capabilities ?? ["e2e"],
         tunnelToken,
         nonce,
       }),

@@ -1,18 +1,26 @@
 /**
  * DO 里的端到端通道（cloud-api §20）：客户端 WS 由 Workers 运行时终止，二进制消息原样写进
- * `OPEN kind: "e2e"` 的流，流的字节原样作为二进制消息发回——不经 `http-forward`、不解帧，里面是
+ * `OPEN kind: "e2e"` 的流，流的字节原样作为二进制消息发回——不解帧，里面是
  * `armadra-e2e/1` 的密文单元，中继看不懂也不看。消息边界不保证（通道按长度自己切）。
  *
  * - 文本消息以 4400 关闭并重置流；单条消息超过 1 MiB 以 1009 关闭。
  * - 客户端关闭 → `END`；掉线（1006 / 1015）→ `RST clientGone`。源 `END` → 1000；源 `RST` / 隧道
  *   没了 → 4404 `source_offline`。
  *
- * 与 {@link WsBridge} 同一套外形（附件、休眠还原、撤销断开都按桥处理）；附件里 `mode: "e2e"`。
+ * 附件里 `mode: "e2e"`；0.5.0 起这是唯一的客户端桥（明文 WS 的桥随明文转发删除）。
  */
 import { CLOSE, RST } from "@armadra/platform-protocol/tunnel";
 
 import type { EndpointHandler, TunnelEndpoint } from "./endpoint.ts";
-import { MAX_CLIENT_MESSAGE_BYTES, type BridgeHooks } from "./ws-bridge.ts";
+/** 客户端单条消息的上限。 */
+export const MAX_CLIENT_MESSAGE_BYTES = 1024 * 1024;
+
+export interface BridgeHooks {
+  /** 有字节经过（任一方向）：记最近活动时间、存附件。 */
+  activity(): void;
+  /** 桥结束（客户端已关或已断）：摘掉、还并发名额。 */
+  closed(): void;
+}
 
 export class E2eBridge implements EndpointHandler {
   readonly ws: WebSocket;

@@ -22,11 +22,10 @@ import {
   call,
   heartbeatHint,
   json,
+  echoChannel,
   login,
-  nextMessage,
-  openClientWs,
+  openChannel,
   registerSource,
-  viaRelay,
   type Session,
   type TestSource,
 } from "./api.ts";
@@ -47,7 +46,7 @@ interface Bucket {
 const stubOf = (sourceId: string) =>
   env.SOURCE.get(env.SOURCE.idFromName(sourceObjectName(sourceId)));
 
-async function online(capabilities: string[] = []): Promise<{
+async function online(capabilities: string[] = ["e2e"]): Promise<{
   session: Session;
   source: TestSource;
   relayToken: string;
@@ -84,37 +83,22 @@ const sum = (rows: Bucket[], field: keyof Bucket) =>
   rows.reduce((total, row) => total + Number(row[field]), 0);
 
 describe("流量统计", () => {
-  it("HTTP、媒体票与 WS 按类别记到源的对象里，/v1/me/traffic 合并答出；不记路径", async () => {
+  it("通道按 e2e 记到源的对象里，/v1/me/traffic 合并答出；明文请求不记；不记路径", async () => {
     const { session, source, relayToken } = await online();
-    for (let index = 0; index < 3; index += 1)
-      await (
-        await viaRelay(source.sourceId, "/echo-request", { token: relayToken })
-      ).arrayBuffer();
-    const issued = await viaRelay(source.sourceId, "/_relay/media-tickets", {
-      token: relayToken,
-      method: "POST",
-      body: JSON.stringify({ path: "/media" }),
-    });
-    const { path } = await json<{ path: string }>(issued);
-    await (
-      await viaRelay(source.sourceId, path, {
-        headers: { range: "bytes=0-3" },
-      })
-    ).arrayBuffer();
-    const { ws } = await openClientWs(source.sourceId, "/ws", relayToken);
-    if (!ws) throw new Error("没有 WS");
-    ws.send("hello");
-    expect(await nextMessage(ws)).toBe("hello");
-    ws.close(1000, "done");
+    for (let index = 0; index < 3; index += 1) {
+      const { ws } = await openChannel(source.sourceId, relayToken);
+      if (!ws) throw new Error("没有 WS");
+      await echoChannel(ws, Uint8Array.of(index));
+      ws.close(1000, "done");
+    }
+    // 明文请求 404，不开流、不计。
+    await (await call(`/s/${source.sourceId}/echo-request`)).arrayBuffer();
 
     const { status, buckets } = await traffic(session, range(source.sourceId));
     expect(status).toBe(200);
-    const of = (kind: string) => buckets.filter((row) => row.kind === kind);
-    expect(sum(of("http"), "connections")).toBe(3);
-    expect(sum(of("http"), "bytesToClient")).toBeGreaterThan(0);
-    expect(sum(of("media"), "connections")).toBe(1);
-    expect(sum(of("ws"), "connections")).toBe(1);
-    expect(sum(of("ws"), "bytesToSource")).toBeGreaterThan(0);
+    expect(buckets.every((row) => row.kind === "e2e")).toBe(true);
+    expect(sum(buckets, "connections")).toBe(3);
+    expect(sum(buckets, "bytesToSource")).toBe(3);
     for (const row of buckets)
       expect(row).toMatchObject({
         node: "cf",
@@ -126,18 +110,13 @@ describe("流量统计", () => {
       session,
       `${range(source.sourceId)}&granularity=day`,
     );
-    expect(sum(daily.buckets, "connections")).toBe(5);
+    expect(sum(daily.buckets, "connections")).toBe(3);
     expect((await traffic(session, "fromMs=5&toMs=5")).status).toBe(400);
   });
 
   it("端到端通道记为 e2e：字节是边缘 WS 载荷之和，设备取令牌的 dev", async () => {
-    const { session, source, relayToken } = await online(["e2e"]);
-    const { ws } = await openClientWs(
-      source.sourceId,
-      "/_relay/e2e",
-      relayToken,
-      ["armadra-e2e.1"],
-    );
+    const { session, source, relayToken } = await online();
+    const { ws } = await openChannel(source.sourceId, relayToken);
     if (!ws) throw new Error("没有 WS");
     let got = 0;
     const echoed = new Promise<void>((resolve) =>
@@ -165,9 +144,10 @@ describe("流量统计", () => {
 
   it("检查周期把内存里的计数写进对象的 DO SQLite", async () => {
     const { source, relayToken } = await online();
-    await (
-      await viaRelay(source.sourceId, "/echo-request", { token: relayToken })
-    ).arrayBuffer();
+    const { ws } = await openChannel(source.sourceId, relayToken);
+    if (!ws) throw new Error("没有 WS");
+    await echoChannel(ws, Uint8Array.of(1));
+    ws.close(1000, "done");
     const stub = stubOf(source.sourceId);
     await runDurableObjectAlarm(stub);
     const rows = await runInDurableObject(stub, (_instance, state) =>
@@ -178,24 +158,22 @@ describe("流量统计", () => {
         }>("SELECT kind, connections FROM relay_traffic_buckets")
         .toArray(),
     );
-    expect(rows).toEqual([{ kind: "http", connections: 1 }]);
+    expect(rows).toEqual([{ kind: "e2e", connections: 1 }]);
   });
 
-  it("休眠唤醒后经还原的 WS 接着记字节（不重复计连接）", async () => {
+  it("休眠唤醒后经还原的通道接着记字节（不重复计连接）", async () => {
     const { session, source, relayToken } = await online();
-    const { ws } = await openClientWs(source.sourceId, "/ws", relayToken);
+    const { ws } = await openChannel(source.sourceId, relayToken);
     if (!ws) throw new Error("没有 WS");
-    ws.send("before");
-    expect(await nextMessage(ws)).toBe("before");
+    await echoChannel(ws, Uint8Array.of(1, 2));
     const before = await traffic(session, range(source.sourceId));
-    const wsBefore = before.buckets.filter((row) => row.kind === "ws");
+    const wsBefore = before.buckets.filter((row) => row.kind === "e2e");
     await evictDurableObject(stubOf(source.sourceId), {
       webSockets: "hibernate",
     });
-    ws.send("after-hibernation");
-    expect(await nextMessage(ws)).toBe("after-hibernation");
+    await echoChannel(ws, Uint8Array.of(3, 4, 5));
     const after = await traffic(session, range(source.sourceId));
-    const wsAfter = after.buckets.filter((row) => row.kind === "ws");
+    const wsAfter = after.buckets.filter((row) => row.kind === "e2e");
     expect(sum(wsAfter, "connections")).toBe(1);
     expect(sum(wsAfter, "bytesToSource")).toBeGreaterThan(
       sum(wsBefore, "bytesToSource"),
@@ -205,9 +183,10 @@ describe("流量统计", () => {
 
   it("保留期：查询前一天清一次，早于 90 天的桶删掉", async () => {
     const { session, source, relayToken } = await online();
-    await (
-      await viaRelay(source.sourceId, "/echo-request", { token: relayToken })
-    ).arrayBuffer();
+    const { ws } = await openChannel(source.sourceId, relayToken);
+    if (!ws) throw new Error("没有 WS");
+    await echoChannel(ws, Uint8Array.of(1));
+    ws.close(1000, "done");
     const stub = stubOf(source.sourceId);
     await runInDurableObject(stub, async (instance: SourceDO, state) => {
       await instance.trafficQuery({
@@ -220,7 +199,7 @@ describe("流量统计", () => {
         `INSERT INTO relay_traffic_buckets
           (tenant_id, bucket_start_ms, node, source_id, subject, device_id, kind,
            connections, bytes_to_source, bytes_to_client)
-          VALUES ('default', ?, 'cf', ?, 'acct:owner', '', 'http', 1, 1, 1)`,
+          VALUES ('default', ?, 'cf', ?, 'acct:owner', '', 'e2e', 1, 1, 1)`,
         Date.now() - 91 * 86_400_000,
         source.sourceId,
       );

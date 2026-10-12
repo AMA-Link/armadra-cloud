@@ -197,6 +197,63 @@ export async function openClientWs(
   return { response, ws };
 }
 
+/** 经中继开一条端到端通道（`_relay/e2e`，子协议 `armadra-e2e.1`）。 */
+export function openChannel(
+  sourceId: string,
+  token: string,
+): Promise<{ response: Response; ws: WebSocket | null }> {
+  return openClientWs(sourceId, "/_relay/e2e", token, ["armadra-e2e.1"]);
+}
+
+/**
+ * 开一条通道看结果：开成答 `null`（随后关掉），被拒答关闭码（中继先完成升级再关），HTTP 拒绝
+ * 答状态码。
+ */
+export async function channelOutcome(
+  sourceId: string,
+  token: string,
+): Promise<number | null> {
+  const { response, ws } = await openChannel(sourceId, token);
+  if (!ws) return response.status;
+  const outcome = await Promise.race([
+    closed(ws).then((event) => event.code),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 200)),
+  ]);
+  if (outcome === null) ws.close(1000, "done");
+  return outcome;
+}
+
+/** 经通道回显一段字节（假 core 把 e2e 流接回自己）。 */
+export async function echoChannel(
+  ws: WebSocket,
+  payload: Uint8Array,
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const done = new Promise<void>((resolve) => {
+    const onMessage = (event: MessageEvent) => {
+      const chunk = new Uint8Array(event.data as ArrayBuffer);
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size >= payload.length) {
+        ws.removeEventListener("message", onMessage);
+        resolve();
+      }
+    };
+    ws.addEventListener("message", onMessage);
+  });
+  for (let offset = 0; offset < payload.length; offset += 60_000)
+    ws.send(payload.subarray(offset, offset + 60_000));
+  await done;
+  const all = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return all;
+}
+
 /** 等一个 WS 事件。 */
 export function nextMessage(
   ws: WebSocket,
