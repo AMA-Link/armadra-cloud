@@ -36,7 +36,6 @@ import {
   dispatchUpgrade,
 } from "./dispatch.ts";
 import { Edge, type EdgeConnectionFilter } from "./edge.ts";
-import { sendRelayError } from "./errors.ts";
 import { nodeStreams } from "./stream.ts";
 import { TunnelServer } from "./ws-server.ts";
 
@@ -68,7 +67,7 @@ export interface RelayOptions {
     socket: Duplex,
     head: Buffer,
   ) => boolean;
-  /** 源地址上 CORS 预检放行的来源（见 `edge/cors.ts`）；原生 App 的来源总是放行。 */
+  /** 源地址上错误答复回显 CORS 的来源（见 `edge/cors.ts`）；原生 App 的来源总是回显。 */
   corsOrigins?: (sourceId: string) => readonly string[];
   /** 客户端 IP 的取法；缺省直连对端地址（不信任任何代理）。 */
   clientIp?: ClientIp;
@@ -134,7 +133,6 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     wsIdleMs: options.wsIdleMs,
     corsOrigins: options.corsOrigins,
     clientIp: options.clientIp,
-    now: options.now,
     traffic,
   });
   const router = createRelayRouter({
@@ -155,11 +153,7 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     options.listen,
     (req, res) => {
       if (!addressed(req)) return router.handle(req, res);
-      return edge.handleRequest(req, res).catch((error: unknown) => {
-        log.error("边缘请求异常", { error: errorName(error) });
-        if (!res.headersSent) sendRelayError(res, "internal");
-        else res.destroy();
-      });
+      edge.handleRequest(req, res);
     },
     options.tls ? { tls: options.tls } : {},
   );

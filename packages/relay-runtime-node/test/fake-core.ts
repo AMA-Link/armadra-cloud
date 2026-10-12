@@ -11,7 +11,11 @@
  * - `GET /big?bytes=N`：写 N 字节的确定序列（背压测试）。
  * - `GET /hold`：先写头，等 `release()` 才结束（GOAWAY 排空测试）。
  * - WS 任意路径：回显（文本 / 二进制），选 `armadra-ticket.*` 子协议。
- * - `OPEN kind: "e2e"`（`capabilities` 含 `e2e` 时中继才会开）：字节原样回显（流接回自己）。
+ * - `OPEN kind: "e2e"`（`capabilities` 含 `e2e` 时中继才会开）：字节原样回显（流接回自己）；
+ *   给了 `e2eSend` 时改成写那么多字节的确定序列（{@link bigByte}）再结束（背压测试）。
+ *
+ * 0.5.0 起中继只开 `e2e` 流；HTTP 与普通 WS 的路由留着，用来证明中继不再把明文请求转进来
+ * （`requests` 恒为 0）。
  */
 import { sign, type KeyObject } from "node:crypto";
 import { once } from "node:events";
@@ -54,6 +58,8 @@ export interface FakeCoreOptions {
   ca?: string;
   /** `hello.capabilities`（缺省空）。 */
   capabilities?: string[];
+  /** 端到端流不回显，改为写这么多字节的确定序列后结束。 */
+  e2eSend?: number;
 }
 
 export interface Connected {
@@ -307,7 +313,12 @@ export class FakeCore {
         this.streams.set(frame.streamId, stream);
         if (frame.open.kind === "e2e") {
           this.e2eOpens.push(frame.open);
-          stream.pipe(stream);
+          const send = this.options.e2eSend;
+          if (send === undefined) stream.pipe(stream);
+          else {
+            stream.resume();
+            void this.writeSequence(stream, send);
+          }
           return;
         }
         this.http.emit("connection", stream);
@@ -338,6 +349,32 @@ export class FakeCore {
         this.goaways.push(frame.reason);
         return;
     }
+  }
+
+  private async writeSequence(
+    stream: TunnelStream,
+    total: number,
+  ): Promise<void> {
+    const chunkSize = 64 * 1024;
+    for (let offset = 0; offset < total; offset += chunkSize) {
+      const size = Math.min(chunkSize, total - offset);
+      const chunk = Buffer.alloc(size);
+      for (let index = 0; index < size; index += 1)
+        chunk[index] = bigByte(offset + index);
+      if (!stream.write(chunk)) {
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            stream.off("drain", done);
+            stream.off("close", done);
+            resolve();
+          };
+          stream.on("drain", done);
+          stream.on("close", done);
+        });
+        if (stream.destroyed) return;
+      }
+    }
+    stream.end();
   }
 
   private async writeBig(
