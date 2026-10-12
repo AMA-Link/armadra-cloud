@@ -11,8 +11,9 @@
 //   1. 本地构建个人中转镜像（本仓）与服务器壳镜像（Armadra 主仓，见下）；
 //   2. 起中继（首次自动 init）与服务器壳；服务器壳不发布端口，只能经中继到达；
 //   3. 服务器壳登记到中继（注册令牌）、隧道连上；
-//   4. 客户端用账号口令登录中继 → 断言 + 中继令牌 → 换 core 会话 → 经中继调 HTTP API、
-//      事件流、终端收发、协作板；
+//   4. 客户端用账号口令登录中继 → 断言 + 中继令牌 → 开端到端通道（`_relay/e2e`，新设备由
+//      服务器壳的主人核对放行）→ 经通道换 core 会话、调 HTTP API、事件流、终端收发、协作板；
+//      中继上的明文路径（HTTP、预检、媒体票）一律 404；
 //   5. 分享链接访客访问；撤销链接、源离线、撤销源，各自断开；
 //   6. 全部日志里查不到任何秘密。
 //
@@ -35,6 +36,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
+
+import { ed25519SignerFromSeed } from "@armadra/platform-protocol/e2e";
+import { WebSocket } from "ws";
 
 import {
   Report,
@@ -295,17 +299,99 @@ const adminCall = (method, path, body) =>
     ...(body === undefined ? {} : { body }),
   });
 
-/** 经中继打 core（客户端视角）：中继令牌 + 来源 = 中继自己。 */
-function viaRelay(client, method, path, body, extra = {}) {
-  return relay.http(method, `${client.baseUrl}${path}`, {
-    ...(body === undefined ? {} : { body }),
+/* ------------------------------ 端到端通道 ------------------------------ */
+
+// 通道的客户端（握手、记录层之上的内层复用，`fetch` 与 WebSocket 的形状），与 Armadra 页面
+// 那一份同形；字节编解码全在协议包。
+const { E2eChannelError, E2eClientChannel, channelFetch, channelWebSocket } =
+  await import("./e2e/channel/index.ts");
+
+/** 底层 WebSocket：信任中继的自签 CA，主机名一律解析到回环（compose 里的 `relay`）。 */
+class ChannelSocket extends WebSocket {
+  constructor(url, protocols) {
+    super(url, protocols, {
+      ca: caPem,
+      perMessageDeflate: false,
+      lookup: (_host, options, callback) =>
+        options?.all
+          ? callback(null, [{ address: "127.0.0.1", family: 4 }])
+          : callback(null, "127.0.0.1", 4),
+    });
+  }
+}
+
+/** 中继拒绝开通道的关闭码 → 等价的 HTTP 拒绝（给只看状态码的步骤用）。 */
+const REFUSED = {
+  4401: [401, "relay_token_invalid"],
+  4403: [403, "relay_source_mismatch"],
+  4404: [503, "source_offline"],
+  4429: [429, "rate_limited"],
+};
+
+/** 开一条通道（不缓存）；被拒抛 `E2eChannelError`（带中继的关闭码）。 */
+async function openChannel(client, relayToken = client.relayToken) {
+  client.device ??= await ed25519SignerFromSeed(randomBytes(32));
+  return E2eClientChannel.open({
+    url: `${client.baseUrl.replace(/^https:/, "wss:")}/_relay/e2e`,
+    relayToken,
+    sourceId: state.sourceId,
+    device: client.device,
+    platform: "desktop",
+    name: client.name ?? "e2e",
+    WebSocket: ChannelSocket,
+    pingIntervalMs: 0,
+  });
+}
+
+/** 这个客户端开着的通道；没有、关了或换了中继令牌就重开。 */
+async function channelOf(client) {
+  const current = client.channel;
+  if (
+    current &&
+    client.channelToken === client.relayToken &&
+    !current.closed &&
+    !current.expired
+  )
+    return current;
+  current?.close();
+  client.channel = await openChannel(client);
+  client.channelToken = client.relayToken;
+  return client.channel;
+}
+
+/** 经通道打 core（客户端视角）；中继拒绝开通道时按关闭码答一个等价的拒绝。 */
+async function viaRelay(client, method, path, body, extra = {}) {
+  let channel;
+  try {
+    channel = await channelOf(client);
+  } catch (error) {
+    if (!(error instanceof E2eChannelError)) throw error;
+    const [status, code] = REFUSED[error.closeCode] ?? [502, "unreachable"];
+    return { status, headers: {}, text: "", body: { code }, refused: error };
+  }
+  const fetcher = channelFetch(channel, { origin: null, base: client.baseUrl });
+  const response = await fetcher(`${client.baseUrl}${path}`, {
+    method,
     headers: {
-      origin: issuer,
-      "armadra-relay-token": client.relayToken,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
       ...(client.access ? { authorization: `Bearer ${client.access}` } : {}),
       ...extra,
     },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
+  const text = await response.text();
+  let parsed = {};
+  try {
+    parsed = text === "" ? {} : JSON.parse(text);
+  } catch {
+    parsed = {};
+  }
+  return {
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+    text,
+    body: parsed,
+  };
 }
 
 async function wsTicket(client) {
@@ -313,26 +399,95 @@ async function wsTicket(client) {
   return secret(ok(answer, "换 WS 票").ticket);
 }
 
-async function openWs(client, path, { relayToken } = {}) {
+/**
+ * 经通道升级 WebSocket（形状同 `relay.ws` 的答案）。通道断了内层流以 1006 结束；`closed()`
+ * 这时答中继关通道的关闭码（4403 撤销、4404 源下线）。
+ */
+async function openWs(client, path) {
   const ticket = await wsTicket(client);
-  return relay.ws(
+  const channel = await channelOf(client);
+  let channelCode;
+  channel.onClose((error) => {
+    channelCode = error.closeCode;
+  });
+  const Socket = channelWebSocket(channel, {
+    origin: null,
+    base: client.baseUrl,
+  });
+  const socket = new Socket(
     `${client.baseUrl.replace(/^https:/, "wss:")}${path}`,
-    [
-      `armadra-relay.${relayToken ?? client.relayToken}`,
-      `armadra-ticket.${ticket}`,
-    ],
-    issuer,
+    [`armadra-ticket.${ticket}`],
   );
+  socket.binaryType = "arraybuffer";
+  const messages = [];
+  socket.onmessage = (event) =>
+    messages.push(
+      typeof event.data === "string"
+        ? Buffer.from(event.data)
+        : Buffer.from(new Uint8Array(event.data)),
+    );
+  let closeCode;
+  const closing = new Promise((done) => {
+    socket.onclose = (event) => {
+      closeCode = event.code;
+      done(event.code);
+    };
+  });
+  const opened = await Promise.race([
+    new Promise((done) => {
+      socket.onopen = () => done(true);
+    }),
+    closing.then(() => false),
+  ]);
+  if (opened)
+    await Promise.race([closing, new Promise((done) => setTimeout(done, 300))]);
+  const settle = async () => {
+    const code = await closing;
+    // 通道的关闭事件与内层流的结束谁先到不一定：等一下再看通道的码。
+    await new Promise((done) => setTimeout(done, 100));
+    return code === 1006 && channelCode !== undefined ? channelCode : code;
+  };
+  return {
+    socket: {
+      send: (data) => socket.send(data),
+      close: () => socket.close(),
+      terminate: () => socket.close(),
+    },
+    status: opened ? 101 : 0,
+    messages,
+    get closeCode() {
+      return closeCode;
+    },
+    closed: settle,
+  };
 }
 
-/** 断言换会话：owner 与访客共用这一段（访客多一张邀请令牌）。 */
+/**
+ * 断言换会话：owner 与访客共用这一段（访客多一张邀请令牌）。这台设备第一次来时 core 答
+ * `device_pending`：服务器壳的主人按通道的校验码放行，再登录一次（同一张断言）。
+ */
 async function coreLogin(client, assertion, invitationToken) {
-  const login = await viaRelay(
-    { ...client, access: "" },
-    "POST",
-    "/api/identity/cloud/login",
-    { assertion, ...(invitationToken ? { invitationToken } : {}) },
-  );
+  await channelOf(client);
+  const send = () =>
+    viaRelay({ ...client, access: "" }, "POST", "/api/identity/cloud/login", {
+      assertion,
+      ...(invitationToken ? { invitationToken } : {}),
+    });
+  let login = await send();
+  if (login.status === 403 && login.body?.code === "device_pending") {
+    const approved = await adminCall("POST", "/api/devices/approve", {
+      pendingId: login.body.details.pendingId,
+      sas: client.channel.sas,
+    });
+    expectEqual(
+      approved.status,
+      200,
+      `放行新设备 ${JSON.stringify(approved.body).slice(0, 200)}`,
+    );
+    login = await send();
+    // 账号在第一次（待确认的那次）就建好了：再登录时 `created` 是 false。
+    client.approvedAfterPending = true;
+  }
   const body = ok(login, "cloud/login");
   expect(
     login.headers["set-cookie"] === undefined,
@@ -534,7 +689,7 @@ async function main() {
   );
 
   await report.step(
-    "断言 + 中继令牌：owner 绑定后换 core 会话，经中继调 HTTP API",
+    "断言 + 中继令牌：owner 绑定后开端到端通道（新设备由主人放行）、换 core 会话、调 HTTP API",
     async () => {
       const assertion = async () =>
         ok(
@@ -611,121 +766,53 @@ async function main() {
         401,
         "没有 Bearer",
       );
-      const noToken = await relay.http(
-        "GET",
-        `${owner.baseUrl}/api/workspaces`,
-        {
-          headers: { origin: issuer, authorization: `Bearer ${owner.access}` },
-        },
-      );
-      expectEqual(noToken.status, 401, "没有中继令牌的状态码");
-      expectEqual(
-        noToken.body.code,
-        "relay_token_invalid",
-        "没有中继令牌的错误码",
-      );
     },
   );
 
   await report.step(
-    "跨源客户端（Origin https://localhost）：预检由中继回答，经中继完成 cloud/login",
+    "明文路径已删除：带令牌的 HTTP、预检、媒体票与普通 WS 升级都由中继答 404",
     async () => {
-      const appOrigin = "https://localhost";
-      const fresh = ok(
-        await v1(
-          "POST",
-          `/v1/sources/${state.sourceId}/assertion`,
-          { device: { platform: "ios", name: "e2e-app" } },
-          state.relayAccess,
-        ),
-        "sources.assertion",
-      );
-      secret(fresh.assertion, "断言");
-      secret(fresh.relayToken, "中继令牌");
-      const url = `${fresh.relayBaseUrl}/api/identity/cloud/login`;
-      const preflight = (origin) =>
-        relay.http("OPTIONS", url, {
-          headers: {
-            origin,
-            "access-control-request-method": "POST",
-            "access-control-request-headers":
-              "armadra-relay-token, content-type",
-          },
-        });
-      const allowed = await preflight(appOrigin);
-      expectEqual(allowed.status, 204, "预检的状态码");
-      expectEqual(
-        allowed.headers["access-control-allow-origin"],
-        appOrigin,
-        "预检按 Origin 回显",
-      );
-      expectEqual(allowed.headers.vary, "origin", "预检带 Vary: Origin");
-      const allowHeaders = String(
-        allowed.headers["access-control-allow-headers"] ?? "",
-      ).split(", ");
-      expect(
-        ["armadra-relay-token", "content-type", "authorization"].every((name) =>
-          allowHeaders.includes(name),
-        ),
-        `预检放行的头：${allowHeaders.join("、")}`,
-      );
-      const refused = await preflight("https://evil.example");
-      expectEqual(refused.status, 403, "名单外来源的预检");
-      expect(
-        refused.headers["access-control-allow-origin"] === undefined,
-        "名单外来源的预检不带 CORS 头",
-      );
-      const noToken = await relay.http("GET", `${fresh.relayBaseUrl}/health`, {
-        headers: { origin: appOrigin },
+      const plain = await relay.http("GET", `${owner.baseUrl}/api/workspaces`, {
+        headers: {
+          origin: issuer,
+          "armadra-relay-token": owner.relayToken,
+          authorization: `Bearer ${owner.access}`,
+        },
       });
-      expectEqual(noToken.status, 401, "不带中继令牌的跨源请求");
-      expectEqual(noToken.body?.code, "relay_token_invalid", "错误码");
-      expectEqual(
-        noToken.headers["access-control-allow-origin"],
-        appOrigin,
-        "中继自己的 401 也按 Origin 回显",
-      );
-      expectEqual(
-        noToken.headers["access-control-expose-headers"],
-        "retry-after",
-        "中继的错误答复暴露 retry-after",
-      );
-      const noTokenOutside = await relay.http(
-        "GET",
-        `${fresh.relayBaseUrl}/health`,
-        { headers: { origin: "https://evil.example" } },
-      );
-      expectEqual(noTokenOutside.status, 401, "名单外来源的同一请求");
-      expect(
-        noTokenOutside.headers["access-control-allow-origin"] === undefined,
-        "名单外来源的 401 不带 CORS 头",
-      );
-      const login = await relay.http("POST", url, {
-        body: { assertion: fresh.assertion },
-        headers: { origin: appOrigin, "armadra-relay-token": fresh.relayToken },
-      });
-      const body = ok(login, "cloud/login（https://localhost）");
-      expectEqual(
-        login.headers["access-control-allow-origin"],
-        appOrigin,
-        "cloud/login 的 CORS 由 core 按来源回答",
-      );
-      expect(login.headers["set-cookie"] === undefined, "不发 Cookie");
-      const access = secret(body.session?.native?.accessToken, "core 访问令牌");
-      secret(body.session.native.refreshToken, "core 刷新令牌");
-      const workspaces = await relay.http(
-        "GET",
-        `${fresh.relayBaseUrl}/api/workspaces`,
+      expectEqual(plain.status, 404, "带令牌的明文请求");
+      expectEqual(plain.body?.code, "not_found", "明文请求的错误码");
+      const preflight = await relay.http(
+        "OPTIONS",
+        `${owner.baseUrl}/api/identity/cloud/login`,
         {
           headers: {
-            origin: appOrigin,
-            "armadra-relay-token": fresh.relayToken,
-            authorization: `Bearer ${access}`,
+            origin: "https://localhost",
+            "access-control-request-method": "POST",
           },
         },
       );
-      ok(workspaces, "GET /api/workspaces（https://localhost）");
-      return "预检 204、中继 401 带 CORS、cloud/login 200";
+      expectEqual(preflight.status, 404, "预检");
+      expectEqual(
+        preflight.headers["access-control-allow-origin"],
+        "https://localhost",
+        "中继自己的 404 按名单回显来源",
+      );
+      const media = await relay.http(
+        "POST",
+        `${owner.baseUrl}/_relay/media-tickets`,
+        {
+          body: { path: "/api/media/x" },
+          headers: { "armadra-relay-token": owner.relayToken },
+        },
+      );
+      expectEqual(media.status, 404, "签媒体票");
+      const upgrade = await relay.ws(
+        `${owner.baseUrl.replace(/^https:/, "wss:")}/api/workspaces/${state.workspaceId}/events`,
+        [`armadra-relay.${owner.relayToken}`, "armadra-ticket.x"],
+        issuer,
+      );
+      expectEqual(upgrade.status, 404, "普通 WS 升级");
+      return "HTTP、预检、媒体票、普通 WS 都 404";
     },
   );
 
@@ -811,34 +898,38 @@ async function main() {
     sync.socket.close();
   });
 
-  await report.step("4401：坏中继令牌被关，换新断言重连成功", async () => {
-    const bad = await openWs(
-      owner,
-      `/api/workspaces/${state.workspaceId}/events`,
-      {
-        relayToken: "not-a-relay-token",
-      },
-    );
-    expectEqual(bad.closeCode ?? (await bad.closed()), 4401, "坏令牌的关闭码");
-    const fresh = ok(
-      await v1(
-        "POST",
-        `/v1/sources/${state.sourceId}/assertion`,
-        { device: { platform: "desktop", name: "e2e-owner" } },
-        state.relayAccess,
-      ),
-      "sources.assertion",
-    );
-    owner.relayToken = secret(fresh.relayToken);
-    secret(fresh.assertion, "断言");
-    const again = await openWs(
-      owner,
-      `/api/workspaces/${state.workspaceId}/events`,
-    );
-    expectEqual(again.status, 101, "新令牌重连");
-    expect(again.closeCode === undefined, "新令牌没有被关");
-    again.socket.close();
-  });
+  await report.step(
+    "4401：坏中继令牌开不了通道，换新断言重连成功",
+    async () => {
+      const bad = await openChannel(owner, "not-a-relay-token").then(
+        (channel) => {
+          channel.close();
+          return undefined;
+        },
+        (error) => error,
+      );
+      expect(bad instanceof E2eChannelError, "坏令牌的通道被拒");
+      expectEqual(bad.closeCode, 4401, "坏令牌的关闭码");
+      const fresh = ok(
+        await v1(
+          "POST",
+          `/v1/sources/${state.sourceId}/assertion`,
+          { device: { platform: "desktop", name: "e2e-owner" } },
+          state.relayAccess,
+        ),
+        "sources.assertion",
+      );
+      owner.relayToken = secret(fresh.relayToken);
+      secret(fresh.assertion, "断言");
+      const again = await openWs(
+        owner,
+        `/api/workspaces/${state.workspaceId}/events`,
+      );
+      expectEqual(again.status, 101, "新令牌重连");
+      expect(again.closeCode === undefined, "新令牌没有被关");
+      again.socket.close();
+    },
+  );
 
   const guest = { baseUrl: "", relayToken: "", access: "", refresh: "" };
   await report.step(
@@ -897,7 +988,11 @@ async function main() {
       guest.relayToken = accepted.relayToken;
       guest.baseUrl = accepted.relayBaseUrl;
       const login = await coreLogin(guest, accepted.assertion, invitationToken);
-      expectEqual(login.created, true, "访客账号是新建的");
+      expectEqual(
+        login.created || guest.approvedAfterPending === true,
+        true,
+        "访客账号是新建的（经放行的那次在待确认时就建了）",
+      );
       const workspaces = ok(
         await viaRelay(guest, "GET", "/api/workspaces"),
         "访客列工作空间",
@@ -946,7 +1041,7 @@ async function main() {
   );
 
   await report.step(
-    "工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；只读访客能登录、读与开事件流，写被边缘挡下",
+    "工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；只读访客经通道登录、读与开事件流，写被 core 挡下",
     async () => {
       const invitation = await adminCall("POST", "/api/identity/invitations", {
         role: "viewer",
@@ -1028,7 +1123,11 @@ async function main() {
         accepted.assertion,
         invitationToken,
       );
-      expectEqual(login.created, true, "范围访客账号是新建的");
+      expectEqual(
+        login.created || scoped.approvedAfterPending === true,
+        true,
+        "范围访客账号是新建的（经放行的那次在待确认时就建了）",
+      );
       const workspaces = ok(
         await viaRelay(scoped, "GET", "/api/workspaces"),
         "范围访客列工作空间",
@@ -1098,7 +1197,7 @@ async function main() {
   );
 
   await report.step(
-    "源下线：503 source_offline、WS 4404；重启后恢复",
+    "源下线：通道 4404（等价 503 source_offline）；重启后恢复",
     async () => {
       const events = await openWs(
         owner,
