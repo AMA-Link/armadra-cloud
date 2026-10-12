@@ -9,6 +9,11 @@
 - 访客链接的身份指纹（cloud-api §20，Refs #43）：`links.accept` 的答案多可选的 `identityFp`，是源登记公钥（端到端通道的身份）的指纹；只作提示，访客按 core 生成的链接片段第三段钉扎。
   Guest-link identity fingerprint (cloud-api §20, Refs #43): `links.accept` answers an optional `identityFp`, the fingerprint of the source's registered key (its end-to-end channel identity); a hint only, guests pin on the third fragment segment the core puts into the link.
 
+### 移除 / Removed
+
+- 中继只转端到端通道（cloud-api §7、§12、§20，Refs #43）：源地址上的明文应用请求（HTTP 与普通 WebSocket 经中继转进隧道、`Armadra-Relay-Token` 头、CORS 预检）与媒体票（`/_relay/media-tickets`、`/_relay/m/<票>`）删除，一律 `404 not_found`、不进隧道；唯一的入口是 `_relay/e2e`。Node 与 Workers 中继都删去 HTTP 转发、明文 WS 桥与媒体票（Workers 唤醒时把 0.5.0 之前留下的明文 WS 桥以 4404 关掉）；内核的 `edge/forward.ts`、`edge/media-tickets.ts` 一并删除。`--limit-preflight` 仍接受但不再使用。要配 Armadra 0.6.0 起的客户端与 core。
+  The relay only forwards end-to-end channels (cloud-api §7, §12, §20, Refs #43): plaintext application traffic on source addresses (HTTP and plain WebSockets forwarded into the tunnel, the `Armadra-Relay-Token` header, CORS preflights) and media tickets (`/_relay/media-tickets`, `/_relay/m/<ticket>`) are gone and answer `404 not_found` without touching the tunnel; `_relay/e2e` is the only entry point. Both the Node and Workers relays drop HTTP forwarding, the plaintext WebSocket bridge and media tickets (Workers closes pre-0.5.0 plaintext bridges with 4404 on wake-up); the kernel's `edge/forward.ts` and `edge/media-tickets.ts` are removed. `--limit-preflight` is still accepted but unused. Requires Armadra 0.6.0 or later clients and cores.
+
 ## 0.4.0（2026-10-12）
 
 ### 新增 / Added

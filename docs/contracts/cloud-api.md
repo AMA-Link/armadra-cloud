@@ -118,30 +118,27 @@
 
 ## §7 中继客户端面
 
-客户端经 `relayBaseUrl` 访问源：HTTP 请求带 `Armadra-Relay-Token` 头，WebSocket 用子协议 `armadra-relay.<jwt>`。中继校验令牌的 `aud`、`exp`、`jti` 与 `src`，剥掉令牌后把请求原样转进隧道。
+0.5.0 起中继只转端到端通道（§20）：源地址上唯一的入口是 `_relay/e2e` 的 WebSocket 升级，子协议 `armadra-e2e.1` + `armadra-relay.<jwt>`。中继校验令牌的 `aud`、`exp`、`jti` 与 `src`，开一条 `OPEN kind: "e2e"` 的流，之后只转密文。明文的应用请求（HTTP 与普通 WebSocket 经中继转进隧道、`Armadra-Relay-Token` 头、CORS 预检）与媒体票（§12）一并删除。
 
-- 地址：saas 是 `https://<sourceId>.src.<域>/…`，路径原样；personal 是 `https://<中继>/s/<sourceId>/…`，中继剥掉 `/s/<sourceId>` 再转。路径与源的 Gateway 相同（含源自己的 `/health`）。
-- 转给源的头：保留 `Host`、`Authorization` 等；剥掉中继令牌、逐跳头与客户端带来的 `X-Forwarded-*` / `Forwarded` / `X-Real-IP`；加 `X-Forwarded-For: <客户端 IP>`、`X-Forwarded-Proto: https`。源应以隧道 `OPEN` 的 `remoteIp` / `clientOrigin` 为准。
-- CORS 预检（`OPTIONS` 且带 `Origin` 与 `Access-Control-Request-Method`）由中继自己回答，不验令牌、不进隧道、不开流，请求体丢弃；按 IP 限流，用单独的桶（缺省每分钟 1200 次），不与普通请求共用。来源是原生 App（`capacitor://localhost`、`https://localhost`）或登记时发给源的 `trustedOrigins` 之一 → `204`，按 Origin 回显 `Access-Control-Allow-Origin`，带 `Vary: Origin`，不发 `Access-Control-Allow-Credentials`；`Allow-Methods` 为 `GET,POST,PUT,PATCH,DELETE,OPTIONS`，`Allow-Headers` 为 `authorization, content-type, x-armadra-csrf, armadra-relay-token`，`Max-Age` 7200（浏览器各自封顶，WebKit 为 600）。其余来源 `403 forbidden`，不带 CORS 头。答案与源是否在线、是否登记无关（saas 模式暂未接入可信来源，只认原生 App）。不是预检的请求（包括缺 `Access-Control-Request-Method` 的 `OPTIONS`）照常要令牌；真请求的 CORS 头由源按它自己的可信来源回答。
-- 边缘限流分层（均答 `429 rate_limited` 并带 `Retry-After`）：带有效中继令牌的请求先按令牌 `jti`（缺省每分钟 1200 次）、再按账号 `sub`（缺省 3600 次）计数，不看 IP；无令牌、令牌无效或 `src` 不符的请求（含 401 路径）按 IP 严格限流（缺省每分钟 60 次）；预检另按 IP 一个桶；同一账号同时开着的 WebSocket 缺省最多 256 条（不可配），满了答 `429 limit_reached`。令牌校验是本地验签，先验后计。personal 的额度可由 `serve` 参数、环境变量或状态文件 `settings.rateLimits` 配置（见 deploy/README.md）；登录（按 IP 每分钟 20 次）与账号锁定不可配、不变。
-- HTTP 监听（中继、cloud）的空闲 keep-alive 为 75 秒，请求头超时 76 秒，整条请求的接收上限 5 分钟（升级后的 WebSocket 不受它管）。空闲上限要比客户端连接池长：WebKit 复用一条刚被服务端关掉的连接发 `POST` 时不重试，直接报加载失败。
-- 中继自己返回的错误答复（下表 HTTP 一列中源地址上的拒绝，含升级被拒与升级途中源离线的 503；不含预检的 `403 forbidden`）也按同一份名单补 CORS 头，让跨源页面读得到 `{ code, message }` 与 `Retry-After`：来源在名单里 → 按 Origin 回显 `Access-Control-Allow-Origin`，带 `Vary: Origin`，`Access-Control-Expose-Headers: retry-after`，不发 `Allow-Credentials`，不用 `*`；名单外或没有 `Origin` 不加任何 CORS 头。只加响应头，不改变任何判定；源自己返回的响应原样透传，CORS 头仍由源负责。
-- WebSocket：除 `armadra-relay.<jwt>` 外至少再带一个子协议（`armadra-ticket.<票>`），否则剥掉令牌后源选不到子协议，浏览器会拒绝这次握手。中继维持连接活性（ping 由中继或它前面的边缘网络发出，浏览器自动应答）；客户端 120 秒内没有任何字节可能被断开。Node 中继每 30 秒发 `ping`、60 秒无字节即断开。
+- 地址：saas 是 `https://<sourceId>.src.<域>/…`，personal 是 `https://<中继>/s/<sourceId>/…`。源地址上除 `_relay/e2e` 的升级外，任何请求（含带令牌的 HTTP、`OPTIONS` 预检、`/_relay/media-tickets`、`/_relay/m/<票>`、别的路径上的 WebSocket 升级）一律 `404 not_found`，不验令牌、不进隧道。
+- 边缘限流分层（WebSocket 以 4429 关闭）：带有效中继令牌的升级先按令牌 `jti`（缺省每分钟 1200 次）、再按账号 `sub`（缺省 3600 次）计数，不看 IP；无令牌、令牌无效或 `src` 不符的按 IP 严格限流（缺省每分钟 60 次）；同一账号同时开着的通道缺省最多 256 条（不可配），满了 4429 `limit_reached`。令牌校验是本地验签，先验后计。personal 的额度可由 `serve` 参数、环境变量或状态文件 `settings.rateLimits` 配置（见 deploy/README.md；`preflight` 一项 0.5.0 起不再使用）；登录（按 IP 每分钟 20 次）与账号锁定不可配、不变。
+- HTTP 监听（中继、cloud）的空闲 keep-alive 为 75 秒，请求头超时 76 秒，整条请求的接收上限 5 分钟（升级后的 WebSocket 不受它管）。
+- 中继自己返回的错误答复（源地址上的 404 与升级被拒的 HTTP 答复）按名单补 CORS 头：来源是原生 App（`capacitor://localhost`、`https://localhost`）或登记时发给源的 `trustedOrigins` 之一 → 按 Origin 回显 `Access-Control-Allow-Origin`，带 `Vary: Origin`，`Access-Control-Expose-Headers: retry-after`，不发 `Allow-Credentials`，不用 `*`；名单外或没有 `Origin` 不加。
+- 活性：中继维持连接活性（ping 由中继或它前面的边缘网络发出，浏览器自动应答）；客户端 120 秒内没有任何字节可能被断开。Node 中继每 30 秒发 `ping`、60 秒无字节即断开。
 - 拒绝：
 
-  | 情形                   | HTTP                        | WebSocket（先完成升级再关闭） |
-  | ---------------------- | --------------------------- | ----------------------------- |
-  | 不是源地址             | 404 `not_found`             | 404，不升级                   |
-  | 预检的来源不在名单里   | 403 `forbidden`             | —                             |
-  | 按 IP / 账号限流       | 429 `rate_limited`          | 4429                          |
-  | 令牌缺失或无效         | 401 `relay_token_invalid`   | 4401                          |
-  | 令牌的 `src` 不是此源  | 403 `relay_source_mismatch` | 4403                          |
-  | 源离线（或隧道排空中） | 503 `source_offline`        | 4404                          |
-  | 隧道流数已满 / 并发 WS | 429 `limit_reached`         | 4429                          |
+  | 情形                          | WebSocket（先完成升级再关闭） |
+  | ----------------------------- | ----------------------------- |
+  | 不是源地址或不是 `_relay/e2e` | 404，不升级                   |
+  | 按 IP / 账号限流              | 4429                          |
+  | 令牌缺失或无效                | 4401                          |
+  | 令牌的 `src` 不是此源         | 4403                          |
+  | 缺版本子协议                  | 4409                          |
+  | 源离线（或隧道排空中）        | 4404                          |
+  | 源没报 `e2e`（旧 core）       | 4404，原因 `e2e_unsupported`  |
+  | 隧道流数已满 / 并发通道       | 4429                          |
 
-  已建立的 WebSocket 在源下线时以 4404 结束（帧中间则直接断开）；升级途中源下线答 503 `source_offline`。
-
-  源的 HTTP 响应不合法（状态行、头、定界或分块错）时，自己解析响应的中继重置这条流并答 502 `bad_gateway`（协议包 0.3.4 登记）；Node 中继由 Node 的 HTTP 解析器处理，仍答 503 `source_offline`。
+  已建立的通道在源下线时以 4404 结束。0.5.0 之前的明文路径（HTTP 转发、普通 WebSocket、预检）见 0.4.x 的本节。
 
 ## §8 隧道 `t/v1`
 
@@ -204,12 +201,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §12 媒体票
 
-`<video src>`、`<audio src>`、`<img src>` 与 `<a href download>` 带不了 `Armadra-Relay-Token` 头，经中继的源上的媒体只能整份取回。媒体票让浏览器直接取：客户端用带头的请求在源地址下换一张票，浏览器再按票取，边缘把请求转到源上签票时指定的那一条路径。实现在 `packages/relay-kernel/src/edge/media-tickets.ts`，两种模式相同。
-
-- **签票**：`POST <源地址>/_relay/media-tickets`，带有效中继令牌（与 §7 同一道校验与限流，源要在线），体 `{ "path": "/api/media/<core 票>" }`（不超过 4 KiB）。`path` 是转给源的路径：以 `/` 开头、不以 `//` 或 `/_relay/` 开头、不含 `.` / `..` 段、空白、控制字符、`#` 与 `\`，不超过 2048 字节，否则 `400 bad_request`。答 `200 { ticket, path: "/_relay/m/<票>", expiresAt }`，`path` 相对源地址，`Cache-Control: no-store`。这条路径由中继自己答，不进隧道。
-- **兑票**：`GET` / `HEAD <源地址>/_relay/m/<票>`，不要令牌。票不认识、过期、不是这个源或签票令牌已撤销 → 按 IP 严格限流后 `404 not_found`；其它方法 `400 bad_request`；认得的票按签票令牌的 `jti` 与账号 `sub` 计数（§7 同一组桶），源离线 `503 source_offline`。转给源的请求与 §7 的 HTTP 转发相同（剥逐跳头、加 `X-Forwarded-*`，`Range` 等原样），路径换成签票时的 `path`；源的响应原样透传。
-- **票**：只在这个中继进程的内存里（saas 多节点时只在签票的那个节点有效），32 字节随机、base64url；绑源、单个路径与签票的中继令牌。可多次使用（播放器拖动是一串 `Range` 请求），闲置 5 分钟或签出 30 分钟作废；签票令牌被撤销后作废；中继重启全部作废。
-- **日志**：与 §7 一样不记路径与头——地址里的票与签票体里的路径都不进日志与指标。
+0.5.0 起删除（随明文转发一起，§7）。`/_relay/media-tickets` 与 `/_relay/m/<票>` 答 `404 not_found`；经中转的媒体由客户端经端到端通道取回。之前：带令牌的请求换一张中继侧的票，浏览器按票直接取，边缘转到源上签票时的路径。
 
 ## §14 断言范围与团队声明
 
@@ -296,15 +288,15 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §20 端到端通道
 
-协议 1.3（协议包 0.4.0）。客户端与源（core）之间经中继建一条端到端加密的通道 `armadra-e2e/1`，中继只转发密文，看不到方法、路径、头与正文。没有遗留兼容的问题：源不报能力 `e2e` 就不开这条面，明文路径（§7）在过渡期照旧可用。
+协议 1.3（协议包 0.4.0）。客户端与源（core）之间经中继建一条端到端加密的通道 `armadra-e2e/1`，中继只转发密文，看不到方法、路径、头与正文。0.5.0 起这是源地址上唯一的入口（§7），明文路径已删除；源不报能力 `e2e`（旧 core）时答 4404 `e2e_unsupported`，客户端提示升级。
 
-- **边缘面**：saas `wss://<sourceId>.src.<域>/_relay/e2e`，personal `wss://<中继>/s/<sourceId>/_relay/e2e`。`_relay/` 是中继的保留段（与 §12 媒体票相同），不进隧道。只认 WebSocket 升级；普通 HTTP 请求答 `404 not_found`。
+- **边缘面**：saas `wss://<sourceId>.src.<域>/_relay/e2e`，personal `wss://<中继>/s/<sourceId>/_relay/e2e`。`_relay/` 是中继的保留段，不进隧道。只认 WebSocket 升级；普通 HTTP 请求答 `404 not_found`。
 - **子协议**：`armadra-e2e.1`（版本，中继选它答复）+ `armadra-relay.<中继令牌>`（与 §7 相同，中继剥掉）。缺版本子协议或版本不认识以 4409 关闭。
 - **判定**：令牌校验、限流、按 `sourceId` 路由与 §7 相同（同一张拒绝表，WebSocket 一列）；源在线但隧道 `hello.capabilities` 没报 `e2e` → 4404，原因 `e2e_unsupported`（错误码仍是 `source_offline`）。中继令牌的 `ro` 对这条面不生效（中继看不到内层请求），读写由源判定。
 - **隧道侧**：中继开一条流 `OPEN { kind: "e2e", method: "GET", path: "/_relay/e2e", headers: [], clientOrigin, remoteIp, relayNode }`，此后客户端 WebSocket 的二进制消息原样写进 `DATA`，`DATA` 原样作为二进制消息发回客户端；文本消息以 4400 关闭。消息边界不保证（中继可以合并或切分），通道自己按长度切单元。客户端关闭 → `END`；源 `END` / `RST` → 以 1000 / 4404 关闭；窗口与背压同隧道。`e2e` 流计入同一账号的并发 WebSocket 上限（256）。
 - **中继令牌 `dev`**：可选声明，issuer 侧签发这张令牌的会话所属设备 id（与断言的 `device.deviceId` 相同）；中继只用它计数「来自哪些设备」，不参与鉴权。老令牌没有它。
 - **通道格式**：以协议包 `./e2e` 为准（握手三条消息、AES-256-GCM 记录、r0 `accept`），黄金向量在 `packages/platform-protocol/fixtures/e2e/handshake.json`。中继不解析它。
-- **日志与指标**：通道结束时记一条元数据（源、流号、两个方向的字节数、时长、关闭码），不记账号、设备、IP 与任何内容；指标 `relay_edge_streams_total{kind}` 按 `http` / `ws` / `e2e` 计开出的流。
+- **日志与指标**：通道结束时记一条元数据（源、流号、两个方向的字节数、时长、关闭码），不记账号、设备、IP 与任何内容；指标 `relay_edge_streams_total{kind}` 计开出的流（0.5.0 起只有 `e2e`）。
 - **活性**：Node 中继每 30 秒发 `ping`、60 秒没有任何消息或 `pong` 即断开（与 §7 相同）；Workers 中继由检查周期按空闲时长断开。客户端的通道自己另有内层 `PING`（协议包 `LIMITS_E2E.pingIntervalMs`）。
 - **访客链接的身份指纹**（0.5.0 起）：`links.accept`（§10）的答案多可选的 `identityFp`——源登记的公钥（也就是它端到端通道的身份公钥）的指纹 `base32(SHA-256(pub))`，52 字符。它来自中继，只作提示与旧链接的兜底；core 生成的分享链接片段第三段（`<secret>.<邀请令牌>.<指纹前 16 位>`）才是访客钉扎的依据，两者不符时客户端拒绝。
 - **实现**：Node 中继（`relay-runtime-node` 的 `e2e-pipe.ts`）与 Workers 中继（`SourceDO` 的 `e2e-bridge.ts`，休眠后照样接上）行为相同；签发方从 0.4.0 起在中继令牌里带 `dev`。

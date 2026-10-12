@@ -65,7 +65,7 @@
 | `--metrics-listen` / `RELAY_METRICS_LISTEN`                   |      | `/metrics` 的单独监听（只绑内网地址），缺省不开                                                                                   |
 | `RELAY_METRICS_TOKEN`                                         |      | 设了则 `/metrics` 要 `Authorization: Bearer <令牌>`                                                                               |
 | `--limit-anonymous` / `RELAY_LIMIT_ANONYMOUS`                 |      | 无令牌或令牌无效的请求，按 IP 每分钟上限，缺省 60                                                                                 |
-| `--limit-preflight` / `RELAY_LIMIT_PREFLIGHT`                 |      | CORS 预检，按 IP 每分钟上限（单独的桶），缺省 1200                                                                                |
+| `--limit-preflight` / `RELAY_LIMIT_PREFLIGHT`                 |      | 0.5.0 起不再使用（中继不答 CORS 预检），仍接受                                                                                    |
 | `--limit-token` / `RELAY_LIMIT_TOKEN`                         |      | 有效中继令牌每分钟上限，缺省 1200                                                                                                 |
 | `--limit-account` / `RELAY_LIMIT_ACCOUNT`                     |      | 同一账号全部令牌每分钟上限，缺省 3600                                                                                             |
 | `--challenge` / `RELAY_CHALLENGE`                             |      | 人机挑战：`turnstile` / `off`（缺省）；开了以后 `platform.info` 报 `challenge`，登录缺令牌答 `400 challenge_required`（契约 §16） |
