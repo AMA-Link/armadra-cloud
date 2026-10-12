@@ -1,14 +1,11 @@
 /**
- * 中继令牌（平台设计 §8.1、中继设计 §4.2）：HTTP 头 `Armadra-Relay-Token`，WS 子协议
- * `armadra-relay.<jwt>`。校验 `typ`、签名、`aud === "relay"`、`iss`、时间、`jti` 未撤销，
+ * 中继令牌（平台设计 §8.1、中继设计 §4.2）：开端到端通道时在 WS 子协议
+ * `armadra-relay.<jwt>` 里（0.5.0 起不再有明文 HTTP 的 `Armadra-Relay-Token` 头）。校验 `typ`、签名、`aud === "relay"`、`iss`、时间、`jti` 未撤销，
  * 最后 `src === sourceId`。缺 / 坏 → `relay_token_invalid`（401）；`src` 不符 →
  * `relay_source_mismatch`（403）。
  */
 import { verifyJwt, type JwtFailure } from "@armadra/cloud-shared/jwt";
-import {
-  RELAY_SUBPROTOCOL_PREFIX,
-  RELAY_TOKEN_HEADER,
-} from "@armadra/platform-protocol";
+import { RELAY_SUBPROTOCOL_PREFIX } from "@armadra/platform-protocol";
 import {
   AUDIENCES,
   relayTokenClaimsSchema,
@@ -16,7 +13,6 @@ import {
   type RelayTokenClaims,
 } from "@armadra/platform-protocol/assertion";
 
-import type { HeaderBag } from "../edge/forward.ts";
 import { jwtOptions, type AuthContext } from "./context.ts";
 
 export type RelayTokenResult =
@@ -51,15 +47,9 @@ export async function verifyRelayToken(
   return { ok: true, claims: result.claims };
 }
 
-/** HTTP：取 `Armadra-Relay-Token` 头（只认一个值）。 */
-export function relayTokenFromHeaders(headers: HeaderBag): string | undefined {
-  const value = headers[RELAY_TOKEN_HEADER];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 /**
  * WS：从 `Sec-WebSocket-Protocol` 里拿出 `armadra-relay.<jwt>`，其余子协议原样留下
- * （`armadra-ticket.<t>` 等要转给源）。
+ * （边缘再看里面有没有 `armadra-e2e.1`）。
  */
 export function splitRelaySubprotocol(header: string | undefined): {
   token: string | undefined;

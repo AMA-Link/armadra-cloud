@@ -274,10 +274,11 @@ describe("隧道与边缘", () => {
     expect(metrics).toEqual({ to_source: 1250, to_client: 3086 });
   });
 
-  it("边缘开流：按令牌的 sub 记一次连接；没开统计就不记；媒体票记到 media", async () => {
+  it("边缘开通道：按令牌的 sub / dev 记一次 e2e 连接；没开统计就不记", async () => {
     const control = testControlPlane();
     const { traffic, batches } = meter();
     const { tunnel } = fakeTunnel();
+    tunnel.capabilities = new Set(["e2e"]);
     const metrics = new RelayMetrics(() => ({ tunnels: 0, streams: 0 }));
     const edge = new EdgePolicy({
       nodeId: "relay-1",
@@ -288,57 +289,36 @@ describe("隧道与边缘", () => {
       metrics,
       traffic,
     });
-    const request = (headers: Record<string, string>): EdgeRequest => ({
-      method: "POST",
-      url: `/s/${SOURCE_ID}/api/x`,
-      headers: { host: "relay", ...headers },
-      clientIp: "203.0.113.7",
-    });
-    const decision = await edge.decideRequest(
-      request({ "armadra-relay-token": relayToken({ sub: "acct:alice" }) }),
-    );
-    if (decision.kind !== "forward") throw new Error(decision.kind);
-    expect(decision.traffic).toEqual({ subject: "acct:alice", deviceId: "" });
-    const head = (path: string) => ({
+    const request: EdgeRequest = {
       method: "GET",
-      url: path,
-      headers: { host: "relay" },
+      url: `/s/${SOURCE_ID}/_relay/e2e`,
+      headers: {
+        host: "relay",
+        upgrade: "websocket",
+        "sec-websocket-protocol": `armadra-e2e.1, armadra-relay.${relayToken({ sub: "acct:alice", dev: "dev_1" })}`,
+      },
       clientIp: "203.0.113.7",
-    });
-    const opened = edge.open(
-      tunnel,
-      "http",
-      head(`/s/${SOURCE_ID}/api/x`),
-      decision.target,
-      [],
-      decision.remoteIp,
-      decision.traffic,
+    };
+    const decision = await edge.decideUpgrade(request);
+    if (decision.kind !== "accept") throw new Error(decision.kind);
+    const identity = {
+      subject: decision.subject,
+      deviceId: decision.device ?? "",
+    };
+    expect(identity).toEqual({ subject: "acct:alice", deviceId: "dev_1" });
+    expect(edge.openE2e(tunnel, request, decision.remoteIp, identity).ok).toBe(
+      true,
     );
-    expect(opened.ok).toBe(true);
-    edge.open(
-      tunnel,
-      "http",
-      head(`/s/${SOURCE_ID}/api/x`),
-      decision.target,
-      [],
-      decision.remoteIp,
-    );
-    edge.open(
-      tunnel,
-      "http",
-      head(`/s/${SOURCE_ID}/api/x`),
-      decision.target,
-      [],
-      decision.remoteIp,
-      { subject: "guest:l:x", deviceId: "d", kind: "media" },
-    );
+    edge.openE2e(tunnel, request, decision.remoteIp);
     await traffic.flush();
     expect(
-      batches[0]?.map((row) => [row.subject, row.kind, row.connections]),
-    ).toEqual([
-      ["acct:alice", "http", 1],
-      ["guest:l:x", "media", 1],
-    ]);
+      batches[0]?.map((row) => [
+        row.subject,
+        row.deviceId,
+        row.kind,
+        row.connections,
+      ]),
+    ).toEqual([["acct:alice", "dev_1", "e2e", 1]]);
   });
 });
 

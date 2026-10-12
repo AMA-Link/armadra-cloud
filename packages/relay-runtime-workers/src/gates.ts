@@ -5,12 +5,7 @@
  *
  * 没配的绑定不生效（本地 `wrangler dev` 与测试可以只配一部分）。
  */
-import { isPreflight } from "@armadra/relay-kernel/edge/cors";
-import { isIssuePath } from "@armadra/relay-kernel/edge/media-tickets";
-import {
-  RELAY_SUBPROTOCOL_PREFIX,
-  RELAY_TOKEN_HEADER,
-} from "@armadra/platform-protocol";
+import { RELAY_SUBPROTOCOL_PREFIX } from "@armadra/platform-protocol";
 
 import type { RelayEnv } from "./env.ts";
 
@@ -48,25 +43,14 @@ export function apiGate(method: string, path: string): GateName | null {
   return null;
 }
 
-/** 源地址的闸：预检、签媒体票、没带令牌的请求（`sourcePath` 是转给源的路径）。 */
-export function edgeGate(
-  request: Request,
-  sourcePath: string,
-): GateName | null {
-  const headers = {
-    origin: request.headers.get("origin") ?? undefined,
-    "access-control-request-method":
-      request.headers.get("access-control-request-method") ?? undefined,
-  };
-  if (isPreflight({ method: request.method, headers }))
-    return "LIMIT_PREFLIGHT";
-  if (isIssuePath(sourcePath)) return "LIMIT_MEDIA";
-  const token =
-    request.headers.has(RELAY_TOKEN_HEADER) ||
-    (request.headers.get("sec-websocket-protocol") ?? "").includes(
-      RELAY_SUBPROTOCOL_PREFIX,
-    );
-  // 兑媒体票不带令牌、票就是凭据：也按「没带令牌」计。
+/**
+ * 源地址的闸：没带中继令牌的请求（0.5.0 起源地址上只有端到端通道的 WS 升级，令牌在子协议
+ * 里；预检与媒体票随明文转发删除，`LIMIT_PREFLIGHT` / `LIMIT_MEDIA` 不再用到）。
+ */
+export function edgeGate(request: Request): GateName | null {
+  const token = (request.headers.get("sec-websocket-protocol") ?? "").includes(
+    RELAY_SUBPROTOCOL_PREFIX,
+  );
   return token ? null : "LIMIT_ANONYMOUS";
 }
 

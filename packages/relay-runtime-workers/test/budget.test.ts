@@ -17,6 +17,7 @@ import {
   call,
   heartbeatHint,
   json,
+  channelOutcome,
   login,
   registerSource,
   viaRelay,
@@ -32,11 +33,7 @@ it("超了日配额：源地址 429 limit_reached；/v1 照常；清掉计数后
     (await core.connect(hint.nodes[0]?.url ?? "", hint.tunnelToken)).ready,
   ).toBeTruthy();
   const { relayToken } = await assertion(session, source.sourceId);
-  const ok = await viaRelay(source.sourceId, "/echo-request", {
-    token: relayToken,
-  });
-  expect(ok.status).toBe(200);
-  await ok.arrayBuffer();
+  expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
 
   const control = env.CONTROL.get(env.CONTROL.idFromName(CONTROL_OBJECT_NAME));
   const sourceStub = env.SOURCE.get(
@@ -71,9 +68,5 @@ it("超了日配额：源地址 429 limit_reached；/v1 照常；清掉计数后
     state.storage.kv.delete(`budget:${dayOf(Date.now())}`);
   });
   await runDurableObjectAlarm(sourceStub);
-  const again = await viaRelay(source.sourceId, "/echo-request", {
-    token: relayToken,
-  });
-  expect(again.status).toBe(200);
-  await again.arrayBuffer();
+  expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
 });

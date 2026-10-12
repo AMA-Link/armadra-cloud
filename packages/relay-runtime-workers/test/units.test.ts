@@ -11,7 +11,6 @@ import {
   type RelayEnv,
 } from "../src/env.ts";
 import { apiGate, edgeGate } from "../src/gates.ts";
-import { KvMediaTickets } from "../src/media-tickets.ts";
 import { servePages } from "../src/pages.ts";
 import { cloudJwks, reportPresence } from "../src/saas.ts";
 
@@ -149,76 +148,19 @@ describe("闸的归类", () => {
     expect(apiGate("POST", "/v1/auth/refresh")).toBeNull();
   });
 
-  it("源地址：预检、签票、没带令牌（含兑票）分开计；带令牌的不过闸", () => {
+  it("源地址：没带令牌的过匿名闸；子协议里带令牌（端到端通道）的不过闸", () => {
     const request = (headers: Record<string, string>, method = "GET") =>
       new Request("https://relay.armadra.test/s/x", { method, headers });
+    expect(edgeGate(request({}))).toBe("LIMIT_ANONYMOUS");
+    // 明文的令牌头不再有意义（源地址上的 HTTP 一律 404）：照样按匿名计。
+    expect(edgeGate(request({ "armadra-relay-token": "t" }))).toBe(
+      "LIMIT_ANONYMOUS",
+    );
     expect(
       edgeGate(
-        request(
-          { origin: "https://a.test", "access-control-request-method": "GET" },
-          "OPTIONS",
-        ),
-        "/x",
-      ),
-    ).toBe("LIMIT_PREFLIGHT");
-    expect(
-      edgeGate(
-        request({ "armadra-relay-token": "t" }, "POST"),
-        "/_relay/media-tickets",
-      ),
-    ).toBe("LIMIT_MEDIA");
-    expect(edgeGate(request({}), "/_relay/m/abc")).toBe("LIMIT_ANONYMOUS");
-    expect(
-      edgeGate(request({ "armadra-relay-token": "t" }), "/api/x"),
-    ).toBeNull();
-    expect(
-      edgeGate(
-        request({
-          "sec-websocket-protocol": "armadra-relay.t, armadra-ticket.x",
-        }),
-        "/ws",
+        request({ "sec-websocket-protocol": "armadra-e2e.1, armadra-relay.t" }),
       ),
     ).toBeNull();
-  });
-});
-
-describe("媒体票（DO 存储版）", () => {
-  it("存储里只有票的派生哈希与密文；闲置 5 分钟或签出 30 分钟作废；清扫", async () => {
-    const stub = env.SOURCE.get(env.SOURCE.idFromName("tickets-unit"));
-    await runInDurableObject(stub, (_instance, state) => {
-      let now = 1_000_000;
-      const tickets = new KvMediaTickets(state.storage.kv, () => now);
-      const grant = {
-        sourceId: "s",
-        path: "/media",
-        subject: "acct:o",
-        jti: "j",
-      };
-      const { ticket, expiresAtMs } = tickets.issue(grant);
-      expect(expiresAtMs).toBe(now + 5 * 60_000);
-      const stored = [...state.storage.kv.list({ prefix: "mt:" })];
-      expect(stored).toHaveLength(1);
-      // 存储里既没有票、也没有签票时的路径与令牌标识。
-      const dump = JSON.stringify(stored);
-      for (const part of [ticket, "/media", "acct:o", '"j"'])
-        expect(dump).not.toContain(part);
-      now += 4 * 60_000;
-      expect(tickets.use(ticket)).toEqual(grant);
-      now += 4 * 60_000;
-      expect(tickets.use(ticket)).toEqual(grant);
-      now += 6 * 60_000;
-      expect(tickets.use(ticket)).toBeUndefined();
-      const second = tickets.issue(grant).ticket;
-      for (let minute = 0; minute < 31; minute += 2) {
-        now += 2 * 60_000;
-        tickets.use(second);
-      }
-      expect(tickets.use(second)).toBeUndefined();
-      tickets.issue(grant);
-      now += 10 * 60_000;
-      expect(tickets.sweep()).toBe(0);
-      expect([...state.storage.kv.list({ prefix: "mt:" })]).toHaveLength(0);
-    });
   });
 });
 

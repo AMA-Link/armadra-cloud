@@ -7,9 +7,9 @@
  *   下发 `heartbeatMs`（缺省 45 秒），源发 `PING`、中继立即回 `PONG`，自己不起定时器（会阻止休眠）；
  *   检查周期（alarm，缺省 60 秒）看 `lastHeardAtMs`，超过 `2 × heartbeatMs` 就关。同源新隧道就绪 →
  *   旧的 `GOAWAY replaced`。握手里的 `sourceId` 必须是这个对象的源（`?src=` 只是路由提示）。
- * - **客户端**：判定在内核的 `EdgePolicy`（地址、令牌、限流、媒体票、CORS 预检）；字节在
- *   `http-forward.ts` 与 `ws-bridge.ts`；端到端通道（`_relay/e2e`）在 `e2e-bridge.ts`，WS 消息与
- *   `DATA` 原样互转、不经 `http-forward`。媒体票落在 DO 的同步 KV 里，休眠后照样认。
+ * - **客户端**：判定在内核的 `EdgePolicy`（地址、令牌、限流）；0.5.0 起只有端到端通道
+ *   （`_relay/e2e`，`e2e-bridge.ts`，WS 消息与 `DATA` 原样互转），源地址上的明文 HTTP 与普通 WS
+ *   一律 404，媒体票随之删除。
  * - **休眠**：隧道与客户端 WS 都经 Hibernation API 接受；热状态写进 WS 附件（`hibernation.ts`），
  *   唤醒时在构造函数里还原。
  * - **控制面**：personal 的 JWKS、撤销判断、可信来源与在线事件都经 RPC 问同一个 `ControlDO`（结果
@@ -52,12 +52,7 @@ import {
   pathAddressing,
   type Addressing,
 } from "@armadra/relay-kernel/edge/addressing";
-import {
-  forwardRequestHeaders,
-  serializeRequestHead,
-  type HeaderBag,
-} from "@armadra/relay-kernel/edge/forward";
-import { MEDIA_ISSUE_BODY_MAX } from "@armadra/relay-kernel/edge/media-tickets";
+import type { HeaderBag } from "@armadra/relay-kernel/edge/headers";
 import {
   EdgePolicy,
   wsCloseCode,
@@ -95,20 +90,12 @@ import {
   type ClientAttachment,
   type TunnelAttachment,
 } from "./hibernation.ts";
-import {
-  forwardHttp,
-  rawHeadersOf,
-  readResponse,
-  responseHeaders,
-} from "./http-forward.ts";
 import { workersRelayLog } from "./log.ts";
-import { KvMediaTickets } from "./media-tickets.ts";
 import { isUpgrade, refuseWithClose, relayError } from "./responses.ts";
 import { cloudJwks, reportPresence } from "./saas.ts";
 import { E2eBridge } from "./e2e-bridge.ts";
 import { DoSqlDatabase } from "./store-do-sqlite/database.ts";
 import { bundledMigrations } from "./store-do-sqlite/migrations.ts";
-import { WsBridge } from "./ws-bridge.ts";
 
 /** 中继节点名：Workers 上没有「节点」概念，路由的 `node` 固定是 `cf`。 */
 export const WORKERS_NODE = "cf";
@@ -144,42 +131,14 @@ interface PendingHandshake {
 }
 
 interface BridgeRecord {
-  bridge: WsBridge | E2eBridge;
+  bridge: E2eBridge;
   attachment: ClientAttachment;
 }
-
-const utf8 = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 
 function headerBag(headers: Headers): HeaderBag {
   const bag: Record<string, string> = {};
   for (const [name, value] of headers) bag[name] = value;
   return bag;
-}
-
-/** 读一个小 JSON 体；超长、不是 JSON 答 `undefined`。 */
-async function readSmallJson(
-  request: Request,
-  limit: number,
-): Promise<unknown> {
-  if (!request.body) return undefined;
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    size += value.length;
-    if (size > limit) {
-      await reader.cancel().catch(() => {});
-      return undefined;
-    }
-    chunks.push(value);
-  }
-  try {
-    return JSON.parse(utf8.decode(Buffer.concat(chunks))) as unknown;
-  } catch {
-    return undefined;
-  }
 }
 
 export class SourceDO extends DurableObject<RelayEnv> {
@@ -190,7 +149,6 @@ export class SourceDO extends DurableObject<RelayEnv> {
   private readonly control: MemoryControlPlane;
   private readonly auth: AuthContext;
   private readonly policy: EdgePolicy<TunnelEndpoint, WebSocket>;
-  private readonly tickets: KvMediaTickets;
   private readonly addressing: Addressing;
   private readonly limits: TunnelLimitsConfig;
   private readonly budget: BudgetMeter;
@@ -244,7 +202,6 @@ export class SourceDO extends DurableObject<RelayEnv> {
       jwks: new JwksCache(() => this.control.jwks(), { ttlMs: JWKS_CACHE_MS }),
       now: Date.now,
     };
-    this.tickets = new KvMediaTickets(ctx.storage.kv);
     this.traffic =
       config && config.trafficRetentionDays > 0
         ? new TrafficMeter({
@@ -268,7 +225,6 @@ export class SourceDO extends DurableObject<RelayEnv> {
       lookup: async (sourceId) => this.lookup(sourceId),
       metrics: this.metrics,
       corsOrigins: () => this.cors?.origins ?? [],
-      mediaTickets: this.tickets,
       traffic: this.traffic,
     });
     this.budget = new BudgetMeter((delta) => this.flushBudget(delta));
@@ -589,46 +545,12 @@ export class SourceDO extends DurableObject<RelayEnv> {
         cors: this.policy.errorCors(edgeRequest, target.sourceId),
       });
     if (isUpgrade(request)) return this.edgeUpgrade(request, edgeRequest);
-    const decision = await this.policy.decideRequest(edgeRequest);
-    switch (decision.kind) {
-      case "error":
-        return relayError(decision.code, {
-          retryAfterMs: decision.retryAfterMs,
-          cors: decision.cors,
-        });
-      case "preflight":
-        return new Response(null, { status: 204, headers: decision.headers });
-      case "issue": {
-        const cors = this.policy.errorCors(
-          edgeRequest,
-          decision.admission.target.sourceId,
-        );
-        if (request.method !== "POST")
-          return relayError("bad_request", { cors });
-        const body = await readSmallJson(request, MEDIA_ISSUE_BODY_MAX);
-        const issued = this.policy.issueMedia(decision.admission, body);
-        if (!issued.ok) return relayError(issued.code, { cors });
-        return new Response(issued.json, {
-          status: 200,
-          headers: {
-            ...(cors ?? {}),
-            "content-type": "application/json",
-            "cache-control": "no-store",
-          },
-        });
-      }
-      case "forward":
-        return forwardHttp({
-          request,
-          edgeRequest,
-          target: decision.target,
-          tunnel: decision.tunnel,
-          remoteIp: decision.remoteIp,
-          policy: this.policy,
-          log: this.log,
-          traffic: decision.traffic,
-        });
-    }
+    // 中继不转明文的应用请求（cloud-api §20）：源地址上的 HTTP 一律 404。
+    const refusal = this.policy.decideRequest(edgeRequest);
+    return relayError(refusal.code, {
+      retryAfterMs: refusal.retryAfterMs,
+      cors: refusal.cors,
+    });
   }
 
   private refuseUpgrade(
@@ -671,60 +593,10 @@ export class SourceDO extends DurableObject<RelayEnv> {
         target.sourceId,
       );
     }
-    if (decision.mode === "e2e") {
-      const opened = this.policy.openE2e(tunnel, edgeRequest, remoteIp, {
-        subject,
-        deviceId,
-      });
-      if (!opened.ok) {
-        release();
-        return this.refuseUpgrade(
-          request,
-          edgeRequest,
-          opened.code,
-          target.sourceId,
-        );
-      }
-      const pair = new WebSocketPair();
-      const [client, server] = [pair[0], pair[1]];
-      this.ctx.acceptWebSocket(server, ["client"]);
-      const record = this.bridgeRecord(server, opened.stream, {
-        kind: "client",
-        mode: "e2e",
-        sourceId: target.sourceId,
-        tunnelId: tunnel.tunnelId,
-        streamId: opened.stream.streamId,
-        subject,
-        ...(deviceId ? { deviceId } : {}),
-        lastActivityMs: Date.now(),
-        core: null,
-      });
-      record.bridge.start();
-      this.persist();
-      void this.ensureAlarm();
-      return new Response(null, {
-        status: 101,
-        webSocket: client,
-        headers: { "sec-websocket-protocol": E2E_SUBPROTOCOL },
-      });
-    }
-    // 不协商扩展：中继自己解帧，`permessage-deflate` 的 RSV 位会被当成协议错误。
-    const headers = forwardRequestHeaders(
-      rawHeadersOf(
-        request.headers,
-        (name) => name === "sec-websocket-extensions",
-      ),
-      { remoteIp, upgrade: { subprotocols: decision.subprotocols } },
-    );
-    const opened = this.policy.open(
-      tunnel,
-      "ws",
-      edgeRequest,
-      target,
-      headers,
-      remoteIp,
-      { subject, deviceId },
-    );
+    const opened = this.policy.openE2e(tunnel, edgeRequest, remoteIp, {
+      subject,
+      deviceId,
+    });
     if (!opened.ok) {
       release();
       return this.refuseUpgrade(
@@ -734,53 +606,27 @@ export class SourceDO extends DurableObject<RelayEnv> {
         target.sourceId,
       );
     }
-    const endpoint = opened.stream;
-    const answer = readResponse(endpoint, "GET", { upgrade: true });
-    void endpoint
-      .write(serializeRequestHead(request.method, target.path, headers))
-      .catch(() => {});
-    const result = await answer;
-    const cors = this.policy.errorCors(edgeRequest, target.sourceId);
-    if (!result.ok) {
-      release();
-      return relayError(result.code, { cors });
-    }
-    const { head } = result.response;
-    if (head.status !== 101) {
-      // core 不肯升级：用它的状态码与头拒绝客户端（不转体）。
-      release();
-      endpoint.destroy();
-      if (head.status < 200 || head.status > 599)
-        return relayError("bad_gateway", { cors });
-      return new Response(null, {
-        status: head.status,
-        headers: responseHeaders(head),
-      });
-    }
-    const protocol = head.headers.find(
-      ([name]) => name.toLowerCase() === "sec-websocket-protocol",
-    )?.[1];
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server, ["client"]);
-    const attachment: ClientAttachment = {
+    const record = this.bridgeRecord(server, opened.stream, {
       kind: "client",
+      mode: "e2e",
       sourceId: target.sourceId,
       tunnelId: tunnel.tunnelId,
-      streamId: endpoint.streamId,
+      streamId: opened.stream.streamId,
       subject,
       ...(deviceId ? { deviceId } : {}),
       lastActivityMs: Date.now(),
       core: null,
-    };
-    const record = this.bridgeRecord(server, endpoint, attachment);
-    record.bridge.start(result.response.upgraded);
+    });
+    record.bridge.start();
     this.persist();
     void this.ensureAlarm();
     return new Response(null, {
       status: 101,
       webSocket: client,
-      headers: protocol ? { "sec-websocket-protocol": protocol } : {},
+      headers: { "sec-websocket-protocol": E2E_SUBPROTOCOL },
     });
   }
 
@@ -806,10 +652,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
     };
     const record: BridgeRecord = {
       attachment,
-      bridge:
-        attachment.mode === "e2e"
-          ? new E2eBridge(ws, endpoint, hooks)
-          : new WsBridge(ws, endpoint, hooks),
+      bridge: new E2eBridge(ws, endpoint, hooks),
     };
     this.bridges.set(ws, record);
     this.bridgeOf.set(endpoint, record);
@@ -856,14 +699,14 @@ export class SourceDO extends DurableObject<RelayEnv> {
     this.socketGone(ws, 1006, "error");
   }
 
-  private socketGone(ws: WebSocket, code: number, reason: string): void {
+  private socketGone(ws: WebSocket, code: number, _reason: string): void {
     const tunnel = this.tunnels.get(ws);
     if (tunnel) {
       tunnel.tunnel.transportClosed(code);
       this.tunnels.delete(ws);
     }
     if (this.handshakes.has(ws)) this.settleHandshake(ws, "aborted");
-    this.bridges.get(ws)?.bridge.clientClose(code, reason);
+    this.bridges.get(ws)?.bridge.clientClose(code);
     // 回一个关闭帧完成握手（已经关了就什么也不做）。
     this.closeSocket(ws, code === 1005 || code === 1006 ? 1000 : code, "");
     this.persist();
@@ -882,7 +725,6 @@ export class SourceDO extends DurableObject<RelayEnv> {
     for (const record of [...this.bridges.values()])
       if (now - record.attachment.lastActivityMs > config.clientIdleMs)
         record.bridge.disconnect(4000, "idle");
-    const tickets = this.tickets.sweep();
     await this.budget.flush();
     await this.flushTraffic();
     if (config.mode === "saas" && this.current)
@@ -895,7 +737,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
         atMs: now,
       });
     this.persist();
-    if (this.tunnels.size > 0 || this.bridges.size > 0 || tickets > 0)
+    if (this.tunnels.size > 0 || this.bridges.size > 0)
       await this.ctx.storage.setAlarm(now + config.alarmMs);
   }
 
@@ -975,7 +817,10 @@ export class SourceDO extends DurableObject<RelayEnv> {
     const tunnels: { ws: WebSocket; attachment: TunnelAttachment }[] = [];
     for (const ws of sockets) {
       const attachment = attachmentOf(ws);
-      if (attachment?.kind === "client")
+      // 0.5.0 之前休眠下来的明文 WS 桥：明文转发已删除，直接关掉让客户端重连走通道。
+      if (attachment?.kind === "client" && attachment.mode !== "e2e")
+        this.closeSocket(ws, CLOSE.sourceOffline, "e2e_required");
+      else if (attachment?.kind === "client")
         clients.set(`${attachment.tunnelId}:${attachment.streamId}`, {
           ws,
           attachment,
@@ -1037,7 +882,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
               sourceId: client.sourceId,
               subject: client.subject,
               deviceId: client.deviceId ?? "",
-              kind: client.mode === "e2e" ? "e2e" : "ws",
+              kind: "e2e",
             }),
           );
       this.current = record;

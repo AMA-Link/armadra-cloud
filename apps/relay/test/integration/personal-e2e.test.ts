@@ -2,7 +2,8 @@
  * 个人中转端到端（中继设计 §9 `personal-e2e.test.ts`）：真 TLS（自签 CA）、真状态文件、R1 的假 core。
  *
  * init → serve → 登录 → 注册令牌 → 假 core 注册 + 源 JWS 换隧道令牌 + 握手 → owner 取断言 →
- * 经 `/s/<id>/` 访问假 core 的 HTTP 与 WS → `me/stream` → 分享链接 → 访客 accept → 访客经中继访问 →
+ * 经 `/s/<id>/_relay/e2e` 开端到端通道（明文 HTTP、预检一律 404）→ `me/stream` → 分享链接 → 访客
+ * accept → 访客开通道 →
  * 撤销链接（访客 WS 断开、令牌失效）→ 撤销源（隧道与 owner WS 断开、`sourceRevoked`）→ 锁定。
  *
  * 每一步的响应都对协议包契约的 output schema 校验；最后核对日志里没有口令、令牌、秘密与正文。
@@ -164,6 +165,34 @@ function openWs(url: string, protocols: string[]): WebSocket {
   return ws;
 }
 
+/** 开一条端到端通道（假 core 把字节回显）。 */
+function channel(base: string, token: string): WebSocket {
+  return openWs(`${base}/_relay/e2e`, [
+    "armadra-e2e.1",
+    `armadra-relay.${token}`,
+  ]);
+}
+
+/** 通道开成答 `null`（随后关掉）；被拒答关闭码（中继先完成升级再关）。 */
+async function channelOutcome(
+  base: string,
+  token: string,
+): Promise<number | null> {
+  const ws = channel(base, token);
+  const closed = once(ws, "close").then(([code]) => code as number);
+  const opened = await Promise.race([
+    once(ws, "open").then(() => true),
+    closed.then(() => false),
+  ]);
+  if (!opened) return closed;
+  const outcome = await Promise.race([
+    closed,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 300)),
+  ]);
+  if (outcome === null) ws.close();
+  return outcome;
+}
+
 async function closeCode(ws: WebSocket): Promise<number> {
   if (ws.readyState === WebSocket.CLOSED) return -1;
   const [code] = (await once(ws, "close")) as [number];
@@ -318,6 +347,7 @@ describe("个人中转端到端", () => {
       tunnelUrl: hint.nodes[0]?.url as string,
       token: () => hint.tunnelToken,
       ca,
+      capabilities: ["e2e"],
     });
     const connected = await core.connect();
     expect(connected.ready).toBeDefined();
@@ -336,7 +366,7 @@ describe("个人中转端到端", () => {
     expect(listed.sources).toMatchObject([{ online: true, via: "owner" }]);
   });
 
-  it("owner 取断言 + 中继令牌，经 /s/<id>/ 访问假 core 的 HTTP 与 WS", async () => {
+  it("owner 取断言 + 中继令牌，经 /s/<id>/_relay/e2e 开通道；明文 HTTP 404", async () => {
     const assertion = output(
       "sources",
       "assertion",
@@ -356,53 +386,34 @@ describe("个人中转端到端", () => {
     secrets.push(relayToken, assertion.assertion);
     expect(relayBaseUrl).toBe(`${issuer}/s/${SOURCE_ID}`);
 
-    const echoed = await call(
+    // 明文路径已删除（cloud-api §20）：带令牌的 HTTP 与 CORS 预检都 404，不进隧道。
+    const before = core.requests;
+    const plain = await call(
       "GET",
       `${relayBaseUrl}/echo-request?m=${MARKER}`,
       {
         headers: { "armadra-relay-token": relayToken },
       },
     );
-    expect(echoed.status).toBe(200);
-    expect(echoed.body).toMatchObject({ url: `/echo-request?m=${MARKER}` });
-    const posted = await call("POST", `${relayBaseUrl}/echo`, {
-      body: { marker: MARKER },
-      headers: { "armadra-relay-token": relayToken },
-    });
-    expect(posted.body).toEqual({ marker: MARKER });
-    expect((await call("GET", `${relayBaseUrl}/echo-request`)).status).toBe(
-      401,
-    );
-
-    // CORS 预检不带令牌：原生 App 与登记时的可信来源（issuer）答 204，别的来源 403。
-    const preflight = (origin: string) =>
-      call("OPTIONS", `${relayBaseUrl}/api/identity/cloud/login`, {
+    expect(plain.status).toBe(404);
+    const preflight = await call(
+      "OPTIONS",
+      `${relayBaseUrl}/api/identity/cloud/login`,
+      {
         headers: {
-          origin,
+          origin: issuer,
           "access-control-request-method": "POST",
-          "access-control-request-headers": "armadra-relay-token, content-type",
         },
-      });
-    for (const origin of [
-      "https://localhost",
-      "capacitor://localhost",
-      issuer,
-    ]) {
-      const answer = await preflight(origin);
-      expect(answer.status).toBe(204);
-      expect(answer.headers["access-control-allow-origin"]).toBe(origin);
-      expect(answer.headers.vary).toBe("origin");
-    }
-    const refused = await preflight("https://evil.example");
-    expect(refused.status).toBe(403);
-    expect(refused.headers["access-control-allow-origin"]).toBeUndefined();
+      },
+    );
+    expect(preflight.status).toBe(404);
+    expect(core.requests).toBe(before);
+    expect(await channelOutcome(relayBaseUrl, "not-a-token")).toBe(4401);
 
-    ownerWs = openWs(`${relayBaseUrl}/ws`, [
-      `armadra-relay.${relayToken}`,
-      "armadra-ticket.core-ticket",
-    ]);
+    ownerWs = channel(relayBaseUrl, relayToken);
     await once(ownerWs, "open");
-    ownerWs.send(MARKER);
+    expect(ownerWs.protocol).toBe("armadra-e2e.1");
+    ownerWs.send(Buffer.from(MARKER));
     const [reply] = (await once(ownerWs, "message")) as [Buffer];
     expect(String(reply)).toBe(MARKER);
   });
@@ -461,10 +472,7 @@ describe("个人中转端到端", () => {
       streamEvents.some((event) => event.type === "linkUsed"),
     );
 
-    const viaGuest = await call("GET", `${relayBaseUrl}/echo-request`, {
-      headers: { "armadra-relay-token": guest.relayToken },
-    });
-    expect(viaGuest.status).toBe(200);
+    expect(await channelOutcome(relayBaseUrl, guest.relayToken)).toBeNull();
     const guestSources = output(
       "me",
       "sources",
@@ -483,10 +491,7 @@ describe("个人中转端到端", () => {
     );
     expect(errorCode(forbidden)).toBe("forbidden");
 
-    guestWs = openWs(`${relayBaseUrl}/ws`, [
-      `armadra-relay.${guest.relayToken}`,
-      "armadra-ticket.core-ticket",
-    ]);
+    guestWs = channel(relayBaseUrl, guest.relayToken);
     await once(guestWs, "open");
   });
 
@@ -513,11 +518,11 @@ describe("个人中转端到端", () => {
       owned.buckets.filter(
         (row) => row.subject === subject && row.kind === kind,
       );
-    expect(of("acct:me", "http").length).toBeGreaterThan(0);
-    expect(of("acct:me", "ws")[0]).toMatchObject({
-      sourceId: SOURCE_ID,
-      connections: 1,
-    });
+    expect(owned.buckets.every((row) => row.kind === "e2e")).toBe(true);
+    expect(of("acct:me", "e2e")[0]).toMatchObject({ sourceId: SOURCE_ID });
+    expect(
+      of("acct:me", "e2e").reduce((total, row) => total + row.connections, 0),
+    ).toBeGreaterThanOrEqual(1);
     const guestSubject = owned.buckets.find((row) =>
       row.subject.startsWith(`guest:${linkId}:`),
     )?.subject;
@@ -580,7 +585,7 @@ describe("个人中转端到端", () => {
     expect(errorCode(tooLong)).toBe("bad_request");
   });
 
-  it("工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；边缘不按 ro 过滤；范围落进存储", async () => {
+  it("工作区范围链接（协议 1.1）：断言带 scp、中继令牌带 ro；边缘不按 ro 过滤（照样开通道）；范围落进存储", async () => {
     const created = output(
       "links",
       "create",
@@ -635,30 +640,8 @@ describe("个人中转端到端", () => {
       true,
     );
 
-    const token = { "armadra-relay-token": scoped.relayToken };
-    const read = await call("GET", `${relayBaseUrl}/echo-request`, {
-      headers: token,
-    });
-    expect(read.status).toBe(200);
-    const before = core.requests;
-    const write = await call("POST", `${relayBaseUrl}/echo`, {
-      body: { text: MARKER },
-      headers: token,
-    });
-    // 边缘不按 ro 过滤（0.3.11）：写方法照常进隧道，读写由 core 判定。
-    expect(write.status).toBe(200);
-    expect(core.requests).toBe(before + 1);
-    // 身份域照常进隧道（假 core 不认识这条路径，答 404）。
-    const login = await call(
-      "POST",
-      `${relayBaseUrl}/api/identity/cloud/login`,
-      {
-        body: {},
-        headers: token,
-      },
-    );
-    expect(login.status).toBe(404);
-    expect(core.requests).toBe(before + 2);
+    // 边缘不按 ro 过滤：ro 令牌照样开得了通道，读写由 core 判定。
+    expect(await channelOutcome(relayBaseUrl, scoped.relayToken)).toBeNull();
     // 再要断言仍带同一份范围。
     const again = output(
       "sources",
@@ -697,11 +680,7 @@ describe("个人中转端到端", () => {
     expect(revoked.status).toBe(200);
     await closeCode(guestWs);
     expect(guestWs.readyState).toBe(WebSocket.CLOSED);
-    const after = await call("GET", `${relayBaseUrl}/echo-request`, {
-      headers: { "armadra-relay-token": guest.relayToken },
-    });
-    expect(after.status).toBe(401);
-    expect(errorCode(after)).toBe("relay_token_invalid");
+    expect(await channelOutcome(relayBaseUrl, guest.relayToken)).toBe(4401);
     const refreshed = await call("POST", `${issuer}/v1/auth/refresh`, {
       body: { refreshToken: guest.guestSession.refreshToken },
     });
@@ -719,10 +698,7 @@ describe("个人中转端到端", () => {
     await waitFor(() =>
       streamEvents.some((event) => event.type === "sourceRevoked"),
     );
-    const after = await call("GET", `${relayBaseUrl}/echo-request`, {
-      headers: { "armadra-relay-token": relayToken },
-    });
-    expect(after.status).toBe(401);
+    expect(await channelOutcome(relayBaseUrl, relayToken)).toBe(4401);
     const hint = await call("GET", `${issuer}/v1/sources/me/relay`, {
       headers: { authorization: `Source ${sourceJws(issuer, Date.now())}` },
     });

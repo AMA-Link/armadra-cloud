@@ -14,16 +14,16 @@ import type { SourceDO } from "../src/source-do.ts";
 import {
   assertion,
   call,
+  channelOutcome,
   closed,
   DEVICE,
+  echoChannel,
   heartbeatHint,
   json,
   login,
-  nextMessage,
-  openClientWs,
+  openChannel,
   postJson,
   registerSource,
-  viaRelay,
   type Session,
   type TestSource,
 } from "./api.ts";
@@ -52,12 +52,12 @@ async function online(): Promise<{
 }
 
 describe("休眠", () => {
-  it("对象换出内存后唤醒：隧道、流表与客户端 WS 原样接上，信用不漏", async () => {
+  it("对象换出内存后唤醒：隧道、流表与客户端通道原样接上，信用不漏", async () => {
     const { source, core, relayToken } = await online();
-    const { ws } = await openClientWs(source.sourceId, "/ws", relayToken);
+    const { ws } = await openChannel(source.sourceId, relayToken);
     if (!ws) throw new Error("没有 WS");
-    ws.send("before");
-    expect(await nextMessage(ws)).toBe("before");
+    const before = Uint8Array.of(1, 2, 3);
+    expect(await echoChannel(ws, before)).toEqual(before);
 
     // 攒着没写的流量统计会让对象留在内存里等定时写（不带着计数休眠）：先让检查周期写掉。
     await runDurableObjectAlarm(stubOf(source.sourceId));
@@ -70,39 +70,14 @@ describe("休眠", () => {
       ),
     ).toMatchObject({ tunnels: 1, streams: 1, clients: 1 });
 
-    ws.send("after");
-    expect(await nextMessage(ws)).toBe("after");
+    const after = Uint8Array.of(4, 5, 6);
+    expect(await echoChannel(ws, after)).toEqual(after);
     await core.ping();
-    // 隧道还能开新流，HTTP 照常。
-    const response = await viaRelay(source.sourceId, "/echo-request", {
-      token: relayToken,
-    });
-    expect(response.status).toBe(200);
-    await response.arrayBuffer();
-    // 多来几轮（> 半个窗口）：唤醒后补窗口的账照样对得上。
-    const big = await viaRelay(source.sourceId, `/big?bytes=${600 * 1024}`, {
-      token: relayToken,
-    });
-    expect((await big.arrayBuffer()).byteLength).toBe(600 * 1024);
+    // 多来几轮（> 半个窗口）：唤醒后补窗口的账照样对得上；隧道还能开新通道。
+    const big = new Uint8Array(600 * 1024).map((_, index) => index & 0xff);
+    expect(await echoChannel(ws, big)).toEqual(big);
+    expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
     ws.close(1000, "done");
-  });
-
-  it("媒体票落在对象存储里：休眠后照样认", async () => {
-    const { source, relayToken } = await online();
-    const issued = await viaRelay(source.sourceId, "/_relay/media-tickets", {
-      token: relayToken,
-      method: "POST",
-      body: JSON.stringify({ path: "/media" }),
-    });
-    const { path } = await json<{ path: string }>(issued);
-    await evictDurableObject(stubOf(source.sourceId), {
-      webSockets: "hibernate",
-    });
-    const ranged = await viaRelay(source.sourceId, path, {
-      headers: { range: "bytes=0-3" },
-    });
-    expect(ranged.status).toBe(206);
-    await ranged.arrayBuffer();
   });
 });
 
@@ -142,12 +117,8 @@ describe("隧道替换与身份", () => {
       (await second.connect(hint.nodes[0]?.url ?? "", hint.tunnelToken)).ready,
     ).toBeTruthy();
     expect((await core.closed()).code).toBe(4491);
-    const response = await viaRelay(source.sourceId, "/echo-request", {
-      token: relayToken,
-    });
-    expect(response.status).toBe(200);
-    await response.arrayBuffer();
-    expect(second.requests.length).toBe(1);
+    expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
+    expect(second.opens.filter((open) => open.kind === "e2e")).toHaveLength(1);
   });
 
   it("?src= 指向别的源而令牌是这个源的：拒绝 tunnel_token_invalid（4490）", async () => {
@@ -170,12 +141,11 @@ describe("隧道替换与身份", () => {
 });
 
 describe("撤销即时生效", () => {
-  it("撤销源：隧道 4492、经中继的 WS 4403、已签出的中继令牌 401", async () => {
+  it("撤销源：隧道 4492、经中继的通道 4403、已签出的中继令牌 4401", async () => {
     const { session, source, core, relayToken } = await online();
-    const { ws } = await openClientWs(source.sourceId, "/ws", relayToken);
+    const { ws } = await openChannel(source.sourceId, relayToken);
     if (!ws) throw new Error("没有 WS");
-    ws.send("x");
-    await nextMessage(ws);
+    await echoChannel(ws, Uint8Array.of(1));
     const wsClosed = closed(ws);
     const revoked = await call(`/v1/sources/${source.sourceId}`, {
       method: "DELETE",
@@ -184,17 +154,14 @@ describe("撤销即时生效", () => {
     expect(revoked.status).toBe(200);
     expect((await core.closed()).code).toBe(4492);
     expect((await wsClosed).code).toBe(4403);
-    const after = await viaRelay(source.sourceId, "/echo-request", {
-      token: relayToken,
-    });
-    expect(after.status).toBe(401);
+    expect(await channelOutcome(source.sourceId, relayToken)).toBe(4401);
     // 撤销后的源换不到隧道令牌。
     expect(
       await heartbeatHint(source).catch((error: Error) => error.message),
     ).toMatch(/^relay 410/);
   });
 
-  it("撤销分享链接：访客的 WS 断开，令牌失效；owner 不受影响", async () => {
+  it("撤销分享链接：访客的通道断开，令牌失效；owner 不受影响", async () => {
     const { session, source, relayToken } = await online();
     const created = await postJson(
       "/v1/links",
@@ -214,10 +181,9 @@ describe("撤销即时生效", () => {
       device: DEVICE,
     });
     const guest = await json<{ relayToken: string }>(accepted);
-    const { ws } = await openClientWs(source.sourceId, "/ws", guest.relayToken);
+    const { ws } = await openChannel(source.sourceId, guest.relayToken);
     if (!ws) throw new Error("没有 WS");
-    ws.send("x");
-    await nextMessage(ws);
+    await echoChannel(ws, Uint8Array.of(1));
     const guestClosed = closed(ws);
     const revoked = await call(`/v1/links/${link.linkId}`, {
       method: "DELETE",
@@ -225,17 +191,7 @@ describe("撤销即时生效", () => {
     });
     expect(revoked.status).toBe(200);
     expect((await guestClosed).code).toBe(4403);
-    expect(
-      (
-        await viaRelay(source.sourceId, "/echo-request", {
-          token: guest.relayToken,
-        })
-      ).status,
-    ).toBe(401);
-    const owner = await viaRelay(source.sourceId, "/echo-request", {
-      token: relayToken,
-    });
-    expect(owner.status).toBe(200);
-    await owner.arrayBuffer();
+    expect(await channelOutcome(source.sourceId, guest.relayToken)).toBe(4401);
+    expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
   });
 });

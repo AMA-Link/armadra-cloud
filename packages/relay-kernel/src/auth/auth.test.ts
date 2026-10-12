@@ -18,11 +18,7 @@ import {
 } from "../../test/tokens.ts";
 import { createAuthContext } from "./context.ts";
 import { JwksCache } from "./jwks.ts";
-import {
-  relayTokenFromHeaders,
-  splitRelaySubprotocol,
-  verifyRelayToken,
-} from "./relay-token.ts";
+import { splitRelaySubprotocol, verifyRelayToken } from "./relay-token.ts";
 import { verifyTunnelToken } from "./tunnel-token.ts";
 
 const OTHER_SOURCE = "fedcba9876543210fedcba9876543210";
@@ -99,9 +95,7 @@ describe("中继令牌", () => {
     ).toMatchObject({ ok: false, failure: "revoked" });
   });
 
-  it("从头与子协议里取令牌，其余子协议留下", () => {
-    expect(relayTokenFromHeaders({ "armadra-relay-token": "t" })).toBe("t");
-    expect(relayTokenFromHeaders({})).toBeUndefined();
+  it("从子协议里取令牌，其余子协议留下", () => {
     expect(
       splitRelaySubprotocol(
         "armadra-ticket.abc, armadra-relay.x.y.z ,armadra-relay.second",

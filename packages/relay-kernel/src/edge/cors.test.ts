@@ -1,32 +1,8 @@
-import type { IncomingMessage } from "node:http";
-
 import { describe, expect, it } from "vitest";
 
-import {
-  isPreflight,
-  NATIVE_APP_ORIGINS,
-  originAllowed,
-  errorCorsHeaders,
-  PREFLIGHT_HEADERS,
-  preflightHeaders,
-} from "./cors.ts";
+import { NATIVE_APP_ORIGINS, originAllowed, errorCorsHeaders } from "./cors.ts";
 
-const req = (method: string, headers: Record<string, string>) =>
-  ({ method, headers }) as unknown as IncomingMessage;
-
-describe("CORS 预检", () => {
-  it("只有 OPTIONS + Origin + Access-Control-Request-Method 才算预检", () => {
-    const origin = { origin: "https://localhost" };
-    const asked = { ...origin, "access-control-request-method": "POST" };
-    expect(isPreflight(req("OPTIONS", asked))).toBe(true);
-    expect(isPreflight(req("OPTIONS", origin))).toBe(false);
-    expect(
-      isPreflight(req("OPTIONS", { "access-control-request-method": "POST" })),
-    ).toBe(false);
-    expect(isPreflight(req("POST", asked))).toBe(false);
-    expect(isPreflight(req("GET", asked))).toBe(false);
-  });
-
+describe("错误答复的 CORS", () => {
   it("名单：原生 App 两个来源总放行；其余按规范拼法与可信来源比", () => {
     for (const origin of NATIVE_APP_ORIGINS)
       expect(originAllowed(origin, [])).toBe(true);
@@ -42,24 +18,6 @@ describe("CORS 预检", () => {
     expect(originAllowed("*", ["*"])).toBe(false);
     expect(originAllowed("capacitor://evil", [])).toBe(false);
     expect(originAllowed("http://localhost", [])).toBe(false);
-  });
-
-  it("答案按 Origin 回显，带 Vary: Origin，不用 * 也不发 allow-credentials；头含中继令牌", () => {
-    const headers = preflightHeaders("https://localhost");
-    expect(headers["access-control-allow-origin"]).toBe("https://localhost");
-    expect(headers.vary).toBe("origin");
-    // 预检能缓存多久就缓存多久（浏览器各自封顶），iOS 全部跨源时少打几次预检。
-    expect(headers["access-control-max-age"]).toBe("7200");
-    expect(headers["access-control-allow-credentials"]).toBeUndefined();
-    expect(headers["access-control-allow-methods"]).toBe(
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    );
-    expect(PREFLIGHT_HEADERS.split(", ")).toEqual([
-      "authorization",
-      "content-type",
-      "x-armadra-csrf",
-      "armadra-relay-token",
-    ]);
   });
 
   it("错误答复：名单内回显 + Vary + 暴露 retry-after；名单外、无 Origin、* 都不加", () => {

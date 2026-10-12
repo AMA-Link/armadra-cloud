@@ -187,10 +187,6 @@ function openWs(url, protocols) {
   });
 }
 
-const nextMessage = (ws) =>
-  new Promise((done) =>
-    ws.once("message", (data, binary) => done({ data, binary })),
-  );
 const closeOf = (ws) =>
   new Promise((done) => ws.once("close", (code) => done(code)));
 
@@ -329,54 +325,36 @@ export async function runWorkersE2e({ root, report }) {
     });
 
     await report.step(
-      "经中继的 HTTP：剥令牌、X-Forwarded-*；1 MiB 大体长度不丢",
+      "明文路径已删除：带令牌的 HTTP 与普通 WS 升级都 404",
       async () => {
         const response = await fetch(
           `${origin}/s/${source.sourceId}/echo-request`,
-          {
-            headers: { "armadra-relay-token": relayToken },
-          },
+          { headers: { "armadra-relay-token": relayToken } },
         );
-        expectEqual(response.status, 200, "echo-request");
-        const body = await response.json();
-        expect(!("armadra-relay-token" in body.headers), "令牌没剥掉");
-        expectEqual(
-          body.headers["x-forwarded-proto"],
-          "https",
-          "x-forwarded-proto",
-        );
-        const big = await fetch(
-          `${origin}/s/${source.sourceId}/big?bytes=1048576`,
-          {
-            headers: { "armadra-relay-token": relayToken },
-          },
-        );
-        let received = 0;
-        try {
-          for await (const chunk of big.body) received += chunk.length;
-        } catch (error) {
-          throw new Error(
-            `大体只收到 ${received} 字节：${error.message}；${error.cause?.message ?? ""}`,
+        expectEqual(response.status, 404, "明文 HTTP");
+        await response.arrayBuffer();
+        const status = await new Promise((done, failed) => {
+          const plain = new WebSocket(
+            `${origin.replace(/^http/, "ws")}/s/${source.sourceId}/ws`,
+            [`armadra-relay.${relayToken}`, "armadra-ticket.e2e"],
           );
-        }
-        expectEqual(received, 1_048_576, "大体长度");
+          plain.once("unexpected-response", (_request, reply) => {
+            done(reply.statusCode);
+            plain.terminate();
+          });
+          plain.once("open", () => {
+            plain.terminate();
+            done(101);
+          });
+          plain.once("error", (error) => {
+            if (!plain.readyState) failed(error);
+          });
+        });
+        expectEqual(status, 404, "明文 WS 升级");
       },
     );
 
     let ws;
-    await report.step("经中继的 WebSocket：子协议选 ticket、回显", async () => {
-      const wsUrl = `${origin.replace(/^http/, "ws")}/s/${source.sourceId}/ws`;
-      const socket = await openWs(wsUrl, [
-        `armadra-relay.${relayToken}`,
-        "armadra-ticket.e2e",
-      ]);
-      expectEqual(socket.protocol, "armadra-ticket.e2e", "子协议");
-      socket.send("hello");
-      const { data } = await nextMessage(socket);
-      expectEqual(data.toString(), "hello", "回显");
-      ws = socket;
-    });
-
     await report.step(
       "端到端通道 _relay/e2e：选 armadra-e2e.1，10 MB 随机字节双向原样",
       async () => {
@@ -414,11 +392,15 @@ export async function runWorkersE2e({ root, report }) {
         await closed;
         const unsupported = await openWs(url, [`armadra-relay.${relayToken}`]);
         expectEqual(await closeOf(unsupported), 4409, "缺版本子协议");
+        ws = await openWs(url, [
+          "armadra-e2e.1",
+          `armadra-relay.${relayToken}`,
+        ]);
       },
     );
 
     await report.step(
-      "撤销源：隧道 4492、客户端 WS 断开、旧中继令牌 401",
+      "撤销源：隧道 4492、客户端通道断开、旧中继令牌 4401",
       async () => {
         const wsClosed = closeOf(ws);
         const revoked = await api(origin, `/v1/sources/${source.sourceId}`, {
@@ -427,14 +409,12 @@ export async function runWorkersE2e({ root, report }) {
         });
         expectEqual(revoked.status, 200, "撤销");
         expectEqual(await core.closed(), 4492, "隧道关闭码");
-        expectEqual(await wsClosed, 4403, "客户端 WS 关闭码");
-        const after = await fetch(
-          `${origin}/s/${source.sourceId}/echo-request`,
-          {
-            headers: { "armadra-relay-token": relayToken },
-          },
+        expectEqual(await wsClosed, 4403, "客户端通道关闭码");
+        const after = await openWs(
+          `${origin.replace(/^http/, "ws")}/s/${source.sourceId}/_relay/e2e`,
+          ["armadra-e2e.1", `armadra-relay.${relayToken}`],
         );
-        expectEqual(after.status, 401, "撤销后的中继令牌");
+        expectEqual(await closeOf(after), 4401, "撤销后的中继令牌");
       },
     );
 

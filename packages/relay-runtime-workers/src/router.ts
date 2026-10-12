@@ -104,7 +104,7 @@ export async function handleRequest(
     host: request.headers.get("host") ?? url.host,
   });
   if (target) {
-    const gate = edgeGate(request, target.path);
+    const gate = edgeGate(request);
     if (!(await passGate(env, gate, clientIp)))
       return limited(gate as GateName);
     return sourceStub(env, target.sourceId).fetch(request);

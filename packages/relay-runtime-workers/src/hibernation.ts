@@ -25,7 +25,10 @@ export interface TunnelAttachment {
 /** 客户端 WS 的附件（一条桥）。 */
 export interface ClientAttachment {
   kind: "client";
-  /** `e2e`：端到端通道（`e2e-bridge.ts`，字节透传）；缺省是普通 WS（解帧转发）。 */
+  /**
+   * `e2e`：端到端通道（`e2e-bridge.ts`，字节透传）。缺省是 0.5.0 之前的明文 WS 桥：唤醒时直接
+   * 关掉（明文转发已删除）。
+   */
   mode?: "e2e";
   sourceId: string;
   tunnelId: string;

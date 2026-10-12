@@ -37,10 +37,7 @@ export function sendRelayError(
 }
 
 /** {@link rawErrorResponse} 的 `Buffer`（裸 socket 写）。 */
-export function rawErrorBytes(
-  code: ErrorCode,
-  cors?: Record<string, string>,
-): Buffer {
+function rawErrorBytes(code: ErrorCode, cors?: Record<string, string>): Buffer {
   const bytes = rawErrorResponse(code, cors);
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
 }
