@@ -6,12 +6,15 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createLogger } from "@armadra/cloud-shared/log";
+import { CLOSE } from "@armadra/platform-protocol/tunnel";
 import { DEFAULT_LIMIT_RULES } from "@armadra/relay-kernel/control/types";
 import { afterAll, expect, it } from "vitest";
+import { WebSocket } from "ws";
 
 import {
   databaseFor,
@@ -334,22 +337,18 @@ it("边缘缺省额度按真实使用：iOS 全部跨源多次预检、同出口
 });
 
 /** 预检打到不存在的源也会先过 `edge.preflight.ip`：限额 2，第 3 次起 429。 */
-async function preflights(url: string, forwardedFor?: string) {
+/** 三次不带令牌开端到端通道：中继完成升级后以关闭码拒绝（4401 令牌缺，4429 限流）。 */
+async function anonymousOpens(url: string, forwardedFor?: string) {
   const out: number[] = [];
   for (let i = 0; i < 3; i += 1) {
-    const response = await fetch(
-      `${url}/s/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x`,
-      {
-        method: "OPTIONS",
-        headers: {
-          origin: "https://a.example",
-          "access-control-request-method": "GET",
-          ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}),
-        },
-      },
+    const ws = new WebSocket(
+      `${url.replace(/^http/, "ws")}/s/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/_relay/e2e`,
+      ["armadra-e2e.1"],
+      forwardedFor ? { headers: { "x-forwarded-for": forwardedFor } } : {},
     );
-    out.push(response.status);
-    await response.arrayBuffer();
+    ws.on("error", () => {});
+    const [code] = (await once(ws, "close")) as [number];
+    out.push(code);
   }
   return out;
 }
@@ -359,29 +358,31 @@ it("受信代理：回环对端在列表内时按 XFF 的客户端 IP 分桶；�
     {
       ...base,
       dataDir: join(root, "tp1"),
-      rateLimits: { preflight: 2 },
+      rateLimits: { anonymous: 2 },
       trustedProxy: { proxies: ["127.0.0.1/32", "::1/128"] },
     },
     quiet,
   );
   try {
-    const a = await preflights(trusted.url, "198.51.100.1");
-    const b = await preflights(trusted.url, "198.51.100.2");
-    expect(a[2]).toBe(429);
-    expect(b[0]).not.toBe(429); // 另一个客户端有自己的桶
-    expect(a.slice(0, 2)).not.toContain(429);
+    const a = await anonymousOpens(trusted.url, "198.51.100.1");
+    const b = await anonymousOpens(trusted.url, "198.51.100.2");
+    expect(a[2]).toBe(CLOSE.limitReached);
+    expect(b[0]).not.toBe(CLOSE.limitReached); // 另一个客户端有自己的桶
+    expect(a.slice(0, 2)).not.toContain(CLOSE.limitReached);
   } finally {
     await trusted.close();
   }
 
   const plain = await startPersonalRelay(
-    { ...base, dataDir: join(root, "tp2"), rateLimits: { preflight: 2 } },
+    { ...base, dataDir: join(root, "tp2"), rateLimits: { anonymous: 2 } },
     quiet,
   );
   try {
-    await preflights(plain.url, "198.51.100.1");
+    await anonymousOpens(plain.url, "198.51.100.1");
     // 没配置：换一个 XFF 也是同一个桶（伪造不能绕过限流）
-    expect((await preflights(plain.url, "198.51.100.2"))[0]).toBe(429);
+    expect((await anonymousOpens(plain.url, "198.51.100.2"))[0]).toBe(
+      CLOSE.limitReached,
+    );
   } finally {
     await plain.close();
   }
@@ -390,14 +391,16 @@ it("受信代理：回环对端在列表内时按 XFF 的客户端 IP 分桶；�
     {
       ...base,
       dataDir: join(root, "tp3"),
-      rateLimits: { preflight: 2 },
+      rateLimits: { anonymous: 2 },
       trustedProxy: { proxies: ["10.9.9.9/32"] },
     },
     quiet,
   );
   try {
-    await preflights(elsewhere.url, "198.51.100.1");
-    expect((await preflights(elsewhere.url, "198.51.100.2"))[0]).toBe(429);
+    await anonymousOpens(elsewhere.url, "198.51.100.1");
+    expect((await anonymousOpens(elsewhere.url, "198.51.100.2"))[0]).toBe(
+      CLOSE.limitReached,
+    );
   } finally {
     await elsewhere.close();
   }

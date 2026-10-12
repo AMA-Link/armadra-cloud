@@ -59,7 +59,7 @@ serve:
   --log-level LEVEL        debug | info | warn | error，默认 info
   --metrics-listen H:P     指标监听（或 RELAY_METRICS_LISTEN），默认不开；RELAY_METRICS_TOKEN 设访问令牌
   --limit-anonymous N      无令牌或令牌无效的请求按 IP 每分钟上限（或 RELAY_LIMIT_ANONYMOUS），默认 60
-  --limit-preflight N      预检按 IP 每分钟上限（或 RELAY_LIMIT_PREFLIGHT），默认 1200
+  --limit-preflight N      0.5.0 起不再使用（或 RELAY_LIMIT_PREFLIGHT）
   --limit-token N          有效令牌每分钟上限（或 RELAY_LIMIT_TOKEN），默认 1200
   --limit-account N        同一账号全部令牌每分钟上限（或 RELAY_LIMIT_ACCOUNT），默认 3600
   --trusted-proxy LIST     受信反向代理的 IP / CIDR，逗号分隔（或 RELAY_TRUSTED_PROXY），如 127.0.0.1/32,::1/128；
