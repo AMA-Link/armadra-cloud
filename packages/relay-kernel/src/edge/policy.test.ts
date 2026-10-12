@@ -1,4 +1,4 @@
-/** 边缘判定（运行时无关）：预检、无令牌、关闭码与已升级连接表。端到端行为见 Node 运行时的集成测试。 */
+/** 边缘判定（运行时无关）：明文请求一律 404、通道升级、关闭码与已升级连接表。端到端行为见 Node 运行时的集成测试。 */
 import { CLOSE } from "@armadra/platform-protocol/tunnel";
 import { describe, expect, it } from "vitest";
 
@@ -40,48 +40,44 @@ const request = (overrides: Partial<EdgeRequest> = {}): EdgeRequest => ({
 });
 
 describe("EdgePolicy", () => {
-  it("预检：名单内答 204 头，名单外 403 不带 CORS，地址不匹配 404", async () => {
-    const { edge } = policy();
-    const preflight = (origin: string, url = `/s/${SOURCE_ID}/api/x`) =>
+  it("源地址上的 HTTP（含预检、带令牌的）一律 404，不验令牌、不进隧道；名单内来源带 CORS 头", async () => {
+    const { tunnel } = fakeTunnel();
+    const { edge, metrics } = policy(tunnel);
+    for (const overrides of [
+      { headers: { host: "relay", origin: "https://app.example" } },
+      {
+        headers: {
+          host: "relay",
+          origin: "https://app.example",
+          "armadra-relay-token": relayToken(),
+        },
+      },
+      {
+        method: "OPTIONS",
+        headers: {
+          host: "relay",
+          origin: "https://app.example",
+          "access-control-request-method": "POST",
+        },
+      },
+      { url: `/s/${SOURCE_ID}/_relay/m/ticket` },
+      { url: `/s/${SOURCE_ID}/_relay/media-tickets`, method: "POST" },
+    ] satisfies Partial<EdgeRequest>[]) {
+      expect(edge.decideRequest(request(overrides))).toMatchObject({
+        kind: "error",
+        code: "not_found",
+        drain: true,
+      });
+    }
+    expect(
       edge.decideRequest(
-        request({
-          method: "OPTIONS",
-          url,
-          headers: {
-            host: "relay",
-            origin,
-            "access-control-request-method": "POST",
-          },
-        }),
-      );
-    expect(await preflight("https://app.example")).toMatchObject({
-      kind: "preflight",
-      headers: { "access-control-allow-origin": "https://app.example" },
-    });
-    expect(await preflight("https://evil.example")).toEqual({
-      kind: "error",
-      code: "forbidden",
-      drain: true,
-    });
-    expect(await preflight("https://app.example", "/nope")).toMatchObject({
-      kind: "error",
-      code: "not_found",
-      drain: true,
-    });
-  });
-
-  it("无令牌：401 relay_token_invalid，名单内来源带 CORS 头；计入指标", async () => {
-    const { edge, metrics } = policy();
-    const decision = await edge.decideRequest(
-      request({ headers: { host: "relay", origin: "https://app.example" } }),
-    );
-    expect(decision).toMatchObject({
-      kind: "error",
-      code: "relay_token_invalid",
-      drain: false,
+        request({ headers: { host: "relay", origin: "https://app.example" } }),
+      ),
+    ).toMatchObject({
       cors: { "access-control-allow-origin": "https://app.example" },
     });
-    expect(metrics.render()).toContain('result="relay_token_invalid"');
+    expect(tunnel.streamCount).toBe(0);
+    expect(metrics.render()).toContain('result="not_found"');
   });
 
   it("WS 拒绝的关闭码", () => {
@@ -96,7 +92,7 @@ describe("EdgePolicy", () => {
     expect(isE2ePath("/_relay/e2e?v=1")).toBe(true);
     expect(isE2ePath("/_relay/e2ex")).toBe(false);
     expect(
-      await edge.decideRequest(request({ url: `/s/${SOURCE_ID}/_relay/e2e` })),
+      edge.decideRequest(request({ url: `/s/${SOURCE_ID}/_relay/e2e` })),
     ).toMatchObject({ kind: "error", code: "not_found", drain: true });
   });
 
@@ -134,7 +130,6 @@ describe("EdgePolicy", () => {
     const accepted = await upgrade(`armadra-e2e.1, armadra-relay.${token}`);
     expect(accepted).toMatchObject({
       kind: "accept",
-      mode: "e2e",
       subject: "acct_test",
       subprotocols: ["armadra-e2e.1"],
       device: "dev_1",
@@ -157,9 +152,10 @@ describe("EdgePolicy", () => {
     tunnel.close(CLOSE.normal, "done");
   });
 
-  it("普通 WS 升级：mode ws，子协议原样转给源；老令牌没有 dev", async () => {
+  it("别的路径上的 WS 升级（明文 WS）：404，不升级、不验令牌", async () => {
     const { tunnel } = fakeTunnel();
     const { edge } = policy(tunnel);
+    tunnel.capabilities = new Set(["e2e"]);
     const decision = await edge.decideUpgrade(
       request({
         url: `/s/${SOURCE_ID}/api/ws`,
@@ -170,12 +166,11 @@ describe("EdgePolicy", () => {
         },
       }),
     );
-    expect(decision).toMatchObject({
-      kind: "accept",
-      mode: "ws",
-      subprotocols: ["armadra-ticket.t"],
+    expect(decision).toEqual({
+      kind: "refuse",
+      code: "not_found",
+      sourceId: SOURCE_ID,
     });
-    expect(decision).not.toHaveProperty("device");
     tunnel.close(CLOSE.normal, "done");
   });
 

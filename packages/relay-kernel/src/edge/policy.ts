@@ -1,23 +1,18 @@
 /**
  * 客户端边缘的判定（中继设计 §4），与运行时无关：解析源 → 限流 → 校验中继令牌 → 找隧道
- * → 决定转发还是拒绝。字节怎么进出由运行时负责（Node 在 `@armadra/relay-runtime-node`
+ * → 决定开通道还是拒绝。字节怎么进出由运行时负责（Node 在 `@armadra/relay-runtime-node`
  * 的 `edge.ts`），这里只看 {@link EdgeRequest}，答一个「下一步做什么」。对模式零分支：地址
  * 写法由 {@link Addressing} 决定，控制面由 `ControlPlane` 决定。
  *
- * CORS 预检（`OPTIONS` + `Origin` + `Access-Control-Request-Method`）由边缘自己回答，
- * 不验令牌、不找隧道、不开流（见 `cors.ts`）：按 IP 限流后，来源在名单里答 204，不在答
- * 403 `forbidden`（不带 CORS 头）。其余请求（含不是预检的 `OPTIONS`）照常要令牌。
+ * 只转端到端通道（0.5.0 起，cloud-api §20）：源地址上唯一的入口是 `_relay/e2e` 的 WS
+ * 升级，要带子协议 `armadra-e2e.1`（缺了 4409），源要在 `hello.capabilities` 报过 `e2e`
+ * （没报 4404，原因 `e2e_unsupported`）；开的是 `OPEN kind: "e2e"`，之后字节两边透传，
+ * 中继不解析。明文的应用请求（HTTP、普通 WS 升级、CORS 预检）与媒体票一并删除，源地址
+ * 上的其它请求一律 `404 not_found`。
  *
- * 拒绝：地址不匹配 → 404（WS 也答 404，不升级）；之后的拒绝 HTTP 答 `{ code, message }`，
- * WS 先完成升级再以关闭码结束（浏览器读不到升级失败的状态码）：令牌 4401 / 4403、
- * 限流 4429、源离线 4404（{@link wsCloseCode}）。
- *
- * 端到端通道（协议 1.3，cloud-api §20）：`_relay/e2e` 只认 WS 升级（HTTP 答 404），要带子协议
- * `armadra-e2e.1`（缺了 4409），源要在 `hello.capabilities` 报过 `e2e`（没报 4404，原因
- * `e2e_unsupported`）；开的是 `OPEN kind: "e2e"`，之后字节两边透传，中继不解析。
- *
- * 只读中继令牌（`ro: true`，协议 1.1）在边缘不再单独过滤（0.3.11 起）：core 的 RPC 一律
- * `POST`，按方法挡会把只读访客整个挡在 RPC 之外；读写只由 core 按自己的授予判定。
+ * 拒绝：地址不匹配或不是通道 → 404（WS 也答 404，不升级）；之后 WS 先完成升级再以关闭码
+ * 结束（浏览器读不到升级失败的状态码）：令牌 4401 / 4403、限流 4429、源离线 4404
+ * （{@link wsCloseCode}）。
  *
  * 不解析正文、不缓存、不记路径与头。
  */
@@ -27,35 +22,21 @@ import {
   E2E_SUBPROTOCOL,
 } from "@armadra/platform-protocol/e2e";
 import type { ErrorCode } from "@armadra/platform-protocol/errors";
-import { CLOSE, LIMITS } from "@armadra/platform-protocol/tunnel";
+import { CLOSE } from "@armadra/platform-protocol/tunnel";
 
 import type { AuthContext } from "../auth/context.ts";
 import {
-  relayTokenFromHeaders,
   splitRelaySubprotocol,
   verifyRelayToken,
 } from "../auth/relay-token.ts";
 import type { ControlPlane } from "../control/types.ts";
 import type { RelayMetrics } from "../metrics.ts";
-import type { TrafficCounter, TrafficKind, TrafficMeter } from "../traffic.ts";
+import type { TrafficCounter, TrafficMeter } from "../traffic.ts";
 import type { StreamEndpoint } from "../tunnel/stream.ts";
 import { TunnelUnavailableError, type Tunnel } from "../tunnel/tunnel.ts";
 import type { Addressing, AddressTarget } from "./addressing.ts";
-import {
-  errorCorsHeaders,
-  isPreflight,
-  originAllowed,
-  preflightHeaders,
-} from "./cors.ts";
-import { headersBytes, type HeaderBag, type HeaderPair } from "./forward.ts";
-import {
-  isIssuePath,
-  MEDIA_REDEEM_PREFIX,
-  MediaTickets,
-  mediaTargetPath,
-  redeemTicketOf,
-  type MediaTicketStore,
-} from "./media-tickets.ts";
+import { errorCorsHeaders } from "./cors.ts";
+import type { HeaderBag } from "./headers.ts";
 
 /** 运行时交给边缘的一个请求（HTTP 或 WS 升级）的元数据；不含正文。 */
 export interface EdgeRequest {
@@ -76,23 +57,18 @@ export interface EdgePolicyOptions<S extends StreamEndpoint> {
   lookup(sourceId: string): Promise<Tunnel<S> | null>;
   metrics: RelayMetrics;
   /**
-   * 预检放行的来源（原生 App 的两个来源总是放行，不用列）。答案不得随源在不在线、
-   * 登没登记而变，否则预检就成了探测源的手段。缺省空。
+   * 错误答复回显 CORS 的来源（原生 App 的两个来源总是回显，不用列）。答案不得随源在
+   * 不在线、登没登记而变。缺省空。
    */
   corsOrigins?: (sourceId: string) => readonly string[];
-  /** 媒体票的时钟（测试用）。 */
-  now?: () => number;
-  /** 媒体票的存放；缺省进程内存（Workers 的 SourceDO 给 DO 存储版）。 */
-  mediaTickets?: MediaTicketStore;
   /** 流量统计（cloud-api §19）；不给就不统计（保留期为 0）。 */
   traffic?: TrafficMeter;
 }
 
-/** 一条流记到谁名下（流量统计）：中继令牌的 `sub` / `dev`；`kind` 缺省按开流的种类。 */
+/** 一条通道记到谁名下（流量统计，类别 `e2e`）：中继令牌的 `sub` / `dev`。 */
 export interface TrafficIdentity {
   subject: string;
   deviceId: string;
-  kind?: TrafficKind;
 }
 
 const WS_CLOSE: Partial<Record<ErrorCode, number>> = {
@@ -144,21 +120,8 @@ export interface EdgeRefusal {
   drain: boolean;
 }
 
-/** HTTP 请求的下一步。 */
-export type RequestDecision<S extends StreamEndpoint> =
-  | EdgeRefusal
-  /** 预检通过：答 204（请求体丢弃）。 */
-  | { kind: "preflight"; headers: Record<string, string> }
-  /** 签媒体票：运行时读小 JSON 体后调 {@link EdgePolicy.issueMedia}。 */
-  | { kind: "issue"; admission: Extract<Admission<S>, { ok: true }> }
-  /** 开流转发（`target.path` 是转给源的路径）；`traffic` 交回 {@link EdgePolicy.open}。 */
-  | {
-      kind: "forward";
-      target: AddressTarget;
-      tunnel: Tunnel<S>;
-      remoteIp: string;
-      traffic: TrafficIdentity;
-    };
+/** HTTP 请求的下一步：只有拒绝（中继不转明文的应用请求）。 */
+export type RequestDecision = EdgeRefusal;
 
 /** WS 升级的下一步。 */
 export type UpgradeDecision<S extends StreamEndpoint> =
@@ -170,14 +133,13 @@ export type UpgradeDecision<S extends StreamEndpoint> =
       reason?: string;
     }
   | {
+      /** 端到端通道：中继自己终止 WS，开 `OPEN kind: "e2e"`。 */
       kind: "accept";
-      /** `ws`：普通 WebSocket，升级请求转给源；`e2e`：端到端通道，中继自己终止 WS。 */
-      mode: "ws" | "e2e";
       target: AddressTarget;
       tunnel: Tunnel<S>;
       subject: string;
       remoteIp: string;
-      /** `ws`：剥掉中继令牌后的子协议（转给源）；`e2e`：中继答复时选的子协议。 */
+      /** 中继答复时选的子协议（`armadra-e2e.1`）。 */
       subprotocols: string[];
       /** 中继令牌的 `dev`（1.3，可选；只计数）。 */
       device?: string;
@@ -207,12 +169,10 @@ function single(value: string | string[] | undefined): string | undefined {
 /** `C` 是运行时里一条已升级连接的句柄（Node 是 socket）。 */
 export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
   private readonly options: EdgePolicyOptions<S>;
-  private readonly media: MediaTicketStore;
   private readonly connections = new Map<C, EdgeConnection>();
 
   constructor(options: EdgePolicyOptions<S>) {
     this.options = options;
-    this.media = options.mediaTickets ?? new MediaTickets(options.now);
   }
 
   resolve(req: EdgeRequest): AddressTarget | null {
@@ -222,51 +182,36 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     });
   }
 
-  /** HTTP 请求：预检、兑票、签票与转发的判定（指标在这里计）。 */
-  async decideRequest(req: EdgeRequest): Promise<RequestDecision<S>> {
-    if (isPreflight(req)) return this.preflight(req);
+  /**
+   * HTTP 请求：0.5.0 起中继不转明文的应用请求（cloud-api §20），源地址上的 HTTP 一律
+   * `404 not_found`（预检同样），不验令牌、不找隧道。端到端通道只认 WS 升级。
+   */
+  decideRequest(req: EdgeRequest): RequestDecision {
     const addressed = this.resolve(req);
-    if (addressed && isE2ePath(addressed.path)) {
-      // 端到端通道只认 WS 升级。
-      this.options.metrics.edgeConnection("not_found");
-      return {
-        kind: "error",
-        code: "not_found",
-        cors: this.errorCors(req, addressed.sourceId),
-        drain: true,
-      };
-    }
-    if (addressed?.path.startsWith(MEDIA_REDEEM_PREFIX))
-      return this.redeemMedia(req, addressed, redeemTicketOf(addressed.path));
-    const admission = await this.admit(req, relayTokenFromHeaders(req.headers));
-    if (!admission.ok) {
-      this.options.metrics.edgeConnection(admission.code);
-      return {
-        kind: "error",
-        code: admission.code,
-        retryAfterMs: admission.retryAfterMs,
-        cors: this.errorCors(req, admission.sourceId),
-        drain: false,
-      };
-    }
-    if (isIssuePath(admission.target.path)) return { kind: "issue", admission };
+    this.options.metrics.edgeConnection("not_found");
     return {
-      kind: "forward",
-      target: admission.target,
-      tunnel: admission.tunnel,
-      remoteIp: admission.remoteIp,
-      traffic: {
-        subject: admission.subject,
-        deviceId: admission.device ?? "",
-      },
+      kind: "error",
+      code: "not_found",
+      cors: this.errorCors(req, addressed?.sourceId),
+      drain: true,
     };
   }
 
   /**
-   * WS 升级：令牌（子协议）、按账号的并发上限。`_relay/e2e` 另要版本子协议与源的 `e2e`
-   * 能力（令牌先验，未授权的请求看不到源支不支持）。
+   * WS 升级：只认 `_relay/e2e`（别的路径 `404 not_found`，不升级）。令牌（子协议）、
+   * 版本子协议与源的 `e2e` 能力（令牌先验，未授权的请求看不到源支不支持）、按账号的
+   * 并发上限。
    */
   async decideUpgrade(req: EdgeRequest): Promise<UpgradeDecision<S>> {
+    const addressed = this.resolve(req);
+    if (addressed === null || !isE2ePath(addressed.path)) {
+      this.options.metrics.edgeConnection("not_found");
+      return {
+        kind: "refuse",
+        code: "not_found",
+        ...(addressed === null ? {} : { sourceId: addressed.sourceId }),
+      };
+    }
     const { token, rest } = splitRelaySubprotocol(
       single(req.headers["sec-websocket-protocol"]),
     );
@@ -280,8 +225,7 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       };
     }
     const { target, tunnel, subject, remoteIp, device } = admission;
-    const e2e = isE2ePath(target.path);
-    if (e2e && !rest.includes(E2E_SUBPROTOCOL)) {
+    if (!rest.includes(E2E_SUBPROTOCOL)) {
       this.options.metrics.edgeConnection("protocol_unsupported");
       return {
         kind: "refuse",
@@ -289,7 +233,7 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
         sourceId: target.sourceId,
       };
     }
-    if (e2e && !tunnel.capabilities.has(E2E_CAPABILITY)) {
+    if (!tunnel.capabilities.has(E2E_CAPABILITY)) {
       this.options.metrics.edgeConnection("source_offline");
       return {
         kind: "refuse",
@@ -312,12 +256,11 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     }
     return {
       kind: "accept",
-      mode: e2e ? "e2e" : "ws",
       target,
       tunnel,
       subject,
       remoteIp,
-      subprotocols: e2e ? [E2E_SUBPROTOCOL] : rest,
+      subprotocols: [E2E_SUBPROTOCOL],
       ...(device === undefined ? {} : { device }),
     };
   }
@@ -325,125 +268,6 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
   /** 已接受的升级结束：还回 `edge.concurrent.acct`。 */
   releaseUpgrade(subject: string): void {
     void this.options.control.limits.release?.("edge.concurrent.acct", subject);
-  }
-
-  /**
-   * 签媒体票：令牌已验过（{@link admit}）。体 `{ path }`，答
-   * `{ ticket, path: "/_relay/m/<票>", expiresAt }`——`path` 相对源地址。
-   */
-  issueMedia(
-    admission: Extract<Admission<S>, { ok: true }>,
-    body: unknown,
-  ): { ok: false; code: ErrorCode } | { ok: true; json: string } {
-    const path = mediaTargetPath(body);
-    if (path === null) return { ok: false, code: "bad_request" };
-    const issued = this.media.issue({
-      sourceId: admission.target.sourceId,
-      path,
-      subject: admission.subject,
-      ...(admission.device === undefined ? {} : { deviceId: admission.device }),
-      jti: admission.jti,
-    });
-    this.options.metrics.edgeConnection("ok");
-    return {
-      ok: true,
-      json: JSON.stringify({
-        ticket: issued.ticket,
-        path: `${MEDIA_REDEEM_PREFIX}${issued.ticket}`,
-        expiresAt: new Date(issued.expiresAtMs).toISOString(),
-      }),
-    };
-  }
-
-  /**
-   * 兑媒体票：不要令牌，票就是凭据。票不认识、过期、换了源或签票令牌被撤销按 IP
-   * 严格限流后答 404；认得的按签票令牌与账号计数（与带头的请求同一组桶），再按票里
-   * 的路径转给源。只认 GET / HEAD。
-   */
-  private async redeemMedia(
-    req: EdgeRequest,
-    target: AddressTarget,
-    ticket: string | null,
-  ): Promise<RequestDecision<S>> {
-    const { control, lookup } = this.options;
-    const cors = this.errorCors(req, target.sourceId);
-    const remoteIp = req.clientIp;
-    const refuse = (code: ErrorCode): EdgeRefusal => {
-      this.options.metrics.edgeConnection(code);
-      return { kind: "error", code, cors, drain: true };
-    };
-    const limited = (retryAfterMs: number | undefined): EdgeRefusal => {
-      this.options.metrics.edgeConnection("rate_limited");
-      return {
-        kind: "error",
-        code: "rate_limited",
-        retryAfterMs,
-        cors,
-        drain: false,
-      };
-    };
-    if (req.method !== "GET" && req.method !== "HEAD")
-      return refuse("bad_request");
-    const grant = ticket === null ? undefined : this.media.use(ticket);
-    const revoked =
-      grant !== undefined && (await control.tokens.isRevoked(grant.jti));
-    if (revoked && ticket !== null) this.media.forget(ticket);
-    if (grant === undefined || revoked || grant.sourceId !== target.sourceId) {
-      const byIp = await control.limits.hit("edge.connect.ip", remoteIp);
-      if (!byIp.allowed) return limited(byIp.retryAfterMs);
-      return refuse("not_found");
-    }
-    for (const [kind, key] of [
-      ["edge.connect.token", grant.jti],
-      ["edge.connect.acct", grant.subject],
-    ] as const) {
-      const hit = await control.limits.hit(kind, key);
-      if (!hit.allowed) return limited(hit.retryAfterMs);
-    }
-    const tunnel = await lookup(grant.sourceId);
-    if (!tunnel) return refuse("source_offline");
-    return {
-      kind: "forward",
-      target: { sourceId: grant.sourceId, path: grant.path },
-      tunnel,
-      remoteIp,
-      traffic: {
-        subject: grant.subject,
-        deviceId: grant.deviceId ?? "",
-        kind: "media",
-      },
-    };
-  }
-
-  /** 预检：解析源 → 按 IP 限流（预检专用桶）→ 来源名单；不验令牌、不碰隧道，请求体丢掉。 */
-  private async preflight(req: EdgeRequest): Promise<RequestDecision<S>> {
-    const { control, corsOrigins } = this.options;
-    const target = this.resolve(req);
-    if (!target)
-      return {
-        kind: "error",
-        code: "not_found",
-        cors: this.errorCors(req),
-        drain: true,
-      };
-    const byIp = await control.limits.hit("edge.preflight.ip", req.clientIp);
-    if (!byIp.allowed) {
-      this.options.metrics.edgeConnection("rate_limited");
-      return {
-        kind: "error",
-        code: "rate_limited",
-        retryAfterMs: byIp.retryAfterMs,
-        cors: this.errorCors(req, target.sourceId),
-        drain: true,
-      };
-    }
-    const origin = originOf(req) as string;
-    if (!originAllowed(origin, corsOrigins?.(target.sourceId) ?? [])) {
-      this.options.metrics.edgeConnection("forbidden");
-      return { kind: "error", code: "forbidden", drain: true };
-    }
-    this.options.metrics.edgeConnection("preflight");
-    return { kind: "preflight", headers: preflightHeaders(origin) };
   }
 
   /** 错误答复的 CORS 头：名单与预检同一份（地址不匹配时只有原生 App 来源）。 */
@@ -512,42 +336,6 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
   }
 
   /**
-   * 为一个请求开流（发 OPEN）。头超过 `openHeadersMaxBytes` 答 `bad_request`；隧道排空 /
-   * 关闭答 `source_offline`，满流答 `limit_reached`。开成了计一次 `ok`；给了 `traffic`（判定答的
-   * {@link TrafficIdentity}）且开了统计，就记一次连接，这条流的字节随后由隧道记到同一行。
-   */
-  open(
-    tunnel: Tunnel<S>,
-    kind: "http" | "ws",
-    req: EdgeRequest,
-    target: AddressTarget,
-    headers: HeaderPair[],
-    remoteIp: string,
-    traffic?: TrafficIdentity,
-  ): { ok: true; stream: S } | { ok: false; code: ErrorCode } {
-    if (headersBytes(headers) > LIMITS.openHeadersMaxBytes)
-      return { ok: false, code: "bad_request" };
-    const counter =
-      traffic && this.options.traffic
-        ? this.options.traffic.counter({
-            sourceId: target.sourceId,
-            subject: traffic.subject,
-            deviceId: traffic.deviceId,
-            kind: traffic.kind ?? kind,
-          })
-        : undefined;
-    return this.openStream(
-      tunnel,
-      kind,
-      req.method,
-      target.path,
-      headers,
-      { clientOrigin: originOf(req), remoteIp },
-      counter,
-    );
-  }
-
-  /**
    * 开端到端通道的流：`OPEN { kind: "e2e", method: "GET", path: "/_relay/e2e", headers: [] }`
    * （子协议、令牌、头一概不转；地址里的 query 也不转）。给了 `traffic` 就按 `e2e` 类别统计。
    */
@@ -568,10 +356,6 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
         : undefined;
     return this.openStream(
       tunnel,
-      "e2e",
-      "GET",
-      E2E_PATH,
-      [],
       { clientOrigin: originOf(req), remoteIp },
       counter,
     );
@@ -579,10 +363,6 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
 
   private openStream(
     tunnel: Tunnel<S>,
-    kind: "http" | "ws" | "e2e",
-    method: string,
-    path: string,
-    headers: HeaderPair[],
     client: { clientOrigin: string | null; remoteIp: string },
     counter?: TrafficCounter,
   ): { ok: true; stream: S } | { ok: false; code: ErrorCode } {
@@ -590,10 +370,10 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
     try {
       stream = tunnel.openStream(
         {
-          kind,
-          method,
-          path,
-          headers,
+          kind: "e2e",
+          method: "GET",
+          path: E2E_PATH,
+          headers: [],
           clientOrigin: client.clientOrigin,
           remoteIp: client.remoteIp,
           relayNode: this.options.nodeId,
@@ -610,7 +390,7 @@ export class EdgePolicy<S extends StreamEndpoint, C = unknown> {
       throw error;
     }
     this.options.metrics.edgeConnection("ok");
-    this.options.metrics.edgeStream(kind);
+    this.options.metrics.edgeStream("e2e");
     counter?.connection();
     return { ok: true, stream };
   }
