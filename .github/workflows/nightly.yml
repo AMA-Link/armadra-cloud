@@ -81,14 +81,15 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: 取 Armadra 主仓（构建 latest 用；需要在仓库密钥里配 ARMADRA_REPO_TOKEN，只读）
+      - run: pnpm libs:build
+      - name: 取 Armadra 主仓（构建 latest 用；主仓公开，没配 ARMADRA_REPO_TOKEN 就用默认令牌）
         if: matrix.server == 'latest'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: AMA-Link/Armadra
           ref: main
           path: armadra
-          token: ${{ secrets.ARMADRA_REPO_TOKEN }}
+          token: ${{ secrets.ARMADRA_REPO_TOKEN || github.token }}
       - name: pnpm e2e --mode personal（服务器壳取 main 现构建）
         if: matrix.server == 'latest'
         env:
