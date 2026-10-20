@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0（2026-10-20）
+
+### 变更 / Changed
+
+- 版本统一：Armadra、armadra-cloud、armadra-agent 同用 0.9.0。cloud 各包与协议包 `@armadra/platform-protocol` 同升 0.9.0，两份 OpenAPI 的版本同步；协议仍是 1.3，线上形状与 0.5.0 相同。`deploy/compat.json` 不变（min / web 仍是 0.6.0）。
+  Version unification: Armadra, armadra-cloud and armadra-agent now share 0.9.0. All cloud packages and the protocol package `@armadra/platform-protocol` move to 0.9.0 together, and both OpenAPI documents follow; the protocol stays at 1.3 and wire shapes are identical to 0.5.0. `deploy/compat.json` is unchanged (min / web stay at 0.6.0).
+
+### 修复 / Fixed
+
+- 夜间 e2e-personal 先构建协议包，`latest` 镜像缺密钥时改用默认令牌检出（仅 CI，不影响运行时；#54，Refs #53）。
+  The nightly e2e-personal job builds the protocol package first and falls back to the default token for checkout when the secret is missing for `latest` (CI only, no runtime change; #54, Refs #53).
+
 ## 0.5.0（2026-10-17）
 
 ### 新增 / Added
