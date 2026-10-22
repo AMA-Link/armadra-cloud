@@ -31,6 +31,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # saas serve：0.10.0 起镜像是 Go 实现，saas 随 SaaS 中继节点（#59 的 G5）提供；在那之前这个服务用 0.9.x 镜像。
   relay:
     image: ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
     command: ["saas", "serve"]
