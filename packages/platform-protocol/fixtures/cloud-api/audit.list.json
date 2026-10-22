@@ -1,0 +1,29 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "fromMs": 1759913600000,
+    "toMs": 1760000000000,
+    "limit": 100
+  },
+  "output": {
+    "events": [
+      {
+        "eventId": "aud_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "actor": {
+          "kind": "account",
+          "id": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "action": "grant.create",
+        "target": {
+          "kind": "grant",
+          "id": "gnt_01JAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "jti": null,
+        "ipPrefix": "203.0.113.0/24",
+        "atMs": 1760000000000
+      }
+    ],
+    "nextCursor": null
+  }
+}

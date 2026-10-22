@@ -1,0 +1,16 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "members": [
+      {
+        "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "email": "dev@armadra.test",
+        "displayName": "Dev",
+        "role": "admin",
+        "joinedAtMs": 1760000000000
+      }
+    ]
+  }
+}

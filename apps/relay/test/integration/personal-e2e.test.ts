@@ -274,11 +274,12 @@ describe("个人中转端到端", () => {
       keys: { kid?: string }[];
     };
     expect(jwks.keys.map((key) => key.kid)).toEqual(["k1"]);
-    const orgs = await call("POST", `${issuer}/v1/orgs`, {
+    // 预留的 SaaS 路由（团队，协议 1.4）：personal 答 404。
+    const teams = await call("POST", `${issuer}/v1/teams`, {
       body: { slug: "a", name: "a" },
     });
-    expect(orgs.status).toBe(404);
-    expect(errorCode(orgs)).toBe("not_found");
+    expect(teams.status).toBe(404);
+    expect(errorCode(teams)).toBe("not_found");
     const health = await call("GET", `${issuer}/health`);
     expect(health.status).toBe(200);
   });

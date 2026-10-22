@@ -1,0 +1,14 @@
+{
+  "input": {
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "plan": "team",
+    "returnUrl": "https://app.armadra.test/t/dev-team/billing"
+  },
+  "output": {
+    "url": "https://pay.armadra.test/checkout/cs_test",
+    "expiresAtMs": 1760003600000
+  }
+}

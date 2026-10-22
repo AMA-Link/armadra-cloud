@@ -7,6 +7,12 @@ import {
   orgRoleSchema,
 } from "../assertion/claims.ts";
 import { hex32Schema, protocolVersionSchema } from "../tunnel/handshake.ts";
+import {
+  hostSettingsSchema,
+  hostTagsSchema,
+  spaceSchema,
+  teamMembershipSchema,
+} from "./saas-schemas.ts";
 
 export {
   devicePlatformSchema,
@@ -71,7 +77,8 @@ export const mfaChallengeResultSchema = z.object({
 });
 
 export const sourceKindSchema = z.enum(["desktop", "server", "hosted"]);
-export const sourceViaSchema = z.enum(["owner", "link", "org"]);
+/** `team` = 经团队授予（1.4 起）；`org` 保留给以后的企业组织层。 */
+export const sourceViaSchema = z.enum(["owner", "link", "team", "org"]);
 
 export const sourceSummarySchema = z.object({
   sourceId: sourceIdSchema,
@@ -83,12 +90,18 @@ export const sourceSummarySchema = z.object({
   via: sourceViaSchema,
   relayOrigin: z.string(),
   coreVersion: z.string(),
+  /** 1.4 起：主机所属的空间；缺省 = 个人空间（personal 不报）。 */
+  space: spaceSchema.optional(),
+  /** 1.4 起：标签（筛选与成组授予）。 */
+  tags: hostTagsSchema.optional(),
 });
 
 export const sourceDetailSchema = sourceSummarySchema.extend({
   trustedOrigins: z.array(z.string()),
   capabilities: z.array(z.string()),
   registeredAtMs: z.number().int(),
+  /** 1.4 起：主机设置；personal 不报。 */
+  settings: hostSettingsSchema.optional(),
 });
 
 export const orgMembershipSchema = z.object({
@@ -103,11 +116,21 @@ export const meSchema = z.object({
   email: z.string().nullable(),
   displayName: z.string(),
   emailVerified: z.boolean(),
+  /** 保留给以后的企业组织层；1.4 里恒为空。 */
   orgs: z.array(orgMembershipSchema),
+  /** 1.4 起：所属的团队；personal 不报。 */
+  teams: z.array(teamMembershipSchema).optional(),
   mfaEnabled: z.boolean(),
+  /** 1.4 起：账号持有的特殊范围，如运营方的 `operator`（控制台据此显示运营后台入口）；缺省 = 无。 */
+  scopes: z.array(z.string()).optional(),
 });
 
-export const linkKindSchema = z.enum(["source_invite", "org_join"]);
+/** `team_join` = 团队加入链接（1.4 起；M2）；`org_join` 从未发出，保留枚举值只增不删。 */
+export const linkKindSchema = z.enum([
+  "source_invite",
+  "org_join",
+  "team_join",
+]);
 
 const scopeIdSchema = z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/);
 
@@ -128,7 +151,8 @@ export const linkSummarySchema = z.object({
   label: z.string(),
   role: z.string().optional(),
   sourceId: sourceIdSchema.optional(),
-  orgId: z.string().optional(),
+  /** `team_join` 链接的团队（1.4 起，取代从未发出的 `orgId`）。 */
+  teamId: z.string().optional(),
   /** 0.3.0 起；整台时不出现。 */
   scope: linkScopeSchema.optional(),
   url: z.string(),
@@ -137,22 +161,6 @@ export const linkSummarySchema = z.object({
   expiresAtMs: z.number().int(),
   createdAtMs: z.number().int(),
   revokedAtMs: z.number().int().nullable(),
-});
-
-export const orgSchema = z.object({
-  orgId: z.string(),
-  slug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/),
-  name: z.string().min(1).max(128),
-  role: orgRoleSchema,
-  createdAtMs: z.number().int(),
-});
-
-export const orgMemberSchema = z.object({
-  accountId: z.string(),
-  email: z.string().nullable(),
-  displayName: z.string(),
-  role: orgRoleSchema,
-  joinedAtMs: z.number().int(),
 });
 
 export type DeviceInput = z.infer<typeof deviceInputSchema>;
@@ -164,5 +172,3 @@ export type SourceDetail = z.infer<typeof sourceDetailSchema>;
 export type Me = z.infer<typeof meSchema>;
 export type LinkSummary = z.infer<typeof linkSummarySchema>;
 export type LinkScope = z.infer<typeof linkScopeSchema>;
-export type Org = z.infer<typeof orgSchema>;
-export type OrgMember = z.infer<typeof orgMemberSchema>;

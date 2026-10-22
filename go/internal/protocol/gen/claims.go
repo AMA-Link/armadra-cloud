@@ -83,18 +83,18 @@ type JWKSet struct {
 
 // RelayTokenClaims 对应 schema assertion/relay-token-claims.json。
 type RelayTokenClaims struct {
-	Iss string  `json:"iss"`
-	Iat int64   `json:"iat"`
-	Exp int64   `json:"exp"`
-	Nbf *int64  `json:"nbf,omitempty"`
-	Jti string  `json:"jti"`
-	Sub string  `json:"sub"`
-	Aud string  `json:"aud"`
-	Src string  `json:"src"`
-	Ver float64 `json:"ver"`
-	Org *string `json:"org,omitempty"`
-	Ro  *bool   `json:"ro,omitempty"`
-	Dev *string `json:"dev,omitempty"`
+	Iss  string  `json:"iss"`
+	Iat  int64   `json:"iat"`
+	Exp  int64   `json:"exp"`
+	Nbf  *int64  `json:"nbf,omitempty"`
+	Jti  string  `json:"jti"`
+	Sub  string  `json:"sub"`
+	Aud  string  `json:"aud"`
+	Src  string  `json:"src"`
+	Ver  float64 `json:"ver"`
+	Team *string `json:"team,omitempty"`
+	Ro   *bool   `json:"ro,omitempty"`
+	Dev  *string `json:"dev,omitempty"`
 }
 
 // SourceJWSClaims 对应 schema assertion/source-jws-claims.json。
@@ -114,23 +114,23 @@ type TunnelTokenClaimsCnf struct {
 
 // TunnelTokenClaims 对应 schema assertion/tunnel-token-claims.json。
 type TunnelTokenClaims struct {
-	Iss string               `json:"iss"`
-	Iat int64                `json:"iat"`
-	Exp int64                `json:"exp"`
-	Nbf *int64               `json:"nbf,omitempty"`
-	Jti string               `json:"jti"`
-	Sub string               `json:"sub"`
-	Aud string               `json:"aud"`
-	Cnf TunnelTokenClaimsCnf `json:"cnf"`
-	Ver float64              `json:"ver"`
-	Org *string              `json:"org,omitempty"`
+	Iss  string               `json:"iss"`
+	Iat  int64                `json:"iat"`
+	Exp  int64                `json:"exp"`
+	Nbf  *int64               `json:"nbf,omitempty"`
+	Jti  string               `json:"jti"`
+	Sub  string               `json:"sub"`
+	Aud  string               `json:"aud"`
+	Cnf  TunnelTokenClaimsCnf `json:"cnf"`
+	Ver  float64              `json:"ver"`
+	Team *string              `json:"team,omitempty"`
 }
 
 // AssertionClaimsOrgRoleValues 列出对应字段允许的取值。
 var AssertionClaimsOrgRoleValues = []string{"owner", "admin", "member"}
 
 // AssertionClaimsTeamRoleValues 列出对应字段允许的取值。
-var AssertionClaimsTeamRoleValues = []string{"lead", "member"}
+var AssertionClaimsTeamRoleValues = []string{"owner", "admin", "member", "billing", "guest"}
 
 // AssertionClaimsRoleValues 列出对应字段允许的取值。
 var AssertionClaimsRoleValues = []string{"viewer", "editor", "operator", "driver"}
@@ -261,7 +261,7 @@ var AssertionClaimsSchema = &schema.Schema{
 				}},
 				{Name: "role", Schema: &schema.Schema{
 					Type: "string",
-					Enum: []any{"lead", "member"},
+					Enum: []any{"owner", "admin", "member", "billing", "guest"},
 				}},
 			},
 			Required: []string{"teamId", "role"},
@@ -438,7 +438,7 @@ var RelayTokenClaimsSchema = &schema.Schema{
 			Const:    float64(1),
 			HasConst: true,
 		}},
-		{Name: "org", Schema: &schema.Schema{
+		{Name: "team", Schema: &schema.Schema{
 			Type:      "string",
 			MinLength: schema.Int(1),
 		}},
@@ -571,7 +571,7 @@ var TunnelTokenClaimsSchema = &schema.Schema{
 			Const:    float64(1),
 			HasConst: true,
 		}},
-		{Name: "org", Schema: &schema.Schema{
+		{Name: "team", Schema: &schema.Schema{
 			Type:      "string",
 			MinLength: schema.Int(1),
 		}},

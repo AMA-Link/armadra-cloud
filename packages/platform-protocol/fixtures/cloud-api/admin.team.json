@@ -1,0 +1,16 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "slug": "dev-team",
+    "name": "Dev Team",
+    "status": "active",
+    "plan": "free",
+    "memberCount": 3,
+    "hostCount": 2,
+    "createdAtMs": 1760000000000,
+    "deletedAtMs": null
+  }
+}

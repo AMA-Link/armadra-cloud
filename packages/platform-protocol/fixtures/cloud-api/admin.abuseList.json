@@ -1,0 +1,24 @@
+{
+  "input": {
+    "signal": "traffic",
+    "frozen": "false",
+    "limit": 100
+  },
+  "output": {
+    "reports": [
+      {
+        "reportId": "abu_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "target": {
+          "kind": "link",
+          "id": "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "signal": "traffic",
+        "relayBytesMonth": 53687091200,
+        "frozen": false,
+        "createdAtMs": 1760000000000
+      }
+    ],
+    "nextCursor": null
+  }
+}

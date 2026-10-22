@@ -32,10 +32,12 @@ func newEnv(t *testing.T) env {
 	}}
 }
 
+func neverRevoked(context.Context, string) (bool, error) { return false, nil }
+
 func (e env) options(typ string, s *schema.Schema, aud string) jose.Options {
 	return jose.Options{
 		Typ: typ, Schema: s, ExpectedAud: aud, ExpectedIss: e.issuer.Issuer,
-		Now: now, Keys: e.keys,
+		Now: now, Keys: e.keys, IsRevoked: neverRevoked,
 	}
 }
 
@@ -70,7 +72,7 @@ func TestFixtures(t *testing.T) {
 		{"relay-token-ro", relay, ""},
 		{"relay-token-dev", relay, ""},
 		{"tunnel-token", tunnel, ""},
-		{"tunnel-token-org", tunnel, ""},
+		{"tunnel-token-team", tunnel, ""},
 		{"source-jws", sourceJWS, ""},
 		{"expired", assertion(), jose.FailExpired},
 		{"wrong-aud", assertion(), jose.FailAudienceMismatch},
@@ -288,8 +290,9 @@ func TestVerificationOrder(t *testing.T) {
 	expectFailure(t, assertion(func(c claimsMap) { c["exp"] = 1 }), ao, jose.FailExpired)
 	expectFailure(t, assertion(func(claimsMap) {}), ao, jose.FailRevoked)
 	ao.IsRevoked = nil
+	ao.SkipRevocation = true
 	if _, err := jose.Verify(context.Background(), assertion(func(claimsMap) {}), ao); err != nil {
-		t.Fatalf("不查撤销时应通过：%v", err)
+		t.Fatalf("显式 SkipRevocation 时应通过：%v", err)
 	}
 
 	// 签名没过之前不看声明：claims 不合 schema 但签名也坏 → bad_signature。
@@ -488,4 +491,32 @@ func TestSignPayloadKeepsBytes(t *testing.T) {
 	if _, err := jose.SignPayload(source.Private, jose.Header{}, []byte(payload)); err == nil {
 		t.Fatal("头里缺 kid 应报错")
 	}
+}
+
+// IsRevoked 缺了要报错，不能悄悄跳过撤销检查；Keys 与 Schema 缺了也是报错而不是 panic。
+func TestVerifyRequiresOptions(t *testing.T) {
+	e := newEnv(t)
+	tok := sign(t, e, gen.TokenTypeAccess, validClaims())
+	check := func(name string, mutate func(*jose.Options), want error) {
+		t.Helper()
+		o := accessOptions(e)
+		mutate(&o)
+		_, err := jose.Verify(context.Background(), tok, o)
+		if !errors.Is(err, want) || jose.FailureOf(err) != "" {
+			t.Errorf("%s：得到 %v，应为 %v", name, err, want)
+		}
+	}
+	check("IsRevoked 为 nil", func(o *jose.Options) { o.IsRevoked = nil }, jose.ErrNoRevocation)
+	check("Keys 为 nil", func(o *jose.Options) { o.Keys = nil }, jose.ErrNoKeys)
+	check("Schema 为 nil", func(o *jose.Options) { o.Schema = nil }, jose.ErrNoSchema)
+
+	// SkipRevocation 能放行，但给了 IsRevoked 就照查。
+	o := accessOptions(e)
+	o.IsRevoked = nil
+	o.SkipRevocation = true
+	if _, err := jose.Verify(context.Background(), tok, o); err != nil {
+		t.Fatalf("SkipRevocation：%v", err)
+	}
+	o.IsRevoked = func(context.Context, string) (bool, error) { return true, nil }
+	expectFailure(t, tok, o, jose.FailRevoked)
 }

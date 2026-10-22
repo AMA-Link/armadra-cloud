@@ -1,6 +1,6 @@
 # Third-party notices
 
-armadra-cloud 的生产依赖（npm 包与 Go 模块）及其许可证全文。本文件由 `node tools/notices.mjs` 生成，不要手改。
+armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模块（含只在测试里用的 JSON Schema 校验库及其依赖，不进生产代码）。本文件由 `node tools/notices.mjs` 生成，不要手改。
 
 | 包 | 版本 | 许可证 |
 | --- | --- | --- |

@@ -3,10 +3,21 @@
  */
 import type { MeStreamEvent } from "@armadra/platform-protocol/cloud-api";
 
-/** 给 `/v1/me/stream` 的事件（不含 ping / pong），带上它关心的源。 */
+/**
+ * 给 `/v1/me/stream` 的事件（不含 ping / pong），带上它关心的源。协议 1.4 的团队事件
+ * （`memberChanged` 等，cloud-api §32）只有 SaaS 控制面发，personal 的总线不收。
+ */
 export type ControlEvent = Exclude<
   MeStreamEvent,
-  { type: "ping" } | { type: "pong" }
+  | { type: "ping" }
+  | { type: "pong" }
+  | { type: "memberChanged" }
+  | { type: "invitationChanged" }
+  | { type: "grantChanged" }
+  | { type: "accessRequested" }
+  | { type: "deviceTrustRequested" }
+  | { type: "deviceTrustResolved" }
+  | { type: "planChanged" }
 >;
 
 export interface EventAudience {

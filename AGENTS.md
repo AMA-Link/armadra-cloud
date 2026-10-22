@@ -14,6 +14,7 @@
 ## 范围与优先级
 
 - 个人中转与 SaaS 按 #59（中继 Go 重写）、#60（SaaS 能力）推进；Workers 版冻结功能，只修缺陷。
+- SaaS 服务端（控制面的账号、团队、授予、计费等）在 `apps/cloud` 的业务路由在路由表里统一答 501 `not_implemented`（测试守住），实现时逐条拿掉；`/v1` 的新增 procedure 同样先预留再实现。
 - 个人中转的缺省入口（`pnpm relay:personal`、`deploy/personal/compose.yml`）不得依赖 PostgreSQL / Redis；多节点是显式选项（`deploy/compose.yml` 的 `relay-personal` profile）。
 
 ## Go 代码

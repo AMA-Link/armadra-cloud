@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
-import { base, SINCE_0_1, SINCE_0_3_10 } from "../meta.ts";
+import { base, SINCE_0_1, SINCE_0_3_10, SINCE_0_10 } from "../meta.ts";
+import { deviceRequestSchema } from "../saas-schemas.ts";
 import {
   challengeTokenSchema,
   deviceInputSchema,
@@ -47,6 +48,18 @@ export const devicePollOutputSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("denied") }),
   z.object({ status: z.literal("expired") }),
 ]);
+
+/** 1.4 起的 OAuth 提供方（M2；账号绑定要先验证邮箱）。 */
+export const OAUTH_PROVIDERS = ["github", "google"] as const;
+export const oauthProviderSchema = z.enum(OAUTH_PROVIDERS);
+
+const since10 = (scope: "anonymous" | "session") =>
+  ({ scope: [scope], since: SINCE_0_10 }) as const;
+const tokenErrors = errors.pick(
+  "email_token_invalid",
+  "email_token_expired",
+  "rate_limited",
+);
 
 export const auth = {
   register: base
@@ -123,6 +136,20 @@ export const auth = {
     .meta(session)
     .errors(errors.pick("device_code_expired", "not_found"))
     .input(z.object({ userCode: z.string(), approve: z.boolean() }))
+    .output(empty),
+  /** 设备授权页要显示发起设备的平台与名字（设计 §11.5），再决定批准还是拒绝。 */
+  deviceGet: base
+    .route({ method: "GET", path: "/v1/auth/device" })
+    .meta(since10("session"))
+    .errors(errors.pick("device_code_expired", "not_found", "rate_limited"))
+    .input(z.object({ userCode: z.string() }))
+    .output(deviceRequestSchema),
+  /** 拒绝后发起设备的 `devicePoll` 答 `denied`。 */
+  deviceDeny: base
+    .route({ method: "POST", path: "/v1/auth/device/deny" })
+    .meta(since10("session"))
+    .errors(errors.pick("device_code_expired", "not_found"))
+    .input(z.object({ userCode: z.string() }))
     .output(empty),
   passkeyRegisterOptions: base
     .route({ method: "POST", path: "/v1/auth/passkey/register/options" })
@@ -209,4 +236,81 @@ export const auth = {
     .errors(errors.pick("mfa_invalid"))
     .input(z.object({ code: z.string() }))
     .output(z.object({ recoveryCodes: z.array(z.string()) })),
+  /**
+   * 邮箱验证与改邮箱确认（cloud-api §29，1.4 起）：邮件里的一次性令牌；未验证的账号可以登录，
+   * 但不能登记主机、签链接、被授予。令牌 24 小时有效、只能用一次。
+   */
+  emailVerify: base
+    .route({ method: "POST", path: "/v1/auth/email/verify" })
+    .meta(since10("anonymous"))
+    .errors(tokenErrors)
+    .input(z.object({ token: z.string().min(1) }))
+    .output(z.object({ email: z.string(), emailVerified: z.literal(true) })),
+  /** 重发验证邮件（按账号限流）。 */
+  emailVerifyResend: base
+    .route({ method: "POST", path: "/v1/auth/email/resend" })
+    .meta(since10("session"))
+    .errors(errors.pick("rate_limited", "conflict"))
+    .input(empty)
+    .output(empty),
+  /** 总是答成功（不泄露邮箱是否注册）；邮件里的链接 30 分钟有效。 */
+  passwordResetStart: base
+    .route({ method: "POST", path: "/v1/auth/password-reset/start" })
+    .meta(since10("anonymous"))
+    .errors(errors.pick("rate_limited"))
+    .input(z.object({ email: z.email() }))
+    .output(empty),
+  /** 成功后撤销该账号全部设备，要重新登录（不答会话）。 */
+  passwordResetFinish: base
+    .route({ method: "POST", path: "/v1/auth/password-reset/finish" })
+    .meta(since10("anonymous"))
+    .errors({ ...tokenErrors, ...passwordErrors })
+    .input(z.object({ token: z.string().min(1), newPassword: z.string() }))
+    .output(empty),
+  /** 第三方登录（M2）：答授权地址，页面或系统浏览器跳过去，回来后 `oauthFinish`。 */
+  oauthStart: base
+    .route({ method: "POST", path: "/v1/auth/oauth/{provider}/start" })
+    .meta(since10("anonymous"))
+    .errors(errors.pick("rate_limited", "bad_request", "not_found"))
+    .input(
+      z.object({
+        provider: oauthProviderSchema,
+        redirectUri: z.url().max(2048),
+      }),
+    )
+    .output(
+      z.object({
+        authorizationUrl: z.url(),
+        state: z.string(),
+        expiresAtMs: z.number().int(),
+      }),
+    ),
+  oauthFinish: base
+    .route({ method: "POST", path: "/v1/auth/oauth/{provider}/finish" })
+    .meta(since10("anonymous"))
+    .errors(
+      errors.pick(
+        "credentials_invalid",
+        "email_unverified",
+        "account_disabled",
+        "rate_limited",
+        "conflict",
+      ),
+    )
+    .input(
+      z.object({
+        provider: oauthProviderSchema,
+        state: z.string(),
+        code: z.string(),
+        device: deviceInputSchema,
+      }),
+    )
+    .output(z.union([sessionResultSchema, mfaChallengeResultSchema])),
+  /** 解绑第三方登录；至少要留一种登录方式。 */
+  oauthUnlink: base
+    .route({ method: "DELETE", path: "/v1/auth/oauth/{provider}" })
+    .meta(since10("session"))
+    .errors(errors.pick("not_found", "conflict"))
+    .input(z.object({ provider: oauthProviderSchema }))
+    .output(empty),
 };

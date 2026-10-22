@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol"
+	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/testutil"
 )
 
@@ -104,8 +105,8 @@ func TestHandshakeFixture(t *testing.T) {
 			t.Error("换了输入签名不该通过")
 		}
 	}
-	if ready.Protocol.Major != 1 || ready.Protocol.Minor != 3 || ready.HeartbeatMs != protocol.HeartbeatMs {
-		t.Errorf("ready 与协议 1.3 不一致：%+v", ready)
+	if ready.Protocol.Major != gen.ProtocolMajor || ready.Protocol.Minor != gen.ProtocolMinor || ready.HeartbeatMs != protocol.HeartbeatMs {
+		t.Errorf("ready 的协议版本、心跳与生成常量不一致：%+v", ready)
 	}
 	if ready.Limits.MaxStreams != protocol.MaxStreams || ready.Limits.StreamWindow != protocol.StreamWindow ||
 		ready.Limits.TunnelWindow != protocol.TunnelWindow || ready.Limits.MaxFrameBytes != protocol.MaxFrameBytes {

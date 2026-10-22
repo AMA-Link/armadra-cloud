@@ -1,0 +1,13 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "fromMs": 1759913600000,
+    "toMs": 1760000000000,
+    "format": "csv"
+  },
+  "output": {
+    "format": "csv",
+    "rows": 1,
+    "content": "eventId,teamId,actorKind,actorId,action,targetKind,targetId,jti,ipPrefix,atMs\n"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "input": {},
+  "output": {
+    "invitations": true,
+    "accessRequests": true,
+    "hostPresence": false,
+    "security": true
+  }
+}

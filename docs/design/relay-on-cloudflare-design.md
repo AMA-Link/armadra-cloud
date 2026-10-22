@@ -1,5 +1,6 @@
 # 中继上 Cloudflare、防护与成本、Node 中继存储可选：设计（2026-10-10）
 
+> **2026-10-22 起：** Workers 中继、防护与存储部分已实现，Workers 版冻结功能；§6（控制面放 49、Workers 当 SaaS 节点）由 [中继 Go 重写](go-relay-design.md) §3.6、§3.10 取代；§2.11 的域名规划与 §4 的防护已合并进那一节。
 > 状态：设计稿（只设计，不改代码）。对应 AMA-Link/Armadra#256（Refs #229）。输入：[多租户与 SaaS 设计](multi-tenant-saas-design.md) §4、§5；armadra-cloud `main 362cb7b`（0.3.0：`packages/relay-kernel`、`packages/control-core`、`packages/cloud-shared`、`packages/platform-protocol` 协议 `1.1`、`apps/relay` personal 的状态文件端口、`apps/cloud` 骨架）；Armadra `main 462be14d`（`apps/desktop/src/core/relay/` 隧道客户端、`core/sources/` 客户端源表，契约最大节号 §59，迁移最大 `0045`）。Cloudflare 事实以文内引用的官方文档为准（读取日期 2026-10-10）。
 > 现状（2026-10-11）：中继只部署在 Cloudflare 正式环境（`relay.armadra.com`），不再有 staging 与 49 服务器部署；人机验证缺省关闭。运维以 [runbooks/relay-on-cloudflare.md](../runbooks/relay-on-cloudflare.md) 为准，文中个人域名已换成 `example.org`。
 > 编号基线：cloud-api 契约已用到 §14，前一份设计预留了 §15；本文从 **§16** 起。协议包 / 两个 app 均 `0.3.0`，协议 `1.1`。

@@ -24,6 +24,7 @@ export {
   scopeClaims,
   scopeEntrySchema,
   sourceJwsClaimsSchema,
+  TEAM_ROLES,
   teamRoleSchema,
   TOKEN_TYPES,
   tunnelTokenClaimsSchema,

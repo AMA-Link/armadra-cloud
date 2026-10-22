@@ -47,8 +47,49 @@ export const ERRORS = {
   link_expired: { status: 410 },
   link_exhausted: { status: 410 },
   link_secret_invalid: { status: 403 },
+  /** 从未发出（`orgs.*` 在 1.4 删除）；码只增不删，保留以防老客户端引用。 */
   org_role_insufficient: { status: 403 },
   org_slug_taken: { status: 409 },
+  // 团队、邀请、转移、账号补充（cloud-api §21 起，1.4）
+  /** 调用者在团队里的角色不够。 */
+  team_role_insufficient: { status: 403 },
+  /** 账号注销前要先转移名下团队的所有权（`me.delete`）。 */
+  team_owner_required: { status: 409 },
+  team_slug_taken: { status: 409 },
+  /** 团队设置不允许这个操作（成员登记主机、guest、匿名链接…）；`details.setting` 写是哪一项。 */
+  team_policy_denied: { status: 403 },
+  /** 团队被运营方停用：拒绝签断言与登记。 */
+  team_suspended: { status: 403 },
+  invitation_expired: { status: 410 },
+  invitation_revoked: { status: 410 },
+  /** 接受邀请的账号邮箱与被邀请的不一致。 */
+  invitation_email_mismatch: { status: 403 },
+  /** 这台主机已有一个未结束的转移。 */
+  transfer_pending: { status: 409 },
+  transfer_expired: { status: 410 },
+  /** 邮件里的一次性令牌（验证邮箱、找回口令、改邮箱）无效或已用过。 */
+  email_token_invalid: { status: 400 },
+  email_token_expired: { status: 410 },
+  /** 支付服务回调的签名对不上。 */
+  webhook_signature_invalid: { status: 401 },
+  // 控制台补充（cloud-api §31 起，1.4）
+  /** 最后一个 owner 不能离开、降级或被移除，要先转移所有权。 */
+  team_last_owner: { status: 409 },
+  /** 团队在删除后的 30 天恢复期内，只有 owner 能 `teams.restore`。 */
+  team_deleted: { status: 410 },
+  member_exists: { status: 409 },
+  /** 团队设置不允许 member 登记主机（`team_policy_denied` 的具体形式）。 */
+  host_registration_disabled: { status: 403 },
+  /** 团队设置不允许 guest。 */
+  guests_disabled: { status: 403 },
+  /** 团队设置不允许匿名接受分享链接（要先登录云账号）。 */
+  anonymous_links_disabled: { status: 403 },
+  /** 当前计划不含这项功能（与按数量计的 `limit_reached` 区分）。 */
+  plan_feature_unavailable: { status: 403 },
+  /** 背书要在已受信的设备上做。 */
+  device_untrusted: { status: 403 },
+  /** 链接被运营方冻结。 */
+  link_frozen: { status: 403 },
   // 中继
   relay_token_invalid: { status: 401 },
   relay_source_mismatch: { status: 403 },

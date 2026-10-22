@@ -133,6 +133,24 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"userCode", "approve"},
 	},
+	"auth.deviceGet": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "userCode", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"userCode"},
+	},
+	"auth.deviceDeny": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "userCode", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"userCode"},
+	},
 	"auth.passkeyRegisterOptions": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
@@ -202,6 +220,76 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"code"},
 	},
+	"auth.emailVerify": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "token", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"token"},
+	},
+	"auth.emailVerifyResend": &schema.Schema{
+		Type: "object",
+	},
+	"auth.passwordResetFinish": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "token", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "newPassword", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"token", "newPassword"},
+	},
+	"auth.oauthFinish": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "provider", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"github", "google"},
+			}},
+			{Name: "state", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "code", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "device", Schema: &schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "platform", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"ios", "android", "desktop", "browser", "server"},
+					}},
+					{Name: "name", Schema: &schema.Schema{
+						Type:      "string",
+						MinLength: schema.Int(1),
+						MaxLength: schema.Int(128),
+					}},
+					{Name: "pushPublicKey", Schema: &schema.Schema{
+						Type: "string",
+					}},
+				},
+				Required: []string{"platform", "name"},
+			}},
+		},
+		Required: []string{"provider", "state", "code", "device"},
+	},
+	"auth.oauthUnlink": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "provider", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"github", "google"},
+			}},
+		},
+		Required: []string{"provider"},
+	},
 	"me.get": &schema.Schema{
 		Type: "object",
 	},
@@ -257,11 +345,96 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"fromMs", "toMs"},
 	},
+	"me.notificationPrefs": &schema.Schema{
+		Type: "object",
+	},
+	"me.notificationPrefsUpdate": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "invitations", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "accessRequests", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "hostPresence", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+		},
+	},
+	"me.spaces": &schema.Schema{
+		Type: "object",
+	},
+	"me.securityLog": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "fromMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(0),
+				Maximum: schema.Num(9007199254740991),
+			}},
+			{Name: "toMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(0),
+				Maximum: schema.Num(9007199254740991),
+			}},
+			{Name: "limit", Schema: &schema.Schema{
+				Type:             "integer",
+				Minimum:          schema.Num(-9007199254740991),
+				Maximum:          schema.Num(500),
+				ExclusiveMinimum: schema.Num(0),
+			}},
+			{Name: "cursor", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(512),
+			}},
+		},
+	},
+	"me.delete": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "password", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"password"},
+	},
+	"me.deleteCancel": &schema.Schema{
+		Type: "object",
+	},
+	"me.export": &schema.Schema{
+		Type: "object",
+	},
 	"sources.registrationToken": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
-				Type: "string",
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
 			}},
 		},
 	},
@@ -347,8 +520,33 @@ var RouteInputs = map[string]*schema.Schema{
 	"sources.list": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
-				Type: "string",
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
 			}},
 		},
 	},
@@ -378,6 +576,30 @@ var RouteInputs = map[string]*schema.Schema{
 				Type: "array",
 				Items: &schema.Schema{
 					Type: "string",
+				},
+			}},
+			{Name: "tags", Schema: &schema.Schema{
+				Type:     "array",
+				MaxItems: schema.Int(16),
+				Items: &schema.Schema{
+					Type:    "string",
+					Pattern: "^[a-z0-9][a-z0-9._-]{0,31}$",
+				},
+			}},
+			{Name: "settings", Schema: &schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "linkCreators", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"owner", "owner_admin", "driver"},
+					}},
+					{Name: "allowGuests", Schema: &schema.Schema{
+						Type: "boolean",
+					}},
+					{Name: "defaultRole", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"viewer", "editor", "operator", "driver"},
+					}},
 				},
 			}},
 		},
@@ -444,6 +666,99 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"sourceId", "accountId"},
 	},
+	"sources.transferStart": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "sourceId", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[0-9a-f]{32}$",
+			}},
+			{Name: "to", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
+			}},
+		},
+		Required: []string{"sourceId", "to"},
+	},
+	"sources.transferList": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "sourceId", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[0-9a-f]{32}$",
+			}},
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
+			}},
+		},
+	},
+	"sources.transferAccept": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "transferId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"transferId"},
+	},
+	"sources.transferCancel": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "transferId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"transferId"},
+	},
 	"links.create": &schema.Schema{
 		AnyOf: []*schema.Schema{
 			&schema.Schema{
@@ -501,15 +816,20 @@ var RouteInputs = map[string]*schema.Schema{
 				Type: "object",
 				Properties: []schema.Property{
 					{Name: "kind", Schema: &schema.Schema{
-						Const:    "org_join",
+						Const:    "team_join",
 						HasConst: true,
 					}},
-					{Name: "orgId", Schema: &schema.Schema{
-						Type: "string",
+					{Name: "teamId", Schema: &schema.Schema{
+						Type:      "string",
+						MinLength: schema.Int(1),
 					}},
 					{Name: "label", Schema: &schema.Schema{
 						Type:      "string",
 						MaxLength: schema.Int(128),
+					}},
+					{Name: "role", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"member", "billing", "guest"},
 					}},
 					{Name: "expiresAtMs", Schema: &schema.Schema{
 						Type:    "integer",
@@ -522,15 +842,17 @@ var RouteInputs = map[string]*schema.Schema{
 						Maximum:          schema.Num(9007199254740991),
 						ExclusiveMinimum: schema.Num(0),
 					}},
-					{Name: "sources", Schema: &schema.Schema{
-						Type: "array",
+					{Name: "emailDomains", Schema: &schema.Schema{
+						Type:     "array",
+						MaxItems: schema.Int(16),
 						Items: &schema.Schema{
-							Type:    "string",
-							Pattern: "^[0-9a-f]{32}$",
+							Type:      "string",
+							MinLength: schema.Int(1),
+							MaxLength: schema.Int(253),
 						},
 					}},
 				},
-				Required: []string{"kind", "orgId", "label", "expiresAtMs"},
+				Required: []string{"kind", "teamId", "label", "expiresAtMs"},
 			},
 		},
 	},
@@ -541,8 +863,33 @@ var RouteInputs = map[string]*schema.Schema{
 				Type:    "string",
 				Pattern: "^[0-9a-f]{32}$",
 			}},
-			{Name: "orgId", Schema: &schema.Schema{
-				Type: "string",
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
 			}},
 		},
 	},
@@ -622,7 +969,7 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"linkId"},
 	},
-	"orgs.create": &schema.Schema{
+	"teams.create": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
 			{Name: "slug", Schema: &schema.Schema{
@@ -637,19 +984,314 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"slug", "name"},
 	},
-	"orgs.get": &schema.Schema{
+	"teams.list": &schema.Schema{
+		Type: "object",
+	},
+	"teams.get": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"teams.update": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "name", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "avatarUrl", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type:      "string",
+						MaxLength: schema.Int(2048),
+					},
+					&schema.Schema{
+						Type: "null",
+					},
+				},
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"teams.delete": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"teams.restore": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"teams.transferOwnership": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "accountId", Schema: &schema.Schema{
 				Type: "string",
 			}},
 		},
-		Required: []string{"orgId"},
+		Required: []string{"teamId", "accountId"},
 	},
-	"orgs.update": &schema.Schema{
+	"teams.members": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"teams.memberRole": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "accountId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "role", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"admin", "member", "billing", "guest"},
+			}},
+		},
+		Required: []string{"teamId", "accountId", "role"},
+	},
+	"teams.memberRemove": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "accountId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"teamId", "accountId"},
+	},
+	"teams.leave": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"teams.settings": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"teams.settingsUpdate": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "membersCanRegisterHosts", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "defaultHostRole", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"viewer", "editor", "operator", "driver"},
+			}},
+			{Name: "allowGuests", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "allowAnonymousLinks", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "deviceEndorsers", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"owner", "owner_admin"},
+			}},
+			{Name: "memberSelfEndorse", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "requireMfa", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "sessionMaxAgeMs", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type:             "integer",
+						Minimum:          schema.Num(-9007199254740991),
+						Maximum:          schema.Num(9007199254740991),
+						ExclusiveMinimum: schema.Num(0),
+					},
+					&schema.Schema{
+						Type: "null",
+					},
+				},
+			}},
+			{Name: "allowedEmailDomains", Schema: &schema.Schema{
+				Type:     "array",
+				MaxItems: schema.Int(32),
+				Items: &schema.Schema{
+					Type:      "string",
+					MinLength: schema.Int(1),
+					MaxLength: schema.Int(253),
+				},
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"teams.usage": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "period", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^\\d{4}-\\d{2}$",
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"invitations.list": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "box", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"sent", "received"},
+			}},
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "sourceId", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[0-9a-f]{32}$",
+			}},
+		},
+	},
+	"invitations.revoke": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "invitationId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"invitationId"},
+	},
+	"invitations.get": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "invitationId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "token", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"invitationId", "token"},
+	},
+	"invitations.resend": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "invitationId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"invitationId"},
+	},
+	"invitations.accept": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "invitationId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "token", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"invitationId", "token"},
+	},
+	"invitations.decline": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "invitationId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "token", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"invitationId", "token"},
+	},
+	"groups.list": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"groups.create": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "name", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(128),
+			}},
+		},
+		Required: []string{"teamId", "name"},
+	},
+	"groups.update": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "groupId", Schema: &schema.Schema{
 				Type: "string",
 			}},
 			{Name: "name", Schema: &schema.Schema{
@@ -658,117 +1300,834 @@ var RouteInputs = map[string]*schema.Schema{
 				MaxLength: schema.Int(128),
 			}},
 		},
-		Required: []string{"orgId"},
+		Required: []string{"teamId", "groupId", "name"},
 	},
-	"orgs.delete": &schema.Schema{
+	"groups.delete": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "groupId", Schema: &schema.Schema{
 				Type: "string",
 			}},
 		},
-		Required: []string{"orgId"},
+		Required: []string{"teamId", "groupId"},
 	},
-	"orgs.members": &schema.Schema{
+	"groups.members": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "groupId", Schema: &schema.Schema{
 				Type: "string",
 			}},
 		},
-		Required: []string{"orgId"},
+		Required: []string{"teamId", "groupId"},
 	},
-	"orgs.memberRole": &schema.Schema{
+	"groups.memberAdd": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "groupId", Schema: &schema.Schema{
 				Type: "string",
 			}},
 			{Name: "accountId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"teamId", "groupId", "accountId"},
+	},
+	"groups.memberRemove": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "groupId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "accountId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"teamId", "groupId", "accountId"},
+	},
+	"groups.setLead": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "groupId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "accountId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "isLead", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+		},
+		Required: []string{"teamId", "groupId", "accountId", "isLead"},
+	},
+	"grants.list": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "sourceId", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[0-9a-f]{32}$",
+			}},
+			{Name: "accountId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "groupId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+	},
+	"grants.create": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "sourceId", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[0-9a-f]{32}$",
+			}},
+			{Name: "subject", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "member",
+								HasConst: true,
+							}},
+							{Name: "accountId", Schema: &schema.Schema{
+								Type: "string",
+							}},
+						},
+						Required: []string{"kind", "accountId"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "group",
+								HasConst: true,
+							}},
+							{Name: "groupId", Schema: &schema.Schema{
+								Type: "string",
+							}},
+						},
+						Required: []string{"kind", "groupId"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "guest",
+								HasConst: true,
+							}},
+							{Name: "accountId", Schema: &schema.Schema{
+								Type: "string",
+							}},
+						},
+						Required: []string{"kind", "accountId"},
+					},
+				},
+			}},
+			{Name: "role", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"viewer", "editor", "operator", "driver"},
+			}},
+			{Name: "workspaceIds", Schema: &schema.Schema{
+				Type:     "array",
+				MaxItems: schema.Int(64),
+				Items: &schema.Schema{
+					Type:      "string",
+					MinLength: schema.Int(1),
+					MaxLength: schema.Int(128),
+				},
+			}},
+			{Name: "expiresAtMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(-9007199254740991),
+				Maximum: schema.Num(9007199254740991),
+			}},
+		},
+		Required: []string{"sourceId", "subject", "role"},
+	},
+	"grants.update": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "grantId", Schema: &schema.Schema{
 				Type: "string",
 			}},
 			{Name: "role", Schema: &schema.Schema{
 				Type: "string",
-				Enum: []any{"owner", "admin", "member"},
+				Enum: []any{"viewer", "editor", "operator", "driver"},
+			}},
+			{Name: "workspaceIds", Schema: &schema.Schema{
+				Type:     "array",
+				MaxItems: schema.Int(64),
+				Items: &schema.Schema{
+					Type:      "string",
+					MinLength: schema.Int(1),
+					MaxLength: schema.Int(128),
+				},
+			}},
+			{Name: "expiresAtMs", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type:    "integer",
+						Minimum: schema.Num(-9007199254740991),
+						Maximum: schema.Num(9007199254740991),
+					},
+					&schema.Schema{
+						Type: "null",
+					},
+				},
 			}},
 		},
-		Required: []string{"orgId", "accountId", "role"},
+		Required: []string{"grantId"},
 	},
-	"orgs.memberRemove": &schema.Schema{
+	"grants.revoke": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "grantId", Schema: &schema.Schema{
 				Type: "string",
+			}},
+		},
+		Required: []string{"grantId"},
+	},
+	"grants.effective": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "sourceId", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[0-9a-f]{32}$",
 			}},
 			{Name: "accountId", Schema: &schema.Schema{
 				Type: "string",
 			}},
 		},
-		Required: []string{"orgId", "accountId"},
+		Required: []string{"sourceId", "accountId"},
 	},
-	"orgs.sources": &schema.Schema{
+	"accessRequests.create": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "sourceId", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[0-9a-f]{32}$",
+			}},
+			{Name: "role", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"viewer", "editor", "operator", "driver"},
+			}},
+			{Name: "workspaceIds", Schema: &schema.Schema{
+				Type:     "array",
+				MaxItems: schema.Int(64),
+				Items: &schema.Schema{
+					Type:      "string",
+					MinLength: schema.Int(1),
+					MaxLength: schema.Int(128),
+				},
+			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(500),
+			}},
+		},
+		Required: []string{"sourceId", "role"},
+	},
+	"accessRequests.list": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "box", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"inbox", "mine"},
+			}},
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "sourceId", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[0-9a-f]{32}$",
+			}},
+			{Name: "status", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"pending", "approved", "denied", "canceled"},
+			}},
+		},
+	},
+	"accessRequests.approve": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "requestId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "role", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"viewer", "editor", "operator", "driver"},
+			}},
+			{Name: "workspaceIds", Schema: &schema.Schema{
+				Type:     "array",
+				MaxItems: schema.Int(64),
+				Items: &schema.Schema{
+					Type:      "string",
+					MinLength: schema.Int(1),
+					MaxLength: schema.Int(128),
+				},
+			}},
+			{Name: "expiresAtMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(-9007199254740991),
+				Maximum: schema.Num(9007199254740991),
+			}},
+		},
+		Required: []string{"requestId"},
+	},
+	"accessRequests.deny": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "requestId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(500),
+			}},
+		},
+		Required: []string{"requestId"},
+	},
+	"trust.list": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
+			}},
+		},
+	},
+	"trust.reject": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "requestId", Schema: &schema.Schema{
 				Type: "string",
 			}},
 		},
-		Required: []string{"orgId"},
+		Required: []string{"requestId"},
 	},
-	"orgs.sourceAttach": &schema.Schema{
+	"audit.list": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "fromMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(0),
+				Maximum: schema.Num(9007199254740991),
+			}},
+			{Name: "toMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(0),
+				Maximum: schema.Num(9007199254740991),
+			}},
+			{Name: "actor", Schema: &schema.Schema{
 				Type: "string",
 			}},
 			{Name: "sourceId", Schema: &schema.Schema{
 				Type:    "string",
 				Pattern: "^[0-9a-f]{32}$",
 			}},
+			{Name: "action", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(64),
+			}},
+			{Name: "limit", Schema: &schema.Schema{
+				Type:             "integer",
+				Minimum:          schema.Num(-9007199254740991),
+				Maximum:          schema.Num(500),
+				ExclusiveMinimum: schema.Num(0),
+			}},
+			{Name: "cursor", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(512),
+			}},
 		},
-		Required: []string{"orgId", "sourceId"},
+		Required: []string{"teamId"},
 	},
-	"orgs.sourceDetach": &schema.Schema{
+	"audit.export": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "fromMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(0),
+				Maximum: schema.Num(9007199254740991),
+			}},
+			{Name: "toMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(0),
+				Maximum: schema.Num(9007199254740991),
+			}},
+			{Name: "actor", Schema: &schema.Schema{
 				Type: "string",
 			}},
 			{Name: "sourceId", Schema: &schema.Schema{
 				Type:    "string",
 				Pattern: "^[0-9a-f]{32}$",
 			}},
+			{Name: "action", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(64),
+			}},
+			{Name: "format", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"csv", "json"},
+			}},
 		},
-		Required: []string{"orgId", "sourceId"},
+		Required: []string{"teamId"},
 	},
 	"billing.plan": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
-				Type: "string",
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
 			}},
 		},
-		Required: []string{"orgId"},
+		Required: []string{"space"},
 	},
 	"billing.usage": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
-			{Name: "orgId", Schema: &schema.Schema{
-				Type: "string",
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
 			}},
 			{Name: "period", Schema: &schema.Schema{
 				Type:    "string",
 				Pattern: "^\\d{4}-\\d{2}$",
 			}},
 		},
-		Required: []string{"orgId"},
+		Required: []string{"space"},
+	},
+	"billing.invoices": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
+			}},
+			{Name: "limit", Schema: &schema.Schema{
+				Type:             "integer",
+				Minimum:          schema.Num(-9007199254740991),
+				Maximum:          schema.Num(500),
+				ExclusiveMinimum: schema.Num(0),
+			}},
+			{Name: "cursor", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(512),
+			}},
+		},
+		Required: []string{"space"},
+	},
+	"billing.webhook": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "provider", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[a-z0-9][a-z0-9_-]{0,31}$",
+			}},
+		},
+		Required: []string{"provider"},
+	},
+	"apiTokens.list": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+	},
+	"apiTokens.revoke": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "tokenId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"tokenId"},
+	},
+	"admin.tenants": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "q", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "limit", Schema: &schema.Schema{
+				Type:             "integer",
+				Minimum:          schema.Num(-9007199254740991),
+				Maximum:          schema.Num(500),
+				ExclusiveMinimum: schema.Num(0),
+			}},
+			{Name: "cursor", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(512),
+			}},
+		},
+	},
+	"admin.accounts": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "q", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "limit", Schema: &schema.Schema{
+				Type:             "integer",
+				Minimum:          schema.Num(-9007199254740991),
+				Maximum:          schema.Num(500),
+				ExclusiveMinimum: schema.Num(0),
+			}},
+			{Name: "cursor", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(512),
+			}},
+			{Name: "status", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"active", "disabled"},
+			}},
+		},
+	},
+	"admin.account": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "accountId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"accountId"},
+	},
+	"admin.accountStatus": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "accountId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "status", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"active", "disabled"},
+			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(500),
+			}},
+		},
+		Required: []string{"accountId", "status", "reason"},
+	},
+	"admin.teams": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "q", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "limit", Schema: &schema.Schema{
+				Type:             "integer",
+				Minimum:          schema.Num(-9007199254740991),
+				Maximum:          schema.Num(500),
+				ExclusiveMinimum: schema.Num(0),
+			}},
+			{Name: "cursor", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(512),
+			}},
+			{Name: "status", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"active", "suspended"},
+			}},
+		},
+	},
+	"admin.team": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"teamId"},
+	},
+	"admin.teamStatus": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "status", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"active", "suspended"},
+			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(500),
+			}},
+		},
+		Required: []string{"teamId", "status", "reason"},
+	},
+	"admin.relayNodes": &schema.Schema{
+		Type: "object",
+	},
+	"admin.relayNodeDrain": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "node", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[a-z0-9][a-z0-9-]{0,62}$",
+			}},
+			{Name: "drain", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+		},
+		Required: []string{"node", "drain"},
+	},
+	"admin.incident": &schema.Schema{
+		Type: "object",
+	},
+	"admin.incidentSet": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "pauseAssertions", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "pauseRegistrations", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(500),
+			}},
+		},
+		Required: []string{"reason"},
+	},
+	"admin.abuseList": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "signal", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"traffic", "report"},
+			}},
+			{Name: "frozen", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"true", "false"},
+			}},
+			{Name: "limit", Schema: &schema.Schema{
+				Type:             "integer",
+				Minimum:          schema.Num(-9007199254740991),
+				Maximum:          schema.Num(500),
+				ExclusiveMinimum: schema.Num(0),
+			}},
+			{Name: "cursor", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(512),
+			}},
+		},
+	},
+	"admin.linkFreeze": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "linkId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "frozen", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(500),
+			}},
+		},
+		Required: []string{"linkId", "frozen", "reason"},
+	},
+	"admin.flagsList": &schema.Schema{
+		Type: "object",
+	},
+	"admin.flagsSet": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "flag", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[a-z][a-z0-9._-]{0,63}$",
+			}},
+			{Name: "all", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
+			{Name: "teamIds", Schema: &schema.Schema{
+				Type:     "array",
+				MaxItems: schema.Int(1000),
+				Items: &schema.Schema{
+					Type:      "string",
+					MinLength: schema.Int(1),
+				},
+			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(500),
+			}},
+		},
+		Required: []string{"flag", "all", "teamIds", "reason"},
+	},
+	"status.get": &schema.Schema{
+		Type: "object",
 	},
 }
 
 // UnsupportedInputs 列出入参 schema 用了生成器还不认识的关键字的过程（值是那个关键字）。
 var UnsupportedInputs = map[string]string{
-	"auth.register":        "format",
-	"auth.passkeyRegister": "propertyNames",
-	"auth.passkeyLogin":    "propertyNames",
-	"relay.nodePresence":   "minItems",
+	"auth.register":           "format",
+	"auth.passkeyRegister":    "propertyNames",
+	"auth.passkeyLogin":       "propertyNames",
+	"auth.passwordResetStart": "format",
+	"auth.oauthStart":         "format",
+	"me.emailChange":          "format",
+	"invitations.create":      "format",
+	"billing.checkout":        "format",
+	"billing.portal":          "format",
+	"apiTokens.create":        "minItems",
+	"admin.statusPublish":     "minItems",
+	"relay.nodePresence":      "minItems",
 }

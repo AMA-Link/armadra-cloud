@@ -503,6 +503,7 @@ const goRule = {
   root: "go",
   allow: ["golang.org/x/crypto", "github.com/lib/test/v6", "golang.org/x/text"],
   testOnly: ["github.com/lib/test/v6"],
+  testOnlyPackages: ["internal/testutil"],
   internalBoundaries: [
     { from: "internal/core", forbid: ["internal/tunnel", "internal/edge"] },
   ],
@@ -611,8 +612,17 @@ import (
 	"example.test/m/internal/store"
 )
 `,
+    "go/internal/relay/r.go": `package relay
+
+import "example.test/m/internal/testutil"
+`,
   });
-  const files = ["go/go.mod", "go/a/a.go", "go/internal/core/c.go"];
+  const files = [
+    "go/go.mod",
+    "go/a/a.go",
+    "go/internal/core/c.go",
+    "go/internal/relay/r.go",
+  ];
   assert.deepEqual(run(root, { goModules: [goRule] }, ["go-modules"], files), [
     "go/go.mod 引入了未登记的模块：github.com/other/dep（先登记进 repo.rules.json 的 goModules）",
     "go/go.mod 引入了未登记的模块：github.com/loose/dep（先登记进 repo.rules.json 的 goModules）",
@@ -622,6 +632,7 @@ import (
     "go/a/a.go 在生产代码里 import 了只许测试用的模块：github.com/lib/test/v6",
     "go/internal/core/c.go 不得 import example.test/m/internal/tunnel（internal/core 不碰 internal/tunnel）",
     "go/internal/core/c.go 不得 import example.test/m/internal/edge/sub（internal/core 不碰 internal/edge）",
+    "go/internal/relay/r.go 在生产代码里 import 了测试用的包：example.test/m/internal/testutil",
   ]);
   const stale = repo({ "go/go.mod": "module example.test/m\n\ngo 1.27.1\n" });
   assert.deepEqual(
