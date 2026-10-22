@@ -173,6 +173,11 @@ func (m *Memory) NodeCommands() NodeCommands { return (*memCommands)(m) }
 // Command 把命令发给本进程的订阅者（personal 撤销源时关它的隧道）。
 func (m *Memory) Command(c NodeCommand) { m.commands.emit(c) }
 
+// Close 实现 Cluster；进程内没有要释放的东西。
+func (m *Memory) Close() error { return nil }
+
+var _ Cluster = (*Memory)(nil)
+
 // RouteCount 返回当前未过期的路由数（测试与 /health 用）。
 func (m *Memory) RouteCount() int {
 	m.mu.Lock()

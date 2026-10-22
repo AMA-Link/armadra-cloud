@@ -36,6 +36,10 @@ type HubOptions struct {
 	Metrics          *obs.Metrics
 	// Nonce 产生握手的 nonce2；测试注入固定值。
 	Nonce func() string
+	// Dispatch 承接可能做网络 I/O 的控制面调用（续路由、删路由、发下线事件），
+	// 让它们不占住关闭隧道的协程（可能是 epoll 循环）；同一个源的调用保持先后顺序。
+	// 不给就自建一个，Shutdown 时排空。
+	Dispatch *control.Dispatcher
 }
 
 // Hub 是本节点的隧道表：握手 → Tunnel，每源一条，新的替换旧的；
@@ -51,6 +55,8 @@ type Hub struct {
 	all          map[*Tunnel]struct{}
 	shuttingDown bool
 	unsubscribe  func()
+	dispatch     *control.Dispatcher
+	ownDispatch  bool
 }
 
 // NewHub 建隧道表，并订阅控制面发给本节点的命令。
@@ -67,7 +73,10 @@ func NewHub(o HubOptions) *Hub {
 	if o.Metrics == nil {
 		o.Metrics = obs.NewMetrics(func() (int, int) { return 0, 0 })
 	}
-	h := &Hub{opts: o, current: map[string]*Tunnel{}, all: map[*Tunnel]struct{}{}}
+	h := &Hub{opts: o, current: map[string]*Tunnel{}, all: map[*Tunnel]struct{}{}, dispatch: o.Dispatch}
+	if h.dispatch == nil {
+		h.dispatch, h.ownDispatch = control.NewDispatcher(0, 0), true
+	}
 	if cmds := o.Control.NodeCommands(); cmds != nil {
 		h.unsubscribe = cmds.Subscribe(h.onCommand)
 	}
@@ -140,12 +149,19 @@ func (h *Hub) Shutdown(grace time.Duration) {
 		t.Goaway("shutdown", grace)
 	}
 	deadline := time.After(grace + 5*time.Second)
+wait:
 	for _, t := range list {
 		select {
 		case <-t.Closed():
 		case <-deadline:
-			return
+			break wait // 宽限到了：不再等，但分发器照样排空 / 关闭
 		}
+	}
+	// 隧道关闭时投递的删路由与下线事件：等做完，免得进程先退出而路由留到过期。
+	if h.ownDispatch {
+		h.dispatch.Close()
+	} else {
+		h.dispatch.Flush(5 * time.Second)
 	}
 }
 
@@ -266,17 +282,19 @@ func (h *Hub) ready(ctx context.Context, sock Socket, hello gen.Hello) (*Tunnel,
 			if !h.isCurrent(tunnel) {
 				return
 			}
-			go func() {
+			h.dispatch.Go(hello.SourceID, func() {
 				c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = o.Control.Routes().Touch(c, hello.SourceID, o.RouteTTL)
-			}()
+			})
 		},
 		OnPeerGoaway: func(string) {
 			if h.isCurrent(tunnel) {
-				c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = o.Control.Routes().Delete(c, hello.SourceID, tunnelID)
+				h.dispatch.Go(hello.SourceID, func() {
+					c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_ = o.Control.Routes().Delete(c, hello.SourceID, tunnelID)
+				})
 			}
 		},
 		OnHeartbeatMiss: o.Metrics.HeartbeatMiss,
@@ -319,13 +337,19 @@ func (h *Hub) ready(ctx context.Context, sock Socket, hello gen.Hello) (*Tunnel,
 		return nil, nil
 	}
 	tunnel.Start()
-	_ = o.Control.Presence().Publish(ctx, control.PresenceEvent{
+	// 上线事件与下线事件走同一个源的同一条队列，先后顺序不会倒。
+	online := control.PresenceEvent{
 		Type:        control.PresenceSourceOnline,
 		SourceID:    hello.SourceID,
 		Node:        o.NodeID,
 		TunnelID:    tunnelID,
 		CoreVersion: hello.CoreVersion,
 		AtMs:        time.Now().UnixMilli(),
+	}
+	h.dispatch.Go(hello.SourceID, func() {
+		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = o.Control.Presence().Publish(c, online)
 	})
 	o.Log.Info("隧道已就绪", obs.SourceID(hello.SourceID), obs.TunnelID(tunnelID))
 	return tunnel, nil
@@ -346,21 +370,25 @@ func (h *Hub) closed(t *Tunnel, info CloseInfo) {
 		delete(h.current, t.SourceID())
 	}
 	h.mu.Unlock()
-	// TODO(G3)：下面的删路由与发下线事件现在同步跑在关闭它的协程上（可能是 epoll 循环），
-	// 内存控制面没问题；redis / postgres 实现必须改成异步。
 	o.Log.Info("隧道已关闭", obs.SourceID(t.SourceID()), obs.TunnelID(t.ID()), obs.Code(int(info.Code)), obs.Reason(info.Reason))
 	if !isCurrent || info.Replaced {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = o.Control.Routes().Delete(ctx, t.SourceID(), t.ID())
-	_ = o.Control.Presence().Publish(ctx, control.PresenceEvent{
-		Type:     control.PresenceSourceOffline,
-		SourceID: t.SourceID(),
-		Node:     o.NodeID,
-		TunnelID: t.ID(),
-		AtMs:     time.Now().UnixMilli(),
+	// 删路由与发下线事件可能做网络 I/O：投递给工作协程，不占住这里的协程（可能是 epoll 循环）。
+	// 同一个源的删除与下线事件同一条队列，先后顺序不变。
+	sourceID, tunnelID := t.SourceID(), t.ID()
+	atMs := time.Now().UnixMilli() // 关闭发生的时刻，不是队列里轮到它的时刻
+	h.dispatch.Go(sourceID, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = o.Control.Routes().Delete(ctx, sourceID, tunnelID)
+		_ = o.Control.Presence().Publish(ctx, control.PresenceEvent{
+			Type:     control.PresenceSourceOffline,
+			SourceID: sourceID,
+			Node:     o.NodeID,
+			TunnelID: tunnelID,
+			AtMs:     atMs,
+		})
 	})
 }
 

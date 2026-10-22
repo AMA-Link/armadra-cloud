@@ -89,6 +89,8 @@
 
 两种以上存储都在、`--store` 与目录里已有的不符、库认不出或损坏、账本对不上，一律拒绝启动，不自动清库或重建。`personal doctor` 检查目录与文件权限、库的完整性、监听地址与 TLS、受信代理与口令，有失败项时退出码为 1。
 
+`--control redis` 需要 Redis 7.0 以上（撤销全量重读用 `PEXPIRETIME`）；版本更低时 Go 版中继启动报错并说明，Node 版同样要求。
+
 ## 端点
 
 - `GET /health`：进程存活，200 即活着（镜像的 `HEALTHCHECK` 经 `armadra-relay health` 打它，先 HTTPS 再明文）。

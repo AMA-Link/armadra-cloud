@@ -89,7 +89,25 @@ func (s *Signer) JWKS(ctx context.Context) (gen.JWKSet, error) {
 }
 
 // Key 实现 jose.Keys：按 kid 取未退役的验签公钥。
+//
+// 查不到 kid 时，若钥存储是读缓存（store.KeyRefresher），让它限频地重读一次再查：
+// 别的节点轮换了钥，本节点的缓存还是旧的。
 func (s *Signer) Key(ctx context.Context, kid string) (ed25519.PublicKey, bool, error) {
+	key, ok, err := s.lookup(ctx, kid)
+	if err != nil || ok {
+		return key, ok, err
+	}
+	refresher, can := s.keys.(store.KeyRefresher)
+	if !can {
+		return nil, false, nil
+	}
+	if err := refresher.RefreshOnMiss(ctx); err != nil {
+		return nil, false, err
+	}
+	return s.lookup(ctx, kid)
+}
+
+func (s *Signer) lookup(ctx context.Context, kid string) (ed25519.PublicKey, bool, error) {
 	set, err := s.JWKS(ctx)
 	if err != nil {
 		return nil, false, err

@@ -42,6 +42,8 @@ type Options struct {
 	Traffic *traffic.Meter
 	// Poller 是连接的事件循环；不给就在 New 里建一个（Close 时关）。
 	Poller *netpoll.Poller
+	// Dispatch 承接 epoll 循环上不能做的控制面调用；不给就自建。
+	Dispatch *control.Dispatcher
 }
 
 // Edge 是客户端边缘的 HTTP 外壳：判定在 Policy，这里管字节进出。
@@ -83,7 +85,7 @@ func New(o Options) (*Edge, error) {
 	}
 	e.policy = NewPolicy(PolicyOptions{
 		NodeID: o.NodeID, Addressing: o.Addressing, Auth: o.Auth, Control: o.Control,
-		Lookup: o.Lookup, Metrics: o.Metrics, CORSOrigins: o.CORSOrigins, Traffic: o.Traffic,
+		Lookup: o.Lookup, Metrics: o.Metrics, CORSOrigins: o.CORSOrigins, Traffic: o.Traffic, Dispatch: o.Dispatch,
 	})
 	go e.wheel.run(o.WSPing, o.WSIdle)
 	return e, nil
@@ -92,10 +94,15 @@ func New(o Options) (*Edge, error) {
 // Policy 返回判定（测试与撤销用）。
 func (e *Edge) Policy() *Policy { return e.policy }
 
+// ConnCounts 返回策略里登记的升级连接数与 ping 时间轮里的连接数（观测与测试用；
+// 连接都收干净后两者应同为 0）。
+func (e *Edge) ConnCounts() (tracked, wheel int) { return e.policy.Tracked(), e.wheel.size() }
+
 // Close 停掉 ping 轮；自己建的 Poller 一并关。已升级的连接用 CloseAll 断开。
 func (e *Edge) Close() {
 	e.once.Do(func() {
 		close(e.wheel.stop)
+		e.policy.Close()
 		if e.own {
 			e.o.Poller.Close()
 		}

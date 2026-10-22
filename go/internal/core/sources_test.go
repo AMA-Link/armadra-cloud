@@ -1,7 +1,9 @@
 package core_test
 
 import (
+	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -131,6 +133,8 @@ func TestAuthenticateSource(t *testing.T) {
 		"已过期":             sign(header, map[string]any{"iss": sourceID, "aud": issuer, "iat": now - 1000, "exp": now - 700, "jti": "jti-aaaa-0007"}),
 		"iat 在未来":         sign(header, map[string]any{"iss": sourceID, "aud": issuer, "iat": now + 1000, "exp": now + 1060, "jti": "jti-aaaa-0008"}),
 		"jti 太短":          sign(header, good("短")),
+		"typ 是空串":         "Source " + signWithRawHeader(t, key.Private, `{"alg":"EdDSA","kid":"`+sourceID+`","typ":""}`, good("jti-aaaa-0011")),
+		"nbf 在未来（比 TypeScript 更严）": sign(header, map[string]any{"iss": sourceID, "aud": issuer, "iat": now, "nbf": now + 1000, "exp": now + 60, "jti": "jti-aaaa-0012"}),
 	}
 	for name, header := range cases {
 		_, err := sources.AuthenticateSource(e.ctx, header)
@@ -185,4 +189,15 @@ func TestSourceVisibilityAndAssertionRules(t *testing.T) {
 	_, err = sources.Assertion(e.ctx, owner, sourceID, nil)
 	eq(t, code(err), "source_revoked", "已撤销")
 	eq(t, code(sources.Revoke(e.ctx, owner, sourceID)), "not_found", "再撤一次")
+}
+
+// signWithRawHeader：头按原文写（jose.Sign 的 typ 为空时会省略，造不出 "typ":""）。
+func signWithRawHeader(t *testing.T, private ed25519.PrivateKey, header string, claims map[string]any) string {
+	t.Helper()
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := base64.RawURLEncoding.EncodeToString([]byte(header)) + "." + base64.RawURLEncoding.EncodeToString(payload)
+	return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, []byte(input)))
 }

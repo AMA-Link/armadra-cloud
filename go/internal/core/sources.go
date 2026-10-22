@@ -294,7 +294,8 @@ func (s *Sources) AuthenticateSource(ctx context.Context, header string) (store.
 	if err != nil {
 		return store.SourceRecord{}, Fail(gen.ErrUnauthenticated)
 	}
-	if parts.Header.Typ != "" && parts.Header.Typ != gen.TokenTypeSource {
+	// typ 可以不写，写了就必须是 armadra-source；写成空串同样拒绝（与 TypeScript 一侧一致）。
+	if parts.TypPresent && parts.Header.Typ != gen.TokenTypeSource {
 		return store.SourceRecord{}, Fail(gen.ErrUnauthenticated)
 	}
 	source, err := s.c.Ports.Sources.Get(ctx, s.c.TenantID, parts.Header.Kid)
@@ -323,6 +324,8 @@ func (s *Sources) AuthenticateSource(ctx context.Context, header string) (store.
 	if claims.Iss != source.SourceID || claims.Aud != issuer {
 		return store.SourceRecord{}, Fail(gen.ErrUnauthenticated)
 	}
+	// 与 TypeScript 的偏差：TypeScript 不看 nbf，这里看——声明了 nbf 就不能早于它（容差同 iat），
+	// 只会比 TypeScript 更严；合法的源不写 nbf 或写成 iat，两边结果一致。
 	if !timesOK(claims.Iat, claims.Exp, claims.Nbf, nowMs) {
 		return store.SourceRecord{}, Fail(gen.ErrUnauthenticated)
 	}

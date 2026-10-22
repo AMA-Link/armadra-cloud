@@ -714,8 +714,8 @@ func TestAbruptDisconnect(t *testing.T) {
 		return open
 	})
 	eventually(t, "登记收干净", func() bool {
-		time.Sleep(20 * time.Millisecond)
-		return h.streams() == 0
+		tracked, wheel := h.plane.Edge.ConnCounts()
+		return h.streams() == 0 && tracked == 0 && wheel == 0
 	})
 }
 

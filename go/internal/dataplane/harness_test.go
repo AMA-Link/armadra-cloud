@@ -62,6 +62,8 @@ type harnessOptions struct {
 	plane   func(*dataplane.Options)
 	control control.MemoryOptions
 	traffic bool
+	// cluster 用多节点控制面顶替环境里的内存控制面（拿到环境的签发者与公钥集）。
+	cluster func(env *relayenv.Env) control.Plane
 }
 
 func newHarness(t *testing.T, ho harnessOptions) *harness {
@@ -71,6 +73,9 @@ func newHarness(t *testing.T, ho harnessOptions) *harness {
 	opts := dataplane.Options{
 		Mode: "personal", NodeID: "relay-test", Version: "0.0.0", Control: h.env.Control,
 		Addressing: edge.PathAddressing(), Log: obs.NewLogger(h.logs, obs.LevelDebug),
+	}
+	if ho.cluster != nil {
+		opts.Control = ho.cluster(h.env)
 	}
 	if ho.traffic {
 		h.traffic = traffic.NewMeter(traffic.MeterOptions{Node: "relay-test", Write: h.rows.writeRows})

@@ -38,6 +38,16 @@ func (w *wheel) remove(ec *edgeConn) {
 	w.mu.Unlock()
 }
 
+func (w *wheel) size() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	for _, b := range w.buckets {
+		n += len(b)
+	}
+	return n
+}
+
 func (w *wheel) snapshot(i int) []*edgeConn {
 	w.mu.Lock()
 	defer w.mu.Unlock()
