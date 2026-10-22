@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.3（2026-10-22）
+
+### 变更 / Changed
+
+- 版本统一：armadra-agent 与 Armadra 同发 0.9.3，armadra-cloud 跟进到 0.9.3。cloud 各包与协议包 `@armadra/platform-protocol` 同升 0.9.3，两份 OpenAPI 的版本同步；协议仍是 1.3，线上形状不变，0.9.2 之后没有其他合入。`deploy/compat.json` 不变。
+  Version unification: armadra-agent and Armadra both ship 0.9.3, so armadra-cloud follows. All cloud packages and the protocol package `@armadra/platform-protocol` move to 0.9.3 together, and both OpenAPI documents follow; the protocol stays at 1.3 and wire shapes are unchanged. Nothing else was merged after 0.9.2. `deploy/compat.json` is unchanged.
+
 ## 0.9.2（2026-10-22）
 
 ### 变更 / Changed
