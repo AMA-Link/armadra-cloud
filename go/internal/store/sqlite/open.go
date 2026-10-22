@@ -273,7 +273,7 @@ func (d *DB) Backup(ctx context.Context, target string) error {
 	// VACUUM INTO 要目标不存在或为空：先建一个 0600 的空文件，权限随它。
 	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return store.Errorf(store.KindExists, "备份目标建不出来：%s", target)
+		return store.Errorf(store.KindCorrupt, "备份目标建不出来：%s", target)
 	}
 	_ = file.Close()
 	err = d.read(ctx, func(q *sql.Conn) error {

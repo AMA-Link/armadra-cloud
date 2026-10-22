@@ -2,8 +2,16 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestRun(t *testing.T) {
@@ -14,7 +22,7 @@ func TestRun(t *testing.T) {
 		wantOut  string
 		wantErr  string
 	}{
-		{"没有命令", nil, 64, "", "用法: armadra-relay <命令>"},
+		{"没有命令", nil, 64, "用法: armadra-relay <命令>", ""},
 		{"未知命令", []string{"nope"}, 64, "", "未知命令：nope"},
 		{"版本", []string{"version"}, 0, "dev\n", ""},
 		{"帮助", []string{"help"}, 0, "用法: armadra-relay", ""},
@@ -42,5 +50,74 @@ func TestRequireLoopback(t *testing.T) {
 		if err := requireLoopback(addr); (err == nil) != ok {
 			t.Errorf("%s：err=%v，应为 ok=%v", addr, err, ok)
 		}
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// dev 带与不带 --traffic 都能起来、答 /health、收到 SIGTERM 后正常退出。
+func TestDevTrafficFlag(t *testing.T) {
+	jwks := filepath.Join(t.TempDir(), "jwks.json")
+	if err := os.WriteFile(jwks, []byte(`{"keys":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range [][]string{nil, {"--traffic"}} {
+		t.Run(strings.Join(extra, " "), func(t *testing.T) {
+			var out, errOut lockedBuffer
+			done := make(chan int, 1)
+			args := append([]string{"dev", "--jwks", jwks, "--issuer", "https://x"}, extra...)
+			go func() { done <- run(args, &out, &errOut) }()
+			var ready struct {
+				URL string `json:"url"`
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for ready.URL == "" {
+				for _, line := range strings.Split(out.String(), "\n") {
+					_ = json.Unmarshal([]byte(line), &ready)
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("没等到就绪行：%q %q", out.String(), errOut.String())
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			resp, err := http.Get(ready.URL + "/health")
+			if err != nil || resp.StatusCode != 200 {
+				t.Fatalf("/health：%v %v", resp, err)
+			}
+			_ = resp.Body.Close()
+			// 测试进程自己先接住信号，免得 dev 还没登记处理器时被默认动作杀掉；之后反复发直到它退出。
+			absorb := make(chan os.Signal, 16)
+			signal.Notify(absorb, syscall.SIGTERM)
+			defer signal.Stop(absorb)
+			timeout := time.After(10 * time.Second)
+			for {
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+				select {
+				case code := <-done:
+					if code != 0 {
+						t.Fatalf("退出码 %d：%q", code, errOut.String())
+					}
+					return
+				case <-timeout:
+					t.Fatal("收到 SIGTERM 后没退出")
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+		})
 	}
 }

@@ -74,6 +74,24 @@ func Mode(v string) Field      { return str("mode", v) }
 func URL(v string) Field       { return str("url", v) }
 func Listen(v string) Field    { return str("listen", v) }
 
+// personal 装配的进程事件字段：都是配置名与时间，不含请求内容、凭据与连接串。
+func Store(v string) Field       { return str("store", v) }
+func Control(v string) Field     { return str("control", v) }
+func TLS(v string) Field         { return str("tls", v) }
+func Fingerprint(v string) Field { return str("fingerprint", v) }
+func Web(v string) Field         { return str("web", v) }
+func MetricsURL(v string) Field  { return str("metrics", v) }
+func Issuer(v string) Field      { return str("issuer", v) }
+func Host(v string) Field        { return str("host", v) }
+func Operation(v string) Field   { return str("operation", v) }
+func NotAfter(v string) Field    { return str("notAfter", v) }
+func Provider(v string) Field    { return str("provider", v) }
+func Scope(v string) Field       { return str("scope", v) }
+func Procedure(v string) Field   { return str("procedure", v) }
+func Reasons(v string) Field     { return str("reasons", v) }
+func Failures(v int) Field       { return num("failures", int64(v)) }
+func Dropped(v int) Field        { return num("dropped", int64(v)) }
+
 // Code 记关闭码或错误码；只认整数与字符串，别的类型丢弃（同 TS 丢非标量）。
 func Code(v any) Field {
 	switch c := v.(type) {

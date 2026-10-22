@@ -266,7 +266,10 @@ func (m *Meter) Run(ctx context.Context) {
 			_ = m.Flush(final)
 			return
 		case <-tick.C:
-			_ = m.Flush(ctx)
+			// ctx 只管退出循环：定时落库不随它取消，免得驱动的 interrupt 留给随后那次最后落库。
+			tickCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalFlushWait)
+			_ = m.Flush(tickCtx)
+			cancel()
 		}
 	}
 }

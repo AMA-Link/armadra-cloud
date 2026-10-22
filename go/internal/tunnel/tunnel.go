@@ -561,6 +561,12 @@ func (t *Tunnel) finish(code protocol.CloseCode, reason string, wantClose bool) 
 	t.ready, t.readyNext, t.parked = nil, nil, nil
 	replaced := t.replaced
 	started := t.started
+	// 写协程还没起来就被关（握手刚完成、Start 之前来了 kick / GOAWAY）：排队的控制帧要自己发出去，
+	// 否则对端只看到关闭码，收不到 GOAWAY。
+	var pending [][]byte
+	if !started && wantClose {
+		pending = append(pending, t.ctl...)
+	}
 	if wantClose {
 		t.closeReq, t.closeCode, t.closeReason = true, code, reason
 	}
@@ -574,6 +580,9 @@ func (t *Tunnel) finish(code protocol.CloseCode, reason string, wantClose bool) 
 	}
 	if !started {
 		if wantClose {
+			for _, frame := range pending {
+				_ = t.tr.Send(frame)
+			}
 			t.tr.Close(code, reason)
 		}
 		close(t.finished)
