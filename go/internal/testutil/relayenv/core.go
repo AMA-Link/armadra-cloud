@@ -96,9 +96,15 @@ func (c *Core) sendJSON(v any) {
 	}
 }
 
+// HandshakeReadTimeout 是握手阶段读每条消息的期限（变量只为测试能缩短）。
+var HandshakeReadTimeout = 5 * time.Second
+
 func (c *Core) readJSON(v any) {
 	c.t.Helper()
-	_ = c.Conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = c.Conn.SetReadDeadline(time.Now().Add(HandshakeReadTimeout))
+	// 期限只管这一次读：留着的话，握手完成 5 秒后任何读都会超时，
+	// gorilla 的读错误是粘性的，假 core 会就此静默不再回应（回显、WINDOW、PONG 全停）。
+	defer func() { _ = c.Conn.SetReadDeadline(time.Time{}) }()
 	mt, b, err := c.Conn.ReadMessage()
 	if err != nil {
 		c.t.Fatalf("读握手消息失败：%v", err)

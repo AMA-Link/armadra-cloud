@@ -780,3 +780,30 @@ func TestRouting(t *testing.T) {
 		}
 	})
 }
+
+// 假 core 握手完成之后不能再带着握手期的读期限：期限到了读就永久失败，
+// 假 core 静默不回应，大流量测试在慢机器上就会停滞到心跳超时（#76）。
+func TestFakeCoreSurvivesHandshakeDeadline(t *testing.T) {
+	old := relayenv.HandshakeReadTimeout
+	relayenv.HandshakeReadTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { relayenv.HandshakeReadTimeout = old })
+	h := newHarness(t, harnessOptions{})
+	core := h.core(relayenv.CoreOptions{Capabilities: []string{"e2e"}})
+	time.Sleep(500 * time.Millisecond)
+	conn, _, err := dial(t, h.e2eURL(), []string{"armadra-e2e.1", "armadra-relay." + h.relayToken(nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, b, err := conn.ReadMessage(); err != nil || string(b) != "ping" {
+		t.Fatalf("握手期限过后假 core 不再回显：%q %v", b, err)
+	}
+	select {
+	case <-core.Closed():
+		t.Fatal("假 core 的读循环退出了")
+	default:
+	}
+}
