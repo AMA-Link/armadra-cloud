@@ -699,3 +699,22 @@ func TestServeClusterControl(t *testing.T) {
 		}
 	})
 }
+
+// 关闭时计量器最后落一次库，带上关闭期间累计的字节，且在存储关闭之前。
+func TestCloseFlushesTrafficLast(t *testing.T) {
+	running, _, dir := plainServe(t)
+	at := time.Now()
+	running.Meter.Add(traffic.Sample{
+		Key: traffic.Key{SourceID: "s1", Subject: "acct:me", Kind: "e2e"}, At: at, Connections: 1, BytesToSource: 7,
+	})
+	running.Close()
+	st, err := OpenStore(context.Background(), dir, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	rows, err := st.Ports().Traffic.Query(context.Background(), store.DefaultTenant, store.TrafficQuery{ToMs: at.Add(2 * time.Hour).UnixMilli(), Limit: 10})
+	if err != nil || len(rows) != 1 || rows[0].BytesToSource != 7 {
+		t.Fatalf("关闭时应落库：%+v %v", rows, err)
+	}
+}

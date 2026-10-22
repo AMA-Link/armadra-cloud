@@ -433,6 +433,10 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	if err != nil {
 		return nil, err
 	}
+	// 启动中途失败也要收掉隧道表的分发器、边缘的事件循环与时间轮；正常关闭时按顺序先调一次。
+	var planeDown sync.Once
+	shutdownPlane := func(grace time.Duration) { planeDown.Do(func() { plane.Shutdown(grace) }) }
+	undo.push(func() { shutdownPlane(0) })
 
 	// 监听。
 	var dynamic *tlsx.Dynamic
@@ -498,10 +502,12 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	}
 
 	// 流量计量落库与保留期清理。
+	// 计量器有自己的 context：要等隧道排空、服务关掉之后才取消，让最后一次落库带上收尾期间的字节。
 	var meterDone chan struct{}
+	meterCtx, stopMeter := context.WithCancel(context.Background())
 	if meter != nil {
 		meterDone = make(chan struct{})
-		go func() { defer close(meterDone); meter.Run(background) }()
+		go func() { defer close(meterDone); meter.Run(meterCtx) }()
 		prune := func(ctx context.Context) {
 			cutoff := now().Add(-time.Duration(retentionDays) * day).UnixMilli()
 			if _, err := st.Ports().Traffic.Prune(ctx, store.DefaultTenant, cutoff); err != nil {
@@ -546,6 +552,10 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	if err != nil {
 		stopBackground()
 		workers.Wait()
+		stopMeter()
+		if meterDone != nil {
+			<-meterDone
+		}
 		_ = server.Close()
 		if metricsServer != nil {
 			_ = metricsServer.Close()
@@ -634,7 +644,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 			flush(flushCtx)
 			cancel()
 			stream.Close()
-			plane.Shutdown(shutdownGrace)
+			shutdownPlane(shutdownGrace)
 			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownGrace)
 			_ = server.Shutdown(shutdownCtx)
 			if metricsServer != nil {
@@ -643,6 +653,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 			cancelShutdown()
 			_ = server.Close()
 			<-serveDone
+			stopMeter()
 			if meterDone != nil {
 				<-meterDone
 			}
