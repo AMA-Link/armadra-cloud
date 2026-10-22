@@ -414,7 +414,9 @@ M1 用「团队全员」与「单个成员」两种授予主体就够了。分�
 
 来源：`multi-tenant-saas-design.md` §3.3(b)；Armadra `platform-saas-architecture.md` §6.2；`platform/cloud-control-plane.md` §5.4；Armadra 契约 §80。
 
-- **两种到达方式，一个终点**：链接（匿名接受 + `#secret`）与邀请（定向、要登录）在 core 都落成一张邀请，所以 core 的接受与消费逻辑不变。
+- **两种到达方式，两个落点**（契约 §22，协议 1.4 补充）：
+  - **分享链接**（匿名接受 + `#secret`）在 core 落成一张邀请，core 的接受与消费逻辑不变；下面几条（用量、接受事务、撤销、信任信息）说的都是链接。
+  - **主机邀请**（按邮箱定向、要登录）在云端落成**授予加 guest 成员关系**，不在 core 里落邀请：接受后控制面登记一条对该主机的授予（团队主机时接受者先成为团队 guest），之后按授予签带 `role` / `scp` 的断言，core 按 §11.2 同步授予。只带 `role` 不带 `team` 的断言要求 core 不低于 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`。实施见 [SaaS M1 实施设计](saas-m1-implementation.md) §4.7。
 - **用量以 core 为准**：core 是用量的真相；云端的 `max_uses` 只做提前拒绝。
 - **接受事务**：条件更新加一。并发测试：10 个同时接受、`max_uses = 5`，恰好 5 个成功；重复接受是幂等的。
 - **会话分享永远只读**：向他人终端写入等于替 Agent 回答权限提示，可写只在工作区级（editor 以上），写终端要 driver。
