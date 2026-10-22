@@ -37,7 +37,9 @@
       "https://armadra.test",
       "https://cloud.armadra.test/app/?x=1#y",
       "http://127.0.0.1:8080/path",
-      "http://[::1]:3000/"
+      "http://[::1]:3000/",
+      "https://a-b.example.com:65535/",
+      "https://[2001:db8::1]:443/"
     ],
     "invalid": [
       "",
@@ -45,7 +47,10 @@
       "/relative/path",
       "https://",
       "://host",
-      "not a url"
+      "not a url",
+      "http://:80",
+      "http://a.com:99999",
+      "http://a<b>.com"
     ]
   }
 }

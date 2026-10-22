@@ -11,9 +11,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -143,9 +145,37 @@ func newEmailMatcher(pattern string) *emailMatcher {
 	return m
 }
 
+// uriMatches 判 format: uri：url.Parse 成功，有 scheme 与非空主机名；端口若有须在 0–65535；
+// 主机名限定 IP-literal（方括号里的 IPv6，不带 zone）或 RFC 3986 的 reg-name（含 IPv4）。
+// 比 z.url() 严（无 host 的 mailto: 也拒绝），但凡 z.url() 拒绝的这里都拒绝。
 func uriMatches(value string) bool {
 	u, err := url.Parse(value)
-	return err == nil && u.Scheme != "" && u.Host != ""
+	if err != nil || u.Scheme == "" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 0 || n > 65535 {
+			return false
+		}
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		addr, err := netip.ParseAddr(host)
+		return err == nil && addr.Zone() == ""
+	}
+	for _, r := range host {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("-._~!$&'()*+,;=", r):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // utf16Len 按 UTF-16 码元计长，与 TypeScript 里 zod 对字符串长度的算法一致。
