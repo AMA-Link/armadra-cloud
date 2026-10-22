@@ -18,7 +18,7 @@
 
 - `auth.stepUp`（`POST /v1/auth/step-up`，scope `session`）：在已有会话上再验证。入参 `{ password?, totpCode?, passkeyAssertion? }`，至少给一项（都缺答 `400 bad_request`），口令或验证码不对答 `401 credentials_invalid` / `401 mfa_invalid`；成功答 `{ elevatedUntilMs }`，该会话在这之前（自此 10 分钟）算已提权，注销账号、转移所有权等敏感操作据此放行。
 - `auth.login` 入参 `scope?: "operator"`：要运营范围的 Cookie 会话，规则见 §28；响应字段 `csrfToken` 见 §1。
-- `auth.register` 在运营方事故开关关闭注册时答 `503 registrations_paused`；`platform.info.registrationsOpen` 报当前是否开放（personal 恒为 `true`），注册页据此直接显示关闭态。
+- `auth.register` 在运营方事故开关关闭注册时答 `503 registrations_paused`；`platform.info.registrationsOpen` 报当前是否开放（personal 恒为 `true`），注册页据此直接显示关闭态。已部署的服务端不报这个字段：缺省时客户端按开放处理。
 
 <!-- rpc:begin contract=§2 -->
 
@@ -62,7 +62,7 @@
 
 1.4 补充（控制台所需，Refs #60）：
 
-- `sourceSummary.ownerName`：主机所有者的显示名（`owner: boolean` 保留）；personal 是账号名，访客看不到所有者时为空串。
+- `sourceSummary.ownerName`：主机所有者的显示名（`owner: boolean` 保留）；personal 是账号名，访客看不到所有者时为空串。已部署的中继不报这个字段：缺省时客户端什么都不显示。
 - `sources.list` 入参加 `status`（`online` / `offline` / `revoked`）、`tag`（多个标签取「且」；GET 里重复写）、`q`（名称模糊）、`cursor`、`limit`（1–200，缺省 50）；出参加 `nextCursor`（`null` = 没有下一页）。personal 的目录一页放得下，没有标签：`status = revoked` 与给了 `tag` 都筛出空，`nextCursor` 恒为 `null`。
 
 <!-- rpc:begin contract=§4 -->

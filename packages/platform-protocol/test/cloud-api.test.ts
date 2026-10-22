@@ -680,7 +680,7 @@ describe("协议 1.4 补充：控制台缺口（G1–G9）", () => {
       expect(request).not.toHaveProperty("sas");
   });
 
-  it("G9 registrations_paused 是 503，platform.info 必带 registrationsOpen", () => {
+  it("G9 registrations_paused 是 503，platform.info.registrationsOpen 可缺", () => {
     expect(errorStatus("registrations_paused")).toBe(503);
     expect(byKey.get("auth.register")).toBeDefined();
     const info = output("platform.info");
@@ -693,6 +693,6 @@ describe("协议 1.4 补充：控制台缺口（G1–G9）", () => {
         relay: { addressing: "subdomain" },
         webApp: null,
       }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 });

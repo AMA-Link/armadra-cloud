@@ -99,8 +99,8 @@ export const sourceSummarySchema = z.object({
   online: z.boolean(),
   lastSeenAtMs: z.number().int().nullable(),
   owner: z.boolean(),
-  /** 1.4 补充：所有者的显示名（personal = 账号名）。 */
-  ownerName: z.string(),
+  /** 1.4 补充：所有者的显示名（personal = 账号名）；旧中继不报，缺省 = 不显示。 */
+  ownerName: z.string().optional(),
   via: sourceViaSchema,
   relayOrigin: z.string(),
   coreVersion: z.string(),

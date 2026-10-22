@@ -77,8 +77,8 @@ export const platformInfoSchema = z.object({
   capabilities: z.array(z.string()),
   relay: z.object({ addressing: z.enum(["subdomain", "path"]) }),
   webApp: z.url().nullable(),
-  /** 1.4 补充：是否开放注册（运营方事故开关关闭时为 false，注册页据此显示关闭态）；personal 恒为 true。 */
-  registrationsOpen: z.boolean(),
+  /** 1.4 补充：是否开放注册（运营方事故开关关闭时为 false，注册页据此显示关闭态）；personal 恒为 true；旧服务端不报，缺省 = 开放。 */
+  registrationsOpen: z.boolean().optional(),
   /** 要求挑战时才有（0.3.5 起）；旧客户端忽略它，此时服务端答 `challenge_required`。 */
   challenge: platformChallengeSchema.optional(),
 });
