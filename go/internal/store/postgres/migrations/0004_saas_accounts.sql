@@ -36,6 +36,8 @@ CREATE TABLE account_credentials (
 );
 
 CREATE INDEX account_credentials_account ON account_credentials (tenant_id, account_id, kind);
+-- 一个账号至多一个 TOTP。
+CREATE UNIQUE INDEX account_credentials_totp ON account_credentials (tenant_id, account_id) WHERE kind = 'totp';
 
 -- 邮件里的一次性令牌：只存哈希；verify 24 小时，reset 30 分钟，change 24 小时。
 CREATE TABLE email_tokens (

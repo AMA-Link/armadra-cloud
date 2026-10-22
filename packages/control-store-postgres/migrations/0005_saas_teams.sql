@@ -43,7 +43,8 @@ CREATE INDEX team_members_account ON team_members (tenant_id, account_id);
 -- 前一个的结果而失败。服务层另外在改成员前先 SELECT … FOR UPDATE 团队行，并先查后答 409
 -- team_last_owner；这里是兜底，违反时 SQLSTATE 23514、约束名 team_has_owner。
 -- UPDATE 时新旧两个团队都查（team_id 本不该被改，改了也守得住）。
-CREATE FUNCTION team_owner_check(t_tenant text, t_team text) RETURNS void LANGUAGE plpgsql AS $$
+CREATE FUNCTION team_owner_check(t_tenant text, t_team text) RETURNS void LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
 BEGIN
   PERFORM 1 FROM teams WHERE tenant_id = t_tenant AND team_id = t_team FOR UPDATE;
   IF FOUND AND NOT EXISTS (SELECT 1 FROM team_members
@@ -53,7 +54,8 @@ BEGIN
 END
 $$;
 
-CREATE FUNCTION team_owner_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION team_owner_guard() RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
 BEGIN
   IF TG_OP IN ('UPDATE', 'DELETE') AND TG_TABLE_NAME = 'team_members' THEN
     PERFORM team_owner_check(OLD.tenant_id, OLD.team_id);
@@ -77,6 +79,8 @@ CREATE TABLE groups (
   name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 128),
   created_at_ms bigint NOT NULL,
   PRIMARY KEY (tenant_id, group_id),
+  -- 给 group_members 的复合外键用：组员的 team_id 必须等于组所属的团队。
+  UNIQUE (tenant_id, team_id, group_id),
   FOREIGN KEY (tenant_id, team_id) REFERENCES teams (tenant_id, team_id) ON DELETE CASCADE
 );
 
@@ -91,7 +95,7 @@ CREATE TABLE group_members (
   is_lead boolean NOT NULL DEFAULT false,
   added_at_ms bigint NOT NULL,
   PRIMARY KEY (tenant_id, group_id, account_id),
-  FOREIGN KEY (tenant_id, group_id) REFERENCES groups (tenant_id, group_id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, team_id, group_id) REFERENCES groups (tenant_id, team_id, group_id) ON DELETE CASCADE,
   FOREIGN KEY (tenant_id, team_id, account_id)
     REFERENCES team_members (tenant_id, team_id, account_id) ON DELETE CASCADE
 );

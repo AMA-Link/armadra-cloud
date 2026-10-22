@@ -13,8 +13,12 @@ CREATE TABLE audit_log (
   action text NOT NULL CHECK (char_length(action) BETWEEN 1 AND 64),
   target_kind text,
   target_id text,
+  -- 涉及的主机（audit.list 的 sourceId 筛选用）。
+  source_id text,
   jti text,
   ip_prefix text,
+  -- 设备名快照（me.securityLog 的 deviceName；设备改名或删除后日志里仍是当时的名字）。
+  device_name text CHECK (char_length(device_name) <= 128),
   -- 运营写操作的理由（契约 §28 必填）；其余为 NULL。
   reason text CHECK (char_length(reason) <= 500),
   PRIMARY KEY (at_ms, event_id)
@@ -27,12 +31,22 @@ CREATE INDEX audit_log_team ON audit_log (tenant_id, team_id, at_ms DESC) WHERE 
 CREATE INDEX audit_log_account ON audit_log (tenant_id, account_id, at_ms DESC) WHERE account_id IS NOT NULL;
 CREATE INDEX audit_log_actor ON audit_log (tenant_id, actor_kind, actor_id, at_ms DESC);
 CREATE INDEX audit_log_target ON audit_log (tenant_id, target_kind, target_id, at_ms DESC);
+CREATE INDEX audit_log_source ON audit_log (tenant_id, team_id, source_id, at_ms DESC) WHERE source_id IS NOT NULL;
 
--- 建一个月的分区（幂等）。兜底分区里若已有这个月的行：在同一事务里先把兜底分区摘下，
--- 建新分区，把那些行搬过去，再把兜底分区挂回。调用方持 pg_advisory_xact_lock。
+-- 建一个月的分区（幂等）。分区名必须是 audit_log_YYYY_MM，边界必须是该 UTC 月的月初与下月月初，否则拒绝（22023）。
+-- 兜底分区里若已有这个月的行：在同一事务里先把兜底分区摘下，建新分区，把那些行搬过去，再把兜底分区挂回。
+-- 调用方持 pg_advisory_xact_lock，并先 SET LOCAL lock_timeout（摘 / 挂分区要父表的排他锁，见 §6）。
 CREATE FUNCTION audit_ensure_partition(month_start_ms bigint, month_end_ms bigint, part_name text)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS void LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
+DECLARE
+  m timestamp := date_trunc('month', to_timestamp(month_start_ms / 1000.0) AT TIME ZONE 'UTC');
 BEGIN
+  IF month_start_ms <> (extract(epoch FROM m) * 1000)::bigint
+     OR month_end_ms <> (extract(epoch FROM m + interval '1 month') * 1000)::bigint
+     OR part_name <> 'audit_log_' || to_char(m, 'YYYY_MM') THEN
+    RAISE EXCEPTION 'invalid audit partition' USING ERRCODE = '22023';
+  END IF;
   IF to_regclass(part_name) IS NOT NULL THEN
     RETURN;
   END IF;

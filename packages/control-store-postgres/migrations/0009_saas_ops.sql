@@ -23,6 +23,9 @@ CREATE TABLE jobs (
 );
 
 CREATE INDEX jobs_due ON jobs (run_at_ms) WHERE done_at_ms IS NULL AND failed_at_ms IS NULL;
+-- 已完成 / 已失败作业的清理（jobs.gc）按时间扫这两个索引。
+CREATE INDEX jobs_done ON jobs (done_at_ms) WHERE done_at_ms IS NOT NULL;
+CREATE INDEX jobs_failed ON jobs (failed_at_ms) WHERE failed_at_ms IS NOT NULL;
 CREATE UNIQUE INDEX jobs_dedupe ON jobs (tenant_id, kind, dedupe_key)
   WHERE dedupe_key IS NOT NULL AND done_at_ms IS NULL AND failed_at_ms IS NULL;
 CREATE UNIQUE INDEX jobs_slot ON jobs (tenant_id, kind, slot_key) WHERE slot_key IS NOT NULL;
@@ -46,6 +49,8 @@ CREATE TABLE outbox_emails (
 );
 
 CREATE INDEX outbox_emails_gc ON outbox_emails (created_at_ms);
+-- 删作业时 ON DELETE SET NULL 要按 job_id 找发件箱行。
+CREATE INDEX outbox_emails_job ON outbox_emails (job_id) WHERE job_id IS NOT NULL;
 
 -- 平台级开关（事故开关等），运营后台写；键见设计 §4.9。
 CREATE TABLE platform_settings (
@@ -59,16 +64,18 @@ CREATE TABLE platform_settings (
 
 -- 已签令牌的索引（Redis cloud:issued:* 的落盘副本，§7.2）：只有标识，没有令牌本身。
 CREATE TABLE cloud_issued_tokens (
-  jti text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  jti text NOT NULL,
   account_id text NOT NULL,
   source_id text NOT NULL,
   device_id text NOT NULL,
-  exp_ms bigint NOT NULL
+  exp_ms bigint NOT NULL,
+  PRIMARY KEY (tenant_id, jti)
 );
 
-CREATE INDEX cloud_issued_tokens_account ON cloud_issued_tokens (account_id, exp_ms);
-CREATE INDEX cloud_issued_tokens_source ON cloud_issued_tokens (source_id, exp_ms);
-CREATE INDEX cloud_issued_tokens_exp ON cloud_issued_tokens (exp_ms);
+CREATE INDEX cloud_issued_tokens_account ON cloud_issued_tokens (tenant_id, account_id, exp_ms);
+CREATE INDEX cloud_issued_tokens_source ON cloud_issued_tokens (tenant_id, source_id, exp_ms);
+CREATE INDEX cloud_issued_tokens_exp ON cloud_issued_tokens (tenant_id, exp_ms);
 
 -- 流量按团队计（能力设计 §11.14）：入口节点写中继令牌的 team；个人空间为空串。
 -- 不进主键：同一小时同一主机换团队只在转移（M2）时发生，按首次写入的团队计。

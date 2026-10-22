@@ -22,7 +22,10 @@ CREATE TABLE source_grants (
   revoked_at_ms bigint,
   revoked_by text,
   PRIMARY KEY (tenant_id, grant_id),
-  FOREIGN KEY (tenant_id, source_id) REFERENCES sources (tenant_id, source_id) DEFERRABLE INITIALLY DEFERRED
+  FOREIGN KEY (tenant_id, source_id) REFERENCES sources (tenant_id, source_id) DEFERRABLE INITIALLY DEFERRED,
+  -- team 主体就是主机所属的团队；team / member 主体只出现在团队主机上。
+  CHECK (subject_kind <> 'team' OR subject_id = team_id),
+  CHECK (subject_kind NOT IN ('team', 'member') OR team_id IS NOT NULL)
 );
 
 -- 同一主机对同一主体只有一条有效授予（重复建答 409 conflict）。
@@ -52,12 +55,15 @@ CREATE TABLE invitations (
   decided_by text,
   created_at_ms bigint NOT NULL,
   expires_at_ms bigint NOT NULL,
+  -- 主机邀请被接受后授予的到期；NULL = 不过期。与邀请自身的有效期（expires_at_ms）无关。
+  grant_expires_at_ms bigint,
   decided_at_ms bigint,
   sent_at_ms bigint,
   resend_count integer NOT NULL DEFAULT 0,
   PRIMARY KEY (tenant_id, invitation_id),
   FOREIGN KEY (tenant_id, source_id) REFERENCES sources (tenant_id, source_id) DEFERRABLE INITIALLY DEFERRED,
-  CHECK (kind <> 'team' OR (team_id IS NOT NULL AND team_role IS NOT NULL AND source_id IS NULL)),
+  CHECK (kind <> 'team' OR (team_id IS NOT NULL AND team_role IS NOT NULL AND source_id IS NULL
+                            AND host_role IS NULL AND cardinality(workspace_ids) = 0)),
   CHECK (kind <> 'host' OR (source_id IS NOT NULL AND host_role IS NOT NULL AND team_role IS NULL))
 );
 
