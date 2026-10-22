@@ -55,7 +55,7 @@ Workers 中继：
 
    ```sh
    terraform init
-   terraform plan -var origin_ipv4=<控制面服务器的公网 IPv4>        # 缺省不建 app / status 记录；控制面部署位置待定（Render 或 Cloudflare），定了再给
+   terraform plan -var origin_ipv4=<控制面服务器的公网 IPv4>        # 缺省不建 app / status 记录；SaaS 控制面跑在 VM 上（docs/design/go-relay-design.md §3.10），那台 VM 上线后再给
    terraform apply -var origin_ipv4=<控制面服务器的公网 IPv4>
    ```
 
