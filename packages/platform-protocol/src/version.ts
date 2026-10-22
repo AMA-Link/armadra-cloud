@@ -10,8 +10,13 @@
  * - 1.3（0.4.0）：端到端通道（cloud-api §20）——隧道 `OPEN.kind` 加 `e2e`、源能力 `e2e`、
  *   中继令牌可选声明 `dev`；通道本身的握手与记录层在 `./e2e`（`armadra-e2e/1`）。老源不报
  *   `e2e` 就收不到这种 `OPEN`，老中继不认 `dev` 照常放行。
+ * - 1.4（0.10.0）：SaaS 租户是团队（cloud-api §21 起）——断言 `team` 改为 `{ teamId, role:
+ *   owner|admin|member|billing|guest }`（1.1 的部门语义从未签发过），中继令牌与隧道令牌的
+ *   `org` 换成 `team`（团队 id）；契约删去从未实现的 `orgs.*`，追加 `teams` / `invitations` /
+ *   `groups` / `grants` / `accessRequests` / `audit` / `billing` / `apiTokens` / `admin` 等
+ *   预留 procedure。`org` 声明保留给以后的企业组织层。
  */
-export const PROTOCOL_VERSION = { major: 1, minor: 3 } as const;
+export const PROTOCOL_VERSION = { major: 1, minor: 4 } as const;
 
 /** 隧道路径；major 变化时同时升为 `/t/v2`。 */
 export const TUNNEL_PATH = "/t/v1";
