@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### 新增 / Added
+
+- 协议 1.4（Refs #60）：SaaS 的租户是团队。断言 `team` 改为 `{ teamId, role: owner|admin|member|billing|guest }`；中继令牌与隧道令牌的 `org` 换成可选的 `team`（团队 id）；`org` 声明保留给以后的企业组织层。SaaS 从未上线，1.1 的部门语义（`lead|member`）与 `org` 从未签发过，所以原地更改。老中继与老 core 忽略新的 `team`。
+  Protocol 1.4 (Refs #60): the SaaS tenant is the team. The assertion `team` becomes `{ teamId, role: owner|admin|member|billing|guest }`; the relay and tunnel tokens replace `org` with an optional `team` (team id); the `org` claim is reserved for a future enterprise layer. SaaS never launched and the 1.1 department semantics (`lead|member`) and `org` were never issued, so they change in place. Older relays and cores ignore the new `team`.
+- 契约追加预留 procedure（cloud-api §21–§30，全部预留：personal 答 404、cloud 答 501，没有处理器）：`teams.*`、`invitations.*`、`groups.*`、`grants.*`（含 `effective`）、`accessRequests.*`、`audit.*`、按团队的 `billing.*`（`checkout` / `portal` / `webhook`）、`apiTokens.*`、运营后台 `admin.*`（scope `operator`）；账号补充 `auth.emailVerify` / `passwordResetStart` / `passwordResetFinish` / `oauth*`、`me.emailChange` / `spaces` / `securityLog` / `delete` / `export`；主机 `sources.update` 多标签与设置、`sources.transfer*`，`sources.registrationToken` 带空间 `space`，`links.create` 多 `team_join`。新增 scope `team:member` / `team:admin` / `team:owner` / `team:billing` / `group:lead` / `operator` / `billing-webhook`，新增错误码 `team_role_insufficient`、`team_owner_required`、`team_slug_taken`、`team_policy_denied`、`team_suspended`、`invitation_expired`、`invitation_revoked`、`invitation_email_mismatch`、`transfer_pending`、`transfer_expired`、`email_token_invalid`、`email_token_expired`、`webhook_signature_invalid`。`PROTOCOL_VERSION` 升到 1.4，`deploy/compat.json` 同步。
+  The contract appends reserved procedures (cloud-api §21–§30, all reserved: personal answers 404, cloud answers 501, no handlers): `teams.*`, `invitations.*`, `groups.*`, `grants.*` (including `effective`), `accessRequests.*`, `audit.*`, team-scoped `billing.*` (`checkout` / `portal` / `webhook`), `apiTokens.*`, and the operator console `admin.*` (scope `operator`); account additions `auth.emailVerify` / `passwordResetStart` / `passwordResetFinish` / `oauth*`, `me.emailChange` / `spaces` / `securityLog` / `delete` / `export`; host changes `sources.update` gains tags and settings, `sources.transfer*`, `sources.registrationToken` takes a `space`, `links.create` gains `team_join`. New scopes `team:member` / `team:admin` / `team:owner` / `team:billing` / `group:lead` / `operator` / `billing-webhook`; new error codes `team_role_insufficient`, `team_owner_required`, `team_slug_taken`, `team_policy_denied`, `team_suspended`, `invitation_expired`, `invitation_revoked`, `invitation_email_mismatch`, `transfer_pending`, `transfer_expired`, `email_token_invalid`, `email_token_expired`, `webhook_signature_invalid`. `PROTOCOL_VERSION` moves to 1.4 and `deploy/compat.json` follows.
+
+### 移除 / Removed
+
+- 契约删除从未实现的 `orgs.*`、scope `org:admin` / `org:owner`、`orgSchema` 与 `orgMemberSchema`；cloud-api §3（组织）与 §9（计费，原挂组织）标为已移除，计费改到 §26 的 `/v1/teams/{teamId}/billing…`。错误码 `org_role_insufficient`、`org_slug_taken` 按「只增不删」保留但不再使用。夹具 `tunnel-token-org.jwt` 改名 `tunnel-token-team.jwt`。
+  The contract drops the never-implemented `orgs.*`, the scopes `org:admin` / `org:owner`, and `orgSchema` / `orgMemberSchema`; cloud-api §3 (organizations) and §9 (billing under organizations) are marked removed and billing moves to `/v1/teams/{teamId}/billing…` in §26. The error codes `org_role_insufficient` and `org_slug_taken` are kept (codes are append-only) but unused. The fixture `tunnel-token-org.jwt` is renamed `tunnel-token-team.jwt`.
+
 ## 0.9.2（2026-10-22）
 
 ### 变更 / Changed
