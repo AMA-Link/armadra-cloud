@@ -37,6 +37,21 @@ func TestQueryObjectCoercesByDeclaredType(t *testing.T) {
 	}
 }
 
+// schema 声明为 array 的 query 参数收全部同名值（sources.list 的 tag），不再只取最后一个。
+func TestQueryObjectCollectsArrayParameters(t *testing.T) {
+	input := gen.RouteInputs["sources.list"]
+	got := queryObject(url.Values{"tag": {"a", "b", "c"}}, input)
+	if !reflect.DeepEqual(got["tag"], []any{"a", "b", "c"}) {
+		t.Fatalf("应收全部同名值：%v", got["tag"])
+	}
+	if _, err := decodeInput(input, got); err != nil {
+		t.Fatalf("合格的数组 query 应通过校验：%v", err)
+	}
+	if got = queryObject(url.Values{"tag": {"only"}}, input); !reflect.DeepEqual(got["tag"], []any{"only"}) {
+		t.Fatalf("单个值也是数组：%v", got["tag"])
+	}
+}
+
 func TestQueryObjectExpandsDeepObject(t *testing.T) {
 	got := queryObject(url.Values{"scope[workspaceId]": {"ws_01"}, "scope[readOnly]": {"true"}, "plain": {"x"}, "bad[": {"y"}, "a[b][c]": {"z"}}, nil)
 	want := map[string]any{
