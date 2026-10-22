@@ -27,4 +27,3 @@ for (const locale of ["zh-CN", "en"]) {
     );
   }
 }
-
