@@ -9,3 +9,8 @@
 *.tgz
 **/.dev.vars
 **/.wrangler
+go/bin
+go/bench/bin
+go/bench/results
+go/bench/logs
+go/bench/work
