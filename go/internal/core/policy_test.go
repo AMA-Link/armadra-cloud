@@ -58,26 +58,47 @@ func TestPersonalPolicy(t *testing.T) {
 
 	t.Run("CanManage：只有 owner", func(t *testing.T) {
 		for _, action := range []core.ManageAction{core.ManageSourceRevoke, core.ManageLinkCreate, core.ManageLinkList, core.ManageLinkUpdate, core.ManageLinkRevoke} {
-			eq(t, code(policy.CanManage(e.ctx, owner, sourceID, action)), "ok", string(action)+" owner")
-			eq(t, code(policy.CanManage(e.ctx, guest, sourceID, action)), "forbidden", string(action)+" 访客")
+			eq(t, code(policy.CanManage(e.ctx, owner, core.ManageTarget{SourceID: sourceID}, action)), "ok", string(action)+" owner")
+			eq(t, code(policy.CanManage(e.ctx, guest, core.ManageTarget{SourceID: sourceID}, action)), "forbidden", string(action)+" 访客")
 		}
 	})
 
+	t.Run("CanManage：空目标与按链接的目标都不能放行非 owner", func(t *testing.T) {
+		for _, target := range []core.ManageTarget{{}, {LinkID: linkID}} {
+			eq(t, code(policy.CanManage(e.ctx, guest, target, core.ManageLinkList)), "forbidden", "访客")
+			eq(t, code(policy.CanManage(e.ctx, owner, target, core.ManageLinkList)), "ok", "owner")
+		}
+	})
+
+	t.Run("Access：单台判定与 Visible 一致", func(t *testing.T) {
+		entry, ok, err := policy.Access(e.ctx, guest, sourceID)
+		e.must(err)
+		eq(t, [2]any{ok, entry.Via}, [2]any{true, "link"}, "访客")
+		_, ok, err = policy.Access(e.ctx, guest, "other")
+		e.must(err)
+		eq(t, ok, false, "别的源")
+	})
+
 	t.Run("Watch：owner 看全部，访客只看链接指向的源", func(t *testing.T) {
-		sees, err := policy.Watch(e.ctx, owner)
+		w, err := policy.Watch(e.ctx, owner)
 		e.must(err)
-		eq(t, sees("anything"), true, "owner")
-		sees, err = policy.Watch(e.ctx, guest)
+		eq(t, w.Sees("anything"), true, "owner")
+		w, err = policy.Watch(e.ctx, guest)
 		e.must(err)
-		eq(t, [2]bool{sees(sourceID), sees("other")}, [2]bool{true, false}, "访客")
-		sees, err = policy.Watch(e.ctx, core.Caller{Role: core.RoleGuest})
+		eq(t, [2]bool{w.Sees(sourceID), w.Sees("other")}, [2]bool{true, false}, "访客")
+		w, err = policy.Watch(e.ctx, core.Caller{Role: core.RoleGuest})
 		e.must(err)
-		eq(t, sees(sourceID), false, "没有链接")
+		eq(t, w.Sees(sourceID), false, "没有链接")
+		w.Refresh(nil)
+		w.Close()
 	})
 }
 
 // denyAll 是一个注入的策略：证明服务确实经 Context.Policy 判定。
-type denyAll struct{ managed []core.ManageAction }
+type denyAll struct {
+	managed []core.ManageAction
+	closed  bool
+}
 
 func (d *denyAll) Visible(context.Context, core.Caller, core.SourceFilter) ([]core.VisibleSource, string, error) {
 	return nil, "", nil
@@ -87,13 +108,23 @@ func (d *denyAll) Intent(context.Context, core.Caller, store.SourceRecord) (core
 	return core.GrantExtra{}, core.Fail(gen.ErrSourceAccessDenied)
 }
 
-func (d *denyAll) CanManage(_ context.Context, _ core.Caller, _ string, action core.ManageAction) error {
+func (d *denyAll) Access(context.Context, core.Caller, string) (core.VisibleSource, bool, error) {
+	return core.VisibleSource{}, false, nil
+}
+
+func (d *denyAll) CanManage(_ context.Context, _ core.Caller, _ core.ManageTarget, action core.ManageAction) error {
 	d.managed = append(d.managed, action)
 	return core.Fail(gen.ErrForbidden)
 }
 
-func (d *denyAll) Watch(context.Context, core.Caller) (func(string) bool, error) {
-	return func(string) bool { return false }, nil
+type denyWatcher struct{ closed *bool }
+
+func (denyWatcher) Sees(string) bool   { return false }
+func (denyWatcher) Refresh(core.Event) {}
+func (w denyWatcher) Close()           { *w.closed = true }
+
+func (d *denyAll) Watch(context.Context, core.Caller) (core.Watcher, error) {
+	return denyWatcher{closed: &d.closed}, nil
 }
 
 func TestServicesGoThroughPolicy(t *testing.T) {
@@ -127,6 +158,7 @@ func TestServicesGoThroughPolicy(t *testing.T) {
 	e.h.Context.Emit(core.NewSourceRevoked(sourceID), nil)
 	detach()
 	eq(t, len(seen), 0, "MeStream 经策略过滤")
+	eq(t, deny.closed, true, "断开时 Watcher.Close")
 }
 
 func TestSourceAddressFunctions(t *testing.T) {

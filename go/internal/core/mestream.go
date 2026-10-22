@@ -107,7 +107,7 @@ type queuedEvent struct {
 // 先后顺序不变。访客能看到的源在 Attach 时解析一次（撤销由 accessRevoked 事件与装配方的复核负责）。
 type attachment struct {
 	caller     Caller
-	sees       func(sourceID string) bool
+	watcher    Watcher
 	queue      chan queuedEvent
 	done       chan struct{}
 	send       func(Event)
@@ -116,11 +116,12 @@ type attachment struct {
 
 // offer 按可见性过滤后放进队列；不做任何 I/O。
 func (a *attachment) offer(event Event, audience *Audience) {
+	a.watcher.Refresh(event)
 	if audience != nil {
 		if a.caller.LinkID != audience.LinkID {
 			return
 		}
-	} else if !a.sees(event.EventSource()) {
+	} else if !a.watcher.Sees(event.EventSource()) {
 		return
 	}
 	select {
@@ -158,12 +159,12 @@ func (m *MeStream) Attach(caller Caller, send func(Event), onOverflow func()) (d
 		send: send, onOverflow: onOverflow,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	sees, watchErr := m.c.access().Watch(ctx, caller)
+	watcher, watchErr := m.c.access().Watch(ctx, caller)
 	cancel()
 	if watchErr != nil {
 		return nil, watchErr
 	}
-	a.sees = sees
+	a.watcher = watcher
 	go a.run()
 	offBus := m.c.Subscribe(a.offer)
 	m.mu.Lock()
@@ -187,6 +188,7 @@ func (m *MeStream) Attach(caller Caller, send func(Event), onOverflow func()) (d
 				stop()
 			}
 			close(a.done)
+			a.watcher.Close()
 		})
 	}, nil
 }
@@ -214,7 +216,7 @@ func (m *MeStream) onPresence(presence PresenceEvent) {
 		if err != nil {
 			return
 		}
-		event = NewSourceOnline(presence.SourceID, presence.AtMs, issuer)
+		event = NewSourceOnline(presence.SourceID, presence.AtMs, m.c.relayOrigin(issuer, presence.SourceID))
 	} else {
 		event = NewSourceOffline(presence.SourceID, presence.AtMs)
 	}

@@ -369,9 +369,17 @@ func (s *Sources) List(ctx context.Context, caller Caller) ([]SourceSummary, err
 	if err != nil {
 		return nil, err
 	}
-	visible, _, err := s.c.access().Visible(ctx, caller, SourceFilter{})
-	if err != nil {
-		return nil, err
+	var visible []VisibleSource
+	for cursor := ""; ; {
+		page, next, err := s.c.access().Visible(ctx, caller, SourceFilter{Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		visible = append(visible, page...)
+		if next == "" {
+			break
+		}
+		cursor = next
 	}
 	out := make([]SourceSummary, 0, len(visible))
 	for _, source := range visible {
@@ -390,15 +398,12 @@ func (s *Sources) Get(ctx context.Context, caller Caller, sourceID string) (Sour
 	if err != nil {
 		return SourceDetail{}, err
 	}
-	visible, _, err := s.c.access().Visible(ctx, caller, SourceFilter{})
+	entry, ok, err := s.c.access().Access(ctx, caller, sourceID)
 	if err != nil {
 		return SourceDetail{}, err
 	}
-	for _, entry := range visible {
+	if ok {
 		source := entry.Source
-		if source.SourceID != sourceID {
-			continue
-		}
 		summary, err := s.summary(ctx, settings.Issuer, entry)
 		if err != nil {
 			return SourceDetail{}, err
@@ -415,7 +420,7 @@ func (s *Sources) Get(ctx context.Context, caller Caller, sourceID string) (Sour
 
 // Revoke 撤销源：标记、关隧道、断开经中继的客户端 WS、通知 me/stream。
 func (s *Sources) Revoke(ctx context.Context, caller Caller, sourceID string) error {
-	if err := s.c.access().CanManage(ctx, caller, sourceID, ManageSourceRevoke); err != nil {
+	if err := s.c.access().CanManage(ctx, caller, ManageTarget{SourceID: sourceID}, ManageSourceRevoke); err != nil {
 		return err
 	}
 	nowMs := s.c.NowMs()
@@ -446,16 +451,13 @@ func (s *Sources) Assertion(ctx context.Context, caller Caller, sourceID string,
 	if registered != nil && registered.RevokedAtMs != nil {
 		return Grant{}, Fail(gen.ErrSourceRevoked)
 	}
-	visible, _, err := s.c.access().Visible(ctx, caller, SourceFilter{})
+	entry, ok, err := s.c.access().Access(ctx, caller, sourceID)
 	if err != nil {
 		return Grant{}, err
 	}
 	var source *store.SourceRecord
-	for i := range visible {
-		if visible[i].Source.SourceID == sourceID {
-			source = &visible[i].Source
-			break
-		}
+	if ok {
+		source = &entry.Source
 	}
 	if source == nil {
 		return Grant{}, Fail(gen.ErrSourceAccessDenied)
