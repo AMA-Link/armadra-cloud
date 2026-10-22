@@ -326,3 +326,17 @@ func TestMemoryConcurrent(t *testing.T) {
 		t.Fatalf("并发名额 %d、速率 %d", conc, rate)
 	}
 }
+
+// 建连高峰里键很多且都在窗口内：清扫不能每次都遍历整张表，否则是平方级。
+func TestMemorySweepAmortized(t *testing.T) {
+	m := control.NewMemory(control.MemoryOptions{Issuer: "i"})
+	start := time.Now()
+	for i := 0; i < 60000; i++ {
+		if _, err := m.Limits().Hit(context.Background(), control.LimitEdgeConnectAcct, "acct-"+strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("6 万个不同的键用了 %v，清扫没有摊还", d)
+	}
+}

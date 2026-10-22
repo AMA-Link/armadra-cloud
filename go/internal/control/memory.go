@@ -10,6 +10,19 @@ import (
 // 超过这个条目数时，写入顺手清一遍过期项。
 const sweepAt = 1024
 
+// sweepGate 让清扫摊还成常数：条目数到门槛才清一遍，清完把门槛提到存活数的两倍
+// （但不低于 sweepAt）。逐次写入都遍历整张表会让建连高峰变成平方级。
+type sweepGate struct{ at int }
+
+func (g *sweepGate) due(size int) bool {
+	if g.at == 0 {
+		g.at = sweepAt
+	}
+	return size >= g.at
+}
+
+func (g *sweepGate) done(alive int) { g.at = max(sweepAt, 2*alive) }
+
 // MemoryOptions 配置 Memory。
 type MemoryOptions struct {
 	Issuer string
@@ -92,6 +105,8 @@ type Memory struct {
 	windows    map[string]*window
 	concurrent map[string]int
 	revokedTab map[string]time.Time
+
+	routesGate, windowsGate, revokedGate sweepGate
 
 	presence bus[PresenceEvent]
 	commands bus[NodeCommand]
@@ -203,13 +218,14 @@ func (r *memRoutes) Set(_ context.Context, sourceID string, route Route, ttl tim
 	m := (*Memory)(r)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.routes) >= sweepAt {
+	if m.routesGate.due(len(m.routes)) {
 		at := m.now()
 		for k, e := range m.routes {
 			if !e.expiresAt.After(at) {
 				delete(m.routes, k)
 			}
 		}
+		m.routesGate.done(len(m.routes))
 	}
 	m.routes[sourceID] = &routeEntry{route: route, expiresAt: m.now().Add(ttl)}
 	return nil
@@ -274,12 +290,13 @@ func (l *memLimits) Hit(_ context.Context, kind LimitKind, key string) (LimitRes
 		return LimitResult{Allowed: true}, nil
 	}
 	at := m.now()
-	if len(m.windows) >= sweepAt {
+	if m.windowsGate.due(len(m.windows)) {
 		for k, w := range m.windows {
 			if !w.resetAt.After(at) {
 				delete(m.windows, k)
 			}
 		}
+		m.windowsGate.done(len(m.windows))
 	}
 	w := m.windows[id]
 	if w == nil || !w.resetAt.After(at) {
@@ -334,12 +351,13 @@ func (t *memTokens) Revoke(_ context.Context, jti string, exp time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	at := m.now()
-	if len(m.revokedTab) >= sweepAt {
+	if m.revokedGate.due(len(m.revokedTab)) {
 		for k, until := range m.revokedTab {
 			if !until.After(at) {
 				delete(m.revokedTab, k)
 			}
 		}
+		m.revokedGate.done(len(m.revokedTab))
 	}
 	if exp.After(at) {
 		m.revokedTab[jti] = exp
