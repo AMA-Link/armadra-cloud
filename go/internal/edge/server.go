@@ -44,6 +44,8 @@ type Options struct {
 	Poller *netpoll.Poller
 	// Dispatch 承接 epoll 循环上不能做的控制面调用；不给就自建。
 	Dispatch *control.Dispatcher
+	// Gate 见 PolicyOptions。
+	Gate Gate
 }
 
 // Edge 是客户端边缘的 HTTP 外壳：判定在 Policy，这里管字节进出。
@@ -86,6 +88,7 @@ func New(o Options) (*Edge, error) {
 	e.policy = NewPolicy(PolicyOptions{
 		NodeID: o.NodeID, Addressing: o.Addressing, Auth: o.Auth, Control: o.Control,
 		Lookup: o.Lookup, Metrics: o.Metrics, CORSOrigins: o.CORSOrigins, Traffic: o.Traffic, Dispatch: o.Dispatch,
+		Gate: o.Gate,
 	})
 	go e.wheel.run(o.WSPing, o.WSIdle)
 	return e, nil
