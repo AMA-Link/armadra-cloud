@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 )
 
 func parseLine(t *testing.T, line string) map[string]any {
@@ -234,7 +237,7 @@ func TestHealth(t *testing.T) {
 	if rec.Body.String() != want {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
-	for k, v := range map[string]string{"armadra-protocol": "1.3", "content-type": "application/json; charset=utf-8", "cache-control": "no-store"} {
+	for k, v := range map[string]string{"armadra-protocol": fmt.Sprintf("%d.%d", gen.ProtocolMajor, gen.ProtocolMinor), "content-type": "application/json; charset=utf-8", "cache-control": "no-store"} {
 		if rec.Header().Get(k) != v {
 			t.Errorf("%s = %q", k, rec.Header().Get(k))
 		}
@@ -252,7 +255,7 @@ func TestReady(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	up := ReadyHandler(map[string]Probe{"redis": func(context.Context) error { return nil }})
-	if rec := get(up, "GET", "/ready", nil); rec.Code != 200 || rec.Header().Get("armadra-protocol") != "1.3" {
+	if rec := get(up, "GET", "/ready", nil); rec.Code != 200 || rec.Header().Get("armadra-protocol") != fmt.Sprintf("%d.%d", gen.ProtocolMajor, gen.ProtocolMinor) {
 		t.Fatalf("%d", rec.Code)
 	}
 }

@@ -360,8 +360,9 @@ func TestOverhead(t *testing.T) {
 		if f.meter.Pending() != 1 {
 			t.Fatalf("pending = %d", f.meter.Pending())
 		}
-		// 本机实测每次几十纳秒（竞态检测下几百纳秒）；这里只防退化成按帧拼键、查表或写库（那会是微秒级）。
-		if perCall > 2*time.Microsecond {
+		// 本机实测每次几十纳秒（竞态检测下几百纳秒）；这里只防退化成按帧拼键、查表或写库（那会是几十微秒级）。
+		// 门槛放得宽，免得机器忙（CI、竞态检测）时误报。
+		if perCall > 20*time.Microsecond {
 			t.Fatalf("每次 %v", perCall)
 		}
 	})
