@@ -11,6 +11,7 @@
 - 认证：云会话用 `Authorization: Bearer <accessToken>`；源对控制面用 `Authorization: Source <jws>`；浏览器来源改用 `__Host-armadra-cloud` Cookie + `X-Armadra-CSRF`。
 - **CSRF 值从哪来**（1.4 补充）：Cookie 会话的 CSRF 值由 `auth.login`、`auth.mfaVerify`、`auth.refresh` 的响应字段 `csrfToken` 给出，页面刷新后由 `me.get` 的 `csrfToken` 取回；前端只放内存。Cookie 会话上每个非 GET 请求必须带 `X-Armadra-CSRF`，值等于它，对不上答 `403 forbidden`。同一请求不同时带 Cookie 与 Bearer。Bearer 会话与 personal 不用 Cookie，响应里没有 `csrfToken`（字段可缺）。
 - **运营会话 Cookie**（1.4 补充）：运营范围的会话是另一枚 Cookie `__Host-armadra-ops`，不覆盖普通会话 `__Host-armadra-cloud`，两者可同时存在；它同样配 `X-Armadra-CSRF`（值取自签出它的那次 `auth.login` / `auth.mfaVerify` 响应的 `csrfToken`，用于 `__Host-armadra-ops` 的请求），寿命 1 小时，只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，其余 procedure 一律不认。详见 §28。
+- **Cookie 会话的刷新与登出**（1.4 补充）：`auth.refresh` 的 `refreshToken` 可省——Cookie 会话的刷新凭据在 Cookie 里（`__Host-armadra-cloud` / `__Host-armadra-ops`），不进请求体；Bearer 客户端（原生、核心）照旧必带。`auth.refresh` 与 `auth.logout` 多可选入参 `scope?: "operator"`：不带作用于普通控制台会话（`__Host-armadra-cloud`），带则作用于运营会话（`__Host-armadra-ops`）；各自要对应那枚 Cookie 的 `X-Armadra-CSRF`。personal 不用 Cookie、没有运营账号：`refreshToken` 缺了答 `session_revoked`（与令牌无效同码），`scope: "operator"` 答 `403 forbidden`（与 `auth.login` 一致）。两个字段都是入参上的可选追加，已部署中继不受影响。
 
 ## §2 账号与会话
 
@@ -18,6 +19,7 @@
 
 - `auth.stepUp`（`POST /v1/auth/step-up`，scope `session`）：在已有会话上再验证。入参 `{ password?, totpCode?, passkeyAssertion? }`，至少给一项（都缺答 `400 bad_request`），口令或验证码不对答 `401 credentials_invalid` / `401 mfa_invalid`；成功答 `{ elevatedUntilMs }`，该会话在这之前（自此 10 分钟）算已提权，注销账号、转移所有权等敏感操作据此放行。
 - `auth.login` 入参 `scope?: "operator"`：要运营范围的 Cookie 会话，规则见 §28；响应字段 `csrfToken` 见 §1。
+- `auth.refresh` 入参 `refreshToken` 可省，`auth.refresh` / `auth.logout` 多可选 `scope?: "operator"`：规则见 §1「Cookie 会话的刷新与登出」与 §28。
 - `auth.register` 在运营方事故开关关闭注册时答 `503 registrations_paused`；`platform.info.registrationsOpen` 报当前是否开放（personal 恒为 `true`），注册页据此直接显示关闭态。已部署的服务端不报这个字段：缺省时客户端按开放处理。
 
 <!-- rpc:begin contract=§2 -->
@@ -30,9 +32,9 @@
 | `auth.register`               | `POST /v1/auth/register`                 | `anonymous` | `email_taken`、`rate_limited`、`registrations_paused`、`password_too_short`、`password_too_long`、`password_too_common`、`password_contains_name`、`password_breached` |
 | `auth.login`                  | `POST /v1/auth/login`                    | `anonymous` | `credentials_invalid`、`account_locked`、`account_disabled`、`rate_limited`、`challenge_required`、`challenge_invalid`、`forbidden`、`operator_mfa_required`           |
 | `auth.mfaVerify`              | `POST /v1/auth/mfa/verify`               | `anonymous` | `mfa_invalid`、`mfa_expired`、`account_locked`                                                                                                                         |
-| `auth.refresh`                | `POST /v1/auth/refresh`                  | `anonymous` | `session_expired`、`session_revoked`                                                                                                                                   |
+| `auth.refresh`                | `POST /v1/auth/refresh`                  | `anonymous` | `session_expired`、`session_revoked`、`forbidden`                                                                                                                      |
 | `auth.stepUp`                 | `POST /v1/auth/step-up`                  | `session`   | `credentials_invalid`、`mfa_invalid`、`rate_limited`、`bad_request`                                                                                                    |
-| `auth.logout`                 | `POST /v1/auth/logout`                   | `session`   | —                                                                                                                                                                      |
+| `auth.logout`                 | `POST /v1/auth/logout`                   | `session`   | `forbidden`                                                                                                                                                            |
 | `auth.deviceStart`            | `POST /v1/auth/device/start`             | `anonymous` | `rate_limited`                                                                                                                                                         |
 | `auth.devicePoll`             | `POST /v1/auth/device/poll`              | `anonymous` | `rate_limited`                                                                                                                                                         |
 | `auth.deviceApprove`          | `POST /v1/auth/device/approve`           | `session`   | `device_code_expired`、`not_found`                                                                                                                                     |
@@ -494,7 +496,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §28 运营后台
 
-1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud`），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。personal 没有运营账号：`scope: "operator"` 一律答 `403 forbidden`。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。
+1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud`），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。personal 没有运营账号：`scope: "operator"` 一律答 `403 forbidden`。`auth.refresh` / `auth.logout` 带 `scope: "operator"` 作用于这枚 Cookie（要它的 CSRF 值），不带则作用于普通会话，见 §1。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。
 
 协议 1.4。单独的 scope `operator`（运营令牌，`Authorization: Bearer`），不对外公开。只读元数据：账号与团队的计划、用量、主机数、状态——看不到任何内容与令牌，也不提供「以用户身份登录」。
 
