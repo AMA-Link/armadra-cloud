@@ -1,9 +1,15 @@
 {
   "input": {
-    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    }
   },
   "output": {
-    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
     "plan": "team",
     "status": "trialing",
     "seats": 5,

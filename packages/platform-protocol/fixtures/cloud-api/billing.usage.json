@@ -1,10 +1,14 @@
 {
   "input": {
-    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "space": {
+      "kind": "personal"
+    },
     "period": "2026-10"
   },
   "output": {
-    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "space": {
+      "kind": "personal"
+    },
     "period": "2026-10",
     "usage": [
       {

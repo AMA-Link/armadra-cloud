@@ -8,6 +8,7 @@
     "region": "ap-east",
     "online": true,
     "tunnels": 12,
+    "connections": 48,
     "draining": true,
     "version": "0.10.0",
     "lastSeenAtMs": 1760000000000

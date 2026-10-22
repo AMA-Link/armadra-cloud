@@ -53,22 +53,22 @@
 
 <!-- rpc:begin contract=§4 -->
 
-| procedure                   | 方法与路径                                         | scope                  | 错误码                                                                                                            |
-| --------------------------- | -------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `sources.registrationToken` | `POST /v1/sources/registration-tokens`             | `session`              | `email_unverified`、`limit_reached`、`team_role_insufficient`、`team_policy_denied`、`team_suspended`             |
-| `sources.register`          | `POST /v1/sources/register`                        | `anonymous`            | `registration_token_invalid`、`source_taken`、`protocol_unsupported`、`rate_limited`                              |
-| `sources.heartbeatHint`     | `GET /v1/sources/me/relay`                         | `source`               | `source_revoked`、`unauthenticated`                                                                               |
-| `sources.list`              | `GET /v1/sources`                                  | `session`              | —                                                                                                                 |
-| `sources.get`               | `GET /v1/sources/{sourceId}`                       | `session`              | `not_found`                                                                                                       |
-| `sources.update`            | `PATCH /v1/sources/{sourceId}`                     | `owner`                | `not_found`、`bad_request`                                                                                        |
-| `sources.revoke`            | `DELETE /v1/sources/{sourceId}`                    | `owner`                | `not_found`                                                                                                       |
-| `sources.assertion`         | `POST /v1/sources/{sourceId}/assertion`            | `session`              | `source_access_denied`、`source_revoked`、`rate_limited`、`team_suspended`                                        |
-| `sources.accessList`        | `GET /v1/sources/{sourceId}/access`                | `owner`                | `not_found`                                                                                                       |
-| `sources.accessRevoke`      | `DELETE /v1/sources/{sourceId}/access/{accountId}` | `owner`                | `not_found`                                                                                                       |
-| `sources.transferStart`     | `POST /v1/sources/{sourceId}/transfer`             | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`transfer_pending`、`limit_reached`、`bad_request` |
-| `sources.transferList`      | `GET /v1/source-transfers`                         | `session`              | —                                                                                                                 |
-| `sources.transferAccept`    | `POST /v1/source-transfers/{transferId}/accept`    | `owner` / `team:admin` | `not_found`、`team_role_insufficient`、`transfer_expired`、`limit_reached`、`conflict`                            |
-| `sources.transferCancel`    | `DELETE /v1/source-transfers/{transferId}`         | `owner` / `team:admin` | `not_found`、`team_role_insufficient`、`conflict`                                                                 |
+| procedure                   | 方法与路径                                         | scope                  | 错误码                                                                                                                                              |
+| --------------------------- | -------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sources.registrationToken` | `POST /v1/sources/registration-tokens`             | `session`              | `email_unverified`、`limit_reached`、`team_role_insufficient`、`team_policy_denied`、`host_registration_disabled`、`team_suspended`、`team_deleted` |
+| `sources.register`          | `POST /v1/sources/register`                        | `anonymous`            | `registration_token_invalid`、`source_taken`、`protocol_unsupported`、`rate_limited`                                                                |
+| `sources.heartbeatHint`     | `GET /v1/sources/me/relay`                         | `source`               | `source_revoked`、`unauthenticated`                                                                                                                 |
+| `sources.list`              | `GET /v1/sources`                                  | `session`              | —                                                                                                                                                   |
+| `sources.get`               | `GET /v1/sources/{sourceId}`                       | `session`              | `not_found`                                                                                                                                         |
+| `sources.update`            | `PATCH /v1/sources/{sourceId}`                     | `owner`                | `not_found`、`bad_request`                                                                                                                          |
+| `sources.revoke`            | `DELETE /v1/sources/{sourceId}`                    | `owner`                | `not_found`                                                                                                                                         |
+| `sources.assertion`         | `POST /v1/sources/{sourceId}/assertion`            | `session`              | `source_access_denied`、`source_revoked`、`rate_limited`、`team_suspended`                                                                          |
+| `sources.accessList`        | `GET /v1/sources/{sourceId}/access`                | `owner`                | `not_found`                                                                                                                                         |
+| `sources.accessRevoke`      | `DELETE /v1/sources/{sourceId}/access/{accountId}` | `owner`                | `not_found`                                                                                                                                         |
+| `sources.transferStart`     | `POST /v1/sources/{sourceId}/transfer`             | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`transfer_pending`、`limit_reached`、`bad_request`                                   |
+| `sources.transferList`      | `GET /v1/source-transfers`                         | `session`              | —                                                                                                                                                   |
+| `sources.transferAccept`    | `POST /v1/source-transfers/{transferId}/accept`    | `owner` / `team:admin` | `not_found`、`team_role_insufficient`、`transfer_expired`、`limit_reached`、`conflict`                                                              |
+| `sources.transferCancel`    | `DELETE /v1/source-transfers/{transferId}`         | `owner` / `team:admin` | `not_found`、`team_role_insufficient`、`conflict`                                                                                                   |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -78,14 +78,14 @@
 
 <!-- rpc:begin contract=§5 -->
 
-| procedure      | 方法与路径                       | scope                   | 错误码                                                                                                                             |
-| -------------- | -------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `links.create` | `POST /v1/links`                 | `owner` / `team:admin`  | `source_access_denied`、`team_role_insufficient`、`team_policy_denied`、`bad_request`                                              |
-| `links.get`    | `GET /v1/links/{linkId}`         | `anonymous`             | `link_invalid`                                                                                                                     |
-| `links.accept` | `POST /v1/links/{linkId}/accept` | `session` / `anonymous` | `link_invalid`、`link_expired`、`link_exhausted`、`link_secret_invalid`、`rate_limited`、`challenge_required`、`challenge_invalid` |
-| `links.list`   | `GET /v1/links`                  | `owner` / `team:admin`  | —                                                                                                                                  |
-| `links.update` | `PATCH /v1/links/{linkId}`       | `owner` / `team:admin`  | `not_found`                                                                                                                        |
-| `links.revoke` | `DELETE /v1/links/{linkId}`      | `owner` / `team:admin`  | `not_found`                                                                                                                        |
+| procedure      | 方法与路径                       | scope                   | 错误码                                                                                                                                                                        |
+| -------------- | -------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `links.create` | `POST /v1/links`                 | `owner` / `team:admin`  | `source_access_denied`、`team_role_insufficient`、`team_policy_denied`、`guests_disabled`、`bad_request`                                                                      |
+| `links.get`    | `GET /v1/links/{linkId}`         | `anonymous`             | `link_invalid`                                                                                                                                                                |
+| `links.accept` | `POST /v1/links/{linkId}/accept` | `session` / `anonymous` | `link_invalid`、`link_expired`、`link_exhausted`、`link_secret_invalid`、`link_frozen`、`anonymous_links_disabled`、`rate_limited`、`challenge_required`、`challenge_invalid` |
+| `links.list`   | `GET /v1/links`                  | `owner` / `team:admin`  | —                                                                                                                                                                             |
+| `links.update` | `PATCH /v1/links/{linkId}`       | `owner` / `team:admin`  | `not_found`                                                                                                                                                                   |
+| `links.revoke` | `DELETE /v1/links/{linkId}`      | `owner` / `team:admin`  | `not_found`                                                                                                                                                                   |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -144,7 +144,7 @@
 
 ## §9 计费（已移除，被 §21 起取代）
 
-协议 1.4 起删除。原 `billing.plan` / `billing.usage` 挂在 `/v1/orgs/{orgId}/…` 之下；计费现在按团队，路径 `/v1/teams/{teamId}/billing…`，见 §26。
+协议 1.4 起删除。原 `billing.plan` / `billing.usage` 挂在 `/v1/orgs/{orgId}/…` 之下；计费现在按空间（个人 / 团队），路径 `/v1/billing/…`，见 §26。
 
 ## §10 personal 模式子集
 
@@ -309,31 +309,31 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 协议 1.4（协议包 0.10.0）。SaaS 的租户是团队：每个账号自带一个个人空间，也可以创建或加入多个团队；主机、授予、链接、配额、计费与审计都挂在空间上（设计 `saas-design.md` §1）。本节与 §22–§29 的 procedure 现在全是预留：personal 答 `404 not_found`，cloud 在实现落地前答 `501 not_implemented`，实现时逐条拿掉。
 
 - **scope** 里的 `team:*` 是调用者在路径（或体里）那个团队里的最低角色：`team:member` 任一角色（含 guest）；`team:admin` owner / admin；`team:owner` 仅 owner；`team:billing` owner / billing。具体的能做 / 不能做表见设计 §2.1，处理器还要按它收窄（例如 billing 只看成员列表、guest 只看被直接授予的主机）。
-- **角色** `owner` / `admin` / `member` / `billing` / `guest`（`guest` 是外部协作者，不占席位，不能进分组，团队设置可关）。每个团队至少一个 owner：最后一个 owner 不能离开、降级或被移除（`409 team_owner_required`），要先 `teams.transferOwnership`（目标必须是 admin）。
-- **删除**：`teams.delete` 先要求没有在线主机，进入 30 天恢复期（`purgeAtMs`），期内 `teams.restore`，之后清除。
-- **设置** `teams.settings`：M1 为 `membersCanRegisterHosts`、`defaultHostRole`、`allowGuests`、`allowAnonymousLinks`、新设备背书人 `deviceEndorsers` / `memberSelfEndorse`；M2 起生效的 `requireMfa`、`sessionMaxAgeMs`、`allowedEmailDomains`。设置禁止某个操作时答 `403 team_policy_denied`，`details.setting` 写是哪一项，界面按它取文案。
+- **角色** `owner` / `admin` / `member` / `billing` / `guest`（`guest` 是外部协作者，不占席位，不能进分组，团队设置可关）。每个团队至少一个 owner：最后一个 owner 不能离开、降级或被移除（`409 team_last_owner`），要先 `teams.transferOwnership`（目标必须是 admin）。
+- **删除**：`teams.delete` 先要求没有在线主机，进入 30 天恢复期（`purgeAtMs`），期内 `teams.restore`，之后清除；恢复期内对该团队的其余调用答 `410 team_deleted`。已是成员再被邀请 / 加入答 `409 member_exists`。
+- **设置** `teams.settings`：M1 为 `membersCanRegisterHosts`、`defaultHostRole`、`allowGuests`、`allowAnonymousLinks`、新设备背书人 `deviceEndorsers` / `memberSelfEndorse`；M2 起生效的 `requireMfa`、`sessionMaxAgeMs`、`allowedEmailDomains`。设置禁止某个操作时答 `403`：成员登记主机 `host_registration_disabled`、guest `guests_disabled`、匿名接受分享链接 `anonymous_links_disabled`（接受链接 `links.accept`），其余设置项答通用的 `team_policy_denied`，`details.setting` 写是哪一项；界面按码取文案。当前计划不含的功能（如分组、访问申请、强制两步验证）答 `403 plan_feature_unavailable`，与按数量计的 `429 limit_reached` 区分。
 - **配额**：只有 Free 时硬上限答 `429 limit_reached`，`details` 写哪个配额、当前用量与上限；`teams.usage` 列主机数、成员数、guest 数、同时连接数、本月流量对照上限。
 - 团队被运营方停用后拒绝签断言与登记主机（`403 team_suspended`）。
 - 未验证邮箱的账号可以登录，但不能建团队、登记主机、签链接、被授予（`403 email_unverified`）。
 
 <!-- rpc:begin contract=§21 -->
 
-| procedure                 | 方法与路径                                      | scope         | 错误码                                                                |
-| ------------------------- | ----------------------------------------------- | ------------- | --------------------------------------------------------------------- |
-| `teams.create`            | `POST /v1/teams`                                | `session`     | `team_slug_taken`、`bad_request`、`email_unverified`、`limit_reached` |
-| `teams.list`              | `GET /v1/teams`                                 | `session`     | —                                                                     |
-| `teams.get`               | `GET /v1/teams/{teamId}`                        | `team:member` | `not_found`                                                           |
-| `teams.update`            | `PATCH /v1/teams/{teamId}`                      | `team:admin`  | `not_found`、`team_role_insufficient`                                 |
-| `teams.delete`            | `DELETE /v1/teams/{teamId}`                     | `team:owner`  | `not_found`、`team_role_insufficient`、`conflict`                     |
-| `teams.restore`           | `POST /v1/teams/{teamId}/restore`               | `team:owner`  | `not_found`、`team_role_insufficient`                                 |
-| `teams.transferOwnership` | `POST /v1/teams/{teamId}/transfer-ownership`    | `team:owner`  | `not_found`、`team_role_insufficient`、`bad_request`                  |
-| `teams.members`           | `GET /v1/teams/{teamId}/members`                | `team:member` | `not_found`、`team_role_insufficient`                                 |
-| `teams.memberRole`        | `PATCH /v1/teams/{teamId}/members/{accountId}`  | `team:admin`  | `not_found`、`team_role_insufficient`、`team_owner_required`          |
-| `teams.memberRemove`      | `DELETE /v1/teams/{teamId}/members/{accountId}` | `team:admin`  | `not_found`、`team_role_insufficient`、`team_owner_required`          |
-| `teams.leave`             | `POST /v1/teams/{teamId}/leave`                 | `team:member` | `not_found`、`team_role_insufficient`、`team_owner_required`          |
-| `teams.settings`          | `GET /v1/teams/{teamId}/settings`               | `team:member` | `not_found`、`team_role_insufficient`                                 |
-| `teams.settingsUpdate`    | `PATCH /v1/teams/{teamId}/settings`             | `team:admin`  | `not_found`、`team_role_insufficient`、`bad_request`                  |
-| `teams.usage`             | `GET /v1/teams/{teamId}/usage`                  | `team:member` | `not_found`、`team_role_insufficient`                                 |
+| procedure                 | 方法与路径                                      | scope         | 错误码                                                                   |
+| ------------------------- | ----------------------------------------------- | ------------- | ------------------------------------------------------------------------ |
+| `teams.create`            | `POST /v1/teams`                                | `session`     | `team_slug_taken`、`bad_request`、`email_unverified`、`limit_reached`    |
+| `teams.list`              | `GET /v1/teams`                                 | `session`     | —                                                                        |
+| `teams.get`               | `GET /v1/teams/{teamId}`                        | `team:member` | `not_found`                                                              |
+| `teams.update`            | `PATCH /v1/teams/{teamId}`                      | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`                    |
+| `teams.delete`            | `DELETE /v1/teams/{teamId}`                     | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`、`conflict`        |
+| `teams.restore`           | `POST /v1/teams/{teamId}/restore`               | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`                    |
+| `teams.transferOwnership` | `POST /v1/teams/{teamId}/transfer-ownership`    | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`、`bad_request`     |
+| `teams.members`           | `GET /v1/teams/{teamId}/members`                | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                    |
+| `teams.memberRole`        | `PATCH /v1/teams/{teamId}/members/{accountId}`  | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner` |
+| `teams.memberRemove`      | `DELETE /v1/teams/{teamId}/members/{accountId}` | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner` |
+| `teams.leave`             | `POST /v1/teams/{teamId}/leave`                 | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner` |
+| `teams.settings`          | `GET /v1/teams/{teamId}/settings`               | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                    |
+| `teams.settingsUpdate`    | `PATCH /v1/teams/{teamId}/settings`             | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`bad_request`     |
+| `teams.usage`             | `GET /v1/teams/{teamId}/usage`                  | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                    |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -346,18 +346,20 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - 邮件里的链接带一次性 `token`；`invitations.get` 匿名可调，只答摘要（遮掩后的邮箱、团队 / 主机名、角色、邀请人），不泄露更多。接受要登录云账号且邮箱与被邀请的一致（`403 invitation_email_mismatch`）。
 - 过期答 `410 invitation_expired`，已撤销答 `410 invitation_revoked`，其余无效情形答 `404 not_found`。接受是幂等的：已接受的再次接受答原结果。
 - 主机邀请在 core 侧与分享链接落成同一张邀请，core 的接受与消费逻辑不变（设计 §11.3）。
+- `invitations.resend`：换新令牌、重新计 7 天、旧链接作废，按邀请限流。
 - `invitations.list` 的 `box = sent`（缺省）列自己能管的邀请，`received` 列发给自己邮箱的待处理邀请。
 
 <!-- rpc:begin contract=§22 -->
 
-| procedure             | 方法与路径                                    | scope                  | 错误码                                                                                                                                                                      |
-| --------------------- | --------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `invitations.create`  | `POST /v1/invitations`                        | `team:admin` / `owner` | `team_role_insufficient`、`source_access_denied`、`team_policy_denied`、`email_unverified`、`limit_reached`、`conflict`、`rate_limited`、`bad_request`                      |
-| `invitations.list`    | `GET /v1/invitations`                         | `session`              | `team_role_insufficient`、`source_access_denied`                                                                                                                            |
-| `invitations.revoke`  | `DELETE /v1/invitations/{invitationId}`       | `team:admin` / `owner` | `not_found`、`team_role_insufficient`                                                                                                                                       |
-| `invitations.get`     | `GET /v1/invitations/{invitationId}`          | `anonymous`            | `not_found`、`invitation_expired`、`invitation_revoked`、`rate_limited`                                                                                                     |
-| `invitations.accept`  | `POST /v1/invitations/{invitationId}/accept`  | `session`              | `not_found`、`invitation_expired`、`invitation_revoked`、`invitation_email_mismatch`、`email_unverified`、`limit_reached`、`team_policy_denied`、`conflict`、`rate_limited` |
-| `invitations.decline` | `POST /v1/invitations/{invitationId}/decline` | `session`              | `not_found`、`invitation_expired`、`invitation_revoked`、`invitation_email_mismatch`                                                                                        |
+| procedure             | 方法与路径                                    | scope                  | 错误码                                                                                                                                                                                                       |
+| --------------------- | --------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `invitations.create`  | `POST /v1/invitations`                        | `team:admin` / `owner` | `team_role_insufficient`、`source_access_denied`、`team_policy_denied`、`guests_disabled`、`member_exists`、`email_unverified`、`limit_reached`、`conflict`、`rate_limited`、`bad_request`                   |
+| `invitations.list`    | `GET /v1/invitations`                         | `session`              | `team_role_insufficient`、`source_access_denied`                                                                                                                                                             |
+| `invitations.revoke`  | `DELETE /v1/invitations/{invitationId}`       | `team:admin` / `owner` | `not_found`、`team_role_insufficient`                                                                                                                                                                        |
+| `invitations.resend`  | `POST /v1/invitations/{invitationId}/resend`  | `team:admin` / `owner` | `not_found`、`team_role_insufficient`、`invitation_revoked`、`conflict`、`rate_limited`                                                                                                                      |
+| `invitations.get`     | `GET /v1/invitations/{invitationId}`          | `anonymous`            | `not_found`、`invitation_expired`、`invitation_revoked`、`rate_limited`                                                                                                                                      |
+| `invitations.accept`  | `POST /v1/invitations/{invitationId}/accept`  | `session`              | `not_found`、`invitation_expired`、`invitation_revoked`、`invitation_email_mismatch`、`email_unverified`、`limit_reached`、`team_policy_denied`、`member_exists`、`team_deleted`、`conflict`、`rate_limited` |
+| `invitations.decline` | `POST /v1/invitations/{invitationId}/decline` | `session`              | `not_found`、`invitation_expired`、`invitation_revoked`、`invitation_email_mismatch`                                                                                                                         |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -369,16 +371,16 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 <!-- rpc:begin contract=§23 -->
 
-| procedure             | 方法与路径                                                         | scope                       | 错误码                                                             |
-| --------------------- | ------------------------------------------------------------------ | --------------------------- | ------------------------------------------------------------------ |
-| `groups.list`         | `GET /v1/teams/{teamId}/groups`                                    | `team:member`               | `not_found`、`team_role_insufficient`                              |
-| `groups.create`       | `POST /v1/teams/{teamId}/groups`                                   | `team:admin`                | `not_found`、`team_role_insufficient`、`limit_reached`、`conflict` |
-| `groups.update`       | `PATCH /v1/teams/{teamId}/groups/{groupId}`                        | `team:admin`                | `not_found`、`team_role_insufficient`、`conflict`                  |
-| `groups.delete`       | `DELETE /v1/teams/{teamId}/groups/{groupId}`                       | `team:admin`                | `not_found`、`team_role_insufficient`                              |
-| `groups.members`      | `GET /v1/teams/{teamId}/groups/{groupId}/members`                  | `team:member`               | `not_found`、`team_role_insufficient`                              |
-| `groups.memberAdd`    | `POST /v1/teams/{teamId}/groups/{groupId}/members`                 | `team:admin` / `group:lead` | `not_found`、`team_role_insufficient`、`bad_request`、`conflict`   |
-| `groups.memberRemove` | `DELETE /v1/teams/{teamId}/groups/{groupId}/members/{accountId}`   | `team:admin` / `group:lead` | `not_found`、`team_role_insufficient`                              |
-| `groups.setLead`      | `PUT /v1/teams/{teamId}/groups/{groupId}/members/{accountId}/lead` | `team:admin`                | `not_found`、`team_role_insufficient`                              |
+| procedure             | 方法与路径                                                         | scope                       | 错误码                                                                                         |
+| --------------------- | ------------------------------------------------------------------ | --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `groups.list`         | `GET /v1/teams/{teamId}/groups`                                    | `team:member`               | `not_found`、`team_role_insufficient`                                                          |
+| `groups.create`       | `POST /v1/teams/{teamId}/groups`                                   | `team:admin`                | `not_found`、`team_role_insufficient`、`limit_reached`、`plan_feature_unavailable`、`conflict` |
+| `groups.update`       | `PATCH /v1/teams/{teamId}/groups/{groupId}`                        | `team:admin`                | `not_found`、`team_role_insufficient`、`conflict`                                              |
+| `groups.delete`       | `DELETE /v1/teams/{teamId}/groups/{groupId}`                       | `team:admin`                | `not_found`、`team_role_insufficient`                                                          |
+| `groups.members`      | `GET /v1/teams/{teamId}/groups/{groupId}/members`                  | `team:member`               | `not_found`、`team_role_insufficient`                                                          |
+| `groups.memberAdd`    | `POST /v1/teams/{teamId}/groups/{groupId}/members`                 | `team:admin` / `group:lead` | `not_found`、`team_role_insufficient`、`bad_request`、`conflict`                               |
+| `groups.memberRemove` | `DELETE /v1/teams/{teamId}/groups/{groupId}/members/{accountId}`   | `team:admin` / `group:lead` | `not_found`、`team_role_insufficient`                                                          |
+| `groups.setLead`      | `PUT /v1/teams/{teamId}/groups/{groupId}/members/{accountId}/lead` | `team:admin`                | `not_found`、`team_role_insufficient`                                                          |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -397,17 +399,17 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 <!-- rpc:begin contract=§24 -->
 
-| procedure                | 方法与路径                                     | scope                  | 错误码                                                                                                                                              |
-| ------------------------ | ---------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `grants.list`            | `GET /v1/grants`                               | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`bad_request`                                                                        |
-| `grants.create`          | `POST /v1/grants`                              | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`team_policy_denied`、`email_unverified`、`limit_reached`、`conflict`、`bad_request` |
-| `grants.update`          | `PATCH /v1/grants/{grantId}`                   | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`bad_request`                                                                        |
-| `grants.revoke`          | `DELETE /v1/grants/{grantId}`                  | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`                                                                                       |
-| `grants.effective`       | `GET /v1/grants/effective`                     | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`                                                                                       |
-| `accessRequests.create`  | `POST /v1/access-requests`                     | `session`              | `not_found`、`conflict`、`limit_reached`、`email_unverified`、`rate_limited`、`bad_request`                                                         |
-| `accessRequests.list`    | `GET /v1/access-requests`                      | `session`              | —                                                                                                                                                   |
-| `accessRequests.approve` | `POST /v1/access-requests/{requestId}/approve` | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`conflict`、`team_policy_denied`、`limit_reached`                                    |
-| `accessRequests.deny`    | `POST /v1/access-requests/{requestId}/deny`    | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`conflict`                                                                           |
+| procedure                | 方法与路径                                     | scope                  | 错误码                                                                                                                                                                 |
+| ------------------------ | ---------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `grants.list`            | `GET /v1/grants`                               | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`bad_request`                                                                                           |
+| `grants.create`          | `POST /v1/grants`                              | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`team_policy_denied`、`guests_disabled`、`email_unverified`、`limit_reached`、`conflict`、`bad_request` |
+| `grants.update`          | `PATCH /v1/grants/{grantId}`                   | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`bad_request`                                                                                           |
+| `grants.revoke`          | `DELETE /v1/grants/{grantId}`                  | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`                                                                                                          |
+| `grants.effective`       | `GET /v1/grants/effective`                     | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`                                                                                                          |
+| `accessRequests.create`  | `POST /v1/access-requests`                     | `session`              | `not_found`、`conflict`、`limit_reached`、`plan_feature_unavailable`、`email_unverified`、`rate_limited`、`bad_request`                                                |
+| `accessRequests.list`    | `GET /v1/access-requests`                      | `session`              | —                                                                                                                                                                      |
+| `accessRequests.approve` | `POST /v1/access-requests/{requestId}/approve` | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`conflict`、`team_policy_denied`、`limit_reached`                                                       |
+| `accessRequests.deny`    | `POST /v1/access-requests/{requestId}/deny`    | `owner` / `team:admin` | `not_found`、`source_access_denied`、`team_role_insufficient`、`conflict`                                                                                              |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -434,22 +436,24 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §26 计费
 
-协议 1.4。接替 §9：按团队，路径 `/v1/teams/{teamId}/billing…`，scope `team:billing`（owner 与 billing）。
+协议 1.4。接替 §9：按空间，路径 `/v1/billing/…`，输入带 `space`（`{ kind: "personal" }` 或 `{ kind: "team", teamId }`；GET 里写成 `space[kind]=team&space[teamId]=…`）。scope 是 `session`（个人空间）或 `team:billing`（团队空间的 owner 与 billing）。
 
 - `billing.plan` / `billing.usage`（M1）：计划代号、状态（`active` / `trialing` / `past_due` / `canceled`）、席位、周期；用量项 `{ metric, value, limit }`，`limit = null` 为不限。
 - `billing.checkout` / `billing.portal`（M2）：答支付服务的结账页 / 客户门户地址；`returnUrl` 必须在控制面的 `APP_ORIGIN` 之下。支付服务未配置答 `503 unavailable`。
 - `billing.webhook`（M2）：`POST /v1/billing/webhooks/{provider}`，scope `billing-webhook`——不带账号，按提供方的签名头验证原始请求体，对不上答 `401 webhook_signature_invalid`；体按提供方原样接收，不在契约里展开；回调更新订阅与配额。
-- 个人空间的订阅（Pro）不在本节：个人空间是否做订阅另议，在那之前不预留 procedure。
+- `billing.invoices`（M2）：发票列表，游标分页，`hostedUrl` / `pdfUrl` 指向支付服务托管的页面，金额为最小货币单位。
+- 个人空间的订阅（Pro）用同一组 procedure（`space = personal`），是否开放由计划决定。
 
 <!-- rpc:begin contract=§26 -->
 
-| procedure          | 方法与路径                                 | scope             | 错误码                                                                          |
-| ------------------ | ------------------------------------------ | ----------------- | ------------------------------------------------------------------------------- |
-| `billing.plan`     | `GET /v1/teams/{teamId}/billing`           | `team:billing`    | `not_found`、`team_role_insufficient`                                           |
-| `billing.usage`    | `GET /v1/teams/{teamId}/billing/usage`     | `team:billing`    | `not_found`、`team_role_insufficient`                                           |
-| `billing.checkout` | `POST /v1/teams/{teamId}/billing/checkout` | `team:billing`    | `not_found`、`team_role_insufficient`、`bad_request`、`conflict`、`unavailable` |
-| `billing.portal`   | `POST /v1/teams/{teamId}/billing/portal`   | `team:billing`    | `not_found`、`team_role_insufficient`、`conflict`、`unavailable`                |
-| `billing.webhook`  | `POST /v1/billing/webhooks/{provider}`     | `billing-webhook` | `webhook_signature_invalid`、`bad_request`、`not_found`                         |
+| procedure          | 方法与路径                             | scope                      | 错误码                                                                                                      |
+| ------------------ | -------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `billing.plan`     | `GET /v1/billing/plan`                 | `session` / `team:billing` | `not_found`、`team_role_insufficient`                                                                       |
+| `billing.usage`    | `GET /v1/billing/usage`                | `session` / `team:billing` | `not_found`、`team_role_insufficient`                                                                       |
+| `billing.checkout` | `POST /v1/billing/checkout`            | `session` / `team:billing` | `not_found`、`team_role_insufficient`、`bad_request`、`conflict`、`unavailable`、`plan_feature_unavailable` |
+| `billing.invoices` | `GET /v1/billing/invoices`             | `session` / `team:billing` | `not_found`、`team_role_insufficient`、`unavailable`                                                        |
+| `billing.portal`   | `POST /v1/billing/portal`              | `session` / `team:billing` | `not_found`、`team_role_insufficient`、`conflict`、`unavailable`                                            |
+| `billing.webhook`  | `POST /v1/billing/webhooks/{provider}` | `billing-webhook`          | `webhook_signature_invalid`、`bad_request`、`not_found`                                                     |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -478,22 +482,34 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - 停用 / 恢复账号或团队（`accountStatus` / `teamStatus`，必须写 `reason`）：拒绝登录与断言、踢掉连接。
 - 中继节点列表与排空（`relayNodes` / `relayNodeDrain`，GOAWAY rebalance）。
 - 事故开关（`incident` / `incidentSet`）：停签断言、停注册；中继侧拒绝新连接、保留在线连接。
-- 所有写操作都写审计（`actor.kind = "operator"`）。滥用处理、功能开关、状态页 M2 再加。
+- 租户搜索 `admin.tenants`：账号与团队混排的一张表（名称 / 邮箱 / slug 模糊查）；详情与停用 / 恢复按 `kind` 走 `account` / `accountStatus` 或 `team` / `teamStatus`，详情多席位、本月流量与最近 5 条运营动作。
+- 节点行多当前连接数 `connections`。
+- 对外状态（M2）：`status.get` 匿名可读（`GET /v1/status`，组件状态与公告），`admin.statusPublish` 发布。
+- 滥用（M2）：`admin.abuseList` 列流量异常 / 举报信号，`admin.linkFreeze` 冻结 / 解冻链接（冻结后 `links.accept` 答 `403 link_frozen`）。
+- 功能开关（M2）：`admin.flagsList` / `admin.flagsSet`，全部团队开或灰度到指定团队。
+- 所有写操作都写审计（`actor.kind = "operator"`），都必须带 `reason`。
 
 <!-- rpc:begin contract=§28 -->
 
-| procedure              | 方法与路径                                  | scope      | 错误码                   |
-| ---------------------- | ------------------------------------------- | ---------- | ------------------------ |
-| `admin.accounts`       | `GET /v1/admin/accounts`                    | `operator` | `not_found`、`forbidden` |
-| `admin.account`        | `GET /v1/admin/accounts/{accountId}`        | `operator` | `not_found`、`forbidden` |
-| `admin.accountStatus`  | `PUT /v1/admin/accounts/{accountId}/status` | `operator` | `not_found`、`forbidden` |
-| `admin.teams`          | `GET /v1/admin/teams`                       | `operator` | `not_found`、`forbidden` |
-| `admin.team`           | `GET /v1/admin/teams/{teamId}`              | `operator` | `not_found`、`forbidden` |
-| `admin.teamStatus`     | `PUT /v1/admin/teams/{teamId}/status`       | `operator` | `not_found`、`forbidden` |
-| `admin.relayNodes`     | `GET /v1/admin/relay-nodes`                 | `operator` | `not_found`、`forbidden` |
-| `admin.relayNodeDrain` | `PUT /v1/admin/relay-nodes/{node}/drain`    | `operator` | `not_found`、`forbidden` |
-| `admin.incident`       | `GET /v1/admin/incident`                    | `operator` | `not_found`、`forbidden` |
-| `admin.incidentSet`    | `PUT /v1/admin/incident`                    | `operator` | `not_found`、`forbidden` |
+| procedure              | 方法与路径                                  | scope       | 错误码                                  |
+| ---------------------- | ------------------------------------------- | ----------- | --------------------------------------- |
+| `admin.tenants`        | `GET /v1/admin/tenants`                     | `operator`  | `not_found`、`forbidden`                |
+| `admin.accounts`       | `GET /v1/admin/accounts`                    | `operator`  | `not_found`、`forbidden`                |
+| `admin.account`        | `GET /v1/admin/accounts/{accountId}`        | `operator`  | `not_found`、`forbidden`                |
+| `admin.accountStatus`  | `PUT /v1/admin/accounts/{accountId}/status` | `operator`  | `not_found`、`forbidden`                |
+| `admin.teams`          | `GET /v1/admin/teams`                       | `operator`  | `not_found`、`forbidden`                |
+| `admin.team`           | `GET /v1/admin/teams/{teamId}`              | `operator`  | `not_found`、`forbidden`                |
+| `admin.teamStatus`     | `PUT /v1/admin/teams/{teamId}/status`       | `operator`  | `not_found`、`forbidden`                |
+| `admin.relayNodes`     | `GET /v1/admin/relay-nodes`                 | `operator`  | `not_found`、`forbidden`                |
+| `admin.relayNodeDrain` | `PUT /v1/admin/relay-nodes/{node}/drain`    | `operator`  | `not_found`、`forbidden`                |
+| `admin.incident`       | `GET /v1/admin/incident`                    | `operator`  | `not_found`、`forbidden`                |
+| `admin.incidentSet`    | `PUT /v1/admin/incident`                    | `operator`  | `not_found`、`forbidden`                |
+| `admin.statusPublish`  | `PUT /v1/admin/status`                      | `operator`  | `not_found`、`forbidden`、`bad_request` |
+| `admin.abuseList`      | `GET /v1/admin/abuse`                       | `operator`  | `not_found`、`forbidden`                |
+| `admin.linkFreeze`     | `PUT /v1/admin/links/{linkId}/frozen`       | `operator`  | `not_found`、`forbidden`                |
+| `admin.flagsList`      | `GET /v1/admin/flags`                       | `operator`  | `not_found`、`forbidden`                |
+| `admin.flagsSet`       | `PUT /v1/admin/flags/{flag}`                | `operator`  | `not_found`、`forbidden`、`bad_request` |
+| `status.get`           | `GET /v1/status`                            | `anonymous` | `rate_limited`                          |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -507,29 +523,35 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **找回口令**：`auth.passwordResetStart` 总是答成功（不泄露邮箱是否注册），邮件链接 30 分钟有效；`auth.passwordResetFinish` 过同一套口令策略，成功后撤销该账号全部设备、不答会话，要重新登录。`auth.register` 与 `auth.passwordResetStart` 可带 `challenge`（§16 的 scope 多了 `auth.register`、`auth.passwordResetStart`）。
 - **第三方登录**（M2）：`oauthStart` 答授权地址与 `state`，`oauthFinish` 用回调的 `code` 换会话（可能答 MFA 挑战）；提供方 `github` / `google`；绑定到已有账号要先验证邮箱（`403 email_unverified`）。`oauthUnlink` 要求至少留一种登录方式（`409 conflict`）。单点登录（`sso*`，M3）暂不预留。
 - **`me.emailChange`**：要口令；新地址收验证邮件，旧地址收通知；验证前旧邮箱照常生效。
+- **设备授权页**：`auth.deviceGet` 答发起设备的平台与名字（设计 §11.5 要求页面显示），`auth.deviceApprove` 批准，`auth.deviceDeny` 拒绝（发起设备的 `devicePoll` 答 `denied`）。
+- **通知偏好**（M2）：`me.notificationPrefs` / `me.notificationPrefsUpdate`，邀请、访问申请、主机上下线按类开关邮件；`security` 恒为 `true`，不可改。
 - **`me.spaces`**：个人空间 + 所属的每个团队及角色、计划，控制台顶部的空间切换用。
 - **`me.securityLog`**：登录、新设备、改口令、两步验证变化；本人可见，游标分页。
 - **`me.delete` / `me.deleteCancel`**：注销账号要口令；先转移名下团队的 owner（否则 `409 team_owner_required`）；7 天冷静期（`purgeAtMs`），期内可取消。
 - **`me.export`**：导出账号、设备、团队身份、授予与安全日志（JSON），按账号限流。
-- `me.get` 的答案 1.4 起多可选的 `teams`（所属团队）；`orgs` 保留给企业组织层，恒为空。
+- `me.get` 的答案 1.4 起多可选的 `teams`（所属团队）与 `scopes`（账号持有的特殊范围，如运营方的 `operator`，控制台据此显示运营入口）；`orgs` 保留给企业组织层，恒为空。
 
 <!-- rpc:begin contract=§29 -->
 
-| procedure                  | 方法与路径                              | scope       | 错误码                                                                                                                                                                        |
-| -------------------------- | --------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.emailVerify`         | `POST /v1/auth/email/verify`            | `anonymous` | `email_token_invalid`、`email_token_expired`、`rate_limited`                                                                                                                  |
-| `auth.emailVerifyResend`   | `POST /v1/auth/email/resend`            | `session`   | `rate_limited`、`conflict`                                                                                                                                                    |
-| `auth.passwordResetStart`  | `POST /v1/auth/password-reset/start`    | `anonymous` | `rate_limited`                                                                                                                                                                |
-| `auth.passwordResetFinish` | `POST /v1/auth/password-reset/finish`   | `anonymous` | `email_token_invalid`、`email_token_expired`、`rate_limited`、`password_too_short`、`password_too_long`、`password_too_common`、`password_contains_name`、`password_breached` |
-| `auth.oauthStart`          | `POST /v1/auth/oauth/{provider}/start`  | `anonymous` | `rate_limited`、`bad_request`、`not_found`                                                                                                                                    |
-| `auth.oauthFinish`         | `POST /v1/auth/oauth/{provider}/finish` | `anonymous` | `credentials_invalid`、`email_unverified`、`account_disabled`、`rate_limited`、`conflict`                                                                                     |
-| `auth.oauthUnlink`         | `DELETE /v1/auth/oauth/{provider}`      | `session`   | `not_found`、`conflict`                                                                                                                                                       |
-| `me.emailChange`           | `POST /v1/me/email`                     | `session`   | `email_taken`、`credentials_invalid`、`rate_limited`、`bad_request`                                                                                                           |
-| `me.spaces`                | `GET /v1/me/spaces`                     | `session`   | —                                                                                                                                                                             |
-| `me.securityLog`           | `GET /v1/me/security-log`               | `session`   | `bad_request`                                                                                                                                                                 |
-| `me.delete`                | `POST /v1/me/delete`                    | `session`   | `credentials_invalid`、`team_owner_required`、`rate_limited`                                                                                                                  |
-| `me.deleteCancel`          | `POST /v1/me/delete/cancel`             | `session`   | `conflict`                                                                                                                                                                    |
-| `me.export`                | `POST /v1/me/export`                    | `session`   | `rate_limited`                                                                                                                                                                |
+| procedure                    | 方法与路径                              | scope       | 错误码                                                                                                                                                                        |
+| ---------------------------- | --------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.deviceGet`             | `GET /v1/auth/device`                   | `session`   | `device_code_expired`、`not_found`、`rate_limited`                                                                                                                            |
+| `auth.deviceDeny`            | `POST /v1/auth/device/deny`             | `session`   | `device_code_expired`、`not_found`                                                                                                                                            |
+| `auth.emailVerify`           | `POST /v1/auth/email/verify`            | `anonymous` | `email_token_invalid`、`email_token_expired`、`rate_limited`                                                                                                                  |
+| `auth.emailVerifyResend`     | `POST /v1/auth/email/resend`            | `session`   | `rate_limited`、`conflict`                                                                                                                                                    |
+| `auth.passwordResetStart`    | `POST /v1/auth/password-reset/start`    | `anonymous` | `rate_limited`                                                                                                                                                                |
+| `auth.passwordResetFinish`   | `POST /v1/auth/password-reset/finish`   | `anonymous` | `email_token_invalid`、`email_token_expired`、`rate_limited`、`password_too_short`、`password_too_long`、`password_too_common`、`password_contains_name`、`password_breached` |
+| `auth.oauthStart`            | `POST /v1/auth/oauth/{provider}/start`  | `anonymous` | `rate_limited`、`bad_request`、`not_found`                                                                                                                                    |
+| `auth.oauthFinish`           | `POST /v1/auth/oauth/{provider}/finish` | `anonymous` | `credentials_invalid`、`email_unverified`、`account_disabled`、`rate_limited`、`conflict`                                                                                     |
+| `auth.oauthUnlink`           | `DELETE /v1/auth/oauth/{provider}`      | `session`   | `not_found`、`conflict`                                                                                                                                                       |
+| `me.emailChange`             | `POST /v1/me/email`                     | `session`   | `email_taken`、`credentials_invalid`、`rate_limited`、`bad_request`                                                                                                           |
+| `me.notificationPrefs`       | `GET /v1/me/notification-prefs`         | `session`   | —                                                                                                                                                                             |
+| `me.notificationPrefsUpdate` | `PATCH /v1/me/notification-prefs`       | `session`   | `bad_request`                                                                                                                                                                 |
+| `me.spaces`                  | `GET /v1/me/spaces`                     | `session`   | —                                                                                                                                                                             |
+| `me.securityLog`             | `GET /v1/me/security-log`               | `session`   | `bad_request`                                                                                                                                                                 |
+| `me.delete`                  | `POST /v1/me/delete`                    | `session`   | `credentials_invalid`、`team_owner_required`、`rate_limited`                                                                                                                  |
+| `me.deleteCancel`            | `POST /v1/me/delete/cancel`             | `session`   | `conflict`                                                                                                                                                                    |
+| `me.export`                  | `POST /v1/me/export`                    | `session`   | `rate_limited`                                                                                                                                                                |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -547,7 +569,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 | 隧道令牌 `org`                | 源所属组织                                     | 删除，换成可选的 `team`                                                                                                                            |
 | `links.create` 的 `org_join`  | 从未实现                                       | 换成 `team_join`（`teamId`、`role`、`emailDomains`），`org_join` 枚举值保留                                                                        |
 | `sources.registrationToken`   | `orgId`                                        | `space: { kind: "personal" } \| { kind: "team", teamId }`，缺省个人空间                                                                            |
-| `sources.list` / `links.list` | `orgId`                                        | `teamId`                                                                                                                                           |
+| `sources.list` / `links.list` | `orgId`                                        | `space`（`{ kind: "personal" }` \| `{ kind: "team", teamId }`，缺省 = 全部可达的空间）                                                             |
 | `sourceVia`                   | `owner` / `link` / `org`                       | 多 `team`                                                                                                                                          |
 | 契约                          | `orgs.*`、`billing`（挂组织）                  | 删 `orgs.*`；追加 `teams` / `invitations` / `groups` / `grants` / `accessRequests` / `audit` / `billing`（按团队）/ `apiTokens` / `admin`，§21–§29 |
 
@@ -555,3 +577,37 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - 老中继收到带 `team` 的令牌照常放行（schema 非 strict，更高 minor 的声明被忽略）；老 core 忽略 `team`。1.3 的签发方没有发过 `org` / 旧 `team`，所以没有需要兼容的存量令牌。
 - core 侧（Armadra）的 `cloud/login` 改成以 `team` + `role` 作 SaaS 准入，另在 Armadra 仓提 PR。
 - 新增的 scope（`team:member` / `team:admin` / `team:owner` / `team:billing` / `group:lead` / `operator` / `billing-webhook`）取代 `org:admin` / `org:owner`。
+
+## §31 设备信任
+
+协议 1.4（设计 `saas-design.md` §11.4）。团队成员第一次从新设备连团队主机，会停在 `device_pending`，要有人从**自己已受信的设备**背书；背书人是主机 owner 与（团队设置允许时）团队 admin，也可以是成员本人从自己另一台已受信的设备。
+
+- **云端不担保设备，也不参与批准。** 批准走端到端通道发到主机，用的是现有的「已受信设备背书」路径；云端看不到也改不了背书内容，否则控制面运营方就能冒充设备。
+- 云端只做两件事：把待信任请求（成员、设备名、平台、6 位 SAS、主机、过期时间）推给背书人——`trust.list` 与 me-stream 的 `deviceTrustRequested` / `deviceTrustResolved`（§32）——以及记下背书人的拒绝（`trust.reject`，请求作废，设备继续停在 `device_pending`）。已被批准或已过期的请求答 `409 conflict`。
+- `trust.list` 缺省列调用者能背书的全部空间，给 `space` 只列那个空间；非背书人答 `403 team_role_insufficient`。`device_untrusted` 表示背书要在已受信的设备上做。
+- 走分享链接进来的访客仍按链接的 `max_devices` 与指纹钉扎，不经这里。
+
+<!-- rpc:begin contract=§31 -->
+
+| procedure      | 方法与路径                                   | scope                  | 错误码                                                                |
+| -------------- | -------------------------------------------- | ---------------------- | --------------------------------------------------------------------- |
+| `trust.list`   | `GET /v1/trust-requests`                     | `owner` / `team:admin` | `team_role_insufficient`、`not_found`                                 |
+| `trust.reject` | `POST /v1/trust-requests/{requestId}/reject` | `owner` / `team:admin` | `not_found`、`team_role_insufficient`、`device_untrusted`、`conflict` |
+
+输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
+
+<!-- rpc:end -->
+
+## §32 me-stream 的团队事件
+
+协议 1.4。`GET /v1/me/stream`（§6）的事件多七种，schema 在协议包 `cloud-api` 的 `meStreamEventSchema`，现在没有发送方（预留）；老客户端遇到不认识的 `type` 应忽略。事件只带标识，不带内容，客户端收到后重拉对应列表。
+
+| `type`                 | 字段                                                                      | 含义                                  |
+| ---------------------- | ------------------------------------------------------------------------- | ------------------------------------- |
+| `memberChanged`        | `teamId`、`accountId?`、`change: added \| removed \| roleChanged`、`atMs` | 团队成员变化                          |
+| `invitationChanged`    | `invitationId`、`teamId?`、`sourceId?`、`state`、`atMs`                   | 邀请被接受、拒绝、撤销、过期          |
+| `grantChanged`         | `sourceId`、`grantId?`、`teamId?`、`atMs`                                 | 主机授予变化                          |
+| `accessRequested`      | `requestId`、`sourceId`、`teamId?`、`atMs`                                | 有新的访问申请要处理                  |
+| `deviceTrustRequested` | `requestId`、`sourceId`、`teamId?`、`atMs`                                | 有新设备待背书（详情用 `trust.list`） |
+| `deviceTrustResolved`  | `requestId`、`outcome: trusted \| rejected \| expired`、`atMs`            | 待信任请求已处理                      |
+| `planChanged`          | `space`、`plan`、`status`、`atMs`                                         | 空间的计划或订阅状态变化              |

@@ -1,0 +1,17 @@
+{
+  "input": {
+    "invitationId": "tinv_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "invitationId": "tinv_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "kind": "team",
+    "email": "alice@armadra.test",
+    "state": "pending",
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "teamRole": "member",
+    "invitedBy": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "createdAtMs": 1760000000000,
+    "expiresAtMs": 1760604800000,
+    "decidedAtMs": null
+  }
+}

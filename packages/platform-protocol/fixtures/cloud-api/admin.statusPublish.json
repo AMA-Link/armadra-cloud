@@ -1,0 +1,23 @@
+{
+  "input": {
+    "components": [
+      {
+        "id": "console",
+        "state": "degraded"
+      }
+    ],
+    "notice": "Investigating slow loads",
+    "reason": "elevated latency"
+  },
+  "output": {
+    "components": [
+      {
+        "id": "console",
+        "name": "Console",
+        "state": "degraded"
+      }
+    ],
+    "notice": "Investigating slow loads",
+    "updatedAtMs": 1760000000000
+  }
+}

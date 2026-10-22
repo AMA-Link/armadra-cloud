@@ -1,6 +1,9 @@
 {
   "input": {
-    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    }
   },
   "output": {
     "sources": [

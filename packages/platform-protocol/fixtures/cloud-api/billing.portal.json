@@ -1,7 +1,10 @@
 {
   "input": {
-    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
-    "returnUrl": "https://app.armadra.test/teams/dev-team"
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "returnUrl": "https://app.armadra.test/t/dev-team/billing"
   },
   "output": {
     "url": "https://pay.armadra.test/portal/bps_test"
