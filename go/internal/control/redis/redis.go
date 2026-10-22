@@ -54,7 +54,7 @@ type Options struct {
 }
 
 // ErrTooOld 表示 Redis 版本低于 7.0。
-var ErrTooOld = errors.New("Redis 版本太低：需要 7.0 以上（撤销重读用 PEXPIRETIME）")
+var ErrTooOld = errors.New("版本太低：Redis 需要 7.0 以上（撤销重读用 PEXPIRETIME）")
 
 const deleteRoute = `
 local value = redis.call('GET', KEYS[1])
