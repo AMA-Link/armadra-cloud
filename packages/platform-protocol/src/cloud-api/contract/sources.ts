@@ -9,7 +9,6 @@ import {
   hostTagsSchema,
   spaceSchema,
   sourceTransferSchema,
-  teamIdSchema,
   workspaceIdsSchema,
 } from "../saas-schemas.ts";
 import {
@@ -74,7 +73,9 @@ export const sources = {
         "limit_reached",
         "team_role_insufficient",
         "team_policy_denied",
+        "host_registration_disabled",
         "team_suspended",
+        "team_deleted",
       ),
     )
     // 1.4 起：令牌由某个空间签发，主机就归那个空间；缺省 = 个人空间。
@@ -137,8 +138,9 @@ export const sources = {
   list: base
     .route({ method: "GET", path: "/v1/sources" })
     .meta(session)
-    // 1.4 起：给 `teamId` 只列该团队的主机；缺省列调用者能到达的全部（个人空间 + 各团队）。
-    .input(z.object({ teamId: teamIdSchema.optional() }))
+    // 1.4 起：给 `space` 只列那个空间的主机；缺省列调用者能到达的全部（个人空间 + 各团队）。
+    // GET 里写成 `space[kind]=team&space[teamId]=…`。
+    .input(z.object({ space: spaceSchema.optional() }))
     .output(z.object({ sources: z.array(sourceSummarySchema) })),
   get: base
     .route({ method: "GET", path: "/v1/sources/{sourceId}" })
@@ -226,7 +228,7 @@ export const sources = {
     .input(
       z.object({
         sourceId: sourceIdSchema.optional(),
-        teamId: teamIdSchema.optional(),
+        space: spaceSchema.optional(),
       }),
     )
     .output(z.object({ transfers: z.array(sourceTransferSchema) })),

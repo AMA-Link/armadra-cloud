@@ -35,7 +35,10 @@ export const groups = {
   create: base
     .route({ method: "POST", path: "/v1/teams/{teamId}/groups" })
     .meta(admin)
-    .errors({ ...groupErrors, ...errors.pick("limit_reached", "conflict") })
+    .errors({
+      ...groupErrors,
+      ...errors.pick("limit_reached", "plan_feature_unavailable", "conflict"),
+    })
     .input(z.object({ teamId: teamIdSchema, name }))
     .output(groupSchema),
   update: base

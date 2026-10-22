@@ -20,7 +20,11 @@ const member = { scope: ["team:member"], since: SINCE_0_10 } as const;
 const admin = { scope: ["team:admin"], since: SINCE_0_10 } as const;
 const owner = { scope: ["team:owner"], since: SINCE_0_10 } as const;
 
-const teamErrors = errors.pick("not_found", "team_role_insufficient");
+const teamErrors = errors.pick(
+  "not_found",
+  "team_role_insufficient",
+  "team_deleted",
+);
 const teamId = { teamId: teamIdSchema };
 
 /**
@@ -95,7 +99,7 @@ export const teams = {
   memberRole: base
     .route({ method: "PATCH", path: "/v1/teams/{teamId}/members/{accountId}" })
     .meta(admin)
-    .errors({ ...teamErrors, ...errors.pick("team_owner_required") })
+    .errors({ ...teamErrors, ...errors.pick("team_last_owner") })
     .input(
       z.object({
         ...teamId,
@@ -108,13 +112,13 @@ export const teams = {
   memberRemove: base
     .route({ method: "DELETE", path: "/v1/teams/{teamId}/members/{accountId}" })
     .meta(admin)
-    .errors({ ...teamErrors, ...errors.pick("team_owner_required") })
+    .errors({ ...teamErrors, ...errors.pick("team_last_owner") })
     .input(z.object({ ...teamId, accountId: z.string() }))
     .output(empty),
   leave: base
     .route({ method: "POST", path: "/v1/teams/{teamId}/leave" })
     .meta(member)
-    .errors({ ...teamErrors, ...errors.pick("team_owner_required") })
+    .errors({ ...teamErrors, ...errors.pick("team_last_owner") })
     .input(z.object(teamId))
     .output(empty),
   settings: base

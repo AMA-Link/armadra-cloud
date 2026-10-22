@@ -121,6 +121,8 @@ export const meSchema = z.object({
   /** 1.4 起：所属的团队；personal 不报。 */
   teams: z.array(teamMembershipSchema).optional(),
   mfaEnabled: z.boolean(),
+  /** 1.4 起：账号持有的特殊范围，如运营方的 `operator`（控制台据此显示运营后台入口）；缺省 = 无。 */
+  scopes: z.array(z.string()).optional(),
 });
 
 /** `team_join` = 团队加入链接（1.4 起；M2）；`org_join` 从未发出，保留枚举值只增不删。 */

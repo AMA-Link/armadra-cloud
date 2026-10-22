@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_1, SINCE_0_3_10, SINCE_0_10 } from "../meta.ts";
+import { deviceRequestSchema } from "../saas-schemas.ts";
 import {
   challengeTokenSchema,
   deviceInputSchema,
@@ -135,6 +136,20 @@ export const auth = {
     .meta(session)
     .errors(errors.pick("device_code_expired", "not_found"))
     .input(z.object({ userCode: z.string(), approve: z.boolean() }))
+    .output(empty),
+  /** 设备授权页要显示发起设备的平台与名字（设计 §11.5），再决定批准还是拒绝。 */
+  deviceGet: base
+    .route({ method: "GET", path: "/v1/auth/device" })
+    .meta(since10("session"))
+    .errors(errors.pick("device_code_expired", "not_found", "rate_limited"))
+    .input(z.object({ userCode: z.string() }))
+    .output(deviceRequestSchema),
+  /** 拒绝后发起设备的 `devicePoll` 答 `denied`。 */
+  deviceDeny: base
+    .route({ method: "POST", path: "/v1/auth/device/deny" })
+    .meta(since10("session"))
+    .errors(errors.pick("device_code_expired", "not_found"))
+    .input(z.object({ userCode: z.string() }))
     .output(empty),
   passkeyRegisterOptions: base
     .route({ method: "POST", path: "/v1/auth/passkey/register/options" })

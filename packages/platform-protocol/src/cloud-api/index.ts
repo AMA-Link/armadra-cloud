@@ -8,7 +8,7 @@ import {
   type ErrorMap,
 } from "@orpc/contract";
 
-import { admin } from "./contract/admin.ts";
+import { admin, status } from "./contract/admin.ts";
 import { apiTokens } from "./contract/apiTokens.ts";
 import { audit } from "./contract/audit.ts";
 import { auth } from "./contract/auth.ts";
@@ -22,6 +22,7 @@ import { platform } from "./contract/platform.ts";
 import { relay } from "./contract/relay.ts";
 import { sources } from "./contract/sources.ts";
 import { teams } from "./contract/teams.ts";
+import { trust } from "./contract/trust.ts";
 import type { CloudMeta } from "./meta.ts";
 
 export const cloudContract = {
@@ -35,17 +36,19 @@ export const cloudContract = {
   groups,
   grants,
   accessRequests,
+  trust,
   audit,
   billing,
   apiTokens,
   admin,
+  status,
   relay,
 };
 export type CloudContract = typeof cloudContract;
 
 /**
  * `docs/contracts/cloud-api.md` 的节号：按顶层域，`me.streamTicket` 归 §6、`auth.changePassword` 归 §18、
- * `me.traffic` 归 §19；1.4 起 SaaS 的各域归 §21–§28，账号补充（邮箱验证、找回口令、第三方登录、
+ * `me.traffic` 归 §19；1.4 起 SaaS 的各域归 §21–§28（`trust` 归 §31），账号补充（邮箱验证、找回口令、第三方登录、
  * 改邮箱、空间、安全日志、注销、导出）归 §29。§3（组织）与 §9（计费，原挂组织）已移除。
  */
 export const CONTRACT_SECTIONS: Record<string, string> = {
@@ -67,6 +70,12 @@ export const CONTRACT_SECTIONS: Record<string, string> = {
   billing: "§26",
   apiTokens: "§27",
   admin: "§28",
+  status: "§28",
+  trust: "§31",
+  "auth.deviceGet": "§29",
+  "auth.deviceDeny": "§29",
+  "me.notificationPrefs": "§29",
+  "me.notificationPrefsUpdate": "§29",
   "auth.emailVerify": "§29",
   "auth.emailVerifyResend": "§29",
   "auth.passwordResetStart": "§29",
@@ -142,6 +151,7 @@ export {
 } from "./contract/auth.ts";
 export {
   adminAccountSchema,
+  adminTenantSchema,
   adminIncidentSchema,
   adminRelayNodeSchema,
   adminTeamSchema,

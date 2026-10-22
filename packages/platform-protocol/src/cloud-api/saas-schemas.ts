@@ -5,7 +5,11 @@
  */
 import { z } from "zod";
 
-import { grantRoleSchema, teamRoleSchema } from "../assertion/claims.ts";
+import {
+  devicePlatformSchema,
+  grantRoleSchema,
+  teamRoleSchema,
+} from "../assertion/claims.ts";
 import { hex32Schema } from "../tunnel/handshake.ts";
 
 const sourceIdSchema = hex32Schema;
@@ -367,6 +371,106 @@ export const sourceTransferSchema = z.object({
   expiresAtMs: z.number().int(),
 });
 
+// 控制台补充（cloud-api §28、§29、§31、§32）-----------------------------
+
+/** 通知偏好：安全类邮件恒开、不可关。 */
+export const notificationPrefsSchema = z.object({
+  invitations: z.boolean(),
+  accessRequests: z.boolean(),
+  hostPresence: z.boolean(),
+  security: z.literal(true),
+});
+
+/** 设备授权页要显示的发起设备（设计 §11.5：显示平台与名字）。 */
+export const deviceRequestSchema = z.object({
+  platform: devicePlatformSchema,
+  name: z.string(),
+  requestedAtMs: z.number().int(),
+  expiresAtMs: z.number().int(),
+});
+
+export const invoiceStatusSchema = z.enum([
+  "draft",
+  "open",
+  "paid",
+  "void",
+  "uncollectible",
+]);
+export const invoiceSchema = z.object({
+  invoiceId: z.string(),
+  number: z.string(),
+  status: invoiceStatusSchema,
+  /** 最小货币单位（分）。 */
+  amount: z.number().int(),
+  currency: z.string().length(3),
+  periodStartMs: z.number().int(),
+  periodEndMs: z.number().int(),
+  issuedAtMs: z.number().int(),
+  hostedUrl: z.string().nullable(),
+  pdfUrl: z.string().nullable(),
+});
+
+/**
+ * 新设备待信任（设计 §11.4）：团队成员第一次从新设备连团队主机，由主机 owner 或团队 admin
+ * 从自己已受信的设备背书。**批准走端到端通道发到主机，不经云端**；云端只转发这条通知并记
+ * 拒绝，看不到也改不了背书内容。
+ */
+export const trustRequestSchema = z.object({
+  requestId: z.string(),
+  sourceId: sourceIdSchema,
+  sourceName: z.string(),
+  teamId: teamIdSchema.nullable(),
+  member: z.object({
+    accountId: z.string(),
+    email: z.string().nullable(),
+    displayName: z.string(),
+  }),
+  device: z.object({ name: z.string(), platform: devicePlatformSchema }),
+  /** 6 位 SAS 验证码，两端各自显示，背书人核对一致才批准。 */
+  sas: z.string().regex(/^\d{6}$/),
+  requestedAtMs: z.number().int(),
+  expiresAtMs: z.number().int(),
+});
+
+export const statusComponentStateSchema = z.enum([
+  "operational",
+  "degraded",
+  "outage",
+]);
+/** 对外状态页的数据：组件状态 + 公告。 */
+export const publicStatusSchema = z.object({
+  components: z.array(
+    z.object({
+      id: z.string().min(1).max(64),
+      name: z.string().min(1).max(128),
+      state: statusComponentStateSchema,
+    }),
+  ),
+  notice: z.string().max(1000).nullable(),
+  updatedAtMs: z.number().int().nullable(),
+});
+
+export const abuseSignalSchema = z.enum(["traffic", "report"]);
+export const abuseReportSchema = z.object({
+  reportId: z.string(),
+  target: z.object({ kind: z.enum(["link", "host"]), id: z.string() }),
+  teamId: teamIdSchema.nullable(),
+  signal: abuseSignalSchema,
+  /** 本月流量字节数（流量异常信号）。 */
+  relayBytesMonth: z.number().int().nonnegative().nullable(),
+  frozen: z.boolean(),
+  createdAtMs: z.number().int(),
+});
+
+export const featureFlagSchema = z.object({
+  flag: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/),
+  /** 对全部团队开。 */
+  all: z.boolean(),
+  /** 灰度的团队 id（`all` 为 `false` 时生效）。 */
+  teamIds: z.array(teamIdSchema).max(1000),
+});
+
+/** `space` 在 GET 里按 query 的方括号写法：`space[kind]=team&space[teamId]=…`。 */
 export type Team = z.infer<typeof teamSchema>;
 export type TeamMember = z.infer<typeof teamMemberSchema>;
 export type TeamSettings = z.infer<typeof teamSettingsSchema>;

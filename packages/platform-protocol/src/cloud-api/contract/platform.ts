@@ -45,6 +45,8 @@ export const PLATFORM_CAPABILITIES = [
   "auth.email-verify",
   "auth.password-reset",
   "me.spaces",
+  "trust",
+  "status",
 ] as const;
 
 export const platformModeSchema = z.enum(["saas", "personal"]);

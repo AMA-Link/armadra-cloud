@@ -3,18 +3,25 @@ import { z } from "zod";
 import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_10 } from "../meta.ts";
 import {
+  invoiceSchema,
+  nextCursorSchema,
+  pageInputShape,
   periodSchema,
-  teamIdSchema,
+  spaceSchema,
   usageEntrySchema,
 } from "../saas-schemas.ts";
 
-const billingScope = { scope: ["team:billing"], since: SINCE_0_10 } as const;
+/** 个人空间由本人（session）管，团队空间要 owner / billing。 */
+const billingScope = {
+  scope: ["session", "team:billing"],
+  since: SINCE_0_10,
+} as const;
 const billingErrors = errors.pick("not_found", "team_role_insufficient");
-const teamId = { teamId: teamIdSchema };
+const space = { space: spaceSchema };
 
-/** 计划与订阅（1.4 起按团队；0.1 的 `orgId` 从未发出，原地换成 `teamId`）。 */
+/** 计划与订阅（1.4 起按空间；0.1 的 `orgId` 从未发出，原地换成 `space`）。 */
 export const billingPlanSchema = z.object({
-  teamId: teamIdSchema,
+  space: spaceSchema,
   plan: z.string(),
   status: z.enum(["active", "trialing", "past_due", "canceled"]),
   seats: z.number().int().nonnegative(),
@@ -25,7 +32,7 @@ export const billingPlanSchema = z.object({
 });
 
 export const billingUsageSchema = z.object({
-  teamId: teamIdSchema,
+  space: spaceSchema,
   period: periodSchema,
   usage: z.array(usageEntrySchema),
 });
@@ -34,44 +41,61 @@ export const billingUsageSchema = z.object({
 const returnUrl = z.url().max(2048).optional();
 
 /**
- * 计划、用量与付费（cloud-api §26）：按团队，`/v1/teams/{teamId}/billing…`。仅 saas，预留；
+ * 计划、用量与付费（cloud-api §26）：按空间，`space` 是 `{ kind: "personal" }` 或 `{ kind: "team", teamId }`。仅 saas，预留；
  * `plan` / `usage` 属 M1，`checkout` / `portal` / `webhook` 属 M2。
  */
 export const billing = {
   plan: base
-    .route({ method: "GET", path: "/v1/teams/{teamId}/billing" })
+    .route({ method: "GET", path: "/v1/billing/plan" })
     .meta(billingScope)
     .errors(billingErrors)
-    .input(z.object(teamId))
+    .input(z.object(space))
     .output(billingPlanSchema),
   usage: base
-    .route({ method: "GET", path: "/v1/teams/{teamId}/billing/usage" })
+    .route({ method: "GET", path: "/v1/billing/usage" })
     .meta(billingScope)
     .errors(billingErrors)
-    .input(z.object({ ...teamId, period: periodSchema.optional() }))
+    .input(z.object({ ...space, period: periodSchema.optional() }))
     .output(billingUsageSchema),
   /** 支付服务的结账页；席位随成员数自动调整。 */
   checkout: base
-    .route({ method: "POST", path: "/v1/teams/{teamId}/billing/checkout" })
+    .route({ method: "POST", path: "/v1/billing/checkout" })
     .meta(billingScope)
     .errors({
       ...billingErrors,
-      ...errors.pick("bad_request", "conflict", "unavailable"),
+      ...errors.pick(
+        "bad_request",
+        "conflict",
+        "unavailable",
+        "plan_feature_unavailable",
+      ),
     })
     .input(
       z.object({
-        ...teamId,
+        ...space,
         plan: z.string().min(1).max(32),
         returnUrl,
       }),
     )
     .output(z.object({ url: z.url(), expiresAtMs: z.number().int() })),
+  /** 发票列表（M2），游标分页；`hostedUrl` / `pdfUrl` 是支付服务托管的页面。 */
+  invoices: base
+    .route({ method: "GET", path: "/v1/billing/invoices" })
+    .meta(billingScope)
+    .errors({ ...billingErrors, ...errors.pick("unavailable") })
+    .input(z.object({ ...space, ...pageInputShape }))
+    .output(
+      z.object({
+        invoices: z.array(invoiceSchema),
+        nextCursor: nextCursorSchema,
+      }),
+    ),
   /** 支付服务的客户门户（付款方式、发票）。 */
   portal: base
-    .route({ method: "POST", path: "/v1/teams/{teamId}/billing/portal" })
+    .route({ method: "POST", path: "/v1/billing/portal" })
     .meta(billingScope)
     .errors({ ...billingErrors, ...errors.pick("conflict", "unavailable") })
-    .input(z.object({ ...teamId, returnUrl }))
+    .input(z.object({ ...space, returnUrl }))
     .output(z.object({ url: z.url() })),
   /**
    * 支付服务回调：不带账号，`scope = billing-webhook`——按提供方的签名头验证原始请求体，

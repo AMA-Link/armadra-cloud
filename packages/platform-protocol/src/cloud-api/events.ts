@@ -5,6 +5,7 @@
 import { z } from "zod";
 
 import { sourceIdSchema } from "./schemas.ts";
+import { spaceSchema, teamIdSchema } from "./saas-schemas.ts";
 
 export const ME_STREAM_PATH = "/v1/me/stream";
 export const ME_STREAM_PING_MS = 30_000;
@@ -32,6 +33,56 @@ export const meStreamEventSchema = z.discriminatedUnion("type", [
       accountId: z.string().optional(),
       guest: z.boolean().optional(),
     }),
+    atMs: z.number().int(),
+  }),
+  // 协议 1.4：SaaS 的团队事件（预留，没有发送方；cloud-api §32）。
+  z.object({
+    type: z.literal("memberChanged"),
+    teamId: teamIdSchema,
+    accountId: z.string().optional(),
+    change: z.enum(["added", "removed", "roleChanged"]),
+    atMs: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("invitationChanged"),
+    invitationId: z.string(),
+    teamId: teamIdSchema.optional(),
+    sourceId: sourceIdSchema.optional(),
+    state: z.enum(["pending", "accepted", "declined", "revoked", "expired"]),
+    atMs: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("grantChanged"),
+    sourceId: sourceIdSchema,
+    grantId: z.string().optional(),
+    teamId: teamIdSchema.optional(),
+    atMs: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("accessRequested"),
+    requestId: z.string(),
+    sourceId: sourceIdSchema,
+    teamId: teamIdSchema.optional(),
+    atMs: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("deviceTrustRequested"),
+    requestId: z.string(),
+    sourceId: sourceIdSchema,
+    teamId: teamIdSchema.optional(),
+    atMs: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("deviceTrustResolved"),
+    requestId: z.string(),
+    outcome: z.enum(["trusted", "rejected", "expired"]),
+    atMs: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("planChanged"),
+    space: spaceSchema,
+    plan: z.string(),
+    status: z.enum(["active", "trialing", "past_due", "canceled"]),
     atMs: z.number().int(),
   }),
   z.object({ type: z.literal("ping"), ts: z.number() }),

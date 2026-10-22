@@ -208,6 +208,7 @@ const adminNode = {
   region: "ap-east",
   online: true,
   tunnels: 12,
+  connections: 48,
   draining: false,
   version: "0.10.0",
   lastSeenAtMs: NOW,
@@ -507,7 +508,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
   },
   "sources.list": {
-    input: { teamId: TEAM_ID },
+    input: { space: { kind: "team", teamId: TEAM_ID } },
     output: { sources: [sourceSummary] },
   },
   "sources.get": { input: { sourceId: SOURCE_ID }, output: sourceDetail },
@@ -596,7 +597,10 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       relayToken: "test-relay-token",
     },
   },
-  "links.list": { input: { sourceId: SOURCE_ID }, output: { links: [link] } },
+  "links.list": {
+    input: { sourceId: SOURCE_ID, space: { kind: "personal" } },
+    output: { links: [link] },
+  },
   "links.update": {
     input: { linkId: link.linkId, label: "For Bob" },
     output: { ...link, label: "For Bob" },
@@ -666,6 +670,10 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
   "invitations.revoke": {
     input: { invitationId: teamInvitation.invitationId },
     output: {},
+  },
+  "invitations.resend": {
+    input: { invitationId: teamInvitation.invitationId },
+    output: teamInvitation,
   },
   "invitations.get": {
     input: {
@@ -808,6 +816,32 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       decidedAtMs: NOW,
     },
   },
+  "trust.list": {
+    input: { space: { kind: "team", teamId: TEAM_ID } },
+    output: {
+      requests: [
+        {
+          requestId: "trq_01JAAAAAAAAAAAAAAAAAAAAAAA",
+          sourceId: SOURCE_ID,
+          sourceName: "Workstation",
+          teamId: TEAM_ID,
+          member: {
+            accountId: ACCOUNT_ID,
+            email: "dev@armadra.test",
+            displayName: "Dev",
+          },
+          device: { name: "Dev iPhone", platform: "ios" },
+          sas: "482913",
+          requestedAtMs: NOW,
+          expiresAtMs: NOW + 600_000,
+        },
+      ],
+    },
+  },
+  "trust.reject": {
+    input: { requestId: "trq_01JAAAAAAAAAAAAAAAAAAAAAAA" },
+    output: {},
+  },
   "audit.list": {
     input: { teamId: TEAM_ID, fromMs: NOW - 86_400_000, toMs: NOW, limit: 100 },
     output: { events: [auditEvent], nextCursor: null },
@@ -827,9 +861,9 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
   },
   "billing.plan": {
-    input: { teamId: TEAM_ID },
+    input: { space: { kind: "team", teamId: TEAM_ID } },
     output: {
-      teamId: TEAM_ID,
+      space: { kind: "team", teamId: TEAM_ID },
       plan: "team",
       status: "trialing",
       seats: 5,
@@ -839,18 +873,18 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
   },
   "billing.usage": {
-    input: { teamId: TEAM_ID, period: "2026-10" },
+    input: { space: { kind: "personal" }, period: "2026-10" },
     output: {
-      teamId: TEAM_ID,
+      space: { kind: "personal" },
       period: "2026-10",
       usage: [{ metric: "relay.bytes", value: 1024, limit: null }],
     },
   },
   "billing.checkout": {
     input: {
-      teamId: TEAM_ID,
+      space: { kind: "team", teamId: TEAM_ID },
       plan: "team",
-      returnUrl: "https://app.armadra.test/teams/dev-team",
+      returnUrl: "https://app.armadra.test/t/dev-team/billing",
     },
     output: {
       url: "https://pay.armadra.test/checkout/cs_test",
@@ -859,10 +893,30 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
   },
   "billing.portal": {
     input: {
-      teamId: TEAM_ID,
-      returnUrl: "https://app.armadra.test/teams/dev-team",
+      space: { kind: "team", teamId: TEAM_ID },
+      returnUrl: "https://app.armadra.test/t/dev-team/billing",
     },
     output: { url: "https://pay.armadra.test/portal/bps_test" },
+  },
+  "billing.invoices": {
+    input: { space: { kind: "team", teamId: TEAM_ID }, limit: 20 },
+    output: {
+      invoices: [
+        {
+          invoiceId: "inv_01JAAAAAAAAAAAAAAAAAAAAAAA",
+          number: "ARM-0001",
+          status: "paid",
+          amount: 4500,
+          currency: "usd",
+          periodStartMs: NOW - 30 * 86_400_000,
+          periodEndMs: NOW,
+          issuedAtMs: NOW,
+          hostedUrl: "https://pay.armadra.test/i/ARM-0001",
+          pdfUrl: null,
+        },
+      ],
+      nextCursor: null,
+    },
   },
   "billing.webhook": {
     input: { provider: "stripe", id: "evt_test", type: "invoice.paid" },
@@ -882,6 +936,32 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     output: { apiTokens: [apiToken] },
   },
   "apiTokens.revoke": { input: { tokenId: apiToken.tokenId }, output: {} },
+  "admin.tenants": {
+    input: { q: "dev", limit: 100 },
+    output: {
+      tenants: [
+        {
+          kind: "team",
+          id: TEAM_ID,
+          name: "Dev Team",
+          plan: "free",
+          hostCount: 2,
+          status: "active",
+          createdAtMs: NOW,
+        },
+        {
+          kind: "account",
+          id: ACCOUNT_ID,
+          name: "dev@armadra.test",
+          plan: "free",
+          hostCount: 1,
+          status: "disabled",
+          createdAtMs: NOW,
+        },
+      ],
+      nextCursor: null,
+    },
+  },
   "admin.accounts": {
     input: { q: "dev", status: "active", limit: 100 },
     output: { accounts: [adminAccount], nextCursor: null },
@@ -925,6 +1005,69 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       updatedAtMs: NOW,
     },
   },
+  "status.get": {
+    input: {},
+    output: {
+      components: [
+        { id: "relay", name: "Relay", state: "operational" },
+        { id: "console", name: "Console", state: "degraded" },
+      ],
+      notice: null,
+      updatedAtMs: NOW,
+    },
+  },
+  "admin.statusPublish": {
+    input: {
+      components: [{ id: "console", state: "degraded" }],
+      notice: "Investigating slow loads",
+      reason: "elevated latency",
+    },
+    output: {
+      components: [{ id: "console", name: "Console", state: "degraded" }],
+      notice: "Investigating slow loads",
+      updatedAtMs: NOW,
+    },
+  },
+  "admin.abuseList": {
+    input: { signal: "traffic", frozen: "false", limit: 100 },
+    output: {
+      reports: [
+        {
+          reportId: "abu_01JAAAAAAAAAAAAAAAAAAAAAAA",
+          target: { kind: "link", id: "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA" },
+          teamId: TEAM_ID,
+          signal: "traffic",
+          relayBytesMonth: 53_687_091_200,
+          frozen: false,
+          createdAtMs: NOW,
+        },
+      ],
+      nextCursor: null,
+    },
+  },
+  "admin.linkFreeze": {
+    input: {
+      linkId: "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      frozen: true,
+      reason: "abuse report",
+    },
+    output: {},
+  },
+  "admin.flagsList": {
+    input: {},
+    output: {
+      flags: [{ flag: "groups.beta", all: false, teamIds: [TEAM_ID] }],
+    },
+  },
+  "admin.flagsSet": {
+    input: {
+      flag: "groups.beta",
+      all: true,
+      teamIds: [],
+      reason: "general availability",
+    },
+    output: { flag: "groups.beta", all: true, teamIds: [] },
+  },
   "auth.emailVerify": {
     input: { token: "test-email-token" },
     output: { email: "dev@armadra.test", emailVerified: true },
@@ -964,7 +1107,35 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       { mfa: { challengeId: "mfa_01", methods: ["totp", "recovery"] } },
     ],
   },
+  "auth.deviceGet": {
+    input: { userCode: "BCDF-GHJK" },
+    output: {
+      platform: "server",
+      name: "armadra-server",
+      requestedAtMs: NOW,
+      expiresAtMs: NOW + 600_000,
+    },
+  },
+  "auth.deviceDeny": { input: { userCode: "BCDF-GHJK" }, output: {} },
   "auth.oauthUnlink": { input: { provider: "github" }, output: {} },
+  "me.notificationPrefs": {
+    input: {},
+    output: {
+      invitations: true,
+      accessRequests: true,
+      hostPresence: false,
+      security: true,
+    },
+  },
+  "me.notificationPrefsUpdate": {
+    input: { hostPresence: true },
+    output: {
+      invitations: true,
+      accessRequests: true,
+      hostPresence: true,
+      security: true,
+    },
+  },
   "me.emailChange": {
     input: {
       newEmail: "dev2@armadra.test",

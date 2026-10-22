@@ -48,6 +48,7 @@ export const grants = {
       ...grantErrors,
       ...errors.pick(
         "team_policy_denied",
+        "guests_disabled",
         "email_unverified",
         "limit_reached",
         "conflict",
@@ -98,6 +99,7 @@ export const accessRequests = {
         "not_found",
         "conflict",
         "limit_reached",
+        "plan_feature_unavailable",
         "email_unverified",
         "rate_limited",
         "bad_request",

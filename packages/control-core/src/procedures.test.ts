@@ -24,7 +24,7 @@ it("协议 1.4 的 SaaS 各组在 personal 里都是预留的（路由命中但�
     Object.fromEntries(PERSONAL_PROCEDURES.map((key) => [key, () => ({})])),
   );
   const saas =
-    /^(teams|invitations|groups|grants|accessRequests|audit|billing|apiTokens|admin)\./;
+    /^(teams|invitations|groups|grants|accessRequests|trust|status|audit|billing|apiTokens|admin)\./;
   const reserved = router.reserved.map((route) => route.key);
   const added = listProcedures(cloudContract)
     .map((entry) => entry.key)
@@ -35,6 +35,6 @@ it("协议 1.4 的 SaaS 各组在 personal 里都是预留的（路由命中但�
     expect(reserved, key).toContain(key);
   }
   expect(router.match("POST", "/v1/teams")?.handler).toBeNull();
-  expect(router.match("GET", "/v1/teams/t1/billing")?.handler).toBeNull();
+  expect(router.match("GET", "/v1/billing/plan")?.handler).toBeNull();
   expect(router.match("GET", "/v1/admin/accounts")?.handler).toBeNull();
 });

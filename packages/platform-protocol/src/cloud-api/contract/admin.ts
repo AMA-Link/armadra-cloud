@@ -4,8 +4,13 @@ import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_10 } from "../meta.ts";
 import { empty } from "../schemas.ts";
 import {
+  abuseReportSchema,
+  auditEventSchema,
+  featureFlagSchema,
   nextCursorSchema,
   pageInputShape,
+  publicStatusSchema,
+  statusComponentStateSchema,
   teamIdSchema,
   teamSlugSchema,
 } from "../saas-schemas.ts";
@@ -27,6 +32,10 @@ export const adminAccountSchema = z.object({
   teamCount: z.number().int().nonnegative(),
   createdAtMs: z.number().int(),
   lastSeenAtMs: z.number().int().nullable(),
+  /** 详情用：席位、本月流量与最近的运营动作（审计最近 5 条）。 */
+  seats: z.number().int().nonnegative().optional(),
+  relayBytesMonth: z.number().int().nonnegative().optional(),
+  recentActions: z.array(auditEventSchema).max(20).optional(),
 });
 
 export const adminTeamSchema = z.object({
@@ -39,6 +48,21 @@ export const adminTeamSchema = z.object({
   hostCount: z.number().int().nonnegative(),
   createdAtMs: z.number().int(),
   deletedAtMs: z.number().int().nullable(),
+  /** 详情用：席位、本月流量与最近的运营动作（审计最近 5 条）。 */
+  seats: z.number().int().nonnegative().optional(),
+  relayBytesMonth: z.number().int().nonnegative().optional(),
+  recentActions: z.array(auditEventSchema).max(20).optional(),
+});
+
+/** 搜索结果里账号与团队混排的一行（`admin.tenants`）。 */
+export const adminTenantSchema = z.object({
+  kind: z.enum(["account", "team"]),
+  id: z.string(),
+  name: z.string(),
+  plan: z.string(),
+  hostCount: z.number().int().nonnegative(),
+  status: z.enum(["active", "disabled", "suspended"]),
+  createdAtMs: z.number().int(),
 });
 
 export const adminRelayNodeSchema = z.object({
@@ -47,6 +71,8 @@ export const adminRelayNodeSchema = z.object({
   online: z.boolean(),
   /** 在线隧道数。 */
   tunnels: z.number().int().nonnegative(),
+  /** 当前经这个节点的客户端连接数。 */
+  connections: z.number().int().nonnegative(),
   draining: z.boolean(),
   version: z.string(),
   lastSeenAtMs: z.number().int().nullable(),
@@ -70,6 +96,18 @@ const searchShape = {
  * 仅 saas，预留（M1 最小集；滥用处理、功能开关、状态页 M2）。
  */
 export const admin = {
+  /** 控制台的租户搜索：账号与团队混排，按名称 / 邮箱 / slug 模糊查；详情与停用按 `kind` 走下面的 account* / team*。 */
+  tenants: base
+    .route({ method: "GET", path: "/v1/admin/tenants" })
+    .meta(operator)
+    .errors(adminErrors)
+    .input(z.object({ ...searchShape }))
+    .output(
+      z.object({
+        tenants: z.array(adminTenantSchema),
+        nextCursor: nextCursorSchema,
+      }),
+    ),
   accounts: base
     .route({ method: "GET", path: "/v1/admin/accounts" })
     .meta(operator)
@@ -171,4 +209,78 @@ export const admin = {
       }),
     )
     .output(adminIncidentSchema),
+  /** 对外状态页的发布（M2）：改组件状态与公告，`status.get` 立即反映。 */
+  statusPublish: base
+    .route({ method: "PUT", path: "/v1/admin/status" })
+    .meta(operator)
+    .errors({ ...adminErrors, ...errors.pick("bad_request") })
+    .input(
+      z.object({
+        components: z
+          .array(
+            z.object({
+              id: z.string().min(1).max(64),
+              state: statusComponentStateSchema,
+            }),
+          )
+          .min(1),
+        notice: z.string().max(1000).nullable().optional(),
+        reason: statusReason,
+      }),
+    )
+    .output(publicStatusSchema),
+  /** 滥用信号（流量异常、举报）：链接或主机，可按是否已冻结过滤（M2）。 */
+  abuseList: base
+    .route({ method: "GET", path: "/v1/admin/abuse" })
+    .meta(operator)
+    .errors(adminErrors)
+    .input(
+      z.object({
+        signal: z.enum(["traffic", "report"]).optional(),
+        frozen: z.enum(["true", "false"]).optional(),
+        ...pageInputShape,
+      }),
+    )
+    .output(
+      z.object({
+        reports: z.array(abuseReportSchema),
+        nextCursor: nextCursorSchema,
+      }),
+    ),
+  /** 冻结链接：之后 `links.accept` 答 `403 link_frozen`，已进来的访客被踢（M2）。 */
+  linkFreeze: base
+    .route({ method: "PUT", path: "/v1/admin/links/{linkId}/frozen" })
+    .meta(operator)
+    .errors(adminErrors)
+    .input(
+      z.object({
+        linkId: z.string(),
+        frozen: z.boolean(),
+        reason: statusReason,
+      }),
+    )
+    .output(empty),
+  /** 功能开关：全部团队开，或灰度到指定团队（M2）。 */
+  flagsList: base
+    .route({ method: "GET", path: "/v1/admin/flags" })
+    .meta(operator)
+    .errors(adminErrors)
+    .input(empty)
+    .output(z.object({ flags: z.array(featureFlagSchema) })),
+  flagsSet: base
+    .route({ method: "PUT", path: "/v1/admin/flags/{flag}" })
+    .meta(operator)
+    .errors({ ...adminErrors, ...errors.pick("bad_request") })
+    .input(featureFlagSchema.extend({ reason: statusReason }))
+    .output(featureFlagSchema),
+};
+
+/** 对外服务状态（cloud-api §28，M2）：匿名可读，状态页与控制台都用它。 */
+export const status = {
+  get: base
+    .route({ method: "GET", path: "/v1/status" })
+    .meta({ scope: ["anonymous"], since: SINCE_0_10 })
+    .errors(errors.pick("rate_limited"))
+    .input(empty)
+    .output(publicStatusSchema),
 };

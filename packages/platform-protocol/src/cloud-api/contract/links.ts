@@ -2,7 +2,11 @@ import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_1, SINCE_0_2 } from "../meta.ts";
-import { teamIdSchema, teamInviteRoleSchema } from "../saas-schemas.ts";
+import {
+  spaceSchema,
+  teamIdSchema,
+  teamInviteRoleSchema,
+} from "../saas-schemas.ts";
 import {
   challengeTokenSchema,
   deviceInputSchema,
@@ -49,6 +53,7 @@ export const links = {
         "source_access_denied",
         "team_role_insufficient",
         "team_policy_denied",
+        "guests_disabled",
         "bad_request",
       ),
     )
@@ -91,6 +96,8 @@ export const links = {
         "link_expired",
         "link_exhausted",
         "link_secret_invalid",
+        "link_frozen",
+        "anonymous_links_disabled",
         "rate_limited",
         "challenge_required",
         "challenge_invalid",
@@ -128,7 +135,7 @@ export const links = {
     .input(
       z.object({
         sourceId: sourceIdSchema.optional(),
-        teamId: teamIdSchema.optional(),
+        space: spaceSchema.optional(),
       }),
     )
     .output(z.object({ links: z.array(linkSummarySchema) })),

@@ -8,6 +8,7 @@ import {
   nextCursorSchema,
   pageInputShape,
   meSpaceSchema,
+  notificationPrefsSchema,
   grantSchema,
   teamMembershipSchema,
 } from "../saas-schemas.ts";
@@ -131,6 +132,18 @@ export const me = {
     )
     .input(z.object({ newEmail: z.email(), password: z.string() }))
     .output(empty),
+  /** 通知偏好（M2）：邀请、访问申请、主机上下线按类开关邮件；安全类邮件不能关。 */
+  notificationPrefs: base
+    .route({ method: "GET", path: "/v1/me/notification-prefs" })
+    .meta(session10)
+    .input(empty)
+    .output(notificationPrefsSchema),
+  notificationPrefsUpdate: base
+    .route({ method: "PATCH", path: "/v1/me/notification-prefs" })
+    .meta(session10)
+    .errors(errors.pick("bad_request"))
+    .input(notificationPrefsSchema.omit({ security: true }).partial())
+    .output(notificationPrefsSchema),
   /** 个人空间 + 所属的每个团队（控制台顶部的空间切换用）。 */
   spaces: base
     .route({ method: "GET", path: "/v1/me/spaces" })

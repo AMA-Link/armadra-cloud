@@ -33,10 +33,12 @@ describe("契约结构", () => {
       "groups",
       "grants",
       "accessRequests",
+      "trust",
       "audit",
       "billing",
       "apiTokens",
       "admin",
+      "status",
       "relay",
     ]);
     expect(procedures.length).toBeGreaterThanOrEqual(100);
@@ -145,8 +147,8 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
       expect(entry.path, entry.key).not.toContain("/v1/orgs");
     expect(byKey.get("billing.plan")).toMatchObject({
       method: "GET",
-      path: "/v1/teams/{teamId}/billing",
-      meta: { scope: ["team:billing"] },
+      path: "/v1/billing/plan",
+      meta: { scope: ["session", "team:billing"] },
     });
     expect(byKey.get("billing.webhook")?.meta.scope).toEqual([
       "billing-webhook",
@@ -175,12 +177,17 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
     expect(sectionOf("billing.checkout")).toBe("§26");
     expect(sectionOf("apiTokens.create")).toBe("§27");
     expect(sectionOf("admin.incident")).toBe("§28");
+    expect(sectionOf("status.get")).toBe("§28");
+    expect(sectionOf("trust.list")).toBe("§31");
+    expect(sectionOf("auth.deviceGet")).toBe("§29");
+    expect(sectionOf("me.notificationPrefs")).toBe("§29");
     expect(sectionOf("auth.emailVerify")).toBe("§29");
     expect(sectionOf("me.spaces")).toBe("§29");
     expect(sectionOf("sources.transferStart")).toBe("§4");
     expect(byKey.get("teams.memberRemove")?.errorCodes).toContain(
-      "team_owner_required",
+      "team_last_owner",
     );
+    expect(byKey.get("me.delete")?.errorCodes).toContain("team_owner_required");
     expect(errorStatus("team_role_insufficient")).toBe(403);
     expect(errorStatus("team_owner_required")).toBe(409);
     expect(errorStatus("invitation_expired")).toBe(410);
@@ -189,7 +196,7 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
     expect(errorStatus("webhook_signature_invalid")).toBe(401);
     for (const entry of procedures)
       if (
-        /^(teams|invitations|groups|grants|accessRequests|audit|apiTokens|admin)\./.test(
+        /^(teams|invitations|groups|grants|accessRequests|trust|audit|apiTokens|admin|status)\./.test(
           entry.key,
         )
       )
@@ -243,6 +250,84 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
     ).toBe(true);
   });
 
+  it("space 维度：sources.list、links.list、billing.*、trust.list 收 personal / team，不收别的", () => {
+    for (const key of [
+      "sources.list",
+      "links.list",
+      "billing.plan",
+      "billing.invoices",
+      "trust.list",
+    ]) {
+      const schema = input(key);
+      const shape = (extra: object) => ({
+        ...extra,
+        space: { kind: "team", teamId: "t" },
+      });
+      expect(schema.safeParse(shape({})).success, key).toBe(true);
+      expect(
+        schema.safeParse({ space: { kind: "personal" } }).success,
+        key,
+      ).toBe(true);
+      expect(
+        schema.safeParse({ space: { kind: "org", orgId: "o" } }).success,
+        key,
+      ).toBe(false);
+    }
+    expect(input("billing.plan").safeParse({}).success).toBe(false);
+    expect(byKey.get("trust.list")?.errorCodes).toContain(
+      "team_role_insufficient",
+    );
+  });
+
+  it("设备授权页：deviceGet / deviceDeny；通知偏好里安全类不可改", () => {
+    expect(byKey.get("auth.deviceGet")).toMatchObject({
+      method: "GET",
+      path: "/v1/auth/device",
+    });
+    expect(
+      input("auth.deviceDeny").safeParse({ userCode: "BCDF-GHJK" }).success,
+    ).toBe(true);
+    const update = input("me.notificationPrefsUpdate");
+    expect(update.safeParse({ hostPresence: false }).success).toBe(true);
+    expect(
+      byKey
+        .get("me.notificationPrefs")
+        ?.procedure["~orpc"].outputSchema.safeParse({
+          invitations: true,
+          accessRequests: true,
+          hostPresence: true,
+          security: false,
+        }).success,
+    ).toBe(false);
+  });
+
+  it("控制台要的错误码都在注册表里", () => {
+    for (const code of [
+      "email_token_invalid",
+      "email_token_expired",
+      "team_slug_taken",
+      "team_role_insufficient",
+      "team_last_owner",
+      "team_owner_required",
+      "team_suspended",
+      "team_deleted",
+      "invitation_expired",
+      "invitation_email_mismatch",
+      "member_exists",
+      "host_registration_disabled",
+      "guests_disabled",
+      "anonymous_links_disabled",
+      "plan_feature_unavailable",
+      "transfer_pending",
+      "device_untrusted",
+      "link_frozen",
+    ])
+      expect(isErrorCode(code), code).toBe(true);
+    expect(errorStatus("team_last_owner")).toBe(409);
+    expect(errorStatus("team_deleted")).toBe(410);
+    expect(errorStatus("link_frozen")).toBe(403);
+  });
+
   it("授予主体四种；GET 列表的分页与时间按 query 字符串收", () => {
     const create = input("grants.create");
     const source = "0123456789abcdef0123456789abcdef";
@@ -272,6 +357,41 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
 });
 
 describe("me.stream 事件", () => {
+  it("协议 1.4 的团队事件", () => {
+    const sourceId = "0123456789abcdef0123456789abcdef";
+    const events = [
+      { type: "memberChanged", teamId: "t", change: "roleChanged", atMs: 1 },
+      {
+        type: "invitationChanged",
+        invitationId: "i",
+        state: "accepted",
+        atMs: 1,
+      },
+      { type: "grantChanged", sourceId, atMs: 1 },
+      { type: "accessRequested", requestId: "r", sourceId, atMs: 1 },
+      { type: "deviceTrustRequested", requestId: "r", sourceId, atMs: 1 },
+      {
+        type: "deviceTrustResolved",
+        requestId: "r",
+        outcome: "trusted",
+        atMs: 1,
+      },
+      {
+        type: "planChanged",
+        space: { kind: "team", teamId: "t" },
+        plan: "team",
+        status: "active",
+        atMs: 1,
+      },
+    ];
+    for (const event of events)
+      expect(meStreamEventSchema.parse(event)).toEqual(event);
+    expect(
+      meStreamEventSchema.safeParse({ type: "memberChanged", teamId: "t" })
+        .success,
+    ).toBe(false);
+  });
+
   it("七种事件按 type 区分", () => {
     const sourceId = "0123456789abcdef0123456789abcdef";
     const events = [

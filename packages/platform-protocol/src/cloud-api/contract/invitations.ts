@@ -34,6 +34,8 @@ export const invitations = {
         "team_role_insufficient",
         "source_access_denied",
         "team_policy_denied",
+        "guests_disabled",
+        "member_exists",
         "email_unverified",
         "limit_reached",
         "conflict",
@@ -65,6 +67,21 @@ export const invitations = {
     .errors(errors.pick("not_found", "team_role_insufficient"))
     .input(z.object({ invitationId: z.string() }))
     .output(empty),
+  /** 重发邀请邮件：换新令牌、重新计 7 天，旧链接作废；按邀请限流。 */
+  resend: base
+    .route({ method: "POST", path: "/v1/invitations/{invitationId}/resend" })
+    .meta(inviter)
+    .errors(
+      errors.pick(
+        "not_found",
+        "team_role_insufficient",
+        "invitation_revoked",
+        "conflict",
+        "rate_limited",
+      ),
+    )
+    .input(z.object({ invitationId: z.string() }))
+    .output(invitationSchema),
   get: base
     .route({ method: "GET", path: "/v1/invitations/{invitationId}" })
     .meta({ scope: ["anonymous"], since: SINCE_0_10 })
@@ -81,6 +98,8 @@ export const invitations = {
         "email_unverified",
         "limit_reached",
         "team_policy_denied",
+        "member_exists",
+        "team_deleted",
         "conflict",
         "rate_limited",
       ),
