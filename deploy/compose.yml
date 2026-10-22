@@ -31,6 +31,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # saas serve 现在是只答 /health、/ready 的占位（Node 版与 Go 版一致），SaaS 中继节点随 #59 的 G5 接替。
   relay:
     image: ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
     command: ["saas", "serve"]

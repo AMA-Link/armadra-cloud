@@ -2,18 +2,18 @@
 
 `armadra-relay personal` 的全部状态（账号、口令哈希、签名钥、源 / 设备 / 链接登记、设置）三选一：
 
-| `--store`  | 位置                                     | 说明                                                                     |
-| ---------- | ---------------------------------------- | ------------------------------------------------------------------------ |
-| `sqlite`   | `relay.db`（WAL，0600）                  | 新装缺省。`node:sqlite`，`serve` 与 CLI 同时打开同一个库，写在事务里     |
-| `file`     | `state.json`（0600）                     | 0.3.x 之前的部署。目录锁 + 原子改名；只有它时不写 `--store` 也自动沿用它 |
-| `postgres` | PostgreSQL（数据目录留 `postgres.json`） | 多节点，显式选。几个节点共用一个库；不选就不加载驱动                     |
+| `--store`  | 位置                                     | 说明                                                        |
+| ---------- | ---------------------------------------- | ----------------------------------------------------------- |
+| `sqlite`   | `relay.db`（WAL，0600）                  | 新装缺省。`serve` 与 CLI 同时打开同一个库，写在事务里       |
+| `file`     | `state.json`（0600）                     | 0.3.x 之前的部署。Go 版（0.10.0 起）只读不写：先迁到 SQLite |
+| `postgres` | PostgreSQL（数据目录留 `postgres.json`） | 多节点，显式选。几个节点共用一个库；不选就不加载驱动        |
 
 都不存消息内容、令牌明文或口令。私钥以 PKCS#8 存在库或文件里，靠文件权限 0600 与数据目录 0700（PostgreSQL 靠库的访问控制）保护。
 
 ## 怎么选
 
 - 新装：什么都不用写，`init` 或 `serve` 的首次自动初始化建 `relay.db`。
-- 已有 `state.json`：照旧用它，`serve` 启动日志提示可以迁移。想继续用文件可以显式写 `--store file`（或 `RELAY_STORE=file`）。
+- 已有 `state.json`：Go 版的 `serve` 拒绝启动并提示 `personal migrate --to sqlite`；升级前按下面的步骤迁过去（Node 版 0.9.x 照旧能用它）。
 - 两种文件都在、`--store` 与目录里已有的不符、库认不出（别的程序的 SQLite、空文件）、库校验不过、迁移账本对不上、库是更新的版本写的：一律拒绝启动，不自动清库或重建。按提示处理，不要删文件碰运气。
 
 SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务端名称用 `serve` 的参数或环境变量（`--limit-*`、`--trusted-proxy`、`--name`）给，它们本来就优先于存储里的值。
@@ -34,7 +34,7 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 
 ## 回退到状态文件
 
-停服后 `personal migrate --data-dir /data --to file`：从库导出 schema v1 的 `state.json`（读回来比对），原库改名为 `relay.db.migrated-<时间>`。也可以直接把上一步留下的 `state.json.migrated-<时间>` 改回 `state.json`，但会丢掉迁移之后的改动。
+只有 Node 版（0.9.x 及以前的镜像）能写状态文件，Go 版拒绝 `--to file`。用 Node 版镜像停服后 `personal migrate --data-dir /data --to file`：从库导出 schema v1 的 `state.json`（读回来比对），原库改名为 `relay.db.migrated-<时间>`。也可以直接把上一步留下的 `state.json.migrated-<时间>` 改回 `state.json`，但会丢掉迁移之后的改动。
 
 ## 备份与恢复
 
@@ -62,17 +62,45 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 
 - 保留：`--traffic-retention-days`（或 `RELAY_TRAFFIC_RETENTION_DAYS`），缺省 90 天；启动时与之后每天清一次更早的桶。`0` = 不记录。
 - 查看：`personal traffic --data-dir /data [--since 7d] [--source <id>]` 按源、账号、设备、类别合计成表；客户端与网页经 `GET /v1/me/traffic`（账号本人看全部源，访客只看自己）。刚发生的流量最多晚一分钟才查得到。
-- 状态文件存储（`--store file`）：统计只在 `serve` 的内存里，接口照常答，重启归零，`personal traffic` 读不到；迁到 SQLite 后才落盘。`personal migrate` 不搬运统计。
+- 状态文件存储（`--store file`，只有 Node 版）：统计只在 `serve` 的内存里，接口照常答，重启归零，`personal traffic` 读不到；迁到 SQLite 后才落盘。`personal migrate` 不搬运统计。
 
 ## 升级与降级
 
 - 升级：新版本打开 `relay.db` 时自动补跑新迁移（`packages/control-store-sql/migrations/`，账本 `relay_migrations` 记编号与 SHA-384）。升级前先备份。
-- 降级：旧程序看到库里记着它不认识的迁移会拒绝启动。从升级前的备份恢复，或用新版本 `migrate --to file` 导出后再降级。加了流量统计表（SQLite 0002 / PostgreSQL 0003）的版本同样如此。
+- 降级：旧程序看到库里记着它不认识的迁移会拒绝启动。从升级前的备份恢复，或用 Node 版 `migrate --to file` 导出后再降级。加了流量统计表（SQLite 0002 / PostgreSQL 0003）的版本同样如此。
+
+## 切换到 Go 版中继（0.10.0）与回滚
+
+0.10.0 起 `ghcr.io/ama-link/armadra-relay` 镜像里是 Go 实现。镜像名、入口（tini + `armadra-relay`）、缺省命令、端口 8443、uid 10002、`/data` 卷、健康检查与全部参数、环境变量都不变；库格式也不变（同一份迁移与账本），Go 版与 Node 版可以交替打开同一个数据目录。
+
+升级：
+
+1. 先备份（这时还是升级前的 Node 镜像，容器里的命令行是 `node /app/out/cli.js`）：
+
+   ```sh
+   docker compose -f deploy/personal/compose.yml exec relay node /app/out/cli.js personal backup --data-dir /data --out /data/backup-$(date +%F).db
+   ```
+
+   PostgreSQL 存储用 `pg_dump`。
+
+2. 数据目录还是 `state.json` 的，用新镜像迁到 SQLite（Go 版的 `migrate` 读得懂状态文件）：
+
+   ```sh
+   docker compose -f deploy/personal/compose.yml stop relay
+   docker compose -f deploy/personal/compose.yml run --rm relay personal migrate --data-dir /data --to sqlite
+   ```
+
+3. 换镜像起服：`ARMADRA_RELAY_IMAGE=ghcr.io/ama-link/armadra-relay:0.10.0 docker compose -f deploy/personal/compose.yml up -d relay`。CA 指纹、账号口令、签名钥、已登记的源、设备与链接、流量统计都原样，客户端不需要重新添加或登录。
+4. 核对：`docker compose -f deploy/personal/compose.yml exec relay armadra-relay personal status`，再 `personal doctor`。
+
+回滚：停服，把 `ARMADRA_RELAY_IMAGE` 换回上一版（如 `ghcr.io/ama-link/armadra-relay:0.9.3`）再起；Go 版写过的 `relay.db` 与 PostgreSQL 库，Node 版照常读写（两版之间没有新迁移，0.9.3 → 0.10.0 就是这样；有新迁移时旧程序拒绝启动，按上一节从备份恢复）。第 2 步迁过的目录回滚后仍是 SQLite；要回到状态文件见上面「回退到状态文件」。
+
+容器里执行子命令的写法变了：`node /app/out/cli.js personal …` 改成 `armadra-relay personal …`。Go 版另有一处差别：`--node-id` 同时作用于隧道层（Node 版隧道层用 `--host`）。缺省命令 `saas serve` 与 Node 版一样只是答 `/health`、`/ready` 的占位，SaaS 中继节点随 #59 的 G5 接替。
 
 ## 体检
 
 ```sh
-docker compose -f deploy/personal/compose.yml exec relay node /app/out/cli.js personal doctor --data-dir /data
+docker compose -f deploy/personal/compose.yml exec relay armadra-relay personal doctor --data-dir /data
 ```
 
 逐项报「通过 / 警告 / 失败」，有失败时退出码为 1：

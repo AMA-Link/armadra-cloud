@@ -32,7 +32,7 @@
     "dev:down": "sh scripts/dev.sh down",
     "dev": "pnpm libs:build && node scripts/dev-run.mjs",
     "db:migrate": "node --env-file-if-exists=.env.dev apps/cloud/src/cli.ts migrate",
-    "relay:personal": "pnpm libs:build && node scripts/relay-personal.mjs",
+    "relay:personal": "node scripts/relay-personal.mjs",
     "build": "pnpm -r --if-present build",
     "images:build": "docker build -f apps/cloud/Dockerfile -t armadra-cloud:local . && docker build -f apps/relay/Dockerfile -t armadra-relay:local .",
     "e2e": "node scripts/e2e.mjs"

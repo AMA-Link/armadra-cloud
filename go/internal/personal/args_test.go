@@ -669,7 +669,7 @@ func TestArgsEnvFromOS(t *testing.T) {
 }
 
 func TestUsageText(t *testing.T) {
-	if !strings.HasPrefix(Usage, "用法: armadra-relay <命令> [选项]\n") || !strings.Contains(Usage, "\n  dev ") || strings.Contains(Usage, "saas") {
+	if !strings.HasPrefix(Usage, "用法: armadra-relay <命令> [选项]\n") || !strings.Contains(Usage, "\n  dev ") || !strings.Contains(Usage, "\n  saas serve ") {
 		t.Fatalf("顶层用法：\n%s", Usage)
 	}
 	if !strings.HasPrefix(PersonalUsage, "用法: armadra-relay personal <子命令> [选项]\n") ||

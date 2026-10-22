@@ -25,7 +25,7 @@
 | `ARMADRA_CLOUD_MIGRATIONS_DIR` |      | 镜像里是 `/app/migrations`                 |
 | `ARMADRA_CLOUD_LOG_LEVEL`      |      | `debug` / `info`（缺省）/ `warn` / `error` |
 
-中继（`armadra-relay saas serve`）：
+中继（`armadra-relay saas serve`；现在是只答 `/health`、`/ready` 的占位，Node 版与 Go 版行为一致，SaaS 中继节点随 #59 的 G5 接替）：
 
 | 变量                          | 必填 | 说明                             |
 | ----------------------------- | ---- | -------------------------------- |
@@ -42,7 +42,7 @@
 | 参数 / 变量                                                   | 必填 | 说明                                                                                                                              |
 | ------------------------------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `--data-dir` / `RELAY_DATA_DIR`                               | 是   | 数据目录（0700）：`relay.db` 或 `state.json`、`tls/`、`acme/`                                                                     |
-| `--store` / `RELAY_STORE`                                     |      | `sqlite` / `file` / `postgres`；缺省按数据目录里已有的，新装 `sqlite`                                                             |
+| `--store` / `RELAY_STORE`                                     |      | `sqlite` / `postgres`；缺省按数据目录里已有的，新装 `sqlite`；`state.json` 先迁到 SQLite                                          |
 | `--database-url` / `RELAY_DATABASE_URL`                       |      | `postgres://…`；`--store postgres` 与 `--control postgres` 必填                                                                   |
 | `--database-url-file` / `RELAY_DATABASE_URL_FILE`             |      | 从文件读连接串（口令不出现在进程参数里）                                                                                          |
 | `--database-schema` / `RELAY_DATABASE_SCHEMA`                 |      | 用哪个 schema，缺省连接的缺省 schema                                                                                              |
@@ -81,15 +81,15 @@
 
 限流额度也可写在状态文件 `settings.rateLimits`（`anonymous`、`preflight`、`token`、`account`，都是 1–1000000 的整数，可省略），优先级：命令行 > 环境变量 > 状态文件 > 缺省；改动后重启 `serve` 生效。登录、链接接受与隧道登记的限流不可配。
 
-其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`traffic`、`backup`、`doctor`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay node /app/out/cli.js personal …`），改动一秒内生效；`migrate --to sqlite|file|postgres` 要先停 `serve`（多节点要停掉所有节点）。数据目录用 PostgreSQL 时每个子命令都要连接串（参数或环境变量）。
+其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`traffic`、`backup`、`doctor`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay armadra-relay personal …`），改动一秒内生效；`migrate --to sqlite|postgres` 要先停 `serve`（多节点要停掉所有节点）。数据目录用 PostgreSQL 时每个子命令都要连接串（参数或环境变量）。
 
 存储（[运维手册](../docs/runbooks/personal-storage.md)）：
 
-| `--store`  | 文件                                     | 适用                                             | 备份                                        |
-| ---------- | ---------------------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| `sqlite`   | `relay.db`（WAL，0600）                  | 新装缺省；单节点个人 / 小团队                    | `personal backup --out F`（在线、一致）     |
-| `file`     | `state.json`（0600）                     | 已部署的个人中转（只有它时自动沿用它）           | `personal backup --out F` 或 `tar` 数据目录 |
-| `postgres` | PostgreSQL（数据目录留 `postgres.json`） | 多节点（显式选，配 `--control redis\|postgres`） | 库自己的备份（`pg_dump`）                   |
+| `--store`  | 文件                                     | 适用                                                                | 备份                                        |
+| ---------- | ---------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------- |
+| `sqlite`   | `relay.db`（WAL，0600）                  | 新装缺省；单节点个人 / 小团队                                       | `personal backup --out F`（在线、一致）     |
+| `file`     | `state.json`（0600）                     | 0.3.x 之前的部署；Go 版只读，`serve` 拒绝，先 `migrate --to sqlite` | `personal backup --out F` 或 `tar` 数据目录 |
+| `postgres` | PostgreSQL（数据目录留 `postgres.json`） | 多节点（显式选，配 `--control redis\|postgres`）                    | 库自己的备份（`pg_dump`）                   |
 
 两种以上存储都在、`--store` 与目录里已有的不符、库认不出或损坏、账本对不上，一律拒绝启动，不自动清库或重建。`personal doctor` 检查目录与文件权限、库的完整性、监听地址与 TLS、受信代理与口令，有失败项时退出码为 1。
 
@@ -101,6 +101,25 @@
 - `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，saas relay 报 Redis，personal relay 报数据目录，多节点时另报 `database` 或 `redis`），任一不可达答 503。
 - 控制面的 `/v1/*` 与 `/.well-known/*` 业务路由现在是预留，答 501 `{ code: "not_implemented", message, requestId }`。
 - 个人中转另有 `/v1/*` 子集、`/.well-known/*`、`/ca.crt`、`/app/*` 与 `/j/<linkId>`（[契约](../docs/contracts/cloud-api.md) §10–§11）。
+
+## 切换到 Go 版中继（0.10.0）与回滚
+
+0.10.0 起 `ghcr.io/ama-link/armadra-relay` 是 Go 实现，`apps/relay/Dockerfile` 路径不变。下面这些与之前的 Node 镜像一致：
+
+| 项       | 值                                                                             |
+| -------- | ------------------------------------------------------------------------------ |
+| 镜像名   | `ghcr.io/ama-link/armadra-relay:<版本>` 与 `:latest`                           |
+| 入口     | `tini --` 加中继命令行；缺省命令 `saas serve`                                  |
+| 运行用户 | uid / gid 10002（`armadra`）                                                   |
+| 卷与端口 | `/data`、8443                                                                  |
+| 环境     | `RELAY_WEB_ROOT=/app/web`、`RELAY_DATA_DIR=/data`、`RELAY_LISTEN=0.0.0.0:8443` |
+| 健康检查 | 每 30 秒、超时 5 秒、3 次，`health` 子命令                                     |
+| 页面     | `WEB_IMAGE` 构建参数把 `/app/web` 拷进来                                       |
+| 库       | 同一份迁移与账本（SQLite `relay_migrations`、PostgreSQL `cloud_migrations`）   |
+
+变了的只有：容器里的命令行是 `armadra-relay`（不再是 `node /app/out/cli.js`）；Go 版不写 `state.json`；`--node-id` 同时作用于隧道层。`saas serve` 仍是与 Node 版一致的占位（同样的变量、`/health` / `/ready` 与退出码），SaaS 形态的部署照常换镜像。
+
+升级：备份（`personal backup` 或 `pg_dump`）→ 数据目录是 `state.json` 的先停服并 `run --rm relay personal migrate --data-dir /data --to sqlite` → 换成 0.10.0 镜像起服 → `exec relay armadra-relay personal status` 与 `doctor` 核对。回滚：停服，镜像换回上一版（如 `0.9.3`）再起，Go 版写过的库 Node 版照常读写。步骤与注意事项见[运维手册](../docs/runbooks/personal-storage.md#切换到-go-版中继0100与回滚)。
 
 ## 升级顺序
 
