@@ -481,15 +481,16 @@ func TestPostgresFixtureRoundTrip(t *testing.T) {
 	want := loadExpected(t)
 	url, schema := restoreDump(t)
 
-	// Go 打开 TypeScript 迁移器建出来的 schema：账本的 SHA-384 一致，所以不补跑、不拒绝。
+	// Go 打开 TypeScript 迁移器建出来的 schema（夹具停在 0003）：前三条的 SHA-384 一致，不拒绝；
+	// 0004–0009（SaaS）补跑，老行取缺省。
 	db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, Now: func() int64 { return 1 }})
 	if err != nil {
 		t.Fatalf("Go 打开 TypeScript 写的 schema：%v", err)
 	}
 	defer func() { _ = db.Close() }()
 	var applied int
-	if err := db.Pool().QueryRow(ctx, "SELECT count(*)::int FROM cloud_migrations WHERE applied_at_ms = 1").Scan(&applied); err != nil || applied != 0 {
-		t.Fatalf("不该补跑任何迁移：%d %v", applied, err)
+	if err := db.Pool().QueryRow(ctx, "SELECT count(*)::int FROM cloud_migrations WHERE applied_at_ms = 1").Scan(&applied); err != nil || applied != 6 {
+		t.Fatalf("应只补跑 0004–0009 六条：%d %v", applied, err)
 	}
 
 	exported, err := db.ExportTenant(ctx, tenant)
@@ -503,8 +504,8 @@ func TestPostgresFixtureRoundTrip(t *testing.T) {
 	}
 
 	migrations, ts := runNode(t, "postgres", url, schema)
-	if migrations != 3 {
-		t.Fatalf("账本应有 3 条：%d", migrations)
+	if migrations != 9 {
+		t.Fatalf("账本应有 9 条：%d", migrations)
 	}
 	sameSnapshot(t, ts, canonical(t, exported), "TypeScript 读夹具 schema")
 
@@ -541,8 +542,8 @@ func TestGoCreatedPostgresIsReadableByTypeScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	migrations, ts := runNode(t, "postgres", url, schema)
-	if migrations != 3 {
-		t.Fatalf("账本应有 3 条：%d", migrations)
+	if migrations != 9 {
+		t.Fatalf("账本应有 9 条：%d", migrations)
 	}
 	sameSnapshot(t, ts, canonical(t, goView), "TypeScript 读 Go 新建的 schema")
 }
