@@ -142,14 +142,19 @@ func newRequestID() string {
 
 func protocolHeader() string { return fmt.Sprintf("%d.%d", gen.ProtocolMajor, gen.ProtocolMinor) }
 
-func writeJSON(w http.ResponseWriter, status int, body any, extra map[string]string) {
+// writeJSON 写 JSON 答复；body 编不出来时改答 500 internal，错误体与别处同形（码来自 gen，带 requestId）。
+func writeJSON(w http.ResponseWriter, status int, body any, extra map[string]string, requestID string) {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(body); err != nil {
 		status = http.StatusInternalServerError
+		extra = nil
 		buf.Reset()
-		buf.WriteString(`{"code":"internal","message":"Internal error"}`)
+		fallback := errorBody{Code: gen.ErrInternal, Message: core.MessageOf(gen.ErrInternal), RequestID: requestID}
+		if err := encoder.Encode(fallback); err != nil {
+			buf.Reset() // 不会发生：固定形状的结构体
+		}
 	}
 	payload := bytes.TrimRight(buf.Bytes(), "\n")
 	h := w.Header()
@@ -191,7 +196,7 @@ func WriteError(w http.ResponseWriter, code gen.ErrorCode, requestID string, ret
 		body.Details = &errorDetails{RetryAfterMs: retryAfter.Milliseconds()}
 		extra["Retry-After"] = strconv.FormatInt(max(1, int64((retryAfter+time.Second-1)/time.Second)), 10)
 	}
-	writeJSON(w, status, body, extra)
+	writeJSON(w, status, body, extra, requestID)
 }
 
 func (a *API) fail(w http.ResponseWriter, err error, requestID string) {
@@ -285,5 +290,5 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, err, requestID)
 		return
 	}
-	writeJSON(w, http.StatusOK, output, nil)
+	writeJSON(w, http.StatusOK, output, nil, requestID)
 }

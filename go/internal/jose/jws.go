@@ -28,6 +28,9 @@ type Header struct {
 // Parts 是拆开的 compact JWS，签名还没验。
 type Parts struct {
 	Header Header
+	// TypPresent 为真：头里写了 typ（哪怕是空串）。Header.Typ 为空时靠它区分「没写」与「写了空串」，
+	// 源 JWS 的 typ 是可选的，但写了就必须等于 armadra-source（空串要拒）。
+	TypPresent bool
 	// Payload 是载荷的 JSON 文本（base64url 解码后，一定是 JSON 对象）。
 	Payload []byte
 	// SigningInput 是 "<头>.<载荷>" 的原文字节：验签的输入。
@@ -95,7 +98,9 @@ func Split(token string) (Parts, error) {
 		return Parts{}, ErrMalformed
 	}
 	header := Header{Alg: alg, Kid: kid}
+	typPresent := false
 	if typ, present := rawHeader["typ"]; present {
+		typPresent = true
 		if header.Typ, ok = typ.(string); !ok {
 			return Parts{}, ErrMalformed
 		}
@@ -110,6 +115,7 @@ func Split(token string) (Parts, error) {
 	}
 	return Parts{
 		Header:       header,
+		TypPresent:   typPresent,
 		Payload:      payload,
 		SigningInput: []byte(segments[0] + "." + segments[1]),
 		Signature:    signature,

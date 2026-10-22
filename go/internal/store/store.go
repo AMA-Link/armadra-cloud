@@ -202,6 +202,21 @@ type KeyStore interface {
 	SigningKeys(ctx context.Context) ([]SigningKeyRecord, error)
 }
 
+// KeyRefresher 是读缓存的 KeyStore 另外提供的：验签查不到 kid 时（别的节点刚轮换了钥）
+// 让缓存限频地重读一次，调用方随后再查。读库的实现（SQLite）不需要它。
+type KeyRefresher interface {
+	// RefreshOnMiss 重读签名钥；离上次重读不满最小间隔时什么也不做（防止带着随便编的 kid
+	// 的请求把库打爆）。
+	RefreshOnMiss(ctx context.Context) error
+}
+
+// KeyCacheRefresher 是带签名钥读缓存的 Backend（PostgreSQL）另外提供的：装配方的存储监视
+// 察觉租户修订号变了（别的节点 rotate-key、改了租户设置），对该租户调一次，缓存立即重读。
+// 修订号不变时不用调；查不到 kid 的限频重读（KeyRefresher）只是兜底。SQLite 每次读库，没有这个。
+type KeyCacheRefresher interface {
+	RefreshKeys(ctx context.Context, tenantID string) error
+}
+
 // Backend 是一个打开的库：端口、签名钥与租户级管理操作，SQLite 与 PostgreSQL 各一个实现。
 type Backend interface {
 	Ports() *Ports

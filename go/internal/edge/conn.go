@@ -44,17 +44,20 @@ type edgeConn struct {
 	inFrag  bool
 	broken  bool
 
-	mu         sync.Mutex
-	s          *tunnel.Stream
-	early      []byte // 流还没接上时客户端抢先发来的字节（升级后马上发数据的客户端）
-	attaching  bool   // 正在补发 early
-	closeSent  bool
-	closeRecv  bool
-	srcDone    bool
-	finished   bool
-	closeCode  int
-	closeTimer *time.Timer
-	endTimer   *time.Timer
+	mu        sync.Mutex
+	s         *tunnel.Stream
+	early     []byte // 流还没接上时客户端抢先发来的字节（升级后马上发数据的客户端）
+	attaching bool   // 正在补发 early
+	closeSent bool
+	// pendingDisconnect：登记之后、绑定连接之前被要求断开（Take / TakeAll 摘掉了登记，c 还空着）；
+	// bind 时立刻关。
+	pendingDisconnect bool
+	closeRecv         bool
+	srcDone           bool
+	finished          bool
+	closeCode         int
+	closeTimer        *time.Timer
+	endTimer          *time.Timer
 
 	bytesUp   atomic.Int64
 	bytesDown atomic.Int64
@@ -82,10 +85,15 @@ func (ec *edgeConn) conn() netpoll.Conn {
 // bind 记下连接：netpoll 的回调可能抢在 Adopt 返回之前到达。
 func (ec *edgeConn) bind(c netpoll.Conn) {
 	ec.mu.Lock()
+	closeNow := false
 	if ec.c == nil {
 		ec.c = c
+		closeNow = ec.pendingDisconnect
 	}
 	ec.mu.Unlock()
+	if closeNow {
+		c.Close()
+	}
 }
 
 // maxEarly 是流接上之前最多暂存的上行字节。
@@ -128,8 +136,15 @@ func (ec *edgeConn) attach(s *tunnel.Stream) {
 }
 
 // Disconnect 实现 Handle：立即断开（撤销源或访客、关闭服务时）。
+// 连接还没绑定时（登记到绑定之间的窗口）只记一笔，bind 时立即关掉。
 func (ec *edgeConn) Disconnect() {
-	if c := ec.conn(); c != nil {
+	ec.mu.Lock()
+	c := ec.c
+	if c == nil {
+		ec.pendingDisconnect = true
+	}
+	ec.mu.Unlock()
+	if c != nil {
 		c.Close()
 	}
 }
@@ -355,11 +370,10 @@ func (ec *edgeConn) OnClose(c netpoll.Conn, _ error) {
 		code = 1006
 	}
 	e := ec.e
-	// TODO(G3)：下面的控制面调用（ReleaseUpgrade）现在同步跑在 epoll 循环上，内存控制面没问题；
-	// redis / postgres 实现必须改成异步，免得拖住整条循环。
 	e.wheel.remove(ec)
 	e.policy.Untrack(ec)
-	e.policy.ReleaseUpgrade(ec.subject)
+	// 还名额可能做网络 I/O：投递给工作协程，不占住 epoll 循环。
+	e.policy.ReleaseUpgradeAsync(ec.subject)
 	var id uint32
 	if s != nil {
 		id = s.ID()

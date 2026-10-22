@@ -159,3 +159,13 @@ type Plane interface {
 	// NodeCommands 只有 saas 与 Memory 有；可能为 nil。
 	NodeCommands() NodeCommands
 }
+
+// Cluster 是装配方用到的控制面：Plane 加「发给全部节点」的命令通道与关闭。
+// Memory、redis、postgres 三种实现都满足它。
+type Cluster interface {
+	Plane
+	// Command 把命令发给全部节点（本节点立即收到，其余经广播）。
+	Command(c NodeCommand)
+	// Close 停掉后台协程与订阅连接（自己建的连接池一并关）。
+	Close() error
+}

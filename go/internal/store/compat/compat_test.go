@@ -120,27 +120,37 @@ func sameSnapshot(t testing.TB, got, want any, what string) {
 	}
 }
 
+// skipOrFail：本机缺 TypeScript 这一半时跳过；CI（环境变量 CI 非空）里一律失败——
+// 兼容测试的另一半被静默跳过，等于没测。
+func skipOrFail(t testing.TB, format string, args ...any) {
+	t.Helper()
+	if os.Getenv("CI") != "" {
+		t.Fatalf("CI 里不许跳过 TypeScript 读回："+format, args...)
+	}
+	t.Skipf(format, args...)
+}
+
 // runNode 用 TypeScript 的存储读库；没有 node（≥ 24）或依赖没装就跳过。
 func runNode(t *testing.T, args ...string) (migrations int, snapshot any) {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("没有 node：跳过 TypeScript 读回")
+		skipOrFail(t, "没有 node：跳过 TypeScript 读回")
 	}
 	out, err := exec.Command(node, "--version").Output()
 	if err != nil {
-		t.Skipf("node 跑不起来：%v", err)
+		skipOrFail(t, "node 跑不起来：%v", err)
 	}
 	major, _ := strconv.Atoi(strings.SplitN(strings.TrimPrefix(strings.TrimSpace(string(out)), "v"), ".", 2)[0])
 	if major < 24 {
-		t.Skipf("node %s 低于 24：跳过 TypeScript 读回", strings.TrimSpace(string(out)))
+		skipOrFail(t, "node %s 低于 24：跳过 TypeScript 读回", strings.TrimSpace(string(out)))
 	}
 	root := testutil.RepoRoot(t)
 	if _, err := os.Stat(filepath.Join(root, "packages", "control-store-sqlite", "node_modules")); err != nil {
-		t.Skip("TypeScript 依赖没装（pnpm install）：跳过 TypeScript 读回")
+		skipOrFail(t, "TypeScript 依赖没装（pnpm install）：跳过 TypeScript 读回")
 	}
 	if _, err := os.Stat(filepath.Join(root, "packages", "platform-protocol", "dist")); err != nil {
-		t.Skip("协议包没构建（pnpm libs:build）：跳过 TypeScript 读回")
+		skipOrFail(t, "协议包没构建（pnpm libs:build）：跳过 TypeScript 读回")
 	}
 	cmd := exec.Command(node, append([]string{filepath.Join(compatDir(t), "read-snapshot.mjs")}, args...)...)
 	cmd.Dir = root
