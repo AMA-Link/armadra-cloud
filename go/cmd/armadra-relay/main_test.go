@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -99,14 +100,23 @@ func TestDevTrafficFlag(t *testing.T) {
 				t.Fatalf("/health：%v %v", resp, err)
 			}
 			_ = resp.Body.Close()
-			_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
-			select {
-			case code := <-done:
-				if code != 0 {
-					t.Fatalf("退出码 %d：%q", code, errOut.String())
+			// 测试进程自己先接住信号，免得 dev 还没登记处理器时被默认动作杀掉；之后反复发直到它退出。
+			absorb := make(chan os.Signal, 16)
+			signal.Notify(absorb, syscall.SIGTERM)
+			defer signal.Stop(absorb)
+			timeout := time.After(10 * time.Second)
+			for {
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+				select {
+				case code := <-done:
+					if code != 0 {
+						t.Fatalf("退出码 %d：%q", code, errOut.String())
+					}
+					return
+				case <-timeout:
+					t.Fatal("收到 SIGTERM 后没退出")
+				case <-time.After(100 * time.Millisecond):
 				}
-			case <-time.After(10 * time.Second):
-				t.Fatal("收到 SIGTERM 后没退出")
 			}
 		})
 	}
