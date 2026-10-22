@@ -552,6 +552,7 @@ describe("挑战（§16）与节点回报（§17）", () => {
       capabilities: ["challenge.turnstile"],
       relay: { addressing: "path" },
       webApp: null,
+      registrationsOpen: true,
     };
     expect(info.safeParse(base).success).toBe(true);
     expect(
@@ -613,6 +614,85 @@ describe("挑战（§16）与节点回报（§17）", () => {
     expect(
       presence.safeParse({ node: "CF", ttlMs: 120_000, events: [event] })
         .success,
+    ).toBe(false);
+  });
+});
+
+describe("协议 1.4 补充：控制台缺口（G1–G9）", () => {
+  const byKey = new Map(procedures.map((entry) => [entry.key, entry]));
+  const input = (key: string) =>
+    byKey.get(key)?.procedure["~orpc"].inputSchema as z.ZodType;
+  const output = (key: string) =>
+    byKey.get(key)?.procedure["~orpc"].outputSchema as z.ZodType;
+
+  it("G1 auth.stepUp 至少给一项凭据", () => {
+    expect(byKey.get("auth.stepUp")).toMatchObject({
+      method: "POST",
+      path: "/v1/auth/step-up",
+    });
+    expect(input("auth.stepUp").safeParse({}).success).toBe(false);
+    expect(input("auth.stepUp").safeParse({ totpCode: "123456" }).success).toBe(
+      true,
+    );
+    expect(
+      output("auth.stepUp").safeParse({ elevatedUntilMs: 1 }).success,
+    ).toBe(true);
+  });
+
+  it("G2 auth.login 的 scope 只能是 operator，错误码已登记", () => {
+    const login = input("auth.login");
+    const base = {
+      account: "ops@armadra.test",
+      password: "x",
+      device: { platform: "desktop", name: "Browser" },
+    };
+    expect(login.safeParse({ ...base, scope: "operator" }).success).toBe(true);
+    expect(login.safeParse({ ...base, scope: "root" }).success).toBe(false);
+    expect(errorStatus("operator_mfa_required")).toBe(403);
+  });
+
+  it("G5 sources.list 的 limit 在 1 到 200", () => {
+    const list = input("sources.list");
+    expect(list.safeParse({ limit: 200, status: "revoked" }).success).toBe(
+      true,
+    );
+    expect(list.safeParse({ limit: 201 }).success).toBe(false);
+    expect(list.safeParse({ limit: 0 }).success).toBe(false);
+    expect(list.safeParse({ status: "gone" }).success).toBe(false);
+  });
+
+  it("G6 billing.usage 的 granularity", () => {
+    const usage = input("billing.usage");
+    const space = { space: { kind: "personal" } };
+    expect(usage.safeParse({ ...space, granularity: "day" }).success).toBe(
+      true,
+    );
+    expect(usage.safeParse({ ...space, granularity: "hour" }).success).toBe(
+      false,
+    );
+  });
+
+  it("G8 trustRequest 不再带 sas", () => {
+    const sample = readJsonFixture("cloud-api/trust.list.json") as {
+      output: { requests: Record<string, unknown>[] };
+    };
+    for (const request of sample.output.requests)
+      expect(request).not.toHaveProperty("sas");
+  });
+
+  it("G9 registrations_paused 是 503，platform.info 必带 registrationsOpen", () => {
+    expect(errorStatus("registrations_paused")).toBe(503);
+    expect(byKey.get("auth.register")).toBeDefined();
+    const info = output("platform.info");
+    expect(
+      info.safeParse({
+        mode: "saas",
+        issuer: "https://cloud.armadra.test",
+        protocol: { major: 1, minor: 4 },
+        capabilities: [],
+        relay: { addressing: "subdomain" },
+        webApp: null,
+      }).success,
     ).toBe(false);
   });
 });

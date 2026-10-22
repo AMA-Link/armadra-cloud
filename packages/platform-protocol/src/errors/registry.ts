@@ -90,6 +90,11 @@ export const ERRORS = {
   device_untrusted: { status: 403 },
   /** 链接被运营方冻结。 */
   link_frozen: { status: 403 },
+  // 控制台缺口（cloud-api §2，1.4 补充）
+  /** 运营方的事故开关关闭了注册（`platform.info.registrationsOpen = false`）。 */
+  registrations_paused: { status: 503 },
+  /** 运营账号没开两步验证，不能签出运营范围的会话（`auth.login` 的 `scope: "operator"`）。 */
+  operator_mfa_required: { status: 403 },
   // 中继
   relay_token_invalid: { status: 401 },
   relay_source_mismatch: { status: 403 },

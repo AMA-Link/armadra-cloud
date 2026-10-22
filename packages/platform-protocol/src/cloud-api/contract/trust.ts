@@ -18,7 +18,7 @@ const endorser = {
  * 新设备待信任（cloud-api §31，设计 §11.4）。团队成员第一次从新设备连团队主机会停在
  * `device_pending`；云端**不担保设备**，也不参与批准——批准走端到端通道发到主机（现有的
  * 「已受信设备背书」路径），云端看不到也改不了背书内容。云端只做两件事：把待信任请求
- * （设备名、平台、SAS）推给背书人（`trust.list` + me-stream 的 `deviceTrustRequested` /
+ * （设备名、平台；不含校验码）推给背书人（`trust.list` + me-stream 的 `deviceTrustRequested` /
  * `deviceTrustResolved`），以及记下背书人的拒绝（`trust.reject`）。仅 saas，预留。
  */
 export const trust = {

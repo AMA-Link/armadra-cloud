@@ -69,6 +69,18 @@ export const sessionSchema = z.object({
 
 export const sessionResultSchema = z.object({ session: sessionSchema });
 
+/**
+ * CSRF 值（1.4 补充，cloud-api §1）：浏览器来源（Cookie 会话）上，`auth.login` / `auth.mfaVerify` /
+ * `auth.refresh` 与 `me.get` 带它；之后每个非 GET 请求把它放进 `X-Armadra-CSRF` 头。Bearer 会话与
+ * personal 不用 Cookie，不报。
+ */
+export const csrfTokenSchema = z.string().min(1);
+
+/** 登录类答案（Cookie 会话时多带 `csrfToken`）：`auth.login` / `auth.mfaVerify` / `auth.refresh`。 */
+export const cookieSessionResultSchema = sessionResultSchema.extend({
+  csrfToken: csrfTokenSchema.optional(),
+});
+
 export const mfaChallengeResultSchema = z.object({
   mfa: z.object({
     challengeId: z.string(),
@@ -87,6 +99,8 @@ export const sourceSummarySchema = z.object({
   online: z.boolean(),
   lastSeenAtMs: z.number().int().nullable(),
   owner: z.boolean(),
+  /** 1.4 补充：所有者的显示名（personal = 账号名）。 */
+  ownerName: z.string(),
   via: sourceViaSchema,
   relayOrigin: z.string(),
   coreVersion: z.string(),
@@ -123,6 +137,8 @@ export const meSchema = z.object({
   mfaEnabled: z.boolean(),
   /** 1.4 起：账号持有的特殊范围，如运营方的 `operator`（控制台据此显示运营后台入口）；缺省 = 无。 */
   scopes: z.array(z.string()).optional(),
+  /** 1.4 补充：Cookie 会话时的 CSRF 值（页面刷新后取回，见 `csrfTokenSchema`）；Bearer 与 personal 不报。 */
+  csrfToken: csrfTokenSchema.optional(),
 });
 
 /** `team_join` = 团队加入链接（1.4 起；M2）；`org_join` 从未发出，保留枚举值只增不删。 */

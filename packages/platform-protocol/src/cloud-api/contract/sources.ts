@@ -140,8 +140,24 @@ export const sources = {
     .meta(session)
     // 1.4 起：给 `space` 只列那个空间的主机；缺省列调用者能到达的全部（个人空间 + 各团队）。
     // GET 里写成 `space[kind]=team&space[teamId]=…`。
-    .input(z.object({ space: spaceSchema.optional() }))
-    .output(z.object({ sources: z.array(sourceSummarySchema) })),
+    // 1.4 补充：筛选与游标分页；`tag` 是「且」（主机要带齐所有给出的标签）。GET 里 `tag` 重复写。
+    .input(
+      z.object({
+        space: spaceSchema.optional(),
+        status: z.enum(["online", "offline", "revoked"]).optional(),
+        tag: z.array(z.string()).optional(),
+        q: z.string().max(128).optional(),
+        cursor: z.string().optional(),
+        limit: z.coerce.number().int().min(1).max(200).optional(),
+      }),
+    )
+    .output(
+      z.object({
+        sources: z.array(sourceSummarySchema),
+        /** `null` = 没有下一页。 */
+        nextCursor: z.string().nullable(),
+      }),
+    ),
   get: base
     .route({ method: "GET", path: "/v1/sources/{sourceId}" })
     .meta(session)
