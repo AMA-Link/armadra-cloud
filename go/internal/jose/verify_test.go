@@ -520,3 +520,24 @@ func TestVerifyRequiresOptions(t *testing.T) {
 	o.IsRevoked = func(context.Context, string) (bool, error) { return true, nil }
 	expectFailure(t, tok, o, jose.FailRevoked)
 }
+
+// typ 缺省与写成空串要分得清：Header.Typ 都是空，TypPresent 不同。
+func TestSplitDistinguishesAbsentAndEmptyTyp(t *testing.T) {
+	e := newEnv(t)
+	build := func(header string) string {
+		payload := base64.RawURLEncoding.EncodeToString([]byte(`{"a":1}`))
+		input := base64.RawURLEncoding.EncodeToString([]byte(header)) + "." + payload
+		return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(e.issuer.Private, []byte(input)))
+	}
+	absent, err := jose.Split(build(`{"alg":"EdDSA","kid":"k"}`))
+	if err != nil || absent.TypPresent || absent.Header.Typ != "" {
+		t.Fatalf("没写 typ：%+v %v", absent, err)
+	}
+	empty, err := jose.Split(build(`{"alg":"EdDSA","kid":"k","typ":""}`))
+	if err != nil || !empty.TypPresent || empty.Header.Typ != "" {
+		t.Fatalf("typ 写成空串：%+v %v", empty, err)
+	}
+	if _, err := jose.Split(build(`{"alg":"EdDSA","kid":"k","typ":5}`)); !errors.Is(err, jose.ErrMalformed) {
+		t.Fatalf("typ 不是字符串应是 malformed：%v", err)
+	}
+}
