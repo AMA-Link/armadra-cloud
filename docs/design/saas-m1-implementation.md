@@ -21,7 +21,7 @@
 
 | 能力                                                   | 过程（契约）                                                                                                                                                                                                                                                                        | 批        |
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| 平台信息与 JWKS                                        | `platform.info`（`mode: "saas"`、`relay.addressing: "host"`、`registrationsOpen`、`challenge`、`capabilities` 见 §5.3）、`platform.jwks`、`/health`、`/ready`                                                                                                                       | S1b       |
+| 平台信息与 JWKS                                        | `platform.info`（`mode: "saas"`、`relay.addressing: "subdomain"`、`registrationsOpen`、`challenge`、`capabilities` 见 §5.3）、`platform.jwks`、`/health`、`/ready`                                                                                                                  | S1b       |
 | 注册、登录、刷新、登出、改口令、提权                   | `auth.register`、`auth.login`、`auth.refresh`、`auth.logout`、`auth.changePassword`、`auth.stepUp`（只认 `password`，运营账号另认 `totpCode`）                                                                                                                                      | S1b       |
 | 邮箱验证、找回口令、改邮箱、新设备提醒                 | `auth.emailVerify`、`auth.emailVerifyResend`、`auth.passwordResetStart/Finish`、`me.emailChange`                                                                                                                                                                                    | S2        |
 | 设备码                                                 | `auth.deviceStart`、`auth.devicePoll`、`auth.deviceApprove`、`auth.deviceGet`、`auth.deviceDeny`                                                                                                                                                                                    | S3        |
@@ -1010,7 +1010,7 @@ type Tx interface {
 | 源                                     | `Authorization: Source <jws>`                                                                                                                                        | `sources.heartbeatHint`、`sources.trustRequest`、`sources.trustResolve` |
 
 - **全部是 `__Host-` 前缀、`Path=/`**（契约 §1，#72；§10 Q3）：子域写不进、路径改不了。刷新 Cookie 每个请求都会带上，服务端只在 `auth.refresh` / `auth.logout` 读它。
-- **同名 Cookie 重复**（`Cookie` 头里同一个名字出现两次以上，常见于 Cookie 投放攻击）→ `400 bad_request`，不挑其中一个用。
+- **同名 Cookie 重复**（`Cookie` 头里同一个名字出现两次以上，常见于 Cookie 投放攻击）→ `401 unauthenticated` 并在答复里清掉这些 Cookie（契约 §1 的最终写法），不挑其中一个用。
 - **传输绑定**：`transport = cookie` 的设备的访问令牌只认从 Cookie 来；`bearer` 的只认从头来；对不上答 `401 unauthenticated`。登录类过程按请求定传输：带 `Origin = APP_ORIGIN` 且不带 `Authorization` → Cookie 传输（响应 `Set-Cookie`、体里不含 `refreshToken`、含 `csrfToken`）；否则 Bearer 传输。
 - **不混用**：同一请求既有任一会话 Cookie 又有 `Authorization` → `400 bad_request`（能力设计 §11.6）；两套会话 Cookie 同时存在是允许的，按过程挑：`admin.*` 与带 `scope: "operator"` 的刷新 / 登出用运营那一套，其余用普通那一套。
 - **刷新与登出**：`auth.refresh` 不带 `refreshToken` 时取对应的刷新 Cookie；成功后两枚一起换新。`auth.logout` 撤销设备并用 `Max-Age=0` 清掉该会话的两枚 Cookie。
@@ -1204,7 +1204,7 @@ type Tx interface {
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | CSRF          | Cookie 写请求缺头 / 错值 → 403；`auth.refresh` 不要求；`auth.logout` 要求；运营 Cookie 用普通会话的值 → 403                                                                                                                      |
 | 来源          | Origin 缺失、重复、为 `https://x.src.<域>` → 403；跨源请求带 Cookie 拿不到 `Allow-Credentials`                                                                                                                                   |
-| Cookie 作用域 | 四枚 Cookie 的 `__Host-` 属性逐项断言；同名 Cookie 重复 → 400；登出两枚都清；Cookie + Bearer 同带 → 400；Cookie 设备的令牌放进 `Authorization` → 401                                                                             |
+| Cookie 作用域 | 四枚 Cookie 的 `__Host-` 属性逐项断言；同名 Cookie 重复 → 401 且答复清掉这些 Cookie；登出两枚都清；Cookie + Bearer 同带 → 400；Cookie 设备的令牌放进 `Authorization` → 401                                                       |
 | 提权          | `elevatedUntilMs` 过期后失效（用可控时钟）；提权失败计入限流                                                                                                                                                                     |
 | 运营隔离      | 普通会话调 `admin.*` → 401；运营会话调 `teams.list` → 401；运营会话过了 1 小时刷新失败（可控时钟）；Bearer 运营会话能调 `admin.*`；非运营账号 `scope: operator` → 403、没 TOTP → `operator_mfa_required`；`mfaVerify` 按账号限流 |
 | 团队隔离      | 「跨团队读不到」：对每个带 `teamId` 的过程，用 T2 的成员调 T1 → `404 not_found`；`TeamScope` 只能由 `teams.Require` 构造（编译期 + `repo.rules.json`）；`tenant_id = default` 的行在 SaaS 接口里不可见                           |
