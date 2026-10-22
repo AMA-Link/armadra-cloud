@@ -1,0 +1,11 @@
+{
+  "input": {
+    "userCode": "BCDF-GHJK"
+  },
+  "output": {
+    "platform": "server",
+    "name": "armadra-server",
+    "requestedAtMs": 1760000000000,
+    "expiresAtMs": 1760000600000
+  }
+}

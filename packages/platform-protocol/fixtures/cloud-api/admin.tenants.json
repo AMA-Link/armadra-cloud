@@ -1,0 +1,29 @@
+{
+  "input": {
+    "q": "dev",
+    "limit": 100
+  },
+  "output": {
+    "tenants": [
+      {
+        "kind": "team",
+        "id": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "name": "Dev Team",
+        "plan": "free",
+        "hostCount": 2,
+        "status": "active",
+        "createdAtMs": 1760000000000
+      },
+      {
+        "kind": "account",
+        "id": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "name": "dev@armadra.test",
+        "plan": "free",
+        "hostCount": 1,
+        "status": "disabled",
+        "createdAtMs": 1760000000000
+      }
+    ],
+    "nextCursor": null
+  }
+}

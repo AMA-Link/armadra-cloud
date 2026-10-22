@@ -1,0 +1,67 @@
+{
+  "input": {},
+  "output": {
+    "exportedAtMs": 1760000000000,
+    "account": {
+      "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "email": "dev@armadra.test",
+      "displayName": "Dev",
+      "emailVerified": true,
+      "orgs": [],
+      "teams": [
+        {
+          "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+          "slug": "dev-team",
+          "name": "Dev Team",
+          "role": "owner"
+        }
+      ],
+      "mfaEnabled": false
+    },
+    "devices": [
+      {
+        "deviceId": "dev_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "platform": "desktop",
+        "name": "Dev laptop",
+        "lastSeenAtMs": 1760000000000,
+        "current": true
+      }
+    ],
+    "teams": [
+      {
+        "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "slug": "dev-team",
+        "name": "Dev Team",
+        "role": "owner"
+      }
+    ],
+    "grants": [
+      {
+        "grantId": "gnt_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "subject": {
+          "kind": "group",
+          "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "role": "editor",
+        "workspaceIds": [
+          "ws_01",
+          "ws_02"
+        ],
+        "expiresAtMs": 1762592000000,
+        "grantedBy": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "createdAtMs": 1760000000000,
+        "revokedAtMs": null
+      }
+    ],
+    "securityLog": [
+      {
+        "eventId": "sec_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "action": "login",
+        "deviceName": "Dev laptop",
+        "ipPrefix": "203.0.113.0/24",
+        "atMs": 1760000000000
+      }
+    ]
+  }
+}

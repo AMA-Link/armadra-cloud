@@ -1,0 +1,23 @@
+{
+  "input": {
+    "transferId": "xfer_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "transferId": "xfer_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "from": {
+      "kind": "personal"
+    },
+    "to": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "status": "completed",
+    "confirmedBy": {
+      "from": true,
+      "to": true
+    },
+    "createdAtMs": 1760000000000,
+    "expiresAtMs": 1760604800000
+  }
+}

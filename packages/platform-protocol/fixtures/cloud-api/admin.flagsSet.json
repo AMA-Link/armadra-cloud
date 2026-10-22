@@ -1,0 +1,13 @@
+{
+  "input": {
+    "flag": "groups.beta",
+    "all": true,
+    "teamIds": [],
+    "reason": "general availability"
+  },
+  "output": {
+    "flag": "groups.beta",
+    "all": true,
+    "teamIds": []
+  }
+}

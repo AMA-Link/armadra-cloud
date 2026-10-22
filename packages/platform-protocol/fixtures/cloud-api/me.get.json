@@ -5,11 +5,12 @@
     "email": "dev@armadra.test",
     "displayName": "Dev",
     "emailVerified": true,
-    "orgs": [
+    "orgs": [],
+    "teams": [
       {
-        "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
-        "slug": "dev-org",
-        "name": "Dev Org",
+        "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "slug": "dev-team",
+        "name": "Dev Team",
         "role": "owner"
       }
     ],

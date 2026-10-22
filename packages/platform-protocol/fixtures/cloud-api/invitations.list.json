@@ -1,0 +1,37 @@
+{
+  "input": {
+    "box": "sent",
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "invitations": [
+      {
+        "invitationId": "tinv_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "kind": "team",
+        "email": "alice@armadra.test",
+        "state": "pending",
+        "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "teamRole": "member",
+        "invitedBy": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "createdAtMs": 1760000000000,
+        "expiresAtMs": 1760604800000,
+        "decidedAtMs": null
+      },
+      {
+        "invitationId": "hinv_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "kind": "host",
+        "email": "bob@armadra.test",
+        "state": "pending",
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "hostRole": "viewer",
+        "workspaceIds": [
+          "ws_01"
+        ],
+        "invitedBy": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "createdAtMs": 1760000000000,
+        "expiresAtMs": 1760604800000,
+        "decidedAtMs": null
+      }
+    ]
+  }
+}

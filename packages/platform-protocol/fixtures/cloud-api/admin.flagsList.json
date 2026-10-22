@@ -1,0 +1,14 @@
+{
+  "input": {},
+  "output": {
+    "flags": [
+      {
+        "flag": "groups.beta",
+        "all": false,
+        "teamIds": [
+          "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+        ]
+      }
+    ]
+  }
+}

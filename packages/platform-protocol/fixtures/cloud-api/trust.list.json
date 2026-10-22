@@ -1,0 +1,30 @@
+{
+  "input": {
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "output": {
+    "requests": [
+      {
+        "requestId": "trq_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "sourceName": "Workstation",
+        "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "member": {
+          "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+          "email": "dev@armadra.test",
+          "displayName": "Dev"
+        },
+        "device": {
+          "name": "Dev iPhone",
+          "platform": "ios"
+        },
+        "sas": "482913",
+        "requestedAtMs": 1760000000000,
+        "expiresAtMs": 1760000600000
+      }
+    ]
+  }
+}

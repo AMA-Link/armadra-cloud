@@ -1,0 +1,17 @@
+{
+  "input": {
+    "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "email": "dev@armadra.test",
+    "displayName": "Dev",
+    "emailVerified": true,
+    "status": "active",
+    "plan": "free",
+    "hostCount": 1,
+    "teamCount": 1,
+    "createdAtMs": 1760000000000,
+    "lastSeenAtMs": 1760000000000
+  }
+}

@@ -158,6 +158,7 @@ describe("夹具里的令牌", () => {
     expect(guest.link?.invitationId).toBe("inv_01");
     expect(guest.email).toBeUndefined();
     const withLink = assertionClaimsSchema.parse(verified("with-link").payload);
+    // `org` 保留给以后的企业组织层，schema 仍收。
     expect(withLink.org).toEqual({
       orgId: "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
       role: "member",
@@ -276,17 +277,43 @@ describe("协议 1.1：断言范围与只读令牌", () => {
     expect(claims.role).toBeUndefined();
   });
 
-  it("team-grant.jwt：org、team、role 与多个工作空间", () => {
+  it("team-grant.jwt：团队角色、主机角色与多个工作空间；不再带 org", () => {
     const claims = assertionClaimsSchema.parse(verified("team-grant").payload);
     expect(claims.team).toEqual({
       teamId: "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
       role: "member",
     });
+    expect(claims.org).toBeUndefined();
     expect(claims.role).toBe("editor");
     expect(parseScopeClaims(claims.scp).workspaceIds).toEqual([
       "ws_01",
       "ws_02",
     ]);
+  });
+
+  it("协议 1.4：断言 team.role 是租户团队的五档，1.1 的 lead 不再收", () => {
+    const valid = verified("valid").payload;
+    const team = { teamId: "team_01JAAAAAAAAAAAAAAAAAAAAAAA" };
+    for (const role of ["owner", "admin", "member", "billing", "guest"])
+      expect(
+        assertionClaimsSchema.safeParse({ ...valid, team: { ...team, role } })
+          .success,
+        role,
+      ).toBe(true);
+    expect(
+      assertionClaimsSchema.safeParse({
+        ...valid,
+        team: { ...team, role: "lead" },
+      }).success,
+    ).toBe(false);
+    // 令牌上的 team 是团队 id 字符串；空串不收。
+    const relay = verified("relay-token").payload;
+    expect(
+      relayTokenClaimsSchema.safeParse({ ...relay, team: "team_1" }).success,
+    ).toBe(true);
+    expect(
+      relayTokenClaimsSchema.safeParse({ ...relay, team: "" }).success,
+    ).toBe(false);
   });
 
   it("旧断言没有 scp / role / team：解析出整台、可写", () => {
@@ -299,16 +326,16 @@ describe("协议 1.1：断言范围与只读令牌", () => {
     });
   });
 
-  it("relay-token-ro.jwt 与 tunnel-token-org.jwt；旧令牌没有 ro / org", () => {
+  it("relay-token-ro.jwt 与 tunnel-token-team.jwt（1.4 起带 team）；旧令牌没有 ro / team", () => {
     const ro = relayTokenClaimsSchema.parse(verified("relay-token-ro").payload);
     expect(ro.ro).toBe(true);
-    expect(ro.org).toBe("org_01JAAAAAAAAAAAAAAAAAAAAAAA");
+    expect(ro.team).toBe("team_01JAAAAAAAAAAAAAAAAAAAAAAA");
     const old = relayTokenClaimsSchema.parse(verified("relay-token").payload);
     expect(old.ro).toBeUndefined();
-    expect(old.org).toBeUndefined();
+    expect(old.team).toBeUndefined();
     expect(
-      tunnelTokenClaimsSchema.parse(verified("tunnel-token-org").payload).org,
-    ).toBe("org_01JAAAAAAAAAAAAAAAAAAAAAAA");
+      tunnelTokenClaimsSchema.parse(verified("tunnel-token-team").payload).team,
+    ).toBe("team_01JAAAAAAAAAAAAAAAAAAAAAAA");
   });
 
   it("协议 1.3：relay-token-dev.jwt 带 dev；老令牌没有；dev 不能是空串", () => {
