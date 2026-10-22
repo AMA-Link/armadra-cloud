@@ -158,16 +158,21 @@ func (a *attachment) run() {
 // 队列满了丢掉事件并调 onOverflow（可为 nil）。
 //
 // 源上下线：整个 MeStream 只订阅一次在线事件，每个事件只查一次源与 issuer，再分发给各连接。
-func (m *MeStream) Attach(caller Caller, send func(Event), onOverflow func()) (detach func()) {
+//
+// 访客的链接查不到（库出错）时返回错误，由装配方关掉连接让客户端重连；链接不存在或已撤销不算错（看不到任何源）。
+func (m *MeStream) Attach(caller Caller, send func(Event), onOverflow func()) (detach func(), err error) {
 	a := &attachment{
 		caller: caller, queue: make(chan queuedEvent, attachQueue), done: make(chan struct{}),
 		send: send, onOverflow: onOverflow,
 	}
 	if caller.Role != RoleOwner && caller.LinkID != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		link, err := m.c.Ports.Links.Get(ctx, m.c.TenantID, caller.LinkID)
+		link, lookupErr := m.c.Ports.Links.Get(ctx, m.c.TenantID, caller.LinkID)
 		cancel()
-		if err == nil && link != nil {
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if link != nil {
 			a.sourceID = link.SourceID
 		}
 	}
@@ -195,7 +200,7 @@ func (m *MeStream) Attach(caller Caller, send func(Event), onOverflow func()) (d
 			}
 			close(a.done)
 		})
-	}
+	}, nil
 }
 
 // onPresence：一个在线事件查一次源（与 issuer），再分发给各连接。

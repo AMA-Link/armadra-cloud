@@ -544,8 +544,8 @@ func ServicesContract(t *testing.T, create func(t *testing.T) store.Backend) {
 					mu.Unlock()
 				}
 			}
-			stream.Attach(owner, record(&toOwner), nil)
-			stream.Attach(guest, record(&toGuest), nil)
+			_, _ = stream.Attach(owner, record(&toOwner), nil)
+			_, _ = stream.Attach(guest, record(&toGuest), nil)
 			e.h.Context.Emit(core.NewSourceRevoked(strings.Repeat("f", 32)), nil)
 			e.h.Publish(core.PresenceEvent{Online: true, SourceID: sourceID, CoreVersion: "1", AtMs: 1})
 			e.h.Publish(core.PresenceEvent{Online: true, SourceID: strings.Repeat("e", 32), CoreVersion: "1", AtMs: 1})

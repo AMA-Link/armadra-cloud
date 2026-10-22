@@ -149,7 +149,17 @@ func (m *MeStream) attach(conn *websocket.Conn, caller core.Caller) {
 			c.stop()
 		}
 	}
-	detach := m.core.Attach(caller, func(event core.Event) { send(event) }, c.stop)
+	detach, err := m.core.Attach(caller, func(event core.Event) { send(event) }, c.stop)
+	if err != nil {
+		// 访客的链接查不了（库出错）：关掉让客户端重连，别留一条永远收不到事件的连接。
+		m.mu.Lock()
+		delete(m.clients, c)
+		m.mu.Unlock()
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "unavailable"),
+			time.Now().Add(streamWriteTimeout))
+		_ = conn.Close()
+		return
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)

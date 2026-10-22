@@ -41,7 +41,11 @@ import (
 
 // 关闭与超时。
 const (
-	shutdownGrace   = 5 * time.Second
+	shutdownGrace = 5 * time.Second
+	// httpShutdown 是关 HTTP 服务等空闲连接的上限；jobTimeout 是周期任务（落库、清理）单次的上限。
+	// 关闭总时间：GOAWAY 宽限 ≤5s + 关服务 ≤2s + 等任务 ≤3s，正常（没有长连接在排空）不到 1s。
+	httpShutdown    = 2 * time.Second
+	jobTimeout      = 3 * time.Second
 	httpIdleTimeout = 75 * time.Second
 	httpHeaderWait  = 76 * time.Second
 	httpReadTimeout = 5 * time.Minute
@@ -484,11 +488,11 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 
 	background, stopBackground := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
-	// 周期任务的 context 不跟 background 一起取消：关闭时让手头的库操作做完（workers.Wait 等它），
-	// 中途取消会让驱动对连接发 interrupt，可能落到紧接着的最后一次流量落库上。
+	// 周期任务的 context 不跟 background 一起取消：关闭时让手头的库操作做完，中途取消会让驱动对连接
+	// 发 interrupt，可能落到最后一次流量落库上。每个任务自带 jobTimeout 的上限，关闭等它也有界。
 	job := func() context.Context {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(background), 30*time.Second)
-		time.AfterFunc(30*time.Second, cancel)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(background), jobTimeout)
+		time.AfterFunc(jobTimeout, cancel)
 		return ctx
 	}
 	every := func(interval time.Duration, fn func(context.Context)) {
@@ -646,13 +650,10 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 			}
 			offPresence()
 			stopBackground()
-			workers.Wait()
-			flushCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-			flush(flushCtx)
-			cancel()
+			// 先发 GOAWAY（容器只给 10 秒宽限）；后台任务在关服务之后再等，最后落一次最近在线。
 			stream.Close()
 			shutdownPlane(shutdownGrace)
-			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownGrace)
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), httpShutdown)
 			_ = server.Shutdown(shutdownCtx)
 			if metricsServer != nil {
 				_ = metricsServer.Shutdown(shutdownCtx)
@@ -660,6 +661,10 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 			cancelShutdown()
 			_ = server.Close()
 			<-serveDone
+			workers.Wait()
+			flushCtx, cancelFlush := context.WithTimeout(context.Background(), jobTimeout)
+			flush(flushCtx)
+			cancelFlush()
 			stopMeter()
 			if meterDone != nil {
 				<-meterDone

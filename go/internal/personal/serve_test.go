@@ -718,3 +718,13 @@ func TestCloseFlushesTrafficLast(t *testing.T) {
 		t.Fatalf("关闭时应落库：%+v %v\n%s", rows, err, logs.String())
 	}
 }
+
+// 关闭要落在容器的 10 秒宽限内：空闲时远小于它，且任务不拖在发 GOAWAY 之前。
+func TestCloseFinishesWithinGrace(t *testing.T) {
+	running, _, _ := plainServe(t)
+	started := time.Now()
+	running.Close()
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("空闲时关闭用了 %v", elapsed)
+	}
+}
