@@ -149,6 +149,11 @@ func TestPersonalFlowCoversEveryProcedure(t *testing.T) {
 	}
 	refreshed := r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": renewed["refreshToken"]}, nil)
 	r.expect(refreshed, 200, "")
+	// personal 没有运营账号：scope operator 一律 403。
+	r.expect(r.do("POST", "/v1/auth/login", map[string]any{
+		"account": "alice", "password": "saffron-glacier-meadow-77", "scope": "operator",
+		"device": map[string]any{"platform": "ios", "name": "phone"},
+	}, nil), 403, "forbidden")
 	secondLogin := r.do("POST", "/v1/auth/login", map[string]any{
 		"account": "alice", "password": "saffron-glacier-meadow-77", "device": map[string]any{"platform": "ios", "name": "phone"},
 	}, nil)

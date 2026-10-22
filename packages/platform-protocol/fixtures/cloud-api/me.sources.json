@@ -9,6 +9,7 @@
         "online": true,
         "lastSeenAtMs": 1760000000000,
         "owner": true,
+        "ownerName": "Dev",
         "via": "owner",
         "relayOrigin": "https://relay.armadra.test",
         "coreVersion": "0.2.0"

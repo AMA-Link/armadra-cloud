@@ -16,7 +16,8 @@
       "relay": {
         "addressing": "subdomain"
       },
-      "webApp": "https://app.armadra.test"
+      "webApp": "https://app.armadra.test",
+      "registrationsOpen": false
     },
     {
       "mode": "personal",
@@ -33,7 +34,8 @@
       "relay": {
         "addressing": "path"
       },
-      "webApp": null
+      "webApp": null,
+      "registrationsOpen": true
     },
     {
       "mode": "personal",
@@ -51,6 +53,7 @@
         "addressing": "path"
       },
       "webApp": "https://relay.armadra.test/app/",
+      "registrationsOpen": true,
       "challenge": {
         "provider": "turnstile",
         "siteKey": "test-site-key",

@@ -1,0 +1,8 @@
+{
+  "input": {
+    "password": "correct horse battery staple"
+  },
+  "output": {
+    "elevatedUntilMs": 1760000600000
+  }
+}

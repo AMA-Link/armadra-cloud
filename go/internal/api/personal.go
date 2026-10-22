@@ -68,7 +68,7 @@ func PersonalHandlers(c *core.Context, options PersonalOptions) (map[string]Hand
 				name = truncateUTF16(strings.TrimSpace(options.Name()), platformNameMax)
 			}
 			capabilities := append([]string{}, PersonalCapabilities...)
-			info := platformInfo{Mode: "personal", Name: name, Issuer: issuer}
+			info := platformInfo{Mode: "personal", Name: name, Issuer: issuer, RegistrationsOpen: true}
 			info.Protocol.Major, info.Protocol.Minor = gen.ProtocolMajor, gen.ProtocolMinor
 			info.Relay.Addressing = "path"
 			if options.WebApp != nil {
@@ -92,9 +92,14 @@ func PersonalHandlers(c *core.Context, options PersonalOptions) (map[string]Hand
 				Password  string               `json:"password"`
 				Device    core.DeviceInput     `json:"device"`
 				Challenge *core.ChallengeToken `json:"challenge"`
+				Scope     string               `json:"scope"`
 			}
 			if err := call.Bind(&in); err != nil {
 				return nil, err
+			}
+			// personal 没有运营账号：要运营范围的会话一律 403（cloud-api §28）。
+			if in.Scope == "operator" {
+				return nil, core.Fail(gen.ErrForbidden)
 			}
 			result, err := accounts.Login(ctx, core.LoginInput{
 				Account: in.Account, Password: in.Password, Device: in.Device, Challenge: in.Challenge,
@@ -172,7 +177,7 @@ func PersonalHandlers(c *core.Context, options PersonalOptions) (map[string]Hand
 				return nil, err
 			}
 			list, err := sources.List(ctx, who)
-			return map[string]any{"sources": list}, err
+			return map[string]any{"sources": list, "nextCursor": nil}, err
 		},
 		"me.devices": func(ctx context.Context, call *Call) (any, error) {
 			who, err := session(ctx, call)
@@ -420,8 +425,10 @@ type platformInfo struct {
 	Relay        struct {
 		Addressing string `json:"addressing"`
 	} `json:"relay"`
-	WebApp    *string                 `json:"webApp"`
-	Challenge *core.PlatformChallenge `json:"challenge,omitempty"`
+	WebApp *string `json:"webApp"`
+	// RegistrationsOpen 在 personal 恒为 true（cloud-api §2）。
+	RegistrationsOpen bool                    `json:"registrationsOpen"`
+	Challenge         *core.PlatformChallenge `json:"challenge,omitempty"`
 }
 
 type me struct {

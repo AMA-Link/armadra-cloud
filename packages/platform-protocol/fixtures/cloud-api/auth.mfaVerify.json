@@ -18,6 +18,7 @@
       "device": {
         "deviceId": "dev_01JAAAAAAAAAAAAAAAAAAAAAAA"
       }
-    }
+    },
+    "csrfToken": "test-csrf-token"
   }
 }

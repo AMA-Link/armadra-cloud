@@ -9,37 +9,46 @@
 - 每个响应带 `Armadra-Protocol: <major>.<minor>` 头；客户端对未知 major 拒绝，对更高 minor 忽略未知字段（schema 非 strict）。
 - 预留：SaaS 服务端的业务路由（总计划 §12.2）已在契约与路由表里，实现落地前统一答 501 `{ code: "not_implemented", message, requestId }`；`GET /health` 已实现。
 - 认证：云会话用 `Authorization: Bearer <accessToken>`；源对控制面用 `Authorization: Source <jws>`；浏览器来源改用 `__Host-armadra-cloud` Cookie + `X-Armadra-CSRF`。
+- **CSRF 值从哪来**（1.4 补充）：Cookie 会话的 CSRF 值由 `auth.login`、`auth.mfaVerify`、`auth.refresh` 的响应字段 `csrfToken` 给出，页面刷新后由 `me.get` 的 `csrfToken` 取回；前端只放内存。Cookie 会话上每个非 GET 请求必须带 `X-Armadra-CSRF`，值等于它，对不上答 `403 forbidden`。同一请求不同时带 Cookie 与 Bearer。Bearer 会话与 personal 不用 Cookie，响应里没有 `csrfToken`（字段可缺）。
+- **运营会话 Cookie**（1.4 补充）：运营范围的会话是另一枚 Cookie `__Host-armadra-ops`，不覆盖普通会话 `__Host-armadra-cloud`，两者可同时存在；它同样配 `X-Armadra-CSRF`（值取自签出它的那次 `auth.login` / `auth.mfaVerify` 响应的 `csrfToken`，用于 `__Host-armadra-ops` 的请求），寿命 1 小时，只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，其余 procedure 一律不认。详见 §28。
 
 ## §2 账号与会话
 
+1.4 补充（控制台所需，Refs #60）：
+
+- `auth.stepUp`（`POST /v1/auth/step-up`，scope `session`）：在已有会话上再验证。入参 `{ password?, totpCode?, passkeyAssertion? }`，至少给一项（都缺答 `400 bad_request`），口令或验证码不对答 `401 credentials_invalid` / `401 mfa_invalid`；成功答 `{ elevatedUntilMs }`，该会话在这之前（自此 10 分钟）算已提权，注销账号、转移所有权等敏感操作据此放行。
+- `auth.login` 入参 `scope?: "operator"`：要运营范围的 Cookie 会话，规则见 §28；响应字段 `csrfToken` 见 §1。
+- `auth.register` 在运营方事故开关关闭注册时答 `503 registrations_paused`；`platform.info.registrationsOpen` 报当前是否开放（personal 恒为 `true`），注册页据此直接显示关闭态。已部署的服务端不报这个字段：缺省时客户端按开放处理。
+
 <!-- rpc:begin contract=§2 -->
 
-| procedure                     | 方法与路径                               | scope       | 错误码                                                                                                                                         |
-| ----------------------------- | ---------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `platform.info`               | `GET /.well-known/armadra-platform`      | `anonymous` | —                                                                                                                                              |
-| `platform.jwks`               | `GET /.well-known/jwks.json`             | `anonymous` | —                                                                                                                                              |
-| `platform.health`             | `GET /health`                            | `anonymous` | `unavailable`                                                                                                                                  |
-| `auth.register`               | `POST /v1/auth/register`                 | `anonymous` | `email_taken`、`rate_limited`、`password_too_short`、`password_too_long`、`password_too_common`、`password_contains_name`、`password_breached` |
-| `auth.login`                  | `POST /v1/auth/login`                    | `anonymous` | `credentials_invalid`、`account_locked`、`account_disabled`、`rate_limited`、`challenge_required`、`challenge_invalid`                         |
-| `auth.mfaVerify`              | `POST /v1/auth/mfa/verify`               | `anonymous` | `mfa_invalid`、`mfa_expired`、`account_locked`                                                                                                 |
-| `auth.refresh`                | `POST /v1/auth/refresh`                  | `anonymous` | `session_expired`、`session_revoked`                                                                                                           |
-| `auth.logout`                 | `POST /v1/auth/logout`                   | `session`   | —                                                                                                                                              |
-| `auth.deviceStart`            | `POST /v1/auth/device/start`             | `anonymous` | `rate_limited`                                                                                                                                 |
-| `auth.devicePoll`             | `POST /v1/auth/device/poll`              | `anonymous` | `rate_limited`                                                                                                                                 |
-| `auth.deviceApprove`          | `POST /v1/auth/device/approve`           | `session`   | `device_code_expired`、`not_found`                                                                                                             |
-| `auth.passkeyRegisterOptions` | `POST /v1/auth/passkey/register/options` | `session`   | —                                                                                                                                              |
-| `auth.passkeyRegister`        | `POST /v1/auth/passkey/register`         | `session`   | —                                                                                                                                              |
-| `auth.passkeyLoginOptions`    | `POST /v1/auth/passkey/login/options`    | `anonymous` | `rate_limited`                                                                                                                                 |
-| `auth.passkeyLogin`           | `POST /v1/auth/passkey/login`            | `anonymous` | `credentials_invalid`、`rate_limited`                                                                                                          |
-| `auth.totpEnroll`             | `POST /v1/auth/totp/enroll`              | `session`   | `conflict`                                                                                                                                     |
-| `auth.totpConfirm`            | `POST /v1/auth/totp/confirm`             | `session`   | `mfa_invalid`                                                                                                                                  |
-| `auth.totpDisable`            | `POST /v1/auth/totp/disable`             | `session`   | `mfa_invalid`                                                                                                                                  |
-| `auth.recoveryCodesRotate`    | `POST /v1/auth/recovery-codes/rotate`    | `session`   | `mfa_invalid`                                                                                                                                  |
-| `me.get`                      | `GET /v1/me`                             | `session`   | —                                                                                                                                              |
-| `me.update`                   | `PATCH /v1/me`                           | `session`   | `bad_request`                                                                                                                                  |
-| `me.sources`                  | `GET /v1/me/sources`                     | `session`   | —                                                                                                                                              |
-| `me.devices`                  | `GET /v1/me/devices`                     | `session`   | —                                                                                                                                              |
-| `me.deviceRevoke`             | `DELETE /v1/me/devices/{deviceId}`       | `session`   | `not_found`                                                                                                                                    |
+| procedure                     | 方法与路径                               | scope       | 错误码                                                                                                                                                                 |
+| ----------------------------- | ---------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform.info`               | `GET /.well-known/armadra-platform`      | `anonymous` | —                                                                                                                                                                      |
+| `platform.jwks`               | `GET /.well-known/jwks.json`             | `anonymous` | —                                                                                                                                                                      |
+| `platform.health`             | `GET /health`                            | `anonymous` | `unavailable`                                                                                                                                                          |
+| `auth.register`               | `POST /v1/auth/register`                 | `anonymous` | `email_taken`、`rate_limited`、`registrations_paused`、`password_too_short`、`password_too_long`、`password_too_common`、`password_contains_name`、`password_breached` |
+| `auth.login`                  | `POST /v1/auth/login`                    | `anonymous` | `credentials_invalid`、`account_locked`、`account_disabled`、`rate_limited`、`challenge_required`、`challenge_invalid`、`forbidden`、`operator_mfa_required`           |
+| `auth.mfaVerify`              | `POST /v1/auth/mfa/verify`               | `anonymous` | `mfa_invalid`、`mfa_expired`、`account_locked`                                                                                                                         |
+| `auth.refresh`                | `POST /v1/auth/refresh`                  | `anonymous` | `session_expired`、`session_revoked`                                                                                                                                   |
+| `auth.stepUp`                 | `POST /v1/auth/step-up`                  | `session`   | `credentials_invalid`、`mfa_invalid`、`rate_limited`、`bad_request`                                                                                                    |
+| `auth.logout`                 | `POST /v1/auth/logout`                   | `session`   | —                                                                                                                                                                      |
+| `auth.deviceStart`            | `POST /v1/auth/device/start`             | `anonymous` | `rate_limited`                                                                                                                                                         |
+| `auth.devicePoll`             | `POST /v1/auth/device/poll`              | `anonymous` | `rate_limited`                                                                                                                                                         |
+| `auth.deviceApprove`          | `POST /v1/auth/device/approve`           | `session`   | `device_code_expired`、`not_found`                                                                                                                                     |
+| `auth.passkeyRegisterOptions` | `POST /v1/auth/passkey/register/options` | `session`   | —                                                                                                                                                                      |
+| `auth.passkeyRegister`        | `POST /v1/auth/passkey/register`         | `session`   | —                                                                                                                                                                      |
+| `auth.passkeyLoginOptions`    | `POST /v1/auth/passkey/login/options`    | `anonymous` | `rate_limited`                                                                                                                                                         |
+| `auth.passkeyLogin`           | `POST /v1/auth/passkey/login`            | `anonymous` | `credentials_invalid`、`rate_limited`                                                                                                                                  |
+| `auth.totpEnroll`             | `POST /v1/auth/totp/enroll`              | `session`   | `conflict`                                                                                                                                                             |
+| `auth.totpConfirm`            | `POST /v1/auth/totp/confirm`             | `session`   | `mfa_invalid`                                                                                                                                                          |
+| `auth.totpDisable`            | `POST /v1/auth/totp/disable`             | `session`   | `mfa_invalid`                                                                                                                                                          |
+| `auth.recoveryCodesRotate`    | `POST /v1/auth/recovery-codes/rotate`    | `session`   | `mfa_invalid`                                                                                                                                                          |
+| `me.get`                      | `GET /v1/me`                             | `session`   | —                                                                                                                                                                      |
+| `me.update`                   | `PATCH /v1/me`                           | `session`   | `bad_request`                                                                                                                                                          |
+| `me.sources`                  | `GET /v1/me/sources`                     | `session`   | —                                                                                                                                                                      |
+| `me.devices`                  | `GET /v1/me/devices`                     | `session`   | —                                                                                                                                                                      |
+| `me.deviceRevoke`             | `DELETE /v1/me/devices/{deviceId}`       | `session`   | `not_found`                                                                                                                                                            |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -50,6 +59,11 @@
 协议 1.4 起删除。`orgs.*`（组织、成员、主机挂接）从未实现、从未签发过 `org` 声明；SaaS 的租户改为团队，见 §21 起各节与设计 `saas-design.md`。`org` 断言声明保留给以后团队之上的企业组织层（§30）。错误码 `org_role_insufficient`、`org_slug_taken` 只增不删地保留在注册表里，但不再被任何 procedure 使用，新代码用 `team_role_insufficient`、`team_slug_taken`。
 
 ## §4 源目录与断言
+
+1.4 补充（控制台所需，Refs #60）：
+
+- `sourceSummary.ownerName`：主机所有者的显示名（`owner: boolean` 保留）；personal 是账号名，访客看不到所有者时为空串。已部署的中继不报这个字段：缺省时客户端什么都不显示。
+- `sources.list` 入参加 `status`（`online` / `offline` / `revoked`）、`tag`（多个标签取「且」；GET 里重复写）、`q`（名称模糊）、`cursor`、`limit`（1–200，缺省 50）；出参加 `nextCursor`（`null` 或缺省 = 没有下一页；已部署的中继不报这个字段，客户端按没有下一页处理）。personal 的目录一页放得下，没有标签：`status = revoked` 与给了 `tag` 都筛出空，`nextCursor` 恒为 `null`。
 
 <!-- rpc:begin contract=§4 -->
 
@@ -306,6 +320,8 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §21 团队
 
+1.4 补充：`teams.members` 每行多 `groups: { groupId, name }[]`（M2，guest 恒空）与 `reachableHosts`（只对 guest 有值：被直接授予、能到达的主机数）。
+
 协议 1.4（协议包 0.10.0）。SaaS 的租户是团队：每个账号自带一个个人空间，也可以创建或加入多个团队；主机、授予、链接、配额、计费与审计都挂在空间上（设计 `saas-design.md` §1）。本节与 §22–§29 的 procedure 现在全是预留：personal 答 `404 not_found`，cloud 在实现落地前答 `501 not_implemented`，实现时逐条拿掉。
 
 - **scope** 里的 `team:*` 是调用者在路径（或体里）那个团队里的最低角色：`team:member` 任一角色（含 guest）；`team:admin` owner / admin；`team:owner` 仅 owner；`team:billing` owner / billing。具体的能做 / 不能做表见设计 §2.1，处理器还要按它收窄（例如 billing 只看成员列表、guest 只看被直接授予的主机）。
@@ -439,6 +455,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 协议 1.4。接替 §9：按空间，路径 `/v1/billing/…`，输入带 `space`（`{ kind: "personal" }` 或 `{ kind: "team", teamId }`；GET 里写成 `space[kind]=team&space[teamId]=…`）。scope 是 `session`（个人空间）或 `team:billing`（团队空间的 owner 与 billing）。
 
 - `billing.plan` / `billing.usage`（M1）：计划代号、状态（`active` / `trialing` / `past_due` / `canceled`）、席位、周期；用量项 `{ metric, value, limit }`，`limit = null` 为不限。
+- `billing.usage` 入参加 `granularity`（`month` 缺省 / `day`，1.4 补充）：`day` 时出参多 `series: { startMs, relayBytes }[]`，本计费周期内每天一条（`startMs` 为当天 UTC 零点）。数据源是中继的 `relay_traffic_buckets` 小时桶按团队汇总到天，口径是入口节点计的端到端字节（`e2e`）；个人空间同一条（`space = personal`）。
 - `billing.checkout` / `billing.portal`（M2）：答支付服务的结账页 / 客户门户地址；`returnUrl` 必须在控制面的 `APP_ORIGIN` 之下。支付服务未配置答 `503 unavailable`。
 - `billing.webhook`（M2）：`POST /v1/billing/webhooks/{provider}`，scope `billing-webhook`——不带账号，按提供方的签名头验证原始请求体，对不上答 `401 webhook_signature_invalid`；体按提供方原样接收，不在契约里展开；回调更新订阅与配额。
 - `billing.invoices`（M2）：发票列表，游标分页，`hostedUrl` / `pdfUrl` 指向支付服务托管的页面，金额为最小货币单位。
@@ -476,6 +493,8 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 <!-- rpc:end -->
 
 ## §28 运营后台
+
+1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud`），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。personal 没有运营账号：`scope: "operator"` 一律答 `403 forbidden`。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。
 
 协议 1.4。单独的 scope `operator`（运营令牌，`Authorization: Bearer`），不对外公开。只读元数据：账号与团队的计划、用量、主机数、状态——看不到任何内容与令牌，也不提供「以用户身份登录」。
 
@@ -585,8 +604,9 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 协议 1.4（设计 `saas-design.md` §11.4）。团队成员第一次从新设备连团队主机，会停在 `device_pending`，要有人从**自己已受信的设备**背书；缺省的背书人是主机 owner 与团队 admin；团队设置「新设备背书人」可以收窄为只有主机 owner；成员本人从自己另一台已受信的设备背书缺省开启（`memberSelfEndorse`），也可以关。
 
 - **云端不担保设备，也不参与批准。** 批准走端到端通道发到主机，用的是现有的「已受信设备背书」路径；云端看不到也改不了背书内容，否则控制面运营方就能冒充设备。
-- 云端只做两件事：把待信任请求（成员、设备名、平台、6 位 SAS、主机、过期时间）推给背书人——`trust.list` 与 me-stream 的 `deviceTrustRequested` / `deviceTrustResolved`（§32）——以及记下背书人的拒绝（`trust.reject`，请求作废，设备继续停在 `device_pending`）。已被批准或已过期的请求答 `409 conflict`。
+- 云端只做两件事：把待信任请求（成员、设备名、平台、主机、过期时间；**不含校验码**）推给背书人——`trust.list` 与 me-stream 的 `deviceTrustRequested` / `deviceTrustResolved`（§32）——以及记下背书人的拒绝（`trust.reject`，请求作废，设备继续停在 `device_pending`）。已被批准或已过期的请求答 `409 conflict`。
 - `trust.list` / `trust.reject` 的 scope 含 `team:member`：成员只看得到、处理得了自己的待信任请求（`memberSelfEndorse` 开着时），主机 owner / 团队 admin 按 `deviceEndorsers` 设置看到团队里的请求，处理器据此收窄；缺省列调用者能背书的全部空间，给 `space` 只列那个空间；不是背书人答 `403 team_role_insufficient`。`device_untrusted` 表示背书要在已受信的设备上做。
+- **校验码（SAS）云端不经手**（1.4 补充：`trustRequest` 删去 `sas`）：校验码只在新设备与主机之间的端到端通道里产生，由新设备显示；背书人把新设备上显示的码输入自己已受信的设备，由端到端通道在主机侧核对，核对通过才批准。`trust.list` 与 me-stream 的 `deviceTrustRequested` 都没有这个字段。
 - 走分享链接进来的访客仍按链接的 `max_devices` 与指纹钉扎，不经这里。
 
 <!-- rpc:begin contract=§31 -->

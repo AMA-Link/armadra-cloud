@@ -420,6 +420,29 @@ describe("登录与接受链接的次序", () => {
     ).toBe("challenge_required");
   });
 
+  it("personal 没有运营账号：auth.login 带 scope operator 答 forbidden", async () => {
+    const { h } = await harness();
+    const { handlers } = createPersonalProcedures(h.context, {
+      stream: {} as never,
+      webApp: () => null,
+    });
+    expect(
+      await codeOf(() =>
+        handlers["auth.login"]({
+          input: {
+            account: "alice",
+            password: PASSWORD,
+            device: DEVICE,
+            scope: "operator",
+          },
+          ip: "ip",
+          authorization: undefined,
+          caller: () => Promise.reject(new Error("anonymous")),
+        }),
+      ),
+    ).toBe("forbidden");
+  });
+
   it("改口令只在 scope 含 auth.changePassword 时要挑战；action 是 armadra-password，失败不计数", async () => {
     const NEXT = "saffron-glacier-meadow-77";
     const owner = async (h: Awaited<ReturnType<typeof harness>>["h"]) => {

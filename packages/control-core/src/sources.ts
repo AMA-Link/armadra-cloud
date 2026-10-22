@@ -60,6 +60,14 @@ export function trustedOriginsOf(
   return [...new Set([...settings.trustedOrigins, settings.issuer])];
 }
 
+/** `sources.list` 的筛选（cloud-api §4，1.4 补充）。 */
+export interface SourceListQuery {
+  status?: "online" | "offline" | "revoked";
+  tag?: string[];
+  q?: string;
+  limit?: number;
+}
+
 export function requireOwner(caller: Caller): void {
   if (caller.role !== "owner") throw new ControlError("forbidden");
 }
@@ -93,6 +101,11 @@ export function createSources(context: ControlContext) {
     caller: Caller,
   ): Promise<SourceSummary> {
     const route = await context.relay.route(source.sourceId);
+    // personal 只有一个账号：owner 看自己的账号名；访客看不到所有者，报空串。
+    const ownerName =
+      caller.role === "owner"
+        ? ((await ports.accounts.get(tenantId, caller.subject))?.name ?? "")
+        : "";
     return {
       sourceId: source.sourceId,
       name: source.name,
@@ -100,6 +113,7 @@ export function createSources(context: ControlContext) {
       online: route !== null,
       lastSeenAtMs: route ? context.now() : source.lastSeenAtMs,
       owner: caller.role === "owner",
+      ownerName,
       via: caller.role === "owner" ? "owner" : "link",
       relayOrigin: issuer,
       coreVersion: route?.coreVersion ?? source.coreVersion,
@@ -338,13 +352,27 @@ export function createSources(context: ControlContext) {
       };
     },
 
-    async list(caller: Caller): Promise<SourceSummary[]> {
+    async list(
+      caller: Caller,
+      query: SourceListQuery = {},
+    ): Promise<SourceSummary[]> {
       const issuer = (await ports.tenants.get(tenantId)).issuer;
-      return Promise.all(
+      const all = await Promise.all(
         (await visibleSources(caller)).map((source) =>
           summary(issuer, source, caller),
         ),
       );
+      // personal 的目录只列未撤销的主机、没有标签，且一页放得下：
+      // `status = revoked` 与任何 `tag` 都筛出空，游标恒为 null。
+      const needle = query.q?.trim().toLowerCase() ?? "";
+      const rows = all.filter((row) => {
+        if (query.status === "revoked") return false;
+        if (query.status === "online" && !row.online) return false;
+        if (query.status === "offline" && row.online) return false;
+        if (query.tag && query.tag.length > 0) return false;
+        return needle === "" || row.name.toLowerCase().includes(needle);
+      });
+      return query.limit === undefined ? rows : rows.slice(0, query.limit);
     },
 
     async get(caller: Caller, sourceId: string): Promise<SourceDetail> {

@@ -94,6 +94,10 @@ export const teamMemberSchema = z.object({
   displayName: z.string(),
   role: teamRoleSchema,
   joinedAtMs: z.number().int(),
+  /** 1.4 补充：所在分组（M2；guest 恒空）。实现时无分组也必须返回 []。 */
+  groups: z.array(z.object({ groupId: z.string(), name: z.string() })),
+  /** 1.4 补充：只对 guest 有值——被直接授予、能到达的主机数。 */
+  reachableHosts: z.number().int().nonnegative().optional(),
 });
 
 /** 一项用量：`metric` 如 `hosts`、`members`、`guests`、`connections`、`relay.bytes`。 */
@@ -104,6 +108,12 @@ export const usageEntrySchema = z.object({
   limit: z.number().nullable(),
 });
 export const periodSchema = z.string().regex(/^\d{4}-\d{2}$/);
+
+/** `billing.usage` 的按天流量序列（1.4 补充）：一天一条，`startMs` 是当天 UTC 零点。 */
+export const usageSeriesPointSchema = z.object({
+  startMs: z.number().int(),
+  relayBytes: z.number().nonnegative(),
+});
 
 export const teamUsageSchema = z.object({
   teamId: teamIdSchema,
@@ -426,8 +436,6 @@ export const trustRequestSchema = z.object({
     displayName: z.string(),
   }),
   device: z.object({ name: z.string(), platform: devicePlatformSchema }),
-  /** 6 位 SAS 验证码，两端各自显示，背书人核对一致才批准。 */
-  sas: z.string().regex(/^\d{6}$/),
   requestedAtMs: z.number().int(),
   expiresAtMs: z.number().int(),
 });

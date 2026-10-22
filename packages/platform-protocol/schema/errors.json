@@ -60,6 +60,8 @@
   "plan_feature_unavailable": 403,
   "device_untrusted": 403,
   "link_frozen": 403,
+  "registrations_paused": 503,
+  "operator_mfa_required": 403,
   "relay_token_invalid": 401,
   "relay_source_mismatch": 403,
   "limit_reached": 429,
