@@ -285,6 +285,7 @@ func (l *Links) Revoke(ctx context.Context, caller Caller, linkID string) error 
 	if l.c.Relay != nil {
 		l.c.Relay.Disconnect(ConnectionFilter{SubjectPrefix: GuestPrefix(linkID)})
 	}
+	l.c.linkRevoked(ctx, sourceID, linkID)
 	l.c.Emit(NewAccessRevoked(sourceID), &Audience{LinkID: linkID})
 	return nil
 }

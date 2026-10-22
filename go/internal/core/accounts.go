@@ -127,6 +127,40 @@ func (a *Accounts) recordFailure(ctx context.Context, accountID string, nowMs in
 	})
 }
 
+// VerifyPassword 比对账号的口令（登录的核心，按邮箱登录的 SaaS 复用）：锁着答 account_locked，不比对；
+// 口令不对记一次失败（连续失败锁定）答 credentials_invalid；对了清零失败计数与锁。account 为 nil
+// （没有这个账号）时仍做一次等时的口令派生，答 credentials_invalid，不泄露账号是否存在。
+func VerifyPassword(ctx context.Context, c *Context, account *store.AccountRecord, password string, nowMs int64) error {
+	if account == nil {
+		identity.BurnPasswordCheck(password)
+		return Fail(gen.ErrCredentialsInvalid)
+	}
+	if wait := lockedFor(accountLockout(account), nowMs); wait > 0 {
+		return FailAfter(gen.ErrAccountLocked, wait)
+	}
+	ok := identity.VerifyPassword(password, account.Password)
+	failedAt := c.NowMs()
+	if !ok {
+		err := c.Ports.Accounts.Update(ctx, c.TenantID, account.AccountID, func(draft *store.AccountRecord) error {
+			if draft != nil {
+				next := NextLockout(accountLockout(draft), failedAt)
+				draft.Failures, draft.LockedUntilMs, draft.LastFailureAtMs = next.Failures, next.LockedUntilMs, next.LastFailureAtMs
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		return Fail(gen.ErrCredentialsInvalid)
+	}
+	return c.Ports.Accounts.Update(ctx, c.TenantID, account.AccountID, func(draft *store.AccountRecord) error {
+		if draft != nil && (draft.Failures != 0 || draft.LockedUntilMs != 0) {
+			draft.Failures, draft.LockedUntilMs = 0, 0
+		}
+		return nil
+	})
+}
+
 // Login 登录，答新会话。
 func (a *Accounts) Login(ctx context.Context, input LoginInput, ip string) (Session, error) {
 	if err := a.c.hit(ctx, LimitLoginIP, ip); err != nil {
@@ -142,26 +176,10 @@ func (a *Accounts) Login(ctx context.Context, input LoginInput, ip string) (Sess
 	if account == nil {
 		return Session{}, a.loginUnknown(truncateRunes(input.Account, 128), input.Password)
 	}
-	if wait := lockedFor(accountLockout(account), a.c.NowMs()); wait > 0 {
-		return Session{}, FailAfter(gen.ErrAccountLocked, wait)
-	}
-	ok := identity.VerifyPassword(input.Password, account.Password)
-	nowMs := a.c.NowMs()
-	if !ok {
-		if err := a.recordFailure(ctx, account.AccountID, nowMs); err != nil {
-			return Session{}, err
-		}
-		return Session{}, Fail(gen.ErrCredentialsInvalid)
-	}
-	err = a.c.Ports.Accounts.Update(ctx, a.c.TenantID, account.AccountID, func(draft *store.AccountRecord) error {
-		if draft != nil && (draft.Failures != 0 || draft.LockedUntilMs != 0) {
-			draft.Failures, draft.LockedUntilMs = 0, 0
-		}
-		return nil
-	})
-	if err != nil {
+	if err := VerifyPassword(ctx, a.c, account, input.Password, a.c.NowMs()); err != nil {
 		return Session{}, err
 	}
+	nowMs := a.c.NowMs()
 	device, refresh, err := CreateDevice(ctx, a.c, account.AccountID, input.Device, nowMs, 0)
 	if err != nil {
 		return Session{}, err
@@ -241,7 +259,12 @@ func truncateRunes(s string, n int) string {
 
 // CheckPassword：口令策略不过就报（码与 core 同名）。
 func CheckPassword(c *Context, password, name string) error {
-	if rule := c.policy()(password, []string{name}); rule != "" {
+	return CheckPasswordNames(c, password, []string{name})
+}
+
+// CheckPasswordNames 同 CheckPassword，口令不得包含 names 里的任何一个（SaaS：邮箱本地部分与显示名）。
+func CheckPasswordNames(c *Context, password string, names []string) error {
+	if rule := c.policy()(password, names); rule != "" {
 		return Fail(rule)
 	}
 	return nil
@@ -250,7 +273,12 @@ func CheckPassword(c *Context, password, name string) error {
 // SetPassword 是换口令的唯一实现（API 与 personal passwd 共用）：过策略、重新派生、清锁，撤销
 // 账号本人的设备（keepDeviceID 那台除外；访客不受影响，由链接管）。账号不存在答 not_found。
 func SetPassword(ctx context.Context, c *Context, accountID, name, password string, nowMs int64, keepDeviceID string) error {
-	if err := CheckPassword(c, password, name); err != nil {
+	return SetPasswordNames(ctx, c, accountID, []string{name}, password, nowMs, keepDeviceID)
+}
+
+// SetPasswordNames 同 SetPassword，策略里的「不得包含」取 names；成功后经撤销钩子通知设备已批量撤销。
+func SetPasswordNames(ctx context.Context, c *Context, accountID string, names []string, password string, nowMs int64, keepDeviceID string) error {
+	if err := CheckPasswordNames(c, password, names); err != nil {
 		return err
 	}
 	record, err := identity.HashPassword(password)
@@ -264,6 +292,7 @@ func SetPassword(ctx context.Context, c *Context, accountID, name, password stri
 	if !found {
 		return Fail(gen.ErrNotFound)
 	}
+	c.devicesRevoked(ctx, accountID, keepDeviceID)
 	return nil
 }
 

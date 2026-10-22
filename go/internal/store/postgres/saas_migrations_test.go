@@ -192,9 +192,11 @@ func TestSaaSMigrationsOnOldDatabase(t *testing.T) {
 		AccountID: "acct:alice", Name: "alice", CreatedAtMs: 1, UpdatedAtMs: 1,
 		Password: identity.PasswordRecord{KDF: "scrypt", Cost: 16384, Block: 8, Parallel: 1, Length: 32, Salt: "c2FsdA==", Hash: "aGFzaA=="},
 	}))
-	must(old.Ports().Devices.Insert(ctx, store.DefaultTenant, store.DeviceRecord{
-		DeviceID: "d1", Subject: "acct:alice", Platform: "desktop", Name: "d", RefreshHash: "h", Rotation: 1, CreatedAtMs: 1, ExpiresAtMs: 9,
-	}, 1))
+	// 0003 的库还没有 transport / scope / elevated_until_ms 三列：当前端口写不进去，用原始 SQL 放一台老设备。
+	if _, err := old.Pool().Exec(ctx, `INSERT INTO devices (tenant_id, device_id, subject, platform, name, refresh_hash,
+	  rotation, created_at_ms, expires_at_ms) VALUES ('default', 'd1', 'acct:alice', 'desktop', 'd', 'h', 1, 1, 9)`); err != nil {
+		t.Fatal(err)
+	}
 	added, err := old.Ports().Registrations.Add(ctx, store.DefaultTenant, store.RegistrationToken{TokenHash: "r1", ExpiresAtMs: 99, AccountID: "acct:alice"}, 1, 10)
 	if err != nil || !added {
 		t.Fatalf("登记令牌：%v %v", added, err)

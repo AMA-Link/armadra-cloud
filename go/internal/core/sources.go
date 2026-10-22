@@ -76,12 +76,22 @@ type RegisterInput struct {
 	ProtocolMinor     int64
 }
 
-// GrantExtra 是签断言时的附加信息。
+// GrantExtra 是签断言时的附加信息。Team、Role、Email、EmailVerified 与 TrackJTI 只有 SaaS 的访问策略
+// 会填（个人中转都不带，签出的字节与 0.2.x 同形）。
 type GrantExtra struct {
 	Name   string
 	Link   *gen.AssertionClaimsLink
 	Device *DeviceInput
 	Scope  *store.LinkScope
+	// Team 是团队主机的团队与调用者在团队里的角色：进断言的 team 声明，teamId 也进中继令牌。
+	Team *gen.AssertionClaimsTeam
+	// Role 是有效角色（断言的 role 声明）；空 = 不带。
+	Role string
+	// Email 非空时进断言的 email 与 emailVerified。
+	Email         string
+	EmailVerified bool
+	// TrackJTI 为真时断言的 jti 带前缀 s.<deviceId>.<sourceId>（签发索引按它过滤，SaaS 实现方案 §4.6）。
+	TrackJTI bool
 }
 
 // Sources 是源服务。
@@ -143,6 +153,15 @@ func (s *Sources) Grant(ctx context.Context, source store.SourceRecord, device s
 	if extra.Name != "" {
 		claims = append(claims, Claim{"name", extra.Name})
 	}
+	if extra.Email != "" {
+		claims = append(claims, Claim{"email", extra.Email}, Claim{"emailVerified", extra.EmailVerified})
+	}
+	if extra.Team != nil {
+		claims = append(claims, Claim{"team", extra.Team})
+	}
+	if extra.Role != "" {
+		claims = append(claims, Claim{"role", extra.Role})
+	}
 	if extra.Link != nil {
 		claims = append(claims, Claim{"link", extra.Link})
 	}
@@ -150,11 +169,18 @@ func (s *Sources) Grant(ctx context.Context, source store.SourceRecord, device s
 		claims = append(claims, Claim{"scp", scp})
 	}
 	claims = append(claims, Claim{"device", gen.AssertionClaimsDevice{DeviceID: device.DeviceID, Platform: platform, Name: name}})
-	assertion, err := s.c.Signer.Sign(ctx, gen.TokenTypeAssertion, claims, SignOptions{TTL: assertionTTL})
+	assertionOptions := SignOptions{TTL: assertionTTL}
+	if extra.TrackJTI {
+		assertionOptions.JTIPrefix = "s." + device.DeviceID + "." + source.SourceID
+	}
+	assertion, err := s.c.Signer.Sign(ctx, gen.TokenTypeAssertion, claims, assertionOptions)
 	if err != nil {
 		return Grant{}, err
 	}
 	relayClaims := Claims{{"sub", device.Subject}, {"aud", gen.TokenAudienceRelay}, {"src", source.SourceID}}
+	if extra.Team != nil {
+		relayClaims = append(relayClaims, Claim{"team", extra.Team.TeamID})
+	}
 	if readOnly {
 		relayClaims = append(relayClaims, Claim{"ro", true})
 	}
@@ -173,6 +199,7 @@ func (s *Sources) Grant(ctx context.Context, source store.SourceRecord, device s
 		Assertion: assertion.Token, AssertionExpiresAtMs: assertion.ExpiresAtMs,
 		RelayToken: relay.Token, RelayTokenExpiresAtMs: relay.ExpiresAtMs,
 		RelayOrigin: s.c.relayOrigin(issuer, source.SourceID), RelayBaseURL: s.c.relayBaseURL(issuer, source.SourceID), Online: online,
+		AssertionJTI: assertion.JTI, RelayTokenJTI: relay.JTI,
 	}, nil
 }
 
@@ -338,14 +365,23 @@ type tunnelJWK struct {
 
 // RelayFor 是 GET /v1/sources/me/relay：签隧道令牌（cnf.jwk = 登记的公钥）。
 func (s *Sources) RelayFor(ctx context.Context, source store.SourceRecord) (RelayInfo, error) {
+	return s.RelayForTeam(ctx, source, "")
+}
+
+// RelayForTeam 同 RelayFor；teamID 非空（团队主机）时隧道令牌带 team 声明。
+func (s *Sources) RelayForTeam(ctx context.Context, source store.SourceRecord, teamID string) (RelayInfo, error) {
 	issuer, err := s.c.Signer.Issuer(ctx)
 	if err != nil {
 		return RelayInfo{}, err
 	}
-	tunnel, err := s.c.Signer.Sign(ctx, gen.TokenTypeTunnel, Claims{
+	claims := Claims{
 		{"sub", source.SourceID}, {"aud", gen.TokenAudienceTunnel},
 		{"cnf", tunnelCnf{JWK: tunnelJWK{Kty: source.PublicJWK.Kty, Crv: source.PublicJWK.Crv, X: source.PublicJWK.X}}},
-	}, SignOptions{TTL: tunnelTokenTTL, JTIPrefix: "t." + source.SourceID})
+	}
+	if teamID != "" {
+		claims = append(claims, Claim{"team", teamID})
+	}
+	tunnel, err := s.c.Signer.Sign(ctx, gen.TokenTypeTunnel, claims, SignOptions{TTL: tunnelTokenTTL, JTIPrefix: "t." + source.SourceID})
 	if err != nil {
 		return RelayInfo{}, err
 	}
@@ -438,6 +474,7 @@ func (s *Sources) Revoke(ctx context.Context, caller Caller, sourceID string) er
 		s.c.Relay.CloseTunnel(sourceID)
 		s.c.Relay.Disconnect(ConnectionFilter{SourceID: sourceID})
 	}
+	s.c.sourceRevoked(ctx, sourceID)
 	s.c.Emit(NewSourceRevoked(sourceID), nil)
 	return nil
 }

@@ -56,6 +56,19 @@ type RelayPort interface {
 	Disconnect(filter ConnectionFilter)
 }
 
+// RevocationSink 是控制核在撤销之后的回调（SaaS 实现方案 §4.2）：SaaS 用它撤销已签令牌、踢掉在线
+// 连接；personal 不装配（nil），靠 jti 的形状即时判定。回调不返回错误：实现自己重试或兜底。
+type RevocationSink interface {
+	// DeviceRevoked：一台设备被撤销（登出、me.deviceRevoke、刷新令牌重放撤销整台设备）。
+	DeviceRevoked(ctx context.Context, subject, deviceID string)
+	// DevicesRevoked：账号的设备被批量撤销（改口令、找回口令）；keepDeviceID 非空时那一台除外。
+	DevicesRevoked(ctx context.Context, subject, keepDeviceID string)
+	// LinkRevoked：分享链接被撤销（它名下的访客设备一并作废）。
+	LinkRevoked(ctx context.Context, sourceID, linkID string)
+	// SourceRevoked：源被撤销。
+	SourceRevoked(ctx context.Context, sourceID string)
+}
+
 // PasswordPolicy 是口令策略：答第一条不过的规则（错误码），全过答空串。
 type PasswordPolicy func(password string, names []string) gen.ErrorCode
 
@@ -87,6 +100,32 @@ type Context struct {
 	// Challenge 是人机挑战（cloud-api §16）：配置了 siteKey 与 secret 才有；nil = 不要求挑战。
 	Challenge *ChallengeGate
 	Events    *EventBus
+	// Revocations 在撤销之后被回调；nil = 不回调（personal）。
+	Revocations RevocationSink
+}
+
+func (c *Context) deviceRevoked(ctx context.Context, subject, deviceID string) {
+	if c.Revocations != nil {
+		c.Revocations.DeviceRevoked(ctx, subject, deviceID)
+	}
+}
+
+func (c *Context) devicesRevoked(ctx context.Context, subject, keepDeviceID string) {
+	if c.Revocations != nil {
+		c.Revocations.DevicesRevoked(ctx, subject, keepDeviceID)
+	}
+}
+
+func (c *Context) linkRevoked(ctx context.Context, sourceID, linkID string) {
+	if c.Revocations != nil {
+		c.Revocations.LinkRevoked(ctx, sourceID, linkID)
+	}
+}
+
+func (c *Context) sourceRevoked(ctx context.Context, sourceID string) {
+	if c.Revocations != nil {
+		c.Revocations.SourceRevoked(ctx, sourceID)
+	}
 }
 
 // NowMs 是当前时刻（毫秒）。

@@ -163,28 +163,51 @@ func insertRegistration(ctx context.Context, q querier, tenantID string, r store
 // ------------------------------------------------------------ 设备
 
 const deviceColumns = `device_id, subject, platform, name, refresh_hash, previous_refresh_hash, rotation,
-  created_at_ms, expires_at_ms, revoked_at_ms, last_seen_at_ms`
+  created_at_ms, expires_at_ms, revoked_at_ms, last_seen_at_ms, transport, scope, elevated_until_ms`
+
+const (
+	transportBearer = "bearer"
+	scopeSession    = "session"
+)
+
+func orDefault(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
 
 func toDevice(row scanner) (*store.DeviceRecord, error) {
 	var (
-		d        store.DeviceRecord
-		rotation int32
+		d                store.DeviceRecord
+		rotation         int32
+		transport, scope string
 	)
 	if err := row.Scan(&d.DeviceID, &d.Subject, &d.Platform, &d.Name, &d.RefreshHash, &d.PreviousRefreshHash,
-		&rotation, &d.CreatedAtMs, &d.ExpiresAtMs, &d.RevokedAtMs, &d.LastSeenAtMs); err != nil {
+		&rotation, &d.CreatedAtMs, &d.ExpiresAtMs, &d.RevokedAtMs, &d.LastSeenAtMs,
+		&transport, &scope, &d.ElevatedUntilMs); err != nil {
 		return nil, err
 	}
 	d.Rotation = int64(rotation)
+	// 缺省值（bearer / session）在记录里是空串，个人中转的记录形状因此不变。
+	if transport != transportBearer {
+		d.Transport = transport
+	}
+	if scope != scopeSession {
+		d.Scope = scope
+	}
 	return &d, nil
 }
 
 func insertDevice(ctx context.Context, q querier, tenantID string, d store.DeviceRecord) error {
 	_, err := q.Exec(ctx,
 		`INSERT INTO devices (tenant_id, device_id, subject, platform, name, refresh_hash,
-		   previous_refresh_hash, rotation, created_at_ms, expires_at_ms, revoked_at_ms, last_seen_at_ms)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		   previous_refresh_hash, rotation, created_at_ms, expires_at_ms, revoked_at_ms, last_seen_at_ms,
+		   transport, scope, elevated_until_ms)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		tenantID, d.DeviceID, d.Subject, d.Platform, d.Name, d.RefreshHash, d.PreviousRefreshHash,
-		d.Rotation, d.CreatedAtMs, d.ExpiresAtMs, d.RevokedAtMs, d.LastSeenAtMs)
+		d.Rotation, d.CreatedAtMs, d.ExpiresAtMs, d.RevokedAtMs, d.LastSeenAtMs,
+		orDefault(d.Transport, transportBearer), orDefault(d.Scope, scopeSession), d.ElevatedUntilMs)
 	return err
 }
 
@@ -192,10 +215,12 @@ func writeDevice(ctx context.Context, q querier, tenantID, deviceID string, d st
 	_, err := q.Exec(ctx,
 		`UPDATE devices SET subject = $1, platform = $2, name = $3, refresh_hash = $4,
 		   previous_refresh_hash = $5, rotation = $6, created_at_ms = $7, expires_at_ms = $8,
-		   revoked_at_ms = $9, last_seen_at_ms = $10
-		 WHERE tenant_id = $11 AND device_id = $12`,
+		   revoked_at_ms = $9, last_seen_at_ms = $10, transport = $11, scope = $12, elevated_until_ms = $13
+		 WHERE tenant_id = $14 AND device_id = $15`,
 		d.Subject, d.Platform, d.Name, d.RefreshHash, d.PreviousRefreshHash, d.Rotation,
-		d.CreatedAtMs, d.ExpiresAtMs, d.RevokedAtMs, d.LastSeenAtMs, tenantID, deviceID)
+		d.CreatedAtMs, d.ExpiresAtMs, d.RevokedAtMs, d.LastSeenAtMs,
+		orDefault(d.Transport, transportBearer), orDefault(d.Scope, scopeSession), d.ElevatedUntilMs,
+		tenantID, deviceID)
 	return err
 }
 

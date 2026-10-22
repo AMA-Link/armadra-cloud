@@ -75,6 +75,12 @@ type DeviceRecord struct {
 	ExpiresAtMs         int64   `json:"expiresAtMs"`
 	RevokedAtMs         *int64  `json:"revokedAtMs"`
 	LastSeenAtMs        *int64  `json:"lastSeenAtMs"`
+	// Transport 是会话的传输：空 = bearer（原生、core、CLI），cookie = 网页控制台。只有 PostgreSQL 存它。
+	Transport string `json:"transport,omitempty"`
+	// Scope 是会话的范围：空 = session（普通），operator = 运营（1 小时绝对寿命）。只有 PostgreSQL 存它。
+	Scope string `json:"scope,omitempty"`
+	// ElevatedUntilMs 是 auth.stepUp 提权到的时刻；空 = 未提权。
+	ElevatedUntilMs *int64 `json:"elevatedUntilMs,omitempty"`
 }
 
 // LinkScope 是分享范围（已规范化，见 core.NormalizeLinkScope）；整台时链接上没有它。
