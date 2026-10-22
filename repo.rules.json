@@ -75,7 +75,7 @@
   },
   "migrations": {
     "lock": "migrations.lock",
-    "$comment": "两个迁移目录各自从 0001 连续：PostgreSQL（cloud 与 Node 中继 --store postgres / --control postgres 共用，在 control-store-postgres 包里）与 SQLite（Node 中继 --store sqlite 与 DO SQLite 共用）；lock 守住已发布迁移的字节。",
+    "$comment": "两个迁移目录各自从 0001 连续：PostgreSQL（cloud 与 Node 中继 --store postgres / --control postgres 共用，在 control-store-postgres 包里）与 SQLite（Node 中继 --store sqlite 与 DO SQLite 共用）；lock 守住已发布迁移的字节。copies 是 Go 的 go:embed 副本：SQL 以 TS 包里的为准，副本必须与 lock 逐字节一致（go generate 拷过去）。",
     "sources": [
       {
         "path": "packages/control-store-postgres/migrations",
@@ -95,12 +95,27 @@
   ],
   "goModules": [
     {
-      "$comment": "go/ 只许 import 标准库、本模块与这里登记的第三方模块：x/crypto 给 scrypt；jsonschema（及它的 x/text）只在测试里校验 cloud-api 夹具，不进生产代码。go.mod 的版本都写精确版本，不用 replace。internal/core 不碰数据面（tunnel、edge），延续「控制核不碰中继内核」的边界。",
+      "$comment": "go/ 只许 import 标准库、本模块与这里登记的第三方模块：x/crypto 给 scrypt；modernc.org/sqlite（纯 Go，连同它的传递依赖）与 pgx/v5（连同 puddle、x/sync 等）是存储驱动；jsonschema（及它的 x/text）只在测试里校验 cloud-api 夹具，不进生产代码。go.mod 的版本都写精确版本，不用 replace。internal/core 不碰数据面（tunnel、edge），延续「控制核不碰中继内核」的边界。",
       "root": "go",
       "allow": [
+        "github.com/dustin/go-humanize",
+        "github.com/google/uuid",
+        "github.com/jackc/pgpassfile",
+        "github.com/jackc/pgservicefile",
+        "github.com/jackc/pgx/v5",
+        "github.com/jackc/puddle/v2",
+        "github.com/mattn/go-isatty",
+        "github.com/ncruces/go-strftime",
+        "github.com/remyoudompheng/bigfft",
         "github.com/santhosh-tekuri/jsonschema/v6",
         "golang.org/x/crypto",
-        "golang.org/x/text"
+        "golang.org/x/sync",
+        "golang.org/x/sys",
+        "golang.org/x/text",
+        "modernc.org/libc",
+        "modernc.org/mathutil",
+        "modernc.org/memory",
+        "modernc.org/sqlite"
       ],
       "testOnly": ["github.com/santhosh-tekuri/jsonschema/v6"],
       "internalBoundaries": [
