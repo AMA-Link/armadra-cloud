@@ -57,6 +57,9 @@ func NextLockout(previous Lockout, nowMs int64) Lockout {
 
 const maxUnknownNames = 1_000
 
+// burnPasswordCheck 是未知账号时的等时派生；测试里换成计数器，断言它确实被调用。
+var burnPasswordCheck = identity.BurnPasswordCheck
+
 // LoginInput 是登录的入参。
 type LoginInput struct {
 	Account   string
@@ -106,7 +109,7 @@ func (a *Accounts) loginUnknown(name, password string) error {
 	if wait := lockedFor(previous, nowMs); wait > 0 {
 		return FailAfter(gen.ErrAccountLocked, wait)
 	}
-	identity.BurnPasswordCheck(password)
+	burnPasswordCheck(password)
 	a.mu.Lock()
 	if len(a.unknown) >= maxUnknownNames {
 		a.unknown = map[string]Lockout{}
@@ -132,7 +135,7 @@ func (a *Accounts) recordFailure(ctx context.Context, accountID string, nowMs in
 // （没有这个账号）时仍做一次等时的口令派生，答 credentials_invalid，不泄露账号是否存在。
 func VerifyPassword(ctx context.Context, c *Context, account *store.AccountRecord, password string, nowMs int64) error {
 	if account == nil {
-		identity.BurnPasswordCheck(password)
+		burnPasswordCheck(password)
 		return Fail(gen.ErrCredentialsInvalid)
 	}
 	if wait := lockedFor(accountLockout(account), nowMs); wait > 0 {
@@ -222,23 +225,7 @@ func (a *Accounts) ChangePassword(ctx context.Context, caller Caller, input Chan
 		return Session{}, err
 	}
 	// 当前设备的刷新令牌也换新：旧的哪怕泄露过也就此作废（不当作重放，不撤销这台）。
-	var (
-		rotated store.DeviceRecord
-		next    string
-		found   bool
-	)
-	err = a.c.Ports.Devices.Update(ctx, a.c.TenantID, caller.DeviceID, func(device *store.DeviceRecord) error {
-		if device == nil || device.RevokedAtMs != nil {
-			return nil
-		}
-		next = device.DeviceID + "." + RandomToken(32)
-		device.RefreshHash = RefreshHash(next)
-		device.PreviousRefreshHash = nil
-		device.Rotation++
-		device.LastSeenAtMs = &nowMs
-		rotated, found = *device, true
-		return nil
-	})
+	rotated, next, found, err := RotateRefresh(ctx, a.c, caller.DeviceID, nowMs)
 	if err != nil {
 		return Session{}, err
 	}
@@ -246,6 +233,24 @@ func (a *Accounts) ChangePassword(ctx context.Context, caller Caller, input Chan
 		return Session{}, Fail(gen.ErrUnauthenticated)
 	}
 	return SessionFor(ctx, a.c, rotated, next)
+}
+
+// RotateRefresh 给一台设备换新刷新令牌：旧的作废（不留作重放检测的「上一个」，不撤销这台）。
+// 答换完的设备记录与新刷新令牌明文；设备不在或已撤销 found 为 false。改口令、找回口令之后用。
+func RotateRefresh(ctx context.Context, c *Context, deviceID string, nowMs int64) (device store.DeviceRecord, refreshToken string, found bool, err error) {
+	err = c.Ports.Devices.Update(ctx, c.TenantID, deviceID, func(draft *store.DeviceRecord) error {
+		if draft == nil || draft.RevokedAtMs != nil {
+			return nil
+		}
+		refreshToken = draft.DeviceID + "." + RandomToken(32)
+		draft.RefreshHash = RefreshHash(refreshToken)
+		draft.PreviousRefreshHash = nil
+		draft.Rotation++
+		draft.LastSeenAtMs = &nowMs
+		device, found = *draft, true
+		return nil
+	})
+	return device, refreshToken, found, err
 }
 
 func truncateRunes(s string, n int) string {

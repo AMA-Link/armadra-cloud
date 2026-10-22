@@ -52,7 +52,10 @@ func TestBeforeHookRunsAfterValidationAndCarriesHeaders(t *testing.T) {
 	var called []string
 	ts := hookAPI(t, api.Options{
 		Handlers: map[string]api.Handler{
-			"auth.logout": func(context.Context, *api.Call) (any, error) { called = append(called, "handler"); return map[string]any{}, nil },
+			"auth.logout": func(context.Context, *api.Call) (any, error) {
+				called = append(called, "handler")
+				return map[string]any{}, nil
+			},
 		},
 		Before: func(call *api.Call) error {
 			called = append(called, "before:"+call.Procedure)

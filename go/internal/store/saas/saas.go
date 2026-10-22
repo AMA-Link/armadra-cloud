@@ -43,6 +43,8 @@ type Reader interface {
 	AccountByEmail(ctx context.Context, tenantID, email string) (*Account, error)
 	// Memberships 是账号所属的团队（排除已删除的），按加入顺序。
 	Memberships(ctx context.Context, tenantID, accountID string) ([]Membership, error)
+	// HasCredential 报告账号是否登记了某种凭据（totp / passkey / oauth）。
+	HasCredential(ctx context.Context, tenantID, accountID, kind string) (bool, error)
 	// Incident 读事故开关（platform_settings 键 incident）；没写过答全关。
 	Incident(ctx context.Context, tenantID string) (Incident, error)
 }
