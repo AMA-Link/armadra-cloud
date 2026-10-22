@@ -58,7 +58,9 @@
       "http://a<b>.com",
       "https://例子<.com",
       "https://例子 .com",
-      "https://例子.com:99999"
+      "https://例子.com:99999",
+      "https://aא.com",
+      "https://אa.com"
     ]
   }
 }

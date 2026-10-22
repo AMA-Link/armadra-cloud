@@ -186,7 +186,7 @@ func uriMatches(value string) bool {
 
 // idnaProfile 与 WHATWG URL 的主机名处理对齐（z.url() 经它接受 IDN）：做 UTS 46 映射与 punycode
 // 转换，不套 STD3 / DNS 长度这类 DNS 注册层面的限制。
-var idnaProfile = idna.New(idna.MapForLookup(), idna.StrictDomainName(false), idna.VerifyDNSLength(false), idna.CheckHyphens(false))
+var idnaProfile = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.StrictDomainName(false), idna.VerifyDNSLength(false), idna.CheckHyphens(false))
 
 // asciiHost 把非 ASCII 主机名转成 ASCII（punycode）；纯 ASCII 原样返回。转换失败答 ok=false。
 func asciiHost(host string) (string, bool) {
