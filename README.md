@@ -25,11 +25,13 @@ Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`（Node
 | `deploy/`                        | compose 与部署说明（[deploy/README.md](deploy/README.md)）             |
 | `docs/`                          | 契约与运维文档（[索引](docs/README.md)）                               |
 | `tools/`                         | 仓库校验、契约生成、工作流校验、第三方声明                             |
+| `go/`                            | 中继 Go 重写（#59）：协议生成器、协议包的 Go 实现、JWS 与身份算法      |
 
 ## 准备
 
 - Node ≥ 24（原生类型剥离，开发态直接跑 `.ts`）
 - pnpm 12.8.1（`corepack enable`）
+- Go 1.27.1（只有 `go/` 和第三方声明要用；`go:check`、`notices` 需要）
 - Docker（只用于本地 PostgreSQL / Redis 与镜像构建）
 
 ```sh
@@ -83,6 +85,7 @@ pnpm dev:down    # 停掉依赖；pnpm dev:down --volumes 连数据一起删
 ```sh
 pnpm check             # 构建协议包 + prettier + eslint + typecheck + repo:check + contract:check + 工作流校验 + 第三方声明
 pnpm repo:test         # tools/ 的自检
+pnpm go:check          # Go：gofmt + vet + staticcheck + race 测试 + 生成物新鲜度
 pnpm test              # 全部单测
 pnpm test:integration  # 集成测试，需要 pnpm dev:up；见下
 pnpm images:build      # 本地构建两个镜像（不推送）
