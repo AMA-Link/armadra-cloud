@@ -94,7 +94,7 @@ export const teamMemberSchema = z.object({
   displayName: z.string(),
   role: teamRoleSchema,
   joinedAtMs: z.number().int(),
-  /** 1.4 补充：所在分组（M2；guest 恒空）。 */
+  /** 1.4 补充：所在分组（M2；guest 恒空）。实现时无分组也必须返回 []。 */
   groups: z.array(z.object({ groupId: z.string(), name: z.string() })),
   /** 1.4 补充：只对 guest 有值——被直接授予、能到达的主机数。 */
   reachableHosts: z.number().int().nonnegative().optional(),

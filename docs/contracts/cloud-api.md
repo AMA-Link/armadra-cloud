@@ -63,7 +63,7 @@
 1.4 补充（控制台所需，Refs #60）：
 
 - `sourceSummary.ownerName`：主机所有者的显示名（`owner: boolean` 保留）；personal 是账号名，访客看不到所有者时为空串。已部署的中继不报这个字段：缺省时客户端什么都不显示。
-- `sources.list` 入参加 `status`（`online` / `offline` / `revoked`）、`tag`（多个标签取「且」；GET 里重复写）、`q`（名称模糊）、`cursor`、`limit`（1–200，缺省 50）；出参加 `nextCursor`（`null` = 没有下一页）。personal 的目录一页放得下，没有标签：`status = revoked` 与给了 `tag` 都筛出空，`nextCursor` 恒为 `null`。
+- `sources.list` 入参加 `status`（`online` / `offline` / `revoked`）、`tag`（多个标签取「且」；GET 里重复写）、`q`（名称模糊）、`cursor`、`limit`（1–200，缺省 50）；出参加 `nextCursor`（`null` 或缺省 = 没有下一页；已部署的中继不报这个字段，客户端按没有下一页处理）。personal 的目录一页放得下，没有标签：`status = revoked` 与给了 `tag` 都筛出空，`nextCursor` 恒为 `null`。
 
 <!-- rpc:begin contract=§4 -->
 
@@ -494,7 +494,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §28 运营后台
 
-1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud`），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。
+1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud`），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。personal 没有运营账号：`scope: "operator"` 一律答 `403 forbidden`。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。
 
 协议 1.4。单独的 scope `operator`（运营令牌，`Authorization: Bearer`），不对外公开。只读元数据：账号与团队的计划、用量、主机数、状态——看不到任何内容与令牌，也不提供「以用户身份登录」。
 

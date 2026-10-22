@@ -102,10 +102,14 @@ export function createPersonalProcedures(
       };
     },
     "platform.jwks": () => context.signer.jwks(),
-    "auth.login": ({ input, ip }) =>
-      accounts
+    "auth.login": ({ input, ip }) => {
+      // personal 没有运营账号：要运营范围的会话一律 403（cloud-api §28）。
+      if (input.scope === "operator")
+        return Promise.reject(new ControlError("forbidden"));
+      return accounts
         .login(input as unknown as Parameters<typeof accounts.login>[0], ip)
-        .then((session) => ({ session })),
+        .then((session) => ({ session }));
+    },
     "auth.refresh": async ({ input }) => ({
       session: await refresh(context, input.refreshToken as string),
     }),

@@ -154,8 +154,8 @@ export const sources = {
     .output(
       z.object({
         sources: z.array(sourceSummarySchema),
-        /** `null` = 没有下一页。 */
-        nextCursor: z.string().nullable(),
+        /** `null` 或缺省 = 没有下一页（已部署的中继不报这个字段）。 */
+        nextCursor: z.string().nullable().optional(),
       }),
     ),
   get: base
