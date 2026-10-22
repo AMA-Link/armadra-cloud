@@ -24,7 +24,7 @@ func TestSignedTokensVerifyAgainstTheJWKS(t *testing.T) {
 
 	result, err := jose.Verify(e.ctx, token.Token, jose.Options{
 		Typ: gen.TokenTypeAccess, Schema: gen.AccessClaimsSchema, ExpectedAud: gen.TokenAudienceAccess,
-		ExpectedIss: "https://cloud.armadra.test", Now: e.h.Clock.Now(), Keys: signer,
+		ExpectedIss: "https://cloud.armadra.test", Now: e.h.Clock.Now(), Keys: signer, SkipRevocation: true,
 	})
 	if err != nil {
 		t.Fatalf("自己签的令牌应验得过：%v", err)

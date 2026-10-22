@@ -232,14 +232,14 @@ func TestErrorShapesAndHeaders(t *testing.T) {
 		}
 	})
 	t.Run("personal 没实现的过程与契约外的路径答 404", func(t *testing.T) {
-		for _, path := range []string{"/v1/orgs/abc", "/v1/auth/register", "/v1/nope", "/v1/sources/"} {
+		for _, path := range []string{"/v1/teams/abc", "/v1/auth/register", "/v1/nope", "/v1/sources/"} {
 			method := "GET"
 			if path == "/v1/auth/register" {
 				method = "POST"
 			}
 			r.expect(r.do(method, path, nil, nil), 404, "not_found")
 		}
-		r.expect(r.do("POST", "/v1/orgs", map[string]any{"slug": "x"}, nil), 404, "not_found")
+		r.expect(r.do("POST", "/v1/teams", map[string]any{"slug": "x"}, nil), 404, "not_found")
 	})
 	t.Run("入参不合格式", func(t *testing.T) {
 		login := "/v1/auth/login"
@@ -312,7 +312,7 @@ func TestRateLimitAnswersRetryAfter(t *testing.T) {
 
 func TestCloudModeAnswers501ForReserved(t *testing.T) {
 	r := newRig(t, rigOptions{mode: api.ModeCloud})
-	res := r.do("GET", "/v1/orgs/abc", nil, nil)
+	res := r.do("GET", "/v1/teams/abc", nil, nil)
 	r.expect(res, 501, "not_implemented")
 	if res.json["message"] != "not_implemented" {
 		t.Fatalf("not_implemented 的 message 沿用码本身：%s", res.body)
@@ -356,5 +356,47 @@ func TestInternalErrorsAreNotLeaked(t *testing.T) {
 	}
 	if reported == nil {
 		t.Fatal("内部错误应报给 OnError")
+	}
+}
+
+// 契约里 personal 不实现的过程（含协议 1.4 的团队、邀请、授权、计费、管理员等 SaaS 各组）：
+// personal 一律答 404 not_found，cloud 一律答 501 not_implemented；预留路由不会遮住启用的路由。
+func TestEveryReservedProcedureAnswersByMode(t *testing.T) {
+	personal := map[string]bool{}
+	for _, name := range api.PersonalProcedures {
+		personal[name] = true
+	}
+	for name, mode := range map[string]api.Mode{"personal": api.ModePersonal, "cloud": api.ModeCloud} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, rigOptions{mode: mode})
+			wantStatus, wantCode := 404, "not_found"
+			if mode == api.ModeCloud {
+				wantStatus, wantCode = 501, "not_implemented"
+			}
+			checked := 0
+			for _, route := range gen.Routes {
+				if personal[route.Procedure] || route.Procedure == "platform.health" {
+					continue
+				}
+				path := route.Path
+				for strings.Contains(path, "{") {
+					start := strings.Index(path, "{")
+					end := strings.Index(path, "}")
+					path = path[:start] + "x" + path[end+1:]
+				}
+				var body any
+				if route.Method == "POST" || route.Method == "PATCH" {
+					body = map[string]any{}
+				}
+				res := r.do(route.Method, path, body, nil)
+				if res.status != wantStatus || res.json["code"] != wantCode {
+					t.Errorf("%s %s（%s）：%d %v，应为 %d %s", route.Method, path, route.Procedure, res.status, res.json["code"], wantStatus, wantCode)
+				}
+				checked++
+			}
+			if checked < 100 {
+				t.Fatalf("只检查了 %d 个预留过程", checked)
+			}
+		})
 	}
 }

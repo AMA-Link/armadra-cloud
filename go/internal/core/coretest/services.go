@@ -2,6 +2,8 @@ package coretest
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"reflect"
@@ -14,7 +16,6 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/identity"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
-	"github.com/AMA-Link/armadra-cloud/go/internal/testutil"
 )
 
 const (
@@ -105,13 +106,13 @@ func (e *env) ownerOf() core.Caller {
 
 func (e *env) registered(owner core.Caller) (*core.Sources, core.RegisterResult) {
 	e.t.Helper()
-	_, source := testutil.Keys(e.t)
+	source := sourceKey(e.t)
 	sources := core.NewSources(e.h.Context)
 	token, err := sources.RegistrationToken(e.ctx, owner)
 	e.must(err)
 	result, err := sources.Register(e.ctx, core.RegisterInput{
 		RegistrationToken: token.RegistrationToken, SourceID: sourceID,
-		PublicKey: gen.Ed25519PublicJWK{Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(source.Public)},
+		PublicKey: gen.Ed25519PublicJWK{Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(source)},
 		Name:      "mac", Kind: "desktop", CoreVersion: "0.2.0-test", Capabilities: []string{},
 		ProtocolMajor: 1, ProtocolMinor: 0,
 	}, "ip")
@@ -145,6 +146,23 @@ func scopeOf(ws, sess string, readOnly *bool) *store.LinkScope {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+var (
+	sourceKeyOnce sync.Once
+	sourcePublic  ed25519.PublicKey
+)
+
+// sourceKey 是测试源登记的 Ed25519 公钥（进程内生成一次）。
+func sourceKey(t testing.TB) ed25519.PublicKey {
+	t.Helper()
+	sourceKeyOnce.Do(func() {
+		var err error
+		if sourcePublic, _, err = ed25519.GenerateKey(rand.Reader); err != nil {
+			t.Fatal(err)
+		}
+	})
+	return sourcePublic
+}
 
 // ServicesContract 对一个存储实现跑服务合同（16 个用例）。
 func ServicesContract(t *testing.T, create func(t *testing.T) store.Backend) {
@@ -339,8 +357,7 @@ func ServicesContract(t *testing.T, create func(t *testing.T) store.Backend) {
 			e.must(err)
 			eq(t, guest.GuestSession.Account.DisplayName, "guest", "访客显示名")
 			// cloud-api §20：源登记的公钥的指纹（访客按链接片段钉扎，这里只是提示）。
-			_, source := testutil.Keys(t)
-			eq(t, guest.IdentityFp, core.IdentityFingerprint(source.Public), "身份指纹")
+			eq(t, guest.IdentityFp, core.IdentityFingerprint(sourceKey(t)), "身份指纹")
 			_, err = links.Accept(e.ctx, core.AcceptInput{LinkID: created.LinkID, Secret: created.Secret}, "ip")
 			eq(t, codeOf(err), "link_exhausted", "次数用完")
 			relayJTI := payloadOf(t, guest.RelayToken)["jti"].(string)

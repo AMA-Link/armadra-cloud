@@ -214,6 +214,8 @@ func (a *Authenticator) Authenticate(ctx context.Context, header string) (Caller
 		ExpectedIss: issuer,
 		Now:         time.UnixMilli(nowMs),
 		Keys:        a.c.Signer,
+		// 访问令牌的撤销按 jti 形状判（a.<deviceId>.<随机>：设备失效、访客的链接撤销即作废）。
+		IsRevoked: func(ctx context.Context, jti string) (bool, error) { return IsRevokedJTI(ctx, a.c, jti, nowMs) },
 	})
 	if err != nil {
 		// 取钥时存储出错不是令牌的问题：原样上抛，别当成未认证。

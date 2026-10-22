@@ -25,14 +25,14 @@ func fixture(t *testing.T, op string) schema.Sample {
 	return sample
 }
 
-// 56 个 cloud-api 夹具：输入与输出都要过 schema 校验。输出按 cloud-openapi.json 的 200 响应校验；
+// 全部 cloud-api 夹具（每个过程一个）：输入与输出都要过 schema 校验。输出按 cloud-openapi.json 的 200 响应校验；
 // 输入先按 OpenAPI 里的参数与请求体 schema 校验（独立的校验库），再按生成出来的 gen.RouteInputs
 // （路由器真正用的解释器）校验——两边必须一致。
 func TestFixturesPassInputAndOutputSchemas(t *testing.T) {
 	api := loadOpenAPI(t)
 	files := testutil.Fixtures(t, "cloud-api", ".json")
-	if len(files) != 56 || len(files) != len(gen.Routes) {
-		t.Fatalf("应有 56 个夹具，与路由表 %d 条一一对应：%d", len(gen.Routes), len(files))
+	if len(files) != len(gen.Routes) {
+		t.Fatalf("夹具应与路由表一一对应：路由 %d 条，夹具 %d 个", len(gen.Routes), len(files))
 	}
 	checked, unsupported := 0, 0
 	for _, file := range files {
