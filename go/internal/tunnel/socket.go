@@ -38,7 +38,7 @@ type wsSocket struct {
 // NewSocket 包装一条已升级的 WebSocket，读上限为一帧加 16 字节。
 func NewSocket(c *websocket.Conn) Socket {
 	c.SetReadLimit(protocol.MaxFrameBytes + 16)
-	return &wsSocket{c: c, buf: make([]byte, 0, 4096)}
+	return &wsSocket{c: c}
 }
 
 func (s *wsSocket) ReadMessage() (bool, []byte, error) {
@@ -49,7 +49,8 @@ func (s *wsSocket) ReadMessage() (bool, []byte, error) {
 	buf := s.buf[:0]
 	for {
 		if len(buf) == cap(buf) {
-			buf = append(buf, 0)[:len(buf)]
+			// 首次按 512 字节起步，之后翻倍；空闲的隧道不占读缓冲。
+			buf = append(make([]byte, 0, max(512, 2*cap(buf))), buf...)
 		}
 		n, err := r.Read(buf[len(buf):cap(buf)])
 		buf = buf[:len(buf)+n]

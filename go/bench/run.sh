@@ -2,6 +2,7 @@
 # Linux 容器内（OrbStack 2 vCPU）：中继容器钉在 CPU 0，压测容器钉在 CPU 1，共用中继的网络与 PID 命名空间
 # （回环直连，不经宿主端口转发；压测端直接读中继的 /proc/1）。
 # 用法: run.sh <源数> <每源通道数> <标签> [loadgen 额外参数…]
+# 环境变量: RELAY_CPUS、LOAD_CPUS（钉核）、BENCH_IMAGE、RELAY_DOCKER_ARGS（给中继容器加参数，如 "-e GOGC=50"）
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -18,7 +19,7 @@ CREDS=work/creds-$SOURCES.json JWKS=work/jwks-$SOURCES.json
 [ -f "$HERE/$CREDS" ] || "$HERE/bin/mint-linux" "$SOURCES" "$HERE/$CREDS" "$HERE/$JWKS" 2>/dev/null \
   || docker run --rm -v "$ROOT:/w" -w /w/go/bench "$IMAGE" ./bin/mint-linux "$SOURCES" "$CREDS" "$JWKS"
 ISSUER=https://cloud.armadra.test
-docker run --rm -d --name "$NAME" --cpuset-cpus "$RELAY_CPUS" --ulimit nofile=1048576:1048576 \
+docker run --rm -d --name "$NAME" --cpuset-cpus "$RELAY_CPUS" --ulimit nofile=1048576:1048576 ${RELAY_DOCKER_ARGS:-} \
   -v "$ROOT:/w:ro" -w /w/go/bench "$IMAGE" \
   ./bin/armadra-relay-linux dev --listen "127.0.0.1:$PORT" --jwks "$JWKS" --issuer "$ISSUER" --debug >/dev/null
 trap 'docker rm -f $NAME >/dev/null 2>&1 || true' EXIT
