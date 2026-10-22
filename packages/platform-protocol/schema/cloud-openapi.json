@@ -6658,8 +6658,7 @@
                     }
                   },
                   "required": [
-                    "sources",
-                    "nextCursor"
+                    "sources"
                   ]
                 }
               }
