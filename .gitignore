@@ -29,3 +29,9 @@ deploy/personal/relay_password.txt
 # Workers 中继：构建产物（scripts/build.mjs 生成），只保留 .assetsignore
 apps/relay-workers/assets/*
 !apps/relay-workers/assets/.assetsignore
+
+# Go 压测（go/bench）的产物
+go/bench/bin/
+go/bench/results/
+go/bench/logs/
+go/bench/work/
