@@ -1,0 +1,51 @@
+{
+  "email": {
+    "valid": [
+      "dev@armadra.test",
+      "a@b.co",
+      "first.last@sub.example.com",
+      "a+tag@example.org",
+      "a_b-c@ex-ample.com",
+      "o'brien@example.com",
+      "X@Y.COM",
+      "1@2.io"
+    ],
+    "invalid": [
+      "",
+      "plain",
+      "@example.com",
+      "a@",
+      "a@b",
+      "a@b.c",
+      ".a@b.co",
+      "a..b@c.co",
+      "a@b..co",
+      "a@-b.co",
+      "a b@c.co",
+      "a@b.co ",
+      " a@b.co",
+      "a@b.co\n",
+      "a@@b.co",
+      "a@b_c.co",
+      "a@b.c0",
+      "名字@example.com",
+      "a@例子.com"
+    ]
+  },
+  "uri": {
+    "valid": [
+      "https://armadra.test",
+      "https://cloud.armadra.test/app/?x=1#y",
+      "http://127.0.0.1:8080/path",
+      "http://[::1]:3000/"
+    ],
+    "invalid": [
+      "",
+      "armadra.test",
+      "/relative/path",
+      "https://",
+      "://host",
+      "not a url"
+    ]
+  }
+}
