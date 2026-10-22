@@ -17,6 +17,7 @@
     "deploy",
     "docs",
     "eslint.config.js",
+    "go",
     "knip.json",
     "migrations.lock",
     "package.json",
@@ -67,9 +68,9 @@
   ],
   "fileSize": {
     "max": 1500,
-    "roots": ["apps", "packages", "tools", "scripts"],
-    "extensions": [".ts", ".mts", ".mjs", ".js"],
-    "excludeSegments": ["/node_modules/"],
+    "roots": ["apps", "packages", "tools", "scripts", "go"],
+    "extensions": [".ts", ".mts", ".mjs", ".js", ".go"],
+    "excludeSegments": ["/node_modules/", "go/internal/protocol/gen/"],
     "exemptions": []
   },
   "migrations": {
@@ -90,6 +91,25 @@
     {
       "$comment": "接口层 oRPC 1.15.4 精确锁：只能写精确版本、不得预发布、全树同一版本。",
       "packages": "@orpc/*"
+    }
+  ],
+  "goModules": [
+    {
+      "$comment": "go/ 只许 import 标准库、本模块与这里登记的第三方模块：x/crypto 给 scrypt；jsonschema（及它的 x/text）只在测试里校验 cloud-api 夹具，不进生产代码。go.mod 的版本都写精确版本，不用 replace。internal/core 不碰数据面（tunnel、edge），延续「控制核不碰中继内核」的边界。",
+      "root": "go",
+      "allow": [
+        "github.com/santhosh-tekuri/jsonschema/v6",
+        "golang.org/x/crypto",
+        "golang.org/x/text"
+      ],
+      "testOnly": ["github.com/santhosh-tekuri/jsonschema/v6"],
+      "testOnlyPackages": ["internal/testutil"],
+      "internalBoundaries": [
+        {
+          "from": "internal/core",
+          "forbid": ["internal/tunnel", "internal/edge"]
+        }
+      ]
     }
   ],
   "packageDependencies": [
