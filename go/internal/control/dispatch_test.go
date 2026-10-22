@@ -81,3 +81,25 @@ func TestDispatcherSurvivesPanic(t *testing.T) {
 		t.Fatal("panic 之后队列停了")
 	}
 }
+
+// 放不下栅栏的队列没等，Flush 不能谎称排空。
+func TestDispatcherFlushReportsFalseWhenABarrierCouldNotBePlaced(t *testing.T) {
+	d := NewDispatcher(1, 1)
+	gate := make(chan struct{})
+	started := make(chan struct{})
+	d.Go("k", func() { close(started); <-gate })
+	<-started
+	d.Go("k", func() {}) // 队列（深度 1）满了
+	if d.Flush(100 * time.Millisecond) {
+		t.Fatal("没放上栅栏应答 false")
+	}
+	close(gate)
+	deadline := time.Now().Add(3 * time.Second)
+	for !d.Flush(time.Second) {
+		if time.Now().After(deadline) {
+			t.Fatal("排空之后应答 true")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	d.Close()
+}

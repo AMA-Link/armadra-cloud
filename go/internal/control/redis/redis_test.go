@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,9 +75,16 @@ type node struct {
 type errorLog struct {
 	mu   sync.Mutex
 	list []string
+	msgs []string
 }
 
 func (l *errorLog) add(op string) { l.mu.Lock(); l.list = append(l.list, op); l.mu.Unlock() }
+func (l *errorLog) addMsg(op string, err error) {
+	l.add(op)
+	l.mu.Lock()
+	l.msgs = append(l.msgs, err.Error())
+	l.mu.Unlock()
+}
 func (l *errorLog) has(prefix string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -98,7 +107,7 @@ func (e *env) node(name string, over func(*cr.Options)) *node {
 	o := cr.Options{
 		Options: cluster.Options{
 			Issuer: "https://relay.example.test", NodeID: name, Limits: controltest.Limited,
-			OnError: func(op string, _ error) { log.add(op) },
+			OnError: log.addMsg,
 		},
 		Client: goredis.NewClient(opts), Prefix: e.prefix,
 		ReconnectMin: 50 * time.Millisecond, ReconnectMax: 200 * time.Millisecond,
@@ -289,6 +298,11 @@ func TestLimitFallsBackToLocalWhenRedisFails(t *testing.T) {
 	if !n.errors.has("limit") {
 		t.Fatal("退回本节点应报告")
 	}
+	for _, msg := range n.errors.msgs {
+		if strings.Contains(msg, "127.0.0.1") || strings.Contains(msg, "6390") {
+			t.Fatalf("报告里不该有主机与端口：%s", msg)
+		}
+	}
 }
 
 func TestNewFailsFastWhenRedisUnreachable(t *testing.T) {
@@ -310,5 +324,61 @@ func must(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 非首次的重读失败不能当没事继续：返回错误、退避、重连、重订阅、再读，断线期间的撤销最终必须生效。
+func TestReloadFailureRetriesInsteadOfFailingOpen(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	var fail atomic.Int32
+	n := e.node("node-a", func(o *cr.Options) {
+		o.ReloadFault = func() error {
+			if fail.Add(-1) >= 0 {
+				return errors.New("注入的 SCAN 失败")
+			}
+			fail.Store(0)
+			return nil
+		}
+	})
+	fail.Store(0)
+	killSubscriber(t, e, "node-a")
+	fail.Store(2) // 重连后的前两次重读都失败
+	must(t, e.admin.Do(ctx, "SET", e.prefix+"revoked:during-outage", "1", "PXAT", time.Now().Add(time.Minute).UnixMilli()).Err())
+	controltest.Eventually(t, "重读失败后重试，断线期间的撤销最终生效", func() bool {
+		r, _ := n.Tokens().IsRevoked(ctx, "during-outage")
+		return r
+	})
+	if !n.errors.has("subscriber") {
+		t.Fatal("重读失败应报告并重连")
+	}
+}
+
+// 周期性全量重读：只写了键、没发布（发布失败、订阅半开）的撤销也会在一个周期内生效。
+func TestPeriodicReloadCatchesMissedBroadcasts(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	n := e.node("node-a", func(o *cr.Options) { o.ReloadEvery = 100 * time.Millisecond })
+	must(t, e.admin.Do(ctx, "SET", e.prefix+"revoked:silent", "1", "PXAT", time.Now().Add(time.Minute).UnixMilli()).Err())
+	controltest.Eventually(t, "周期重读到静默写入的撤销", func() bool {
+		r, _ := n.Tokens().IsRevoked(ctx, "silent")
+		return r
+	})
+}
+
+// 活性检查：空闲期间发 PING 不影响收广播。
+func TestLivenessPingKeepsSubscriptionWorking(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	a := e.node("node-a", func(o *cr.Options) { o.LivenessEvery = 50 * time.Millisecond })
+	b := e.node("node-b", nil)
+	time.Sleep(400 * time.Millisecond)
+	must(t, b.Tokens().Revoke(ctx, "after-idle", time.Now().Add(time.Minute)))
+	controltest.Eventually(t, "空闲之后仍收到广播", func() bool {
+		r, _ := a.Tokens().IsRevoked(ctx, "after-idle")
+		return r
+	})
+	if a.errors.has("subscriber") {
+		t.Fatal("活性检查不该把正常的连接判成断线")
 	}
 }

@@ -154,6 +154,10 @@ func TestPersonalFlowCoversEveryProcedure(t *testing.T) {
 		"account": "alice", "password": "saffron-glacier-meadow-77", "scope": "operator",
 		"device": map[string]any{"platform": "ios", "name": "phone"},
 	}, nil), 403, "forbidden")
+	// refreshToken 缺了答 session_revoked；refresh 带 scope operator 答 403。
+	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{}, nil), 401, "session_revoked")
+	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": current0(refreshed), "scope": "operator"}, nil), 403, "forbidden")
+	r.expect(r.do("POST", "/v1/auth/logout", map[string]any{"scope": "operator"}, bearer(refreshed.json["session"].(map[string]any)["accessToken"].(string))), 403, "forbidden")
 	secondLogin := r.do("POST", "/v1/auth/login", map[string]any{
 		"account": "alice", "password": "saffron-glacier-meadow-77", "device": map[string]any{"platform": "ios", "name": "phone"},
 	}, nil)
@@ -429,4 +433,8 @@ func TestEveryReservedProcedureAnswersByMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func current0(r response) string {
+	return r.json["session"].(map[string]any)["refreshToken"].(string)
 }

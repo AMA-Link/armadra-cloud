@@ -59,16 +59,24 @@ type Options struct {
 	ReconnectMin, ReconnectMax time.Duration
 	// SweepEvery 缺省 60 秒（测试可缩短）。
 	SweepEvery time.Duration
+	// ReloadEvery 是周期性全量重读撤销的间隔，兜底通知丢失或监听半开时漏掉的撤销；缺省 45 秒。
+	ReloadEvery time.Duration
+	// LivenessEvery 是监听连接的活性检查间隔：这么久没有通知就发一条轻查询，失败就重连；缺省 15 秒。
+	LivenessEvery time.Duration
+	// ReloadFault 是测试用的故障注入：返回错误时这一次重读当作失败。
+	ReloadFault func() error
 }
 
 // Plane 是 PostgreSQL 控制面。
 type Plane struct {
 	*cluster.Base
-	pool     *pgxpool.Pool
-	ownsPool bool
-	listen   *pgx.ConnConfig
-	chans    channels
-	sweep    time.Duration
+	pool                  *pgxpool.Pool
+	ownsPool              bool
+	listen                *pgx.ConnConfig
+	chans                 channels
+	sweep                 time.Duration
+	reloadEvery, liveness time.Duration
+	fault                 func() error
 
 	stop     context.CancelFunc
 	loopDone chan struct{}
@@ -123,6 +131,12 @@ func New(ctx context.Context, o Options) (*Plane, error) {
 	if o.SweepEvery <= 0 {
 		o.SweepEvery = SweepEvery
 	}
+	if o.ReloadEvery <= 0 {
+		o.ReloadEvery = 45 * time.Second
+	}
+	if o.LivenessEvery <= 0 {
+		o.LivenessEvery = 15 * time.Second
+	}
 	loopCtx, stop := context.WithCancel(context.Background())
 	p := &Plane{
 		Base: cluster.NewBase(o.Options), pool: pool, ownsPool: owns,
@@ -131,8 +145,10 @@ func New(ctx context.Context, o Options) (*Plane, error) {
 			presence: o.ChannelPrefix + ChannelPresence, revoked: o.ChannelPrefix + ChannelRevoked,
 			command: o.ChannelPrefix + ChannelCommand,
 		},
+		reloadEvery: o.ReloadEvery, liveness: o.LivenessEvery, fault: o.ReloadFault,
 		stop: stop, loopDone: make(chan struct{}), ready: make(chan struct{}), readyErr: make(chan error, 1),
 	}
+	p.Classify = errorClass
 	go p.listenLoop(loopCtx, o.ReconnectMin, o.ReconnectMax)
 	select {
 	case <-p.ready:
@@ -144,6 +160,7 @@ func New(ctx context.Context, o Options) (*Plane, error) {
 		return nil, errors.New("PostgreSQL 控制面启动超时或被取消")
 	}
 	go p.sweepLoop(loopCtx)
+	go p.reloadLoop(loopCtx)
 	return p, nil
 }
 
@@ -209,24 +226,50 @@ func (p *Plane) listenOnce(ctx context.Context) error {
 		}
 	}
 	// 监听已生效之后再读全量：读的过程中发生的撤销要么在表里、要么走通知，不会漏。
+	// 读不全就不能算监听就绪（否则断线期间的撤销会被漏判）：返回错误，由外层退避、重连、重新监听、再读。
 	if err := p.reloadRevoked(ctx); err != nil {
-		if !p.isReady() {
-			return err
-		}
-		p.Report("reload revoked", err)
+		return err
 	}
 	if !p.isReady() {
 		close(p.ready)
 	}
 	for {
-		n, err := conn.WaitForNotification(ctx)
+		wctx, cancel := context.WithTimeout(ctx, p.liveness)
+		n, err := conn.WaitForNotification(wctx)
+		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			// 这么久没有通知：用一条轻查询确认连接还活着（半开的连接这里会失败或超时）。
+			qctx, qcancel := context.WithTimeout(ctx, p.liveness)
+			_, qerr := conn.Exec(qctx, "SELECT 1")
+			qcancel()
+			if qerr != nil {
+				return qerr
+			}
+			continue
 		}
 		p.receive([]byte(n.Payload))
+	}
+}
+
+// reloadLoop 周期性全量重读撤销：兜底通知丢失或监听半开时漏掉的撤销。
+func (p *Plane) reloadLoop(ctx context.Context) {
+	ticker := time.NewTicker(p.reloadEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			p.Report("reload revoked", p.reloadRevoked(rctx))
+			cancel()
+		}
 	}
 }
 
@@ -246,6 +289,11 @@ func (p *Plane) receive(payload []byte) {
 }
 
 func (p *Plane) reloadRevoked(ctx context.Context) error {
+	if p.fault != nil {
+		if err := p.fault(); err != nil {
+			return err
+		}
+	}
 	rows, err := p.pool.Query(ctx, "SELECT jti, exp_ms FROM relay_revoked_tokens WHERE exp_ms > $1", p.Now().UnixMilli())
 	if err != nil {
 		return err

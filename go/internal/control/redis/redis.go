@@ -8,6 +8,8 @@
 //	| 速率限流      | <前缀>limit:<种类>:<键的 SHA-256>，脚本 INCR + 首次 PEXPIRE，各节点共用一个桶；出错退回本节点内存 |
 //	| 并发限流      | 本节点内存                                                                  |
 //
+// 需要 Redis 7.0 以上：撤销全量重读用 PEXPIRETIME（7.0 新增），更老的版本启动时报错并说明。
+//
 // 订阅用单独的连接，断线后自己重连（退避）并重新订阅；每次订阅就绪都全量重读撤销，断线期间的
 // 撤销不漏。不写令牌明文（撤销只有 jti）。
 package redis
@@ -16,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +44,17 @@ type Options struct {
 	Prefix string
 	// ReconnectMin 与 ReconnectMax 是订阅连接断线后的重连退避；缺省 200ms 到 5s。
 	ReconnectMin, ReconnectMax time.Duration
+	// ReloadEvery 是周期性全量重读撤销的间隔，兜底发布失败或订阅半开时漏掉的撤销；缺省 45 秒。
+	ReloadEvery time.Duration
+	// LivenessEvery 是订阅连接的活性检查间隔：这么久没收到任何东西就发 PING，
+	// 再一个间隔还没动静就当断线重连；缺省 15 秒。
+	LivenessEvery time.Duration
+	// ReloadFault 是测试用的故障注入：返回错误时这一次重读当作失败。
+	ReloadFault func() error
 }
+
+// ErrTooOld 表示 Redis 版本低于 7.0。
+var ErrTooOld = errors.New("版本太低：Redis 需要 7.0 以上（撤销重读用 PEXPIRETIME）")
 
 const deleteRoute = `
 local value = redis.call('GET', KEYS[1])
@@ -70,15 +84,17 @@ type Plane struct {
 	deleteScript *goredis.Script
 	hitScript    *goredis.Script
 
-	stop     context.CancelFunc
-	psMu     sync.Mutex
-	ps       *goredis.PubSub
-	stopped  bool
-	loopDone chan struct{}
-	ready    chan struct{}
-	readyErr chan error
-	once     sync.Once
-	closeErr error
+	reloadEvery, liveness time.Duration
+	fault                 func() error
+	stop                  context.CancelFunc
+	psMu                  sync.Mutex
+	ps                    *goredis.PubSub
+	stopped               bool
+	loopDone              chan struct{}
+	ready                 chan struct{}
+	readyErr              chan error
+	once                  sync.Once
+	closeErr              error
 }
 
 type channels struct{ presence, command, revoked string }
@@ -111,16 +127,25 @@ func New(ctx context.Context, o Options) (*Plane, error) {
 	if o.ReconnectMax <= 0 {
 		o.ReconnectMax = 5 * time.Second
 	}
+	if o.ReloadEvery <= 0 {
+		o.ReloadEvery = 45 * time.Second
+	}
+	if o.LivenessEvery <= 0 {
+		o.LivenessEvery = 15 * time.Second
+	}
 	loopCtx, stop := context.WithCancel(context.Background())
 	p := &Plane{
 		Base: cluster.NewBase(o.Options), client: client, ownsCli: owns, prefix: prefix,
 		chans:        channels{presence: prefix + "presence", command: prefix + "ctl", revoked: prefix + "revoked"},
 		deleteScript: goredis.NewScript(deleteRoute), hitScript: goredis.NewScript(hit),
+		reloadEvery: o.ReloadEvery, liveness: o.LivenessEvery, fault: o.ReloadFault,
 		stop: stop, loopDone: make(chan struct{}), ready: make(chan struct{}), readyErr: make(chan error, 1),
 	}
+	p.Classify = classify
 	go p.subscribeLoop(loopCtx, o.ReconnectMin, o.ReconnectMax)
 	select {
 	case <-p.ready:
+		go p.reloadLoop(loopCtx)
 		return p, nil
 	case err := <-p.readyErr:
 		_ = p.Close()
@@ -172,21 +197,27 @@ func (p *Plane) isReady() bool {
 	}
 }
 
-// sanitize 去掉可能带连接串的细节，只留类别。
-func sanitize(err error) error {
-	var opErr interface{ Timeout() bool }
+// classify 只留错误类别：不带主机、端口、口令与服务端的原文。
+func classify(err error) string {
+	var netErr net.Error
+	var redisErr goredis.Error
 	switch {
+	case errors.Is(err, ErrTooOld):
+		return ErrTooOld.Error()
 	case errors.Is(err, context.DeadlineExceeded):
-		return errors.New("超时")
-	case errors.As(err, &opErr):
-		return errors.New("网络错误")
+		return "超时"
+	case errors.As(err, &netErr):
+		return "网络错误"
+	case errors.Is(err, io.EOF):
+		return "连接被断开"
+	case errors.As(err, &redisErr):
+		first, _, _ := strings.Cut(err.Error(), " ")
+		return "Redis 答复错误：" + first
 	}
-	msg := err.Error()
-	if i := strings.Index(msg, "://"); i >= 0 {
-		return errors.New("连接出错")
-	}
-	return err
+	return "连接出错"
 }
+
+func sanitize(err error) error { return errors.New(classify(err)) }
 
 // subscribeOnce 建一条订阅连接、等三个订阅确认、重读撤销、收消息，直到连接断掉。
 // 答 nil 表示被要求停止；答 err 表示断线（调用方重连）。
@@ -215,24 +246,53 @@ func (p *Plane) subscribeOnce(ctx context.Context, first bool) error {
 		}
 	}
 	// 订阅已生效之后再读全量：读的过程中发生的撤销要么在扫描里、要么走广播，不会漏。
+	// 读不全就不能算订阅就绪（否则断线期间的撤销会被漏判）：返回错误，由外层退避、重连、重订阅、再读。
 	if err := p.reloadRevoked(ctx); err != nil {
-		if first {
-			return err
-		}
-		p.Report("reload revoked", err)
+		return err
 	}
 	if first {
 		close(p.ready)
 	}
+	waiting := false // 已发 PING、还没收到任何东西
 	for {
-		msg, err := ps.ReceiveMessage(ctx)
+		msg, err := ps.ReceiveTimeout(ctx, p.liveness)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				if waiting {
+					return errors.New("订阅连接没有响应")
+				}
+				if err := ps.Ping(ctx); err != nil {
+					return err
+				}
+				waiting = true
+				continue
+			}
 			return err
 		}
-		p.receive([]byte(msg.Payload))
+		waiting = false
+		if m, ok := msg.(*goredis.Message); ok {
+			p.receive([]byte(m.Payload))
+		}
+	}
+}
+
+// reloadLoop 周期性全量重读撤销：兜底发布 / 通知失败或订阅半开时漏掉的撤销。
+func (p *Plane) reloadLoop(ctx context.Context) {
+	ticker := time.NewTicker(p.reloadEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			p.Report("reload revoked", p.reloadRevoked(rctx))
+			cancel()
+		}
 	}
 }
 
@@ -253,6 +313,19 @@ func (p *Plane) receive(payload []byte) {
 
 // reloadRevoked SCAN 出全部 <前缀>revoked:*，到期时刻取 PEXPIRETIME。
 func (p *Plane) reloadRevoked(ctx context.Context) error {
+	err := p.reloadRevokedOnce(ctx)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unknown command") {
+		return ErrTooOld
+	}
+	return err
+}
+
+func (p *Plane) reloadRevokedOnce(ctx context.Context) error {
+	if p.fault != nil {
+		if err := p.fault(); err != nil {
+			return err
+		}
+	}
 	found := map[string]int64{}
 	at := p.Now().UnixMilli()
 	prefix := p.revokedKey("")

@@ -44,6 +44,8 @@ type Options struct {
 	ApplicationName string
 	// Migrations 缺省用随包的。
 	Migrations []store.Migration
+	// OnError 报告后台失败（签名钥未命中重读失败）；错误只带类别，不带连接串。
+	OnError func(operation string, err error)
 	// KeyRefreshGap 是验签查不到 kid 时重读签名钥的最短间隔；缺省 5 秒。
 	KeyRefreshGap time.Duration
 	// Now 缺省 time.Now；账本的 applied_at_ms 用它。
@@ -57,6 +59,7 @@ type DB struct {
 	pool       *pgxpool.Pool
 	schema     string
 	refreshGap time.Duration
+	onError    func(string, error)
 
 	keysMu sync.Mutex
 	keys   map[string]*keyCache
@@ -140,7 +143,7 @@ func Open(ctx context.Context, options Options) (*DB, error) {
 	if gap <= 0 {
 		gap = refreshOnMissGap
 	}
-	db := &DB{pool: pool, schema: options.Schema, refreshGap: gap, keys: map[string]*keyCache{}}
+	db := &DB{pool: pool, schema: options.Schema, refreshGap: gap, onError: sanitizedReport(options.OnError), keys: map[string]*keyCache{}}
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
@@ -213,4 +216,12 @@ func (d *DB) write(ctx context.Context, tenantID string, fn func(tx pgx.Tx) (cha
 func bumpRevision(ctx context.Context, q querier, tenantID string) error {
 	_, err := q.Exec(ctx, "UPDATE tenants SET revision = revision + 1 WHERE tenant_id = $1", tenantID)
 	return err
+}
+
+// sanitizedReport 把报告里的错误换成不带连接串的类别。
+func sanitizedReport(fn func(string, error)) func(string, error) {
+	if fn == nil {
+		return nil
+	}
+	return func(op string, err error) { fn(op, unreachable(err)) }
 }

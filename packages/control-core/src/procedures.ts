@@ -110,10 +110,15 @@ export function createPersonalProcedures(
         .login(input as unknown as Parameters<typeof accounts.login>[0], ip)
         .then((session) => ({ session }));
     },
-    "auth.refresh": async ({ input }) => ({
-      session: await refresh(context, input.refreshToken as string),
-    }),
-    "auth.logout": async ({ caller }) => {
+    "auth.refresh": async ({ input }) => {
+      // personal 没有运营账号，也没有 Cookie 会话：scope 一律 403，refreshToken 必带（cloud-api §28）。
+      if (input.scope === "operator") throw new ControlError("forbidden");
+      if (typeof input.refreshToken !== "string")
+        throw new ControlError("session_revoked");
+      return { session: await refresh(context, input.refreshToken) };
+    },
+    "auth.logout": async ({ input, caller }) => {
+      if (input.scope === "operator") throw new ControlError("forbidden");
       await revokeDevice(context, (await caller()).deviceId);
       return {};
     },

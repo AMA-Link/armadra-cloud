@@ -86,11 +86,20 @@ var RouteInputs = map[string]*schema.Schema{
 			{Name: "refreshToken", Schema: &schema.Schema{
 				Type: "string",
 			}},
+			{Name: "scope", Schema: &schema.Schema{
+				Const:    "operator",
+				HasConst: true,
+			}},
 		},
-		Required: []string{"refreshToken"},
 	},
 	"auth.logout": &schema.Schema{
 		Type: "object",
+		Properties: []schema.Property{
+			{Name: "scope", Schema: &schema.Schema{
+				Const:    "operator",
+				HasConst: true,
+			}},
+		},
 	},
 	"auth.deviceStart": &schema.Schema{
 		Type: "object",

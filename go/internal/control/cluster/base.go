@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 
@@ -44,6 +45,9 @@ type Base struct {
 
 	tasks sync.WaitGroup
 	out   *control.Dispatcher
+
+	// Classify 把驱动错误换成不带主机、用户、库名的类别；后端建好后设置。报告出去的错误都经它。
+	Classify func(error) string
 }
 
 // NewBase 建共用部分。
@@ -106,11 +110,15 @@ func (b *Base) SubscribePresence(fn func(control.PresenceEvent)) func() {
 	return b.Local.Presence().Subscribe(fn)
 }
 
-// Report 报告后台失败。
+// Report 报告后台失败：错误先经 Classify 换成类别，不把连接串、主机、用户名带进报告。
 func (b *Base) Report(operation string, err error) {
-	if b.opts.OnError != nil && err != nil {
-		b.opts.OnError(operation, err)
+	if b.opts.OnError == nil || err == nil {
+		return
 	}
+	if b.Classify != nil {
+		err = errors.New(b.Classify(err))
+	}
+	b.opts.OnError(operation, err)
 }
 
 // Background 在后台执行任务：失败只报告；Settle 会等它。
