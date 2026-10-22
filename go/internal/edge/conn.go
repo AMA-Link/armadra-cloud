@@ -46,6 +46,8 @@ type edgeConn struct {
 
 	mu         sync.Mutex
 	s          *tunnel.Stream
+	early      []byte // 流还没接上时客户端抢先发来的字节（升级后马上发数据的客户端）
+	attaching  bool   // 正在补发 early
 	closeSent  bool
 	closeRecv  bool
 	srcDone    bool
@@ -73,10 +75,37 @@ func (ec *edgeConn) bind(c netpoll.Conn) {
 	ec.mu.Unlock()
 }
 
-func (ec *edgeConn) setStream(s *tunnel.Stream) {
+// maxEarly 是流接上之前最多暂存的上行字节。
+const maxEarly = 4 << 20
+
+// attach 把连接接上隧道流，并按序补发流接上之前客户端抢先发来的字节。
+// 补发期间后到的读也进 early，由这里一并发完，所以顺序不会乱；Send 不在锁里调。
+func (ec *edgeConn) attach(s *tunnel.Stream) {
 	ec.mu.Lock()
+	if ec.s != nil {
+		ec.mu.Unlock()
+		return
+	}
 	ec.s = s
-	ec.mu.Unlock()
+	ec.attaching = true
+	for {
+		early := ec.early
+		ec.early = nil
+		if len(early) == 0 {
+			ec.attaching = false
+			ec.mu.Unlock()
+			return
+		}
+		c := ec.c
+		ec.mu.Unlock()
+		if !s.Send(early) && c != nil {
+			c.Pause()
+			if !s.Parked() {
+				c.Resume()
+			}
+		}
+		ec.mu.Lock()
+	}
 }
 
 // Disconnect 实现 Handle：立即断开（撤销源或访客、关闭服务时）。
@@ -168,10 +197,21 @@ func (ec *edgeConn) upstream(c netpoll.Conn, payload []byte) {
 	if len(payload) == 0 {
 		return
 	}
-	s := ec.stream()
-	if s == nil {
+	ec.mu.Lock()
+	s := ec.s
+	if s == nil || ec.attaching {
+		if len(ec.early)+len(payload) > maxEarly {
+			ec.mu.Unlock()
+			ec.broken = true
+			ec.closeGracefully(closeTooBig, "early_data_too_large")
+			return
+		}
+		ec.early = append(ec.early, payload...)
+		ec.mu.Unlock()
+		ec.bytesUp.Add(int64(len(payload)))
 		return
 	}
+	ec.mu.Unlock()
 	ec.bytesUp.Add(int64(len(payload)))
 	if s.Send(payload) {
 		return
@@ -313,10 +353,8 @@ func (ec *edgeConn) OnClose(c netpoll.Conn, _ error) {
 
 // Data：源 → 客户端，每块一条二进制消息。
 func (ec *edgeConn) Data(s *tunnel.Stream, p []byte) {
+	ec.attach(s)
 	ec.mu.Lock()
-	if ec.s == nil {
-		ec.s = s
-	}
 	skip := ec.closeSent || ec.finished
 	c := ec.c
 	ec.mu.Unlock()
@@ -332,10 +370,8 @@ func (ec *edgeConn) Data(s *tunnel.Stream, p []byte) {
 
 // End：源 END → 1000。
 func (ec *edgeConn) End(s *tunnel.Stream) {
+	ec.attach(s)
 	ec.mu.Lock()
-	if ec.s == nil {
-		ec.s = s
-	}
 	ec.srcDone = true
 	ec.mu.Unlock()
 	ec.closeGracefully(int(protocol.CloseNormal), "")
@@ -343,10 +379,8 @@ func (ec *edgeConn) End(s *tunnel.Stream) {
 
 // Reset：源 RST 或隧道没了 → 4404。
 func (ec *edgeConn) Reset(s *tunnel.Stream, _ protocol.RstCode) {
+	ec.attach(s)
 	ec.mu.Lock()
-	if ec.s == nil {
-		ec.s = s
-	}
 	ec.srcDone = true
 	ec.mu.Unlock()
 	ec.closeGracefully(int(protocol.CloseSourceOffline), "source_offline")

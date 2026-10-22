@@ -126,6 +126,12 @@ func (c *capture) wait(t testing.TB, pred func([]protocol.Frame) bool) []protoco
 	return nil
 }
 
+func (c *capture) snapshot() []protocol.Frame {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.Frame(nil), c.frames...)
+}
+
 func (c *capture) has(typ protocol.FrameType, code protocol.RstCode) func([]protocol.Frame) bool {
 	return func(fs []protocol.Frame) bool {
 		for _, f := range fs {
@@ -173,7 +179,7 @@ func newPipe(t testing.TB, cfg func(*tunnel.Config)) *pipeRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ec.setStream(s)
+	ec.attach(s)
 	return &pipeRig{t: t, e: e, ec: ec, conn: fc, tun: tun, cap: cp, s: s}
 }
 
@@ -227,6 +233,36 @@ func TestPipeUpstream(t *testing.T) {
 		two := append(clientFrameBytes(opBinary, true, []byte("ab")), clientFrameBytes(opBinary, true, []byte("cd"))...)
 		p.read(two)
 		p.cap.wait(t, func(fs []protocol.Frame) bool { return string(dataBytes(fs)) == "hello worldabcd" })
+	})
+
+	t.Run("流还没接上时抢先发来的字节暂存，接上后按序补发", func(t *testing.T) {
+		p := newPipe(t, nil)
+		// 把连接退回「流还没接上」的状态。
+		p.ec.mu.Lock()
+		p.ec.s = nil
+		p.ec.mu.Unlock()
+		p.read(clientFrameBytes(opBinary, true, []byte("early-")))
+		p.read(clientFrameBytes(opBinary, true, []byte("bird")))
+		if got := dataBytes(p.cap.snapshot()); len(got) != 0 {
+			t.Fatalf("流没接上不该发：%q", got)
+		}
+		p.ec.attach(p.s)
+		p.read(clientFrameBytes(opBinary, true, []byte("!")))
+		p.cap.wait(t, func(fs []protocol.Frame) bool { return string(dataBytes(fs)) == "early-bird!" })
+	})
+
+	t.Run("流没接上就抢发超过上限：以 1009 关闭", func(t *testing.T) {
+		p := newPipe(t, nil)
+		p.ec.mu.Lock()
+		p.ec.s = nil
+		p.ec.mu.Unlock()
+		big := make([]byte, protocol.MaxFrameBytes-100)
+		for i := 0; i < 5; i++ {
+			p.read(clientFrameBytes(opBinary, true, big))
+		}
+		if cf := p.conn.closeFrames(); len(cf) != 1 || cf[0].code != closeTooBig {
+			t.Fatalf("%+v", cf)
+		}
 	})
 
 	t.Run("分片消息按字节透传，空消息忽略", func(t *testing.T) {

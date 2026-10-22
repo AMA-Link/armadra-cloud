@@ -237,7 +237,7 @@ func (e *Edge) ServeUpgrade(w http.ResponseWriter, r *http.Request) {
 		ec.closeGracefully(int(closeCode), string(code))
 		return
 	}
-	ec.setStream(s)
+	ec.attach(s)
 }
 
 func hijack(w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, error) {
