@@ -14,6 +14,13 @@
 - 契约删除从未实现的 `orgs.*`、scope `org:admin` / `org:owner`、`orgSchema` 与 `orgMemberSchema`；cloud-api §3（组织）与 §9（计费，原挂组织）标为已移除，计费改到 §26 的 `/v1/teams/{teamId}/billing…`。错误码 `org_role_insufficient`、`org_slug_taken` 按「只增不删」保留但不再使用。夹具 `tunnel-token-org.jwt` 改名 `tunnel-token-team.jwt`。
   The contract drops the never-implemented `orgs.*`, the scopes `org:admin` / `org:owner`, and `orgSchema` / `orgMemberSchema`; cloud-api §3 (organizations) and §9 (billing under organizations) are marked removed and billing moves to `/v1/teams/{teamId}/billing…` in §26. The error codes `org_role_insufficient` and `org_slug_taken` are kept (codes are append-only) but unused. The fixture `tunnel-token-org.jwt` is renamed `tunnel-token-team.jwt`.
 
+## 0.9.3（2026-10-22）
+
+### 变更 / Changed
+
+- 版本统一：armadra-agent 与 Armadra 同发 0.9.3，armadra-cloud 跟进到 0.9.3。cloud 各包与协议包 `@armadra/platform-protocol` 同升 0.9.3，两份 OpenAPI 的版本同步；协议仍是 1.3，线上形状不变，0.9.2 之后没有其他合入。`deploy/compat.json` 不变。
+  Version unification: armadra-agent and Armadra both ship 0.9.3, so armadra-cloud follows. All cloud packages and the protocol package `@armadra/platform-protocol` move to 0.9.3 together, and both OpenAPI documents follow; the protocol stays at 1.3 and wire shapes are unchanged. Nothing else was merged after 0.9.2. `deploy/compat.json` is unchanged.
+
 ## 0.9.2（2026-10-22）
 
 ### 变更 / Changed
