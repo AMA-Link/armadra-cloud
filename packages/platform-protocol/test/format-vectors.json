@@ -39,7 +39,12 @@
       "http://127.0.0.1:8080/path",
       "http://[::1]:3000/",
       "https://a-b.example.com:65535/",
-      "https://[2001:db8::1]:443/"
+      "https://[2001:db8::1]:443/",
+      "https://例子.com",
+      "https://münchen.de/x",
+      "https://ＥＸＡＭＰＬＥ.com/",
+      "https://a.例子:8080/p?q=1",
+      "http://例子"
     ],
     "invalid": [
       "",
@@ -50,7 +55,10 @@
       "not a url",
       "http://:80",
       "http://a.com:99999",
-      "http://a<b>.com"
+      "http://a<b>.com",
+      "https://例子<.com",
+      "https://例子 .com",
+      "https://例子.com:99999"
     ]
   }
 }

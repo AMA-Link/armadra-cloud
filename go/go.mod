@@ -8,6 +8,7 @@ require (
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/crypto v0.58.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0
 )

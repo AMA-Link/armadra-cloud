@@ -142,9 +142,9 @@ func TestQueryAcceptsTheOfficialClientSerialization(t *testing.T) {
 			t.Errorf("%s：得到 %+v（%v），应为 %+v", raw, got, err, want)
 		}
 	}
-	// 下标按数值排序，不是字典序。
-	got, err := parse("tag[10]=k&tag[2]=c")
-	if err != nil || !reflect.DeepEqual(got["tag"], []any{"c", "k"}) {
+	// 下标按数值排序，不是字典序（0..11 里 10、11 排在 2 之后）。
+	got, err := parse("tag[10]=k&tag[2]=c&tag[0]=a&tag[1]=b&tag[3]=d&tag[4]=e&tag[5]=f&tag[6]=g&tag[7]=h&tag[8]=i&tag[9]=j&tag[11]=l")
+	if err != nil || !reflect.DeepEqual(got["tag"], []any{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"}) {
 		t.Errorf("下标应按数值排序：%v %v", got, err)
 	}
 }
@@ -160,6 +160,13 @@ func TestQueryRejectsAmbiguousForms(t *testing.T) {
 		"tag[-1]=a",                             // 负下标
 		"space=team&space[kind]=team",           // 对象平铺与括号混用
 		"space[kind]=team&space[kind]=personal", // 对象成员重复
+		"space[kind][x]=team",                   // 不成形的括号键，前缀是已声明的属性
+		"tag[0][x]=a",                           // 同上，前缀是数组属性
+		"space[kind=team",                       // 缺右括号，前缀是已声明的属性
+		"tag[01]=a",                             // 下标带前导 0
+		"tag[+1]=a",                             // 下标带正号
+		"tag[1]=a",                              // 下标不从 0 开始
+		"tag[0]=a&tag[2]=b",                     // 下标有空洞
 	} {
 		q, _ := url.ParseQuery(raw)
 		if _, err := queryObject(q, input); err == nil {
@@ -172,5 +179,19 @@ func TestQueryRejectsAmbiguousForms(t *testing.T) {
 		if _, err := queryObject(q, input); err == nil {
 			t.Fatal("应稳定地被拒绝")
 		}
+	}
+}
+
+func TestQueryKeepsUndeclaredMalformedKeys(t *testing.T) {
+	input := gen.RouteInputs["sources.list"]
+	// 前缀不是已声明的属性：原样保留，由校验剪枝（与之前一致）。
+	q, _ := url.ParseQuery("unknown[a][b]=1&bad[=2")
+	if _, err := queryObject(q, input); err != nil {
+		t.Fatalf("未声明的前缀不该算错：%v", err)
+	}
+	q, _ = url.ParseQuery("tag[1]=b&tag[0]=a&tag[2]=c")
+	got, err := queryObject(q, input)
+	if err != nil || len(got["tag"].([]any)) != 3 || got["tag"].([]any)[0] != "a" {
+		t.Fatalf("下标 0..n-1 乱序应按序并入：%v %v", got, err)
 	}
 }

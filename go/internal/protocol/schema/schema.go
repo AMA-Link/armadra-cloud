@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"golang.org/x/net/idna"
 )
 
 // Schema 是一条生成出来的校验规则。零值表示不加限制。
@@ -167,6 +169,10 @@ func uriMatches(value string) bool {
 		addr, err := netip.ParseAddr(host)
 		return err == nil && addr.Zone() == ""
 	}
+	host, ok := asciiHost(host)
+	if !ok {
+		return false
+	}
 	for _, r := range host {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -176,6 +182,21 @@ func uriMatches(value string) bool {
 		}
 	}
 	return true
+}
+
+// idnaProfile 与 WHATWG URL 的主机名处理对齐（z.url() 经它接受 IDN）：做 UTS 46 映射与 punycode
+// 转换，不套 STD3 / DNS 长度这类 DNS 注册层面的限制。
+var idnaProfile = idna.New(idna.MapForLookup(), idna.StrictDomainName(false), idna.VerifyDNSLength(false), idna.CheckHyphens(false))
+
+// asciiHost 把非 ASCII 主机名转成 ASCII（punycode）；纯 ASCII 原样返回。转换失败答 ok=false。
+func asciiHost(host string) (string, bool) {
+	for i := 0; i < len(host); i++ {
+		if host[i] >= 0x80 {
+			ascii, err := idnaProfile.ToASCII(host)
+			return ascii, err == nil && ascii != ""
+		}
+	}
+	return host, true
 }
 
 // utf16Len 按 UTF-16 码元计长，与 TypeScript 里 zod 对字符串长度的算法一致。
