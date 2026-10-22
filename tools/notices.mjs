@@ -8,7 +8,7 @@
  *
  * - npm：`pnpm licenses list -r --prod --json`，工作区所有包的生产依赖（pnpm 12 起
  *   根目录不再缺省递归，要显式 `-r`），再补上它漏列的已解析 peer 与可选依赖；
- * - Go：`go list -deps -test -json ./...`（在 go/ 下），代码与测试实际用到的第三方模块，
+ * - Go：`go list -deps -test -json ./...`（在 go/ 下，对每个分发平台各跑一遍再合并），代码与测试实际用到的第三方模块，
  *   不含 `go run pkg@版本` 调用的工具。
  *
  * 每个包的许可证正文从安装目录（Go 是模块缓存）里的 LICENSE / NOTICE 等文件原样读出。
@@ -124,20 +124,41 @@ export function goPackagesFrom(listOutput, readTexts = noticeTexts) {
   });
 }
 
+/**
+ * 随二进制分发的平台：不同平台编译进去的模块不一样（例如只有 macOS 与 Windows 用到的终端检测库），
+ * 声明要覆盖全部，也让输出不取决于在哪台机器上生成。
+ */
+export const GO_TARGETS = [
+  ["linux", "amd64"],
+  ["linux", "arm64"],
+  ["darwin", "amd64"],
+  ["darwin", "arm64"],
+  ["windows", "amd64"],
+];
+
 function goPackages() {
   const goDir = join(root, "go");
   if (!existsSync(join(goDir, "go.mod"))) return [];
-  const result = spawnSync(
-    "go",
-    ["list", "-deps", "-test", "-json=ImportPath,Module,Standard", "./..."],
-    { cwd: goDir, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-  );
-  if (result.error || result.status !== 0) {
-    throw new Error(
-      `go list 失败（Go 模块的许可证要从它读）：\n${result.error ?? result.stderr}`,
+  let output = "";
+  for (const [goos, goarch] of GO_TARGETS) {
+    const result = spawnSync(
+      "go",
+      ["list", "-deps", "-test", "-json=ImportPath,Module,Standard", "./..."],
+      {
+        cwd: goDir,
+        encoding: "utf8",
+        maxBuffer: 256 * 1024 * 1024,
+        env: { ...process.env, GOOS: goos, GOARCH: goarch, CGO_ENABLED: "0" },
+      },
     );
+    if (result.error || result.status !== 0) {
+      throw new Error(
+        `go list 失败（Go 模块的许可证要从它读；${goos}/${goarch}）：\n${result.error ?? result.stderr}`,
+      );
+    }
+    output += result.stdout;
   }
-  return goPackagesFrom(result.stdout);
+  return goPackagesFrom(output);
 }
 
 function noticeTexts(directory) {

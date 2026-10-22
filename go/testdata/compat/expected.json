@@ -1,0 +1,21 @@
+{
+  "note": "兼容夹具的测试值，不含真实口令或密钥",
+  "nowMs": 1760000000000,
+  "tenant": "default",
+  "password": "plover-quartz-lantern-41",
+  "ids": {
+    "source": "0123456789abcdef0123456789abcdef",
+    "revokedSource": "fedcba9876543210fedcba9876543210",
+    "ownerDevice": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+    "revokedDevice": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+    "guestDevice": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
+    "link": "1111111111111111",
+    "revokedLink": "2222222222222222"
+  },
+  "secrets": {
+    "ownerRefreshToken": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1.fixture-owner-refresh-token",
+    "registrationToken": "fixture-registration-token",
+    "linkSecret": "fixture-link-secret"
+  },
+  "revision": 7
+}

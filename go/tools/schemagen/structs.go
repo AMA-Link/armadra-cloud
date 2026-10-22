@@ -12,6 +12,15 @@ var knownKeywords = map[string]bool{
 	"maximum": true, "exclusiveMinimum": true, "properties": true,
 	"required": true, "items": true, "prefixItems": true, "maxItems": true,
 	"anyOf": true,
+	// default 只是注解（不是约束），校验时没有作用，直接略过。
+	"default": true,
+}
+
+// unsupportedKeyword 是 literal 遇到的、生成器不认识的 schema 关键字。
+type unsupportedKeyword struct{ keyword string }
+
+func (e *unsupportedKeyword) Error() string {
+	return fmt.Sprintf("不认识的 schema 关键字 %q", e.keyword)
 }
 
 type typeDef struct {
@@ -204,7 +213,7 @@ func (g *structGen) render(f *file) {
 func literal(v *value) (string, error) {
 	for _, key := range v.keys {
 		if !knownKeywords[key] {
-			return "", fmt.Errorf("不认识的 schema 关键字 %q", key)
+			return "", &unsupportedKeyword{keyword: key}
 		}
 	}
 	var parts []string

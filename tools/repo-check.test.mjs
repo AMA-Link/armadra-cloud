@@ -297,6 +297,51 @@ test("migrations：编号连续、已发布文件 sha256 不变", () => {
   ]);
 });
 
+test("migrations：副本（Go embed）与 lock 逐字节一致、文件集合一样", () => {
+  const first = "create table a(id);\n";
+  const second = "create table b(id);\n";
+  const lock = JSON.stringify({
+    db: { "0001_a.sql": sha256(first), "0002_b.sql": sha256(second) },
+  });
+  const rules = {
+    migrations: {
+      lock: "migrations.lock",
+      sources: [{ path: "db", kind: "directory" }],
+      copies: [{ from: "db", to: "go/migrations" }],
+    },
+  };
+  const good = repo({
+    "db/0001_a.sql": first,
+    "db/0002_b.sql": second,
+    "go/migrations/0001_a.sql": first,
+    "go/migrations/0002_b.sql": second,
+    "migrations.lock": lock,
+  });
+  assert.deepEqual(run(good, rules, ["migrations"], []), []);
+
+  const bad = repo({
+    "db/0001_a.sql": first,
+    "db/0002_b.sql": second,
+    "go/migrations/0001_a.sql": "create table a(id); -- 改过\n",
+    "go/migrations/0003_c.sql": second,
+    "migrations.lock": lock,
+  });
+  assert.deepEqual(run(bad, rules, ["migrations"], []), [
+    "迁移副本与 db/0001_a.sql 不一致：go/migrations/0001_a.sql（运行 go generate）",
+    "迁移副本缺文件：go/migrations/0002_b.sql（运行 go generate）",
+    "迁移副本多出文件：go/migrations/0003_c.sql",
+  ]);
+
+  const missing = repo({
+    "db/0001_a.sql": first,
+    "db/0002_b.sql": second,
+    "migrations.lock": lock,
+  });
+  assert.deepEqual(run(missing, rules, ["migrations"], []), [
+    "迁移副本目录缺失：go/migrations",
+  ]);
+});
+
 test("trackedFiles：读得到本仓库自己的跟踪列表", () => {
   const files = trackedFiles(fileURLToPath(new URL("../", import.meta.url)));
   assert.ok(files.includes("package.json"));
