@@ -9,6 +9,12 @@
     "email": "dev@armadra.test",
     "displayName": "Dev",
     "role": "admin",
-    "joinedAtMs": 1760000000000
+    "joinedAtMs": 1760000000000,
+    "groups": [
+      {
+        "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "name": "Platform"
+      }
+    ]
   }
 }

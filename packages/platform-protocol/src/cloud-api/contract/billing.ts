@@ -9,6 +9,7 @@ import {
   periodSchema,
   spaceSchema,
   usageEntrySchema,
+  usageSeriesPointSchema,
 } from "../saas-schemas.ts";
 
 /** 个人空间由本人（session）管，团队空间要 owner / billing。 */
@@ -35,6 +36,8 @@ export const billingUsageSchema = z.object({
   space: spaceSchema,
   period: periodSchema,
   usage: z.array(usageEntrySchema),
+  /** `granularity = "day"` 时才有：本计费周期内每天一条。 */
+  series: z.array(usageSeriesPointSchema).optional(),
 });
 
 /** 回到控制台的地址，必须是控制面的 `APP_ORIGIN` 之下。 */
@@ -55,7 +58,13 @@ export const billing = {
     .route({ method: "GET", path: "/v1/billing/usage" })
     .meta(billingScope)
     .errors(billingErrors)
-    .input(z.object({ ...space, period: periodSchema.optional() }))
+    .input(
+      z.object({
+        ...space,
+        period: periodSchema.optional(),
+        granularity: z.enum(["month", "day"]).optional(),
+      }),
+    )
     .output(billingUsageSchema),
   /** 支付服务的结账页；席位随成员数自动调整。 */
   checkout: base

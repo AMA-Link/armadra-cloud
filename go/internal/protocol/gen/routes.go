@@ -22,6 +22,7 @@ var Routes = []Route{
 	{Procedure: "auth.login", Method: "POST", Path: "/v1/auth/login"},
 	{Procedure: "auth.mfaVerify", Method: "POST", Path: "/v1/auth/mfa/verify"},
 	{Procedure: "auth.refresh", Method: "POST", Path: "/v1/auth/refresh"},
+	{Procedure: "auth.stepUp", Method: "POST", Path: "/v1/auth/step-up"},
 	{Procedure: "auth.logout", Method: "POST", Path: "/v1/auth/logout"},
 	{Procedure: "auth.deviceStart", Method: "POST", Path: "/v1/auth/device/start"},
 	{Procedure: "auth.devicePoll", Method: "POST", Path: "/v1/auth/device/poll"},

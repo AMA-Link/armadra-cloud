@@ -18,7 +18,7 @@ import {
   revokeDevice,
   type Authenticator,
 } from "./sessions.ts";
-import { createSources } from "./sources.ts";
+import { createSources, type SourceListQuery } from "./sources.ts";
 import { createTraffic, type TrafficSummaryInput } from "./traffic.ts";
 
 /** personal 报的能力（契约 `PLATFORM_CAPABILITIES` 的子集）。 */
@@ -97,14 +97,19 @@ export function createPersonalProcedures(
           : [...PERSONAL_CAPABILITIES],
         relay: { addressing: "path" },
         webApp: options.webApp(),
+        registrationsOpen: true,
         ...(context.challenge ? { challenge: context.challenge.info() } : {}),
       };
     },
     "platform.jwks": () => context.signer.jwks(),
-    "auth.login": ({ input, ip }) =>
-      accounts
+    "auth.login": ({ input, ip }) => {
+      // personal 没有运营账号：要运营范围的会话一律 403（cloud-api §28）。
+      if (input.scope === "operator")
+        return Promise.reject(new ControlError("forbidden"));
+      return accounts
         .login(input as unknown as Parameters<typeof accounts.login>[0], ip)
-        .then((session) => ({ session })),
+        .then((session) => ({ session }));
+    },
     "auth.refresh": async ({ input }) => ({
       session: await refresh(context, input.refreshToken as string),
     }),
@@ -182,8 +187,12 @@ export function createPersonalProcedures(
       ),
     "sources.heartbeatHint": async ({ authorization }) =>
       sources.relayFor(await sources.authenticateSource(authorization)),
-    "sources.list": async ({ caller }) => ({
-      sources: await sources.list(await caller()),
+    "sources.list": async ({ input, caller }) => ({
+      sources: await sources.list(
+        await caller(),
+        input as unknown as SourceListQuery,
+      ),
+      nextCursor: null,
     }),
     "sources.get": async ({ input, caller }) =>
       sources.get(await caller(), input.sourceId as string),

@@ -9,7 +9,22 @@
         "email": "dev@armadra.test",
         "displayName": "Dev",
         "role": "admin",
-        "joinedAtMs": 1760000000000
+        "joinedAtMs": 1760000000000,
+        "groups": [
+          {
+            "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA",
+            "name": "Platform"
+          }
+        ]
+      },
+      {
+        "accountId": "acct_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "email": "guest@armadra.test",
+        "displayName": "Guest",
+        "role": "guest",
+        "joinedAtMs": 1760000000000,
+        "groups": [],
+        "reachableHosts": 2
       }
     ]
   }

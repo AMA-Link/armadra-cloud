@@ -61,6 +61,10 @@ var RouteInputs = map[string]*schema.Schema{
 				},
 				Required: []string{"provider", "token"},
 			}},
+			{Name: "scope", Schema: &schema.Schema{
+				Const:    "operator",
+				HasConst: true,
+			}},
 		},
 		Required: []string{"account", "password", "device"},
 	},
@@ -547,6 +551,28 @@ var RouteInputs = map[string]*schema.Schema{
 						Required: []string{"kind", "teamId"},
 					},
 				},
+			}},
+			{Name: "status", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"online", "offline", "revoked"},
+			}},
+			{Name: "tag", Schema: &schema.Schema{
+				Type: "array",
+				Items: &schema.Schema{
+					Type: "string",
+				},
+			}},
+			{Name: "q", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "cursor", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "limit", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(1),
+				Maximum: schema.Num(200),
 			}},
 		},
 	},
@@ -1810,6 +1836,10 @@ var RouteInputs = map[string]*schema.Schema{
 				Type:    "string",
 				Pattern: "^\\d{4}-\\d{2}$",
 			}},
+			{Name: "granularity", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"month", "day"},
+			}},
 		},
 		Required: []string{"space"},
 	},
@@ -2119,6 +2149,7 @@ var RouteInputs = map[string]*schema.Schema{
 // UnsupportedInputs 列出入参 schema 用了生成器还不认识的关键字的过程（值是那个关键字）。
 var UnsupportedInputs = map[string]string{
 	"auth.register":           "format",
+	"auth.stepUp":             "propertyNames",
 	"auth.passkeyRegister":    "propertyNames",
 	"auth.passkeyLogin":       "propertyNames",
 	"auth.passwordResetStart": "format",

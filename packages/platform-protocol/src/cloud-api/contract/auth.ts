@@ -7,6 +7,7 @@ import {
   challengeTokenSchema,
   deviceInputSchema,
   empty,
+  cookieSessionResultSchema,
   mfaChallengeResultSchema,
   sessionResultSchema,
   sessionSchema,
@@ -66,7 +67,7 @@ export const auth = {
     .route({ method: "POST", path: "/v1/auth/register" })
     .meta(anonymous)
     .errors({
-      ...errors.pick("email_taken", "rate_limited"),
+      ...errors.pick("email_taken", "rate_limited", "registrations_paused"),
       ...passwordErrors,
     })
     .input(
@@ -89,6 +90,8 @@ export const auth = {
         "rate_limited",
         "challenge_required",
         "challenge_invalid",
+        "forbidden",
+        "operator_mfa_required",
       ),
     )
     .input(
@@ -99,21 +102,59 @@ export const auth = {
         device: deviceInputSchema,
         /** 挑战令牌（cloud-api §16，0.3.5 起）：`platform.info.challenge.scope` 含 `auth.login` 时必带。 */
         challenge: challengeTokenSchema.optional(),
+        /**
+         * 1.4 补充：要一个运营范围的 Cookie 会话（独立的 `__Host-armadra-ops` Cookie，寿命 1 小时，
+         * 不覆盖普通会话，cloud-api §1 / §28）。只对开了两步验证的运营账号签出：不是运营账号答
+         * `403 forbidden`，是运营账号但没开两步验证答 `403 operator_mfa_required`；走两步验证时
+         * 范围随挑战带到 `auth.mfaVerify`。
+         */
+        scope: z.literal("operator").optional(),
       }),
     )
-    .output(z.union([sessionResultSchema, mfaChallengeResultSchema])),
+    .output(z.union([cookieSessionResultSchema, mfaChallengeResultSchema])),
   mfaVerify: base
     .route({ method: "POST", path: "/v1/auth/mfa/verify" })
     .meta(anonymous)
     .errors(errors.pick("mfa_invalid", "mfa_expired", "account_locked"))
     .input(z.object({ challengeId: z.string(), code: z.string() }))
-    .output(sessionResultSchema),
+    .output(cookieSessionResultSchema),
   refresh: base
     .route({ method: "POST", path: "/v1/auth/refresh" })
     .meta(anonymous)
     .errors(errors.pick("session_expired", "session_revoked"))
     .input(z.object({ refreshToken: z.string() }))
-    .output(sessionResultSchema),
+    .output(cookieSessionResultSchema),
+  /**
+   * 在已有会话上再验证（1.4 补充，cloud-api §2）：口令、两步验证码、通行密钥断言至少给一项；
+   * 通过后这个会话在 `elevatedUntilMs`（10 分钟）前算「已提权」，敏感操作（注销账号、转移所有权）据此放行。
+   */
+  stepUp: base
+    .route({ method: "POST", path: "/v1/auth/step-up" })
+    .meta(session)
+    .errors(
+      errors.pick(
+        "credentials_invalid",
+        "mfa_invalid",
+        "rate_limited",
+        "bad_request",
+      ),
+    )
+    .input(
+      z
+        .object({
+          password: z.string().optional(),
+          totpCode: z.string().optional(),
+          passkeyAssertion: webauthnJson.optional(),
+        })
+        .refine(
+          (value) =>
+            value.password !== undefined ||
+            value.totpCode !== undefined ||
+            value.passkeyAssertion !== undefined,
+          { message: "password、totpCode、passkeyAssertion 至少给一项" },
+        ),
+    )
+    .output(z.object({ elevatedUntilMs: z.number().int() })),
   logout: base
     .route({ method: "POST", path: "/v1/auth/logout" })
     .meta(session)
