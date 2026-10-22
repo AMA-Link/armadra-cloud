@@ -157,6 +157,8 @@ func Run(args []string, env map[string]string, version, usage string, stdout, st
 // Serve 起占位服务，ctx 结束时关掉；ready 非空时在监听就绪后收到地址（测试用）。
 func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, ready func(url string)) error {
 	log := obs.NewLogger(logOut, cfg.LogLevel)
+	// 驱动自己的日志不是一行一个 JSON，还带着主机名：关掉，不可达由 /ready 与下面那条 warn 报告。
+	goredis.SetLogger(quietRedis{})
 	var redis *goredis.Client
 	if options, err := goredis.ParseURL(cfg.RedisURL); err == nil {
 		options.DialTimeout = 5 * time.Second
@@ -231,3 +233,8 @@ func requestID() string {
 	b[8] = b[8]&0x3f | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
+
+// quietRedis 吞掉 go-redis 的内部日志（连接池重拨等）。
+type quietRedis struct{}
+
+func (quietRedis) Printf(context.Context, string, ...any) {}
