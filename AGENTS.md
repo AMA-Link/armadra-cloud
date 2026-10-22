@@ -13,8 +13,22 @@
 
 ## 范围与优先级
 
-- 先交付个人中转（`armadra-relay personal`）；SaaS 服务端（控制面的账号、组织、源目录、计费，`saas serve` 的中继装配）只预留接口：协议包的 `cloud-api` schema 保留，`apps/cloud` 的业务路由在路由表里统一答 501 `not_implemented`（测试守住），实现时逐条拿掉。
+- 个人中转与 SaaS 按 #59（中继 Go 重写）、#60（SaaS 能力）推进；Workers 版冻结功能，只修缺陷。
+- SaaS 服务端（控制面的账号、团队、授予、计费等）在 `apps/cloud` 的业务路由在路由表里统一答 501 `not_implemented`（测试守住），实现时逐条拿掉；`/v1` 的新增 procedure 同样先预留再实现。
 - 个人中转的缺省入口（`pnpm relay:personal`、`deploy/personal/compose.yml`）不得依赖 PostgreSQL / Redis；多节点是显式选项（`deploy/compose.yml` 的 `relay-personal` profile）。
+
+## Go 代码
+
+- Go 模块在 `go/`（`module github.com/AMA-Link/armadra-cloud/go`），随 #59 分批落地；设计见 `docs/design/go-relay-design.md`（PR #61 合并后）。
+- 协议包是源：`go/internal/protocol/gen/` 是 `tools/schemagen` 从 `packages/platform-protocol/schema/` 生成的，文件头标「生成物，勿手改」。改了 schema、夹具或身份常量，同一个 PR 里 `go generate ./...` 并提交；`pnpm go:check` 的最后一步（`go generate` 后 `git diff` 必须为空）守住。
+- 错误码只从 `gen` 取（`gen.Err*`），不在业务代码里写错误码字符串；线上形状与 TS 一致：`{ code, message, requestId?, details? }`。
+- 日志字段走白名单（`internal/obs`）：字段名固定，不记流正文、终端输出、画布内容、口令、令牌明文；日志 `msg` 是简体中文短句，变量进字段。
+- `internal/core` 不 import `internal/tunnel`、`internal/edge`（延续「控制核不碰中继内核」），由 `repo.rules.json` 的 `goModules.internalBoundaries` 守。
+- 依赖写精确版本，`go/` 只许 import 标准库、本模块与 `repo.rules.json` 的 `goModules.allow` 登记过的模块（`go.mod` 不用 `replace`）；测试专用的模块（JSON Schema 校验库）只许出现在 `_test.go` 与 `testutil/`。staticcheck 固定版本，经 `go run` 调用，不进 `go.mod`。改 `go.mod` 后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。
+- 代码注释与日志、CLI 文案是简体中文短句，标识符用英文；夹具（`packages/platform-protocol/fixtures/`）作表驱动测试，测试不迁就实现去改夹具。
+- 存储与兼容：迁移 SQL 以 TS 包里的为准（`packages/control-store-sql/migrations/`、`packages/control-store-postgres/migrations/`），`go generate` 拷到 `go/internal/store/{sqlite,postgres}/migrations/` 供 `go:embed`，`repo-check` 按 `migrations.lock` 校验两份逐字节一致；新迁移只在 TS 包里加。Go 版与 TS 版交替读写同一个库，`go/testdata/compat/` 是 TS 版写出来的夹具（SQLite 库、PostgreSQL 转储、`state.json`）和生成脚本，`internal/store/compat` 的测试把 Go 写过的库交回 TS 的存储读；合同或记录形状变了，同 PR 重新生成夹具（`node go/testdata/compat/make-fixtures.mjs`，用法见脚本头）。
+- PostgreSQL 的测试读 `ARMADRA_CLOUD_TEST_DATABASE_URL`（`pnpm dev:up` 的库或 CI 的服务容器），每个测试一个随机名字的 schema、用完只删它；没有这个变量就跳过并说明。CI 的 `go` 作业带 PostgreSQL 服务容器并装 TS 依赖，所以两边都会跑。
+- 验证：`pnpm go:check`（gofmt、`go vet`、staticcheck、`go test -race`、生成物新鲜度）。
 
 ## 界面与文案统一
 
@@ -35,19 +49,19 @@
 - 怎么跑见 [README](README.md)；文档索引在 [docs/README.md](docs/README.md)，新增文档要登记。
 - 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表与 `cloud-openapi.json` 由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
 - 协议包的黄金夹具、schema 导出（`schema/`，JSON Schema、错误码表、常量与 OpenAPI）与身份向量是生成物：改了帧、声明、契约或身份常量，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`pnpm --filter @armadra/platform-protocol schema`、`pnpm contract:generate`、`node scripts/gen-vectors.mjs`），`pnpm protocol:check` 守住。
-- 验证：`pnpm check`、`pnpm repo:test`、`pnpm test`、`pnpm test:integration`（需 `pnpm dev:up`）、`pnpm images:build`；Workers 中继另有 `pnpm e2e --mode personal-workers`（本地 workerd）。
+- 验证：`pnpm check`、`pnpm repo:test`、`pnpm go:check`、`pnpm test`、`pnpm test:integration`（需 `pnpm dev:up`）、`pnpm images:build`；Workers 中继另有 `pnpm e2e --mode personal-workers`（本地 workerd）。
 - 发布（npm、GHCR）、域名、证书、密钥都是对外操作，由维护者执行；本地绝不手动 `npm publish` / `docker push`。Workers 中继同理：`wrangler deploy` / `rollback` / `secret put|delete`、改 DNS 与面板设置都由维护者执行，测试与端到端只用本地 workerd（vitest 的 Workers 插件、`wrangler dev --local`）。
-- 依赖写精确版本（无 `^`）；改生产依赖后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。
+- 依赖写精确版本（无 `^`）；改生产依赖后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`（含 Go 模块）。
 - 不出现任何第三方参考项目的名字。
 
 ## Review guidelines
 
 - 简体中文，先结论，每条写文件与行号、会出什么错、怎么修。
-- relay import cloud、app import Armadra 源码、`@orpc/*` 出现在门面之外：P1。
+- relay import cloud、app import Armadra 源码、`@orpc/*` 出现在门面之外：P1；Go 的 `internal/core` import `internal/tunnel` / `internal/edge`、`go/` import 未登记的模块或 Armadra 源码：P1。
 - 修改已发布迁移、编号不连续、lock 未同步、任何自动清库：P0。
-- 正文 / 令牌 / 口令进入日志、持久化或响应：P0。
-- 令牌校验少了 `aud` / `exp` / `jti` 任一项、中继把流转给非令牌 `src` 的源：P0。
-- 接口形状改了而协议包 / `cloud-api.md` 没同步：P1。
-- `personal` 的缺省装配静态带进 PostgreSQL / Redis（不经那两处动态 import）：P1；依赖没写精确版本或 `THIRD_PARTY_NOTICES.md` 未同步：P2。
+- 正文 / 令牌 / 口令进入日志、持久化或响应：P0；Go 日志字段不在白名单、把这些放进字段：P0。
+- 令牌校验少了 `aud` / `exp` / `jti` 任一项、中继把流转给非令牌 `src` 的源：P0；Go 的 `internal/jose` 少了验证步骤、改了顺序（typ → kid → 签名 → schema → aud → iss → 时间 → jti）、口令或令牌哈希不用定时安全比较：P0。
+- 接口形状改了而协议包 / `cloud-api.md` 没同步：P1；手改 `go/internal/protocol/gen/`、协议包改了而 Go 生成物没重新生成、Go 业务代码里写错误码字符串字面量：P1。
+- `personal` 的缺省装配静态带进 PostgreSQL / Redis（不经那两处动态 import）：P1；依赖没写精确版本（含 `go.mod`、staticcheck 版本）或 `THIRD_PARTY_NOTICES.md` 未同步：P2。
 - 界面 / CLI 文案没进 i18n 或中英不同步：P2。
 - 新增行为没有对应测试时指出缺口；测试只改断言或重生成夹具去迁就实现时要说明理由是否成立。

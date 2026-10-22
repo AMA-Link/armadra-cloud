@@ -4,3 +4,4 @@
 # 黄金字节与二进制夹具不是文本。
 *.bin binary
 *.png binary
+*.db binary

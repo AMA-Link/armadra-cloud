@@ -4,10 +4,15 @@
  *   node tools/notices.mjs            重新生成根目录的 THIRD_PARTY_NOTICES.md
  *   node tools/notices.mjs --check    与仓库里的那份逐字节比较，不同就失败
  *
- * 来源是 `pnpm licenses list -r --prod --json`：工作区所有包的生产依赖（pnpm 12 起
- * 根目录不再缺省递归，要显式 `-r`），再补上它漏列的已解析 peer 与可选依赖。每个包的
- * 许可证正文从安装目录里的 LICENSE / NOTICE 等文件原样读出。输出只取决于锁文件：
- * 按名字与版本排序，不写绝对路径与时间，换行统一为 LF。
+ * 来源有两处：
+ *
+ * - npm：`pnpm licenses list -r --prod --json`，工作区所有包的生产依赖（pnpm 12 起
+ *   根目录不再缺省递归，要显式 `-r`），再补上它漏列的已解析 peer 与可选依赖；
+ * - Go：`go list -deps -test -json ./...`（在 go/ 下，对每个分发平台各跑一遍再合并），代码与测试实际用到的第三方模块，
+ *   不含 `go run pkg@版本` 调用的工具。
+ *
+ * 每个包的许可证正文从安装目录（Go 是模块缓存）里的 LICENSE / NOTICE 等文件原样读出。
+ * 输出只取决于锁文件与 go.sum：按名字与版本排序，不写绝对路径与时间，换行统一为 LF。
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -26,6 +31,18 @@ const NOTICE_NAME = /^(licen[cs]e|copying|notice)([-._].*)?$/i;
 
 /** `pnpm licenses list --json` 的输出 → `[{ name, version, license, homepage, path }]`。 */
 export function packagesFrom(report) {
+  return sortPackages(npmRows(report));
+}
+
+function sortPackages(rows) {
+  return rows.sort((a, b) =>
+    a.name === b.name
+      ? a.version.localeCompare(b.version)
+      : a.name.localeCompare(b.name),
+  );
+}
+
+function npmRows(report) {
   const rows = [];
   for (const [license, entries] of Object.entries(report)) {
     for (const entry of entries) {
@@ -40,13 +57,108 @@ export function packagesFrom(report) {
       });
     }
   }
-  return rows
-    .filter((row) => !row.name.startsWith("@armadra/"))
-    .sort((a, b) =>
-      a.name === b.name
-        ? a.version.localeCompare(b.version)
-        : a.name.localeCompare(b.name),
+  return rows.filter((row) => !row.name.startsWith("@armadra/"));
+}
+
+/** `go list -json` 输出的是一串首尾相接的 JSON 对象，不是数组。 */
+export function parseJsonStream(text) {
+  const objects = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) objects.push(JSON.parse(text.slice(start, index + 1)));
+    }
+  }
+  return objects;
+}
+
+/** 按 LICENSE 正文认许可证的 SPDX 标识；认不出写「见许可证文本」。 */
+export function detectLicense(text) {
+  const body = text.replace(/\s+/g, " ");
+  if (/Apache License,? Version 2\.0/i.test(body)) return "Apache-2.0";
+  if (/Permission is hereby granted, free of charge/i.test(body)) return "MIT";
+  if (/Redistribution and use in source and binary forms/i.test(body)) {
+    return /Neither the name of/i.test(body) ? "BSD-3-Clause" : "BSD-2-Clause";
+  }
+  if (/Mozilla Public License,? (Version|v\.?) ?2\.0/i.test(body))
+    return "MPL-2.0";
+  if (/Permission to use, copy, modify, and\/or distribute/i.test(body))
+    return "ISC";
+  return "见许可证文本";
+}
+
+/** `go list -deps -test -json=ImportPath,Module,Standard` 的输出 → 第三方模块列表。 */
+export function goPackagesFrom(listOutput, readTexts = noticeTexts) {
+  const seen = new Map();
+  for (const entry of parseJsonStream(listOutput)) {
+    const module = entry.Module;
+    if (!module || module.Main || entry.Standard) continue;
+    const key = `${module.Path}@${module.Version}`;
+    if (!seen.has(key)) seen.set(key, module);
+  }
+  return [...seen.values()].map((module) => {
+    const texts = readTexts(module.Dir);
+    return {
+      name: module.Path,
+      version: module.Version,
+      license: detectLicense(texts.join("\n")),
+      // 模块路径末尾的 /vN 不是主页的一部分。
+      homepage: `https://${module.Path.replace(/\/v\d+$/, "")}`,
+      path: module.Dir,
+    };
+  });
+}
+
+/**
+ * 随二进制分发的平台：不同平台编译进去的模块不一样（例如只有 macOS 与 Windows 用到的终端检测库），
+ * 声明要覆盖全部，也让输出不取决于在哪台机器上生成。
+ */
+export const GO_TARGETS = [
+  ["linux", "amd64"],
+  ["linux", "arm64"],
+  ["darwin", "amd64"],
+  ["darwin", "arm64"],
+  ["windows", "amd64"],
+];
+
+function goPackages() {
+  const goDir = join(root, "go");
+  if (!existsSync(join(goDir, "go.mod"))) return [];
+  let output = "";
+  for (const [goos, goarch] of GO_TARGETS) {
+    const result = spawnSync(
+      "go",
+      ["list", "-deps", "-test", "-json=ImportPath,Module,Standard", "./..."],
+      {
+        cwd: goDir,
+        encoding: "utf8",
+        maxBuffer: 256 * 1024 * 1024,
+        env: { ...process.env, GOOS: goos, GOARCH: goarch, CGO_ENABLED: "0" },
+      },
     );
+    if (result.error || result.status !== 0) {
+      throw new Error(
+        `go list 失败（Go 模块的许可证要从它读；${goos}/${goarch}）：\n${result.error ?? result.stderr}`,
+      );
+    }
+    output += result.stdout;
+  }
+  return goPackagesFrom(output);
 }
 
 function noticeTexts(directory) {
@@ -65,7 +177,7 @@ export function render(packages, readTexts = noticeTexts) {
   const lines = [
     "# Third-party notices",
     "",
-    "armadra-cloud 的生产依赖及其许可证全文。本文件由 `node tools/notices.mjs` 生成，不要手改。",
+    "armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模块（含只在测试里用的 JSON Schema 校验库及其依赖，不进生产代码）。本文件由 `node tools/notices.mjs` 生成，不要手改。",
     "",
     "| 包 | 版本 | 许可证 |",
     "| --- | --- | --- |",
@@ -98,9 +210,8 @@ function generate() {
     throw new Error(`pnpm licenses list failed:\n${result.stderr}`);
   }
   const text = result.stdout.trim();
-  return render(
-    packagesFrom(withResolvedPeers(text === "" ? {} : JSON.parse(text))),
-  );
+  const npm = npmRows(withResolvedPeers(text === "" ? {} : JSON.parse(text)));
+  return render(sortPackages([...npm, ...goPackages()]));
 }
 
 /**

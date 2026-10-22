@@ -9,7 +9,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { packagesFrom, render, withResolvedPeers } from "./notices.mjs";
+import {
+  detectLicense,
+  goPackagesFrom,
+  packagesFrom,
+  parseJsonStream,
+  render,
+  withResolvedPeers,
+} from "./notices.mjs";
 
 test("按名字与版本排序，跳过工作区自己的包", () => {
   const rows = packagesFrom({
@@ -101,4 +108,75 @@ test("pnpm 12 漏列的已解析 peer 与可选依赖连同它们的依赖被补
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("go list 的 JSON 流：对象首尾相接，字符串里的花括号与转义不干扰", () => {
+  const text = `{
+	"ImportPath": "a",
+	"Module": {"Path": "x.test/m", "Version": "v1.0.0", "Dir": "/cache/m"}
+}
+{"ImportPath": "b{", "Standard": true}
+{"ImportPath": "c\\"}", "Module": {"Path": "y.test/n/v6", "Version": "v6.0.3", "Dir": "/cache/n"}}`;
+  assert.deepEqual(
+    parseJsonStream(text).map((entry) => entry.ImportPath),
+    ["a", "b{", 'c"}'],
+  );
+});
+
+test("Go 模块：去掉标准库与主模块，同一模块只记一次，按正文认许可证", () => {
+  const texts = { "/cache/m": "MIT", "/cache/n": "BSD", "/cache/x": "" };
+  const output = [
+    { ImportPath: "fmt", Standard: true },
+    {
+      ImportPath: "me/go",
+      Module: { Path: "me/go", Version: "", Main: true, Dir: "/src" },
+    },
+    {
+      ImportPath: "x.test/m/a",
+      Module: { Path: "x.test/m", Version: "v1.2.3", Dir: "/cache/m" },
+    },
+    {
+      ImportPath: "x.test/m/b",
+      Module: { Path: "x.test/m", Version: "v1.2.3", Dir: "/cache/m" },
+    },
+    {
+      ImportPath: "y.test/n/v6",
+      Module: { Path: "y.test/n/v6", Version: "v6.0.3", Dir: "/cache/n" },
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  const rows = goPackagesFrom(output, (dir) => [texts[dir]]);
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.version, row.homepage, row.path]),
+    [
+      ["x.test/m", "v1.2.3", "https://x.test/m", "/cache/m"],
+      ["y.test/n/v6", "v6.0.3", "https://y.test/n", "/cache/n"],
+    ],
+  );
+  assert.deepEqual(
+    rows.map((row) => row.license),
+    ["见许可证文本", "见许可证文本"],
+  );
+});
+
+test("按 LICENSE 正文认 SPDX 标识", () => {
+  const bsd =
+    "Redistribution and use in source and binary forms, with or without\nmodification, are permitted provided that:\n * Neither the name of Google";
+  assert.equal(detectLicense(bsd), "BSD-3-Clause");
+  assert.equal(
+    detectLicense(bsd.replace("Neither the name of", "Nothing about")),
+    "BSD-2-Clause",
+  );
+  assert.equal(
+    detectLicense(
+      "MIT License\n\nPermission is hereby granted,\nfree of charge, to any",
+    ),
+    "MIT",
+  );
+  assert.equal(
+    detectLicense("Apache License\n  Version 2.0, January 2004"),
+    "Apache-2.0",
+  );
+  assert.equal(detectLicense("all rights reserved"), "见许可证文本");
 });

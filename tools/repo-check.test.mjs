@@ -16,7 +16,13 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { RULES, checkRepository, trackedFiles } from "./repo-check.mjs";
+import {
+  RULES,
+  checkRepository,
+  goImports,
+  parseGoMod,
+  trackedFiles,
+} from "./repo-check.mjs";
 
 const roots = [];
 
@@ -53,6 +59,7 @@ test("导出的规则名与实现一一对应", () => {
     "blacklist",
     "docs-index",
     "file-size",
+    "go-modules",
     "links",
     "migrations",
     "naming",
@@ -290,6 +297,51 @@ test("migrations：编号连续、已发布文件 sha256 不变", () => {
   ]);
 });
 
+test("migrations：副本（Go embed）与 lock 逐字节一致、文件集合一样", () => {
+  const first = "create table a(id);\n";
+  const second = "create table b(id);\n";
+  const lock = JSON.stringify({
+    db: { "0001_a.sql": sha256(first), "0002_b.sql": sha256(second) },
+  });
+  const rules = {
+    migrations: {
+      lock: "migrations.lock",
+      sources: [{ path: "db", kind: "directory" }],
+      copies: [{ from: "db", to: "go/migrations" }],
+    },
+  };
+  const good = repo({
+    "db/0001_a.sql": first,
+    "db/0002_b.sql": second,
+    "go/migrations/0001_a.sql": first,
+    "go/migrations/0002_b.sql": second,
+    "migrations.lock": lock,
+  });
+  assert.deepEqual(run(good, rules, ["migrations"], []), []);
+
+  const bad = repo({
+    "db/0001_a.sql": first,
+    "db/0002_b.sql": second,
+    "go/migrations/0001_a.sql": "create table a(id); -- 改过\n",
+    "go/migrations/0003_c.sql": second,
+    "migrations.lock": lock,
+  });
+  assert.deepEqual(run(bad, rules, ["migrations"], []), [
+    "迁移副本与 db/0001_a.sql 不一致：go/migrations/0001_a.sql（运行 go generate）",
+    "迁移副本缺文件：go/migrations/0002_b.sql（运行 go generate）",
+    "迁移副本多出文件：go/migrations/0003_c.sql",
+  ]);
+
+  const missing = repo({
+    "db/0001_a.sql": first,
+    "db/0002_b.sql": second,
+    "migrations.lock": lock,
+  });
+  assert.deepEqual(run(missing, rules, ["migrations"], []), [
+    "迁移副本目录缺失：go/migrations",
+  ]);
+});
+
 test("trackedFiles：读得到本仓库自己的跟踪列表", () => {
   const files = trackedFiles(fileURLToPath(new URL("../", import.meta.url)));
   assert.ok(files.includes("package.json"));
@@ -433,4 +485,179 @@ test("package-dependencies：本仓库的规则在现状上通过", () => {
     checkRepository({ root, rules, only: ["package-dependencies"] }),
     [],
   );
+});
+
+const GO_MOD = `module example.test/m
+
+go 1.27.1
+
+require (
+	golang.org/x/crypto v0.58.0
+	github.com/lib/test/v6 v6.0.3 // indirect
+)
+
+require golang.org/x/text v0.43.0
+`;
+
+const goRule = {
+  root: "go",
+  allow: ["golang.org/x/crypto", "github.com/lib/test/v6", "golang.org/x/text"],
+  testOnly: ["github.com/lib/test/v6"],
+  testOnlyPackages: ["internal/testutil"],
+  internalBoundaries: [
+    { from: "internal/core", forbid: ["internal/tunnel", "internal/edge"] },
+  ],
+};
+
+test("go-modules：解析 go.mod 的 require 块、单行 require 与 replace", () => {
+  const parsed = parseGoMod(
+    `${GO_MOD}\nreplace a => ../b\nexclude (\n\tx v1.0.0\n)\n`,
+  );
+  assert.equal(parsed.module, "example.test/m");
+  assert.deepEqual(parsed.modules, [
+    { path: "golang.org/x/crypto", version: "v0.58.0" },
+    { path: "github.com/lib/test/v6", version: "v6.0.3" },
+    { path: "golang.org/x/text", version: "v0.43.0" },
+  ]);
+  assert.deepEqual(parsed.directives, [
+    "replace a => ../b",
+    "exclude x v1.0.0",
+  ]);
+});
+
+test("go-modules：只取真正的 import，注释与字符串里的不算", () => {
+  const source = `package x
+
+// import "fake.test/comment"
+import (
+	"fmt"
+	_ "embed"
+	alias "golang.org/x/crypto/scrypt"
+	/* "fake.test/block" */
+)
+
+import "os"
+
+var s = "import \\"fake.test/string\\""
+`;
+  assert.deepEqual(goImports(source).sort(), [
+    "embed",
+    "fmt",
+    "golang.org/x/crypto/scrypt",
+    "os",
+  ]);
+});
+
+test("go-modules：登记过的模块与标准库、本模块通过", () => {
+  const root = repo({
+    "go/go.mod": GO_MOD,
+    "go/a/a.go": `package a
+
+import (
+	"fmt"
+	"example.test/m/internal/b"
+	"golang.org/x/crypto/scrypt"
+)
+`,
+    "go/a/a_test.go": `package a
+
+import "github.com/lib/test/v6/sub"
+`,
+    "go/internal/testutil/t.go": `package testutil
+
+import "github.com/lib/test/v6"
+`,
+    "go/internal/core/c.go": `package core
+
+import "example.test/m/internal/store"
+`,
+  });
+  assert.deepEqual(
+    run(
+      root,
+      { goModules: [goRule] },
+      ["go-modules"],
+      [
+        "go/go.mod",
+        "go/a/a.go",
+        "go/a/a_test.go",
+        "go/internal/testutil/t.go",
+        "go/internal/core/c.go",
+      ],
+    ),
+    [],
+  );
+  assert.deepEqual(run(root, {}, ["go-modules"], []), []);
+});
+
+test("go-modules：未登记的模块、replace、测试专用模块进生产代码、越过内部边界都被拦下", () => {
+  const root = repo({
+    "go/go.mod": `${GO_MOD}
+require github.com/other/dep v1.2.3
+require github.com/loose/dep v1.2
+replace golang.org/x/text => ../text
+`,
+    "go/a/a.go": `package a
+
+import (
+	"github.com/sneaky/pkg"
+	"github.com/lib/test/v6"
+)
+`,
+    "go/internal/core/c.go": `package core
+
+import (
+	"example.test/m/internal/tunnel"
+	"example.test/m/internal/edge/sub"
+	"example.test/m/internal/store"
+)
+`,
+    "go/internal/relay/r.go": `package relay
+
+import "example.test/m/internal/testutil"
+`,
+  });
+  const files = [
+    "go/go.mod",
+    "go/a/a.go",
+    "go/internal/core/c.go",
+    "go/internal/relay/r.go",
+  ];
+  assert.deepEqual(run(root, { goModules: [goRule] }, ["go-modules"], files), [
+    "go/go.mod 引入了未登记的模块：github.com/other/dep（先登记进 repo.rules.json 的 goModules）",
+    "go/go.mod 引入了未登记的模块：github.com/loose/dep（先登记进 repo.rules.json 的 goModules）",
+    "go/go.mod 的 github.com/loose/dep 必须写精确版本：v1.2",
+    "go/go.mod 不许用 replace：replace golang.org/x/text => ../text",
+    "go/a/a.go import 了未登记的模块：github.com/sneaky/pkg",
+    "go/a/a.go 在生产代码里 import 了只许测试用的模块：github.com/lib/test/v6",
+    "go/internal/core/c.go 不得 import example.test/m/internal/tunnel（internal/core 不碰 internal/tunnel）",
+    "go/internal/core/c.go 不得 import example.test/m/internal/edge/sub（internal/core 不碰 internal/edge）",
+    "go/internal/relay/r.go 在生产代码里 import 了测试用的包：example.test/m/internal/testutil",
+  ]);
+  const stale = repo({ "go/go.mod": "module example.test/m\n\ngo 1.27.1\n" });
+  assert.deepEqual(
+    run(
+      stale,
+      { goModules: [{ root: "go", allow: ["golang.org/x/crypto"] }] },
+      ["go-modules"],
+      ["go/go.mod"],
+    ),
+    ["goModules 登记了 go.mod 里没有的模块，可移除：golang.org/x/crypto"],
+  );
+  assert.deepEqual(
+    run(
+      stale,
+      { goModules: [{ root: "nope", allow: [] }] },
+      ["go-modules"],
+      [],
+    ),
+    ["Go 模块规则指向的 go.mod 不存在：nope/go.mod"],
+  );
+});
+
+test("go-modules：本仓库的规则在现状上通过", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const rules = JSON.parse(readFileSync(join(root, "repo.rules.json"), "utf8"));
+  assert.ok(rules.goModules.some((rule) => rule.root === "go"));
+  assert.deepEqual(checkRepository({ root, rules, only: ["go-modules"] }), []);
 });
