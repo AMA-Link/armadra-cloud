@@ -95,6 +95,10 @@ func generate(schemaDir string) (map[string][]byte, error) {
 		return nil, fmt.Errorf("cloud-openapi.json：%w", err)
 	}
 
+	if out["inputs.go"], err = genInputs(openapi); err != nil {
+		return nil, fmt.Errorf("cloud-openapi.json（入参）：%w", err)
+	}
+
 	if out["claims.go"], err = genStructs(schemaDir, []string{"assertion"}, nil); err != nil {
 		return nil, err
 	}
