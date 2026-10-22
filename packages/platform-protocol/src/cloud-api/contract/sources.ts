@@ -195,7 +195,7 @@ export const sources = {
     .meta(session)
     // 1.4 起：给 `space` 只列那个空间的主机；缺省列调用者能到达的全部（个人空间 + 各团队）。
     // GET 里写成 `space[kind]=team&space[teamId]=…`。
-    // 1.4 补充：筛选与游标分页；`tag` 是「且」（主机要带齐所有给出的标签）。GET 里 `tag` 重复写。
+    // 1.4 补充：筛选与游标分页；`tag` 是「且」（主机要带齐所有给出的标签）。GET 里数组写成 `tag[0]=a&tag[1]=b`（官方客户端的写法），`tag[]=a` 与重复 `tag=a&tag=b` 也认。
     .input(
       z.object({
         space: spaceSchema.optional(),

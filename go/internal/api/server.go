@@ -267,7 +267,11 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var raw map[string]any
 	if method == http.MethodGet || method == http.MethodDelete {
-		raw = queryObject(r.URL.Query(), match.Route.Input)
+		var err error
+		if raw, err = queryObject(r.URL.Query(), match.Route.Input); err != nil {
+			a.fail(w, err, requestID)
+			return
+		}
 	} else {
 		var err error
 		if raw, err = readBody(r); err != nil {
