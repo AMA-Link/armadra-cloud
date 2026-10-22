@@ -1,0 +1,17 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "allowGuests": false
+  },
+  "output": {
+    "membersCanRegisterHosts": false,
+    "defaultHostRole": "viewer",
+    "allowGuests": false,
+    "allowAnonymousLinks": false,
+    "deviceEndorsers": "owner_admin",
+    "memberSelfEndorse": true,
+    "requireMfa": false,
+    "sessionMaxAgeMs": null,
+    "allowedEmailDomains": []
+  }
+}

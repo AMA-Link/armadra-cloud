@@ -1,0 +1,22 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "apiTokens": [
+      {
+        "tokenId": "tok_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "name": "CI",
+        "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "scopes": [
+          "directory:read"
+        ],
+        "prefix": "armat_ab",
+        "expiresAtMs": 1767776000000,
+        "lastUsedAtMs": null,
+        "createdAtMs": 1760000000000,
+        "revokedAtMs": null
+      }
+    ]
+  }
+}

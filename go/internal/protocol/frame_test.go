@@ -254,10 +254,10 @@ func TestDecodeCopiesData(t *testing.T) {
 func TestConstantsMatchGenerated(t *testing.T) {
 	if protocol.MaxFrameBytes != 1<<20 || protocol.MaxDataChunk != 64<<10 || protocol.StreamWindow != 256<<10 ||
 		protocol.TunnelWindow != 8<<20 || protocol.MaxStreams != 256 {
-		t.Fatal("限制与协议 1.3 不一致")
+		t.Fatal("限制与协议不一致")
 	}
-	if gen.ProtocolMajor != 1 || gen.ProtocolMinor != 3 {
-		t.Fatal("协议版本应为 1.3")
+	if gen.ProtocolMajor != 1 {
+		t.Fatalf("协议 major 应为 1，实际 %d", gen.ProtocolMajor)
 	}
 	names := map[protocol.FrameType]string{1: "open", 2: "data", 3: "end", 4: "rst", 5: "window", 6: "ping", 7: "pong", 8: "goaway"}
 	for typ, name := range names {

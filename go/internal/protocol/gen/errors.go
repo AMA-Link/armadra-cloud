@@ -46,6 +46,28 @@ const (
 	ErrLinkSecretInvalid        ErrorCode = "link_secret_invalid"
 	ErrOrgRoleInsufficient      ErrorCode = "org_role_insufficient"
 	ErrOrgSlugTaken             ErrorCode = "org_slug_taken"
+	ErrTeamRoleInsufficient     ErrorCode = "team_role_insufficient"
+	ErrTeamOwnerRequired        ErrorCode = "team_owner_required"
+	ErrTeamSlugTaken            ErrorCode = "team_slug_taken"
+	ErrTeamPolicyDenied         ErrorCode = "team_policy_denied"
+	ErrTeamSuspended            ErrorCode = "team_suspended"
+	ErrInvitationExpired        ErrorCode = "invitation_expired"
+	ErrInvitationRevoked        ErrorCode = "invitation_revoked"
+	ErrInvitationEmailMismatch  ErrorCode = "invitation_email_mismatch"
+	ErrTransferPending          ErrorCode = "transfer_pending"
+	ErrTransferExpired          ErrorCode = "transfer_expired"
+	ErrEmailTokenInvalid        ErrorCode = "email_token_invalid"
+	ErrEmailTokenExpired        ErrorCode = "email_token_expired"
+	ErrWebhookSignatureInvalid  ErrorCode = "webhook_signature_invalid"
+	ErrTeamLastOwner            ErrorCode = "team_last_owner"
+	ErrTeamDeleted              ErrorCode = "team_deleted"
+	ErrMemberExists             ErrorCode = "member_exists"
+	ErrHostRegistrationDisabled ErrorCode = "host_registration_disabled"
+	ErrGuestsDisabled           ErrorCode = "guests_disabled"
+	ErrAnonymousLinksDisabled   ErrorCode = "anonymous_links_disabled"
+	ErrPlanFeatureUnavailable   ErrorCode = "plan_feature_unavailable"
+	ErrDeviceUntrusted          ErrorCode = "device_untrusted"
+	ErrLinkFrozen               ErrorCode = "link_frozen"
 	ErrRelayTokenInvalid        ErrorCode = "relay_token_invalid"
 	ErrRelaySourceMismatch      ErrorCode = "relay_source_mismatch"
 	ErrLimitReached             ErrorCode = "limit_reached"
@@ -107,6 +129,28 @@ var ErrorCodes = []ErrorCode{
 	ErrLinkSecretInvalid,
 	ErrOrgRoleInsufficient,
 	ErrOrgSlugTaken,
+	ErrTeamRoleInsufficient,
+	ErrTeamOwnerRequired,
+	ErrTeamSlugTaken,
+	ErrTeamPolicyDenied,
+	ErrTeamSuspended,
+	ErrInvitationExpired,
+	ErrInvitationRevoked,
+	ErrInvitationEmailMismatch,
+	ErrTransferPending,
+	ErrTransferExpired,
+	ErrEmailTokenInvalid,
+	ErrEmailTokenExpired,
+	ErrWebhookSignatureInvalid,
+	ErrTeamLastOwner,
+	ErrTeamDeleted,
+	ErrMemberExists,
+	ErrHostRegistrationDisabled,
+	ErrGuestsDisabled,
+	ErrAnonymousLinksDisabled,
+	ErrPlanFeatureUnavailable,
+	ErrDeviceUntrusted,
+	ErrLinkFrozen,
 	ErrRelayTokenInvalid,
 	ErrRelaySourceMismatch,
 	ErrLimitReached,
@@ -168,6 +212,28 @@ var errorStatus = map[ErrorCode]int{
 	ErrLinkSecretInvalid:        403,
 	ErrOrgRoleInsufficient:      403,
 	ErrOrgSlugTaken:             409,
+	ErrTeamRoleInsufficient:     403,
+	ErrTeamOwnerRequired:        409,
+	ErrTeamSlugTaken:            409,
+	ErrTeamPolicyDenied:         403,
+	ErrTeamSuspended:            403,
+	ErrInvitationExpired:        410,
+	ErrInvitationRevoked:        410,
+	ErrInvitationEmailMismatch:  403,
+	ErrTransferPending:          409,
+	ErrTransferExpired:          410,
+	ErrEmailTokenInvalid:        400,
+	ErrEmailTokenExpired:        410,
+	ErrWebhookSignatureInvalid:  401,
+	ErrTeamLastOwner:            409,
+	ErrTeamDeleted:              410,
+	ErrMemberExists:             409,
+	ErrHostRegistrationDisabled: 403,
+	ErrGuestsDisabled:           403,
+	ErrAnonymousLinksDisabled:   403,
+	ErrPlanFeatureUnavailable:   403,
+	ErrDeviceUntrusted:          403,
+	ErrLinkFrozen:               403,
 	ErrRelayTokenInvalid:        401,
 	ErrRelaySourceMismatch:      403,
 	ErrLimitReached:             429,

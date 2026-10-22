@@ -1,0 +1,22 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "period": "2026-10"
+  },
+  "output": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "period": "2026-10",
+    "usage": [
+      {
+        "metric": "hosts",
+        "value": 2,
+        "limit": 3
+      },
+      {
+        "metric": "relay.bytes",
+        "value": 1048576,
+        "limit": 5368709120
+      }
+    ]
+  }
+}

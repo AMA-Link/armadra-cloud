@@ -1,0 +1,28 @@
+{
+  "input": {
+    "box": "inbox",
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "status": "pending"
+  },
+  "output": {
+    "requests": [
+      {
+        "requestId": "req_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "sourceId": "0123456789abcdef0123456789abcdef",
+        "sourceName": "Workstation",
+        "requester": {
+          "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+          "email": "dev@armadra.test",
+          "displayName": "Dev"
+        },
+        "role": "editor",
+        "workspaceIds": [],
+        "reason": "Need to review the build",
+        "status": "pending",
+        "decidedBy": null,
+        "decidedAtMs": null,
+        "createdAtMs": 1760000000000
+      }
+    ]
+  }
+}

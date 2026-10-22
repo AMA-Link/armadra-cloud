@@ -1,0 +1,42 @@
+{
+  "input": {
+    "requestId": "req_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "role": "viewer"
+  },
+  "output": {
+    "request": {
+      "requestId": "req_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "sourceId": "0123456789abcdef0123456789abcdef",
+      "sourceName": "Workstation",
+      "requester": {
+        "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "email": "dev@armadra.test",
+        "displayName": "Dev"
+      },
+      "role": "editor",
+      "workspaceIds": [],
+      "reason": "Need to review the build",
+      "status": "approved",
+      "decidedBy": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "decidedAtMs": 1760000000000,
+      "createdAtMs": 1760000000000
+    },
+    "grant": {
+      "grantId": "gnt_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "sourceId": "0123456789abcdef0123456789abcdef",
+      "subject": {
+        "kind": "member",
+        "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "role": "editor",
+      "workspaceIds": [
+        "ws_01",
+        "ws_02"
+      ],
+      "expiresAtMs": 1762592000000,
+      "grantedBy": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      "createdAtMs": 1760000000000,
+      "revokedAtMs": null
+    }
+  }
+}

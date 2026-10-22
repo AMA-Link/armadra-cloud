@@ -41,8 +41,18 @@ export type DevicePlatform = z.infer<typeof devicePlatformSchema>;
 export const orgRoleSchema = z.enum(["owner", "admin", "member"]);
 export type OrgRole = z.infer<typeof orgRoleSchema>;
 
-/** 团队里的角色（0.3.0 起，断言 `team.role`）。 */
-export const teamRoleSchema = z.enum(["lead", "member"]);
+/**
+ * 团队里的角色（断言 `team.role`；1.4 起，1.1 的 `lead|member` 从未签发过）。`billing` 只管
+ * 计划与账单，`guest` 是外部协作者，只能到被直接授予的主机。
+ */
+export const TEAM_ROLES = [
+  "owner",
+  "admin",
+  "member",
+  "billing",
+  "guest",
+] as const;
+export const teamRoleSchema = z.enum(TEAM_ROLES);
 export type TeamRole = z.infer<typeof teamRoleSchema>;
 
 /** 主机授予的四档（core `roleScopes`；0.3.0 起，断言 `role`）。 */
@@ -158,8 +168,9 @@ export const assertionClaimsSchema = z.object({
   name: z.string().optional(),
   email: z.string().optional(),
   emailVerified: z.boolean().optional(),
+  /** 保留给以后的企业组织层（团队之上）；1.4 里没有签发方。 */
   org: z.object({ orgId: z.string().min(1), role: orgRoleSchema }).optional(),
-  /** 0.3.0 起：经团队授予时的团队。 */
+  /** 1.4 起：主机所属的团队与调用者在团队里的角色；个人空间的主机不带。 */
   team: z
     .object({ teamId: z.string().min(1), role: teamRoleSchema })
     .optional(),
@@ -184,8 +195,8 @@ export const relayTokenClaimsSchema = z.object({
   /** 只能经中继访问这个源。 */
   src: hex32Schema,
   ver: z.literal(CLAIMS_VERSION),
-  /** 0.3.0 起：源所属的组织（限流与计量）；personal 不发。 */
-  org: z.string().min(1).optional(),
+  /** 1.4 起：源所属的团队 id（`edge.*.team` 限流与计量）；个人空间的源与 personal 不发。 */
+  team: z.string().min(1).optional(),
   /** 0.3.0 起：只读。0.3.11 起边缘不再据它过滤，读写由 core 判定。 */
   ro: z.boolean().optional(),
   /**
@@ -203,8 +214,8 @@ export const tunnelTokenClaimsSchema = z.object({
   /** 握手时 relay 用它验 auth 的签名（§4.4）。 */
   cnf: z.object({ jwk: ed25519PublicJwkSchema }),
   ver: z.literal(CLAIMS_VERSION),
-  /** 0.3.0 起：源所属的组织（`tunnel.connect` 按组织计量）；personal 不发。 */
-  org: z.string().min(1).optional(),
+  /** 1.4 起：源所属的团队 id（`tunnel.connect` 按团队计量）；个人空间的源与 personal 不发。 */
+  team: z.string().min(1).optional(),
 });
 
 /** core → 控制面 / personal 中继：`Authorization: Source <jws>`，头 `kid = sourceId`，60 秒。 */

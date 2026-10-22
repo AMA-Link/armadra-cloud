@@ -1,0 +1,37 @@
+{
+  "input": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "role": "editor",
+    "workspaceIds": [
+      "ws_01",
+      "ws_02"
+    ],
+    "expiresAtMs": 1762592000000,
+    "from": [
+      {
+        "via": "group",
+        "grantId": "gnt_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "role": "editor",
+        "workspaceIds": [
+          "ws_01",
+          "ws_02"
+        ],
+        "expiresAtMs": 1762592000000
+      },
+      {
+        "via": "team",
+        "grantId": "gnt_01JBBBBBBBBBBBBBBBBBBBBBBB",
+        "role": "viewer",
+        "workspaceIds": [
+          "ws_01"
+        ],
+        "expiresAtMs": null
+      }
+    ]
+  }
+}

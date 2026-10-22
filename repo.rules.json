@@ -104,6 +104,7 @@
         "golang.org/x/text"
       ],
       "testOnly": ["github.com/santhosh-tekuri/jsonschema/v6"],
+      "testOnlyPackages": ["internal/testutil"],
       "internalBoundaries": [
         {
           "from": "internal/core",

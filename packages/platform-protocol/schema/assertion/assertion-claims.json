@@ -79,8 +79,11 @@
         "role": {
           "type": "string",
           "enum": [
-            "lead",
-            "member"
+            "owner",
+            "admin",
+            "member",
+            "billing",
+            "guest"
           ]
         }
       },

@@ -1,12 +1,20 @@
 {
   "input": {
-    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    }
   },
   "output": {
-    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
     "plan": "team",
-    "status": "active",
+    "status": "trialing",
     "seats": 5,
-    "periodEndsAtMs": 1762592000000
+    "periodEndsAtMs": 1762592000000,
+    "trialEndsAtMs": 1761209600000,
+    "cancelAtPeriodEnd": false
   }
 }

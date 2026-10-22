@@ -82,8 +82,30 @@ type Options struct {
 	// Skew 是时钟偏差容忍，零值取协议的 5 分钟。
 	Skew time.Duration
 	Keys Keys
-	// IsRevoked 查 jti 是否已撤销；nil 表示不查。
+	// IsRevoked 查 jti 是否已撤销。必须给：与 TypeScript 一侧一样，缺了就报错而不是悄悄跳过。
 	IsRevoked func(ctx context.Context, jti string) (bool, error)
+	// SkipRevocation 明确不查撤销（例如断言走重放表而不是撤销表）。
+	// 只有 IsRevoked 为 nil 时才看它。
+	SkipRevocation bool
+}
+
+// 选项缺必填项时 Verify 返回的错误（不是 *Error，不对应令牌的失败原因）。
+var (
+	ErrNoKeys       = errors.New("Options.Keys 不能为空")
+	ErrNoSchema     = errors.New("Options.Schema 不能为空")
+	ErrNoRevocation = errors.New("Options.IsRevoked 不能为空；确实不查撤销要显式设 SkipRevocation")
+)
+
+func (o Options) check() error {
+	switch {
+	case o.Keys == nil:
+		return ErrNoKeys
+	case o.Schema == nil:
+		return ErrNoSchema
+	case o.IsRevoked == nil && !o.SkipRevocation:
+		return ErrNoRevocation
+	}
+	return nil
 }
 
 // Registered 是注册声明。
@@ -123,6 +145,9 @@ func registered(claims map[string]any) Registered {
 
 // Verify 验一个令牌，顺序见包注释。失败时返回 *Error。
 func Verify(ctx context.Context, token string, o Options) (Result, error) {
+	if err := o.check(); err != nil {
+		return Result{}, err
+	}
 	parts, err := Split(token)
 	if err != nil {
 		return Result{}, fail(FailMalformed, err)
@@ -157,7 +182,7 @@ func Verify(ctx context.Context, token string, o Options) (Result, error) {
 	if f := checkTimes(reg, o); f != "" {
 		return Result{}, fail(f, nil)
 	}
-	if o.IsRevoked != nil {
+	if !o.SkipRevocation || o.IsRevoked != nil {
 		revoked, err := o.IsRevoked(ctx, reg.Jti)
 		if err != nil {
 			return Result{}, fail(FailRevoked, err)
