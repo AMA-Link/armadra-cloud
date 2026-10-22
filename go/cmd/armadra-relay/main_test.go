@@ -14,7 +14,7 @@ func TestRun(t *testing.T) {
 		wantOut  string
 		wantErr  string
 	}{
-		{"没有命令", nil, 64, "", "用法: armadra-relay <命令>"},
+		{"没有命令", nil, 64, "用法: armadra-relay <命令>", ""},
 		{"未知命令", []string{"nope"}, 64, "", "未知命令：nope"},
 		{"版本", []string{"version"}, 0, "dev\n", ""},
 		{"帮助", []string{"help"}, 0, "用法: armadra-relay", ""},

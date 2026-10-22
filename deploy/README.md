@@ -62,6 +62,10 @@
 | `--account` / `RELAY_PERSONAL_ACCOUNT`                        |      | 存储不存在时自动初始化的账号                                                                                                      |
 | `--password-file` / `RELAY_PERSONAL_PASSWORD_FILE`            |      | 自动初始化的口令文件（之后不再读取）                                                                                              |
 | `--listen` / `RELAY_LISTEN`                                   |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`                                                                                    |
+| `--log-level` / `RELAY_LOG_LEVEL`                             |      | `debug` / `info`（缺省）/ `warn` / `error`                                                                                        |
+| `--name` / `RELAY_NAME`                                       |      | 服务端名称（`platform.info.name`），客户端添加时的缺省显示名；缺省取状态里的 `displayName`，再取 `--host`                         |
+| `--trusted-proxy` / `RELAY_TRUSTED_PROXY`                     |      | 受信反向代理的 IP / CIDR，逗号分隔，如 `127.0.0.1/32,::1/128`；直连对端在列表内才读 `X-Forwarded-For` / `X-Real-IP`，缺省不信任   |
+| `--trusted-proxy-prefer` / `RELAY_TRUSTED_PROXY_PREFER`       |      | 先读哪个头：`forwarded-for`（缺省）/ `real-ip`；要和 `--trusted-proxy` 一起给                                                     |
 | `--metrics-listen` / `RELAY_METRICS_LISTEN`                   |      | `/metrics` 的单独监听（只绑内网地址），缺省不开                                                                                   |
 | `RELAY_METRICS_TOKEN`                                         |      | 设了则 `/metrics` 要 `Authorization: Bearer <令牌>`                                                                               |
 | `--limit-anonymous` / `RELAY_LIMIT_ANONYMOUS`                 |      | 无令牌或令牌无效的请求，按 IP 每分钟上限，缺省 60                                                                                 |
