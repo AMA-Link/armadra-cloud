@@ -484,6 +484,13 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 
 	background, stopBackground := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
+	// 周期任务的 context 不跟 background 一起取消：关闭时让手头的库操作做完（workers.Wait 等它），
+	// 中途取消会让驱动对连接发 interrupt，可能落到紧接着的最后一次流量落库上。
+	job := func() context.Context {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(background), 30*time.Second)
+		time.AfterFunc(30*time.Second, cancel)
+		return ctx
+	}
 	every := func(interval time.Duration, fn func(context.Context)) {
 		workers.Add(1)
 		go func() {
@@ -495,7 +502,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 				case <-background.Done():
 					return
 				case <-ticker.C:
-					fn(background)
+					fn(job())
 				}
 			}
 		}()
@@ -515,7 +522,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 			}
 		}
 		workers.Add(1)
-		go func() { defer workers.Done(); prune(background) }()
+		go func() { defer workers.Done(); prune(job()) }()
 		every(day, prune)
 	}
 
