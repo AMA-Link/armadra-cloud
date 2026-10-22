@@ -75,7 +75,14 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 
 升级：
 
-1. 先备份：`personal backup --data-dir /data --out /data/backup-$(date +%F).db`（PostgreSQL 用 `pg_dump`）。
+1. 先备份（这时还是升级前的 Node 镜像，容器里的命令行是 `node /app/out/cli.js`）：
+
+   ```sh
+   docker compose -f deploy/personal/compose.yml exec relay node /app/out/cli.js personal backup --data-dir /data --out /data/backup-$(date +%F).db
+   ```
+
+   PostgreSQL 存储用 `pg_dump`。
+
 2. 数据目录还是 `state.json` 的，用新镜像迁到 SQLite（Go 版的 `migrate` 读得懂状态文件）：
 
    ```sh
