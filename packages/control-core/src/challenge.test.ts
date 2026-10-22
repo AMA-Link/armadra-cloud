@@ -421,7 +421,7 @@ describe("登录与接受链接的次序", () => {
   });
 
   it("personal 没有运营账号：auth.login 带 scope operator 答 forbidden", async () => {
-    const { h } = await harness("");
+    const { h } = await harness();
     const { handlers } = createPersonalProcedures(h.context, {
       stream: {} as never,
       webApp: () => null,
