@@ -103,47 +103,16 @@ func (s *Sources) liveSource(ctx context.Context, sourceID string) (*store.Sourc
 	return source, nil
 }
 
-// visibleSources 是调用方能看到的源：owner → 全部未撤销的；访客 → 链接指向的那一个。
-func (s *Sources) visibleSources(ctx context.Context, caller Caller) ([]store.SourceRecord, error) {
-	if caller.Role == RoleOwner {
-		all, err := s.c.Ports.Sources.List(ctx, s.c.TenantID)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]store.SourceRecord, 0, len(all))
-		for _, source := range all {
-			if source.RevokedAtMs == nil {
-				out = append(out, source)
-			}
-		}
-		return out, nil
-	}
-	if caller.LinkID == "" {
-		return nil, nil
-	}
-	link, err := s.c.Ports.Links.Get(ctx, s.c.TenantID, caller.LinkID)
-	if err != nil || link == nil || link.RevokedAtMs != nil {
-		return nil, err
-	}
-	source, err := s.liveSource(ctx, link.SourceID)
-	if err != nil || source == nil {
-		return nil, err
-	}
-	return []store.SourceRecord{*source}, nil
-}
-
-func (s *Sources) summary(ctx context.Context, issuer string, source store.SourceRecord, caller Caller) (SourceSummary, error) {
+func (s *Sources) summary(ctx context.Context, issuer string, visible VisibleSource) (SourceSummary, error) {
+	source := visible.Source
 	coreVersion, online, err := s.c.route(ctx, source.SourceID)
 	if err != nil {
 		return SourceSummary{}, err
 	}
 	out := SourceSummary{
 		SourceID: source.SourceID, Name: source.Name, Kind: source.Kind, Online: online,
-		LastSeenAtMs: source.LastSeenAtMs, Owner: caller.Role == RoleOwner, Via: "link",
-		RelayOrigin: issuer, CoreVersion: source.CoreVersion,
-	}
-	if caller.Role == RoleOwner {
-		out.Via = "owner"
+		LastSeenAtMs: source.LastSeenAtMs, Owner: visible.Owner, Via: visible.Via,
+		RelayOrigin: s.c.relayOrigin(issuer, source.SourceID), CoreVersion: source.CoreVersion,
 	}
 	if online {
 		now := s.c.NowMs()
@@ -203,7 +172,7 @@ func (s *Sources) Grant(ctx context.Context, source store.SourceRecord, device s
 	return Grant{
 		Assertion: assertion.Token, AssertionExpiresAtMs: assertion.ExpiresAtMs,
 		RelayToken: relay.Token, RelayTokenExpiresAtMs: relay.ExpiresAtMs,
-		RelayOrigin: issuer, RelayBaseURL: RelayBaseURL(issuer, source.SourceID), Online: online,
+		RelayOrigin: s.c.relayOrigin(issuer, source.SourceID), RelayBaseURL: s.c.relayBaseURL(issuer, source.SourceID), Online: online,
 	}, nil
 }
 
@@ -231,6 +200,29 @@ func (s *Sources) RegistrationToken(ctx context.Context, caller Caller) (Registr
 	return RegistrationTokenResult{RegistrationToken: token, ExpiresAtMs: expiresAtMs, Issuer: issuer}, nil
 }
 
+// BuildSourceRecord 是登记的纯函数：existing 是库里已有的记录（可为 nil），答要写入的记录。
+// 已有未撤销的记录公钥不同答 source_taken；同钥或已撤销的重登记保留 lastSeenAtMs 与 trustedOrigins，
+// 未撤销时保留 registeredAtMs。不读写任何存储，调用方在自己的事务里持久化。
+func BuildSourceRecord(existing *store.SourceRecord, input RegisterInput, nowMs int64) (store.SourceRecord, error) {
+	publicJWK := gen.Ed25519PublicJWK{Kty: "OKP", Crv: "Ed25519", X: input.PublicKey.X}
+	if existing != nil && existing.RevokedAtMs == nil && existing.PublicJWK.X != publicJWK.X {
+		return store.SourceRecord{}, Fail(gen.ErrSourceTaken)
+	}
+	record := store.SourceRecord{
+		SourceID: input.SourceID, Name: input.Name, Kind: input.Kind, PublicJWK: publicJWK,
+		CoreVersion: input.CoreVersion, Capabilities: store.NonNil(input.Capabilities),
+		RegisteredAtMs: nowMs, TrustedOrigins: []string{},
+	}
+	if existing != nil {
+		if existing.RevokedAtMs == nil {
+			record.RegisteredAtMs = existing.RegisteredAtMs
+		}
+		record.LastSeenAtMs = existing.LastSeenAtMs
+		record.TrustedOrigins = store.NonNil(existing.TrustedOrigins)
+	}
+	return record, nil
+}
+
 // Register 用注册令牌登记一个源。
 func (s *Sources) Register(ctx context.Context, input RegisterInput, ip string) (RegisterResult, error) {
 	if err := s.c.hit(ctx, LimitLoginIP, "register:"+ip); err != nil {
@@ -249,24 +241,8 @@ func (s *Sources) Register(ctx context.Context, input RegisterInput, ip string) 
 	if input.ProtocolMajor != gen.ProtocolMajor {
 		return RegisterResult{}, Fail(gen.ErrProtocolUnsupported)
 	}
-	publicJWK := gen.Ed25519PublicJWK{Kty: "OKP", Crv: "Ed25519", X: input.PublicKey.X}
 	_, err = s.c.Ports.Sources.Put(ctx, s.c.TenantID, input.SourceID, func(existing *store.SourceRecord) (store.SourceRecord, error) {
-		if existing != nil && existing.RevokedAtMs == nil && existing.PublicJWK.X != publicJWK.X {
-			return store.SourceRecord{}, Fail(gen.ErrSourceTaken)
-		}
-		record := store.SourceRecord{
-			SourceID: input.SourceID, Name: input.Name, Kind: input.Kind, PublicJWK: publicJWK,
-			CoreVersion: input.CoreVersion, Capabilities: store.NonNil(input.Capabilities),
-			RegisteredAtMs: nowMs, TrustedOrigins: []string{},
-		}
-		if existing != nil {
-			if existing.RevokedAtMs == nil {
-				record.RegisteredAtMs = existing.RegisteredAtMs
-			}
-			record.LastSeenAtMs = existing.LastSeenAtMs
-			record.TrustedOrigins = store.NonNil(existing.TrustedOrigins)
-		}
-		return record, nil
+		return BuildSourceRecord(existing, input, nowMs)
 	})
 	if err != nil {
 		return RegisterResult{}, err
@@ -277,7 +253,7 @@ func (s *Sources) Register(ctx context.Context, input RegisterInput, ip string) 
 	}
 	return RegisterResult{
 		Issuer: settings.Issuer, JWKSURL: settings.Issuer + gen.PathJwksWellKnown,
-		RelayOrigins: []string{settings.Issuer}, TrustedOrigins: TrustedOriginsOf(settings),
+		RelayOrigins: []string{s.c.relayOrigin(settings.Issuer, input.SourceID)}, TrustedOrigins: TrustedOriginsOf(settings),
 		SourceID: input.SourceID, OwnerAccountID: ownerID,
 	}, nil
 }
@@ -373,13 +349,13 @@ func (s *Sources) RelayFor(ctx context.Context, source store.SourceRecord) (Rela
 	if err != nil {
 		return RelayInfo{}, err
 	}
-	url := TunnelURL(issuer)
-	if s.c.TunnelURL != nil {
-		url = s.c.TunnelURL(source.SourceID)
+	nodes, err := s.c.tunnelNodes(ctx, issuer, source.SourceID)
+	if err != nil {
+		return RelayInfo{}, err
 	}
 	return RelayInfo{
 		TunnelToken: tunnel.Token, ExpiresAtMs: tunnel.ExpiresAtMs,
-		Nodes: []TunnelNode{{URL: url, Weight: 1}},
+		Nodes: nodes,
 		Limits: TunnelLimits{
 			MaxStreams: gen.LimitMaxStreams, StreamWindow: gen.LimitStreamWindow,
 			TunnelWindow: gen.LimitTunnelWindow, MaxFrameBytes: gen.LimitMaxFrameBytes,
@@ -393,13 +369,21 @@ func (s *Sources) List(ctx context.Context, caller Caller) ([]SourceSummary, err
 	if err != nil {
 		return nil, err
 	}
-	visible, err := s.visibleSources(ctx, caller)
-	if err != nil {
-		return nil, err
+	var visible []VisibleSource
+	for cursor := ""; ; {
+		page, next, err := s.c.access().Visible(ctx, caller, SourceFilter{Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		visible = append(visible, page...)
+		if next == "" {
+			break
+		}
+		cursor = next
 	}
 	out := make([]SourceSummary, 0, len(visible))
 	for _, source := range visible {
-		summary, err := s.summary(ctx, settings.Issuer, source, caller)
+		summary, err := s.summary(ctx, settings.Issuer, source)
 		if err != nil {
 			return nil, err
 		}
@@ -414,15 +398,13 @@ func (s *Sources) Get(ctx context.Context, caller Caller, sourceID string) (Sour
 	if err != nil {
 		return SourceDetail{}, err
 	}
-	visible, err := s.visibleSources(ctx, caller)
+	entry, ok, err := s.c.access().Access(ctx, caller, sourceID)
 	if err != nil {
 		return SourceDetail{}, err
 	}
-	for _, source := range visible {
-		if source.SourceID != sourceID {
-			continue
-		}
-		summary, err := s.summary(ctx, settings.Issuer, source, caller)
+	if ok {
+		source := entry.Source
+		summary, err := s.summary(ctx, settings.Issuer, entry)
 		if err != nil {
 			return SourceDetail{}, err
 		}
@@ -438,7 +420,7 @@ func (s *Sources) Get(ctx context.Context, caller Caller, sourceID string) (Sour
 
 // Revoke 撤销源：标记、关隧道、断开经中继的客户端 WS、通知 me/stream。
 func (s *Sources) Revoke(ctx context.Context, caller Caller, sourceID string) error {
-	if err := RequireOwner(caller); err != nil {
+	if err := s.c.access().CanManage(ctx, caller, ManageTarget{SourceID: sourceID}, ManageSourceRevoke); err != nil {
 		return err
 	}
 	nowMs := s.c.NowMs()
@@ -469,16 +451,13 @@ func (s *Sources) Assertion(ctx context.Context, caller Caller, sourceID string,
 	if registered != nil && registered.RevokedAtMs != nil {
 		return Grant{}, Fail(gen.ErrSourceRevoked)
 	}
-	visible, err := s.visibleSources(ctx, caller)
+	entry, ok, err := s.c.access().Access(ctx, caller, sourceID)
 	if err != nil {
 		return Grant{}, err
 	}
 	var source *store.SourceRecord
-	for i := range visible {
-		if visible[i].SourceID == sourceID {
-			source = &visible[i]
-			break
-		}
+	if ok {
+		source = &entry.Source
 	}
 	if source == nil {
 		return Grant{}, Fail(gen.ErrSourceAccessDenied)
@@ -490,26 +469,10 @@ func (s *Sources) Assertion(ctx context.Context, caller Caller, sourceID string,
 	if record == nil {
 		return Grant{}, Fail(gen.ErrUnauthenticated)
 	}
-	extra := GrantExtra{Device: device}
-	if caller.Role == RoleGuest && caller.LinkID != "" {
-		link, err := s.c.Ports.Links.Get(ctx, s.c.TenantID, caller.LinkID)
-		if err != nil {
-			return Grant{}, err
-		}
-		if link != nil {
-			extra.Name = link.Label
-			extra.Link = &gen.AssertionClaimsLink{LinkID: link.LinkID, InvitationID: link.InvitationID}
-			extra.Scope = link.Scope
-		}
+	extra, err := s.c.access().Intent(ctx, caller, *source)
+	if err != nil {
+		return Grant{}, err
 	}
-	if caller.Role == RoleOwner {
-		owner, err := s.c.Ports.Accounts.Get(ctx, s.c.TenantID, caller.Subject)
-		if err != nil {
-			return Grant{}, err
-		}
-		if owner != nil {
-			extra.Name = owner.Name
-		}
-	}
+	extra.Device = device
 	return s.Grant(ctx, *source, *record, extra)
 }

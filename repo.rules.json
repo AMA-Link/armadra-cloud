@@ -105,7 +105,7 @@
   ],
   "goModules": [
     {
-      "$comment": "go/ 只许 import 标准库、本模块与这里登记的第三方模块：x/crypto 给 scrypt；gorilla/websocket 给隧道与 me-stream 的升级；modernc.org/sqlite（纯 Go，连同它的传递依赖）与 pgx/v5（连同 puddle、x/sync 等）是存储驱动；go-redis/v9（连同 xxhash 等）是多节点控制面的 Redis 驱动；jsonschema（及它的 x/text）只在测试里校验 cloud-api 夹具，不进生产代码。go.mod 的版本都写精确版本，不用 replace。internal/core 不碰数据面（tunnel、edge），延续「控制核不碰中继内核」的边界。",
+      "$comment": "go/ 只许 import 标准库、本模块与这里登记的第三方模块：x/crypto 给 scrypt；x/net/idna 给入参解释器的 format: uri（IDN 主机名转 punycode）；gorilla/websocket 给隧道与 me-stream 的升级；modernc.org/sqlite（纯 Go，连同它的传递依赖）与 pgx/v5（连同 puddle、x/sync 等）是存储驱动；go-redis/v9（连同 xxhash 等）是多节点控制面的 Redis 驱动；jsonschema（及它的 x/text）只在测试里校验 cloud-api 夹具，不进生产代码。go.mod 的版本都写精确版本，不用 replace。internal/core 不碰数据面（tunnel、edge），延续「控制核不碰中继内核」的边界。",
       "root": "go",
       "allow": [
         "github.com/cespare/xxhash/v2",
@@ -123,6 +123,7 @@
         "github.com/santhosh-tekuri/jsonschema/v6",
         "go.uber.org/atomic",
         "golang.org/x/crypto",
+        "golang.org/x/net",
         "golang.org/x/sync",
         "golang.org/x/sys",
         "golang.org/x/text",

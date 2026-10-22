@@ -92,7 +92,7 @@ func NewLinks(c *Context, sources *Sources) *Links { return &Links{c: c, sources
 
 // Create 建链接。
 func (l *Links) Create(ctx context.Context, caller Caller, input CreateLinkInput) (LinkCreated, error) {
-	if err := RequireOwner(caller); err != nil {
+	if err := l.c.access().CanManage(ctx, caller, ManageTarget{SourceID: input.SourceID}, ManageLinkCreate); err != nil {
 		return LinkCreated{}, err
 	}
 	if input.OrgJoin {
@@ -239,7 +239,7 @@ func (l *Links) Accept(ctx context.Context, input AcceptInput, ip string) (LinkA
 
 // List 是全部链接（账号本人），可按源过滤。
 func (l *Links) List(ctx context.Context, caller Caller, sourceID string) ([]LinkSummary, error) {
-	if err := RequireOwner(caller); err != nil {
+	if err := l.c.access().CanManage(ctx, caller, ManageTarget{SourceID: sourceID}, ManageLinkList); err != nil {
 		return nil, err
 	}
 	return ListLinks(ctx, l.c, sourceID)
@@ -247,7 +247,7 @@ func (l *Links) List(ctx context.Context, caller Caller, sourceID string) ([]Lin
 
 // Update 只改链接的备注。
 func (l *Links) Update(ctx context.Context, caller Caller, linkID, label string) (LinkSummary, error) {
-	if err := RequireOwner(caller); err != nil {
+	if err := l.c.access().CanManage(ctx, caller, ManageTarget{LinkID: linkID}, ManageLinkUpdate); err != nil {
 		return LinkSummary{}, err
 	}
 	label = trimJS(label)
@@ -272,7 +272,7 @@ func (l *Links) Update(ctx context.Context, caller Caller, linkID, label string)
 
 // Revoke 撤销链接与它名下的访客设备，断开访客的 WS，通知访客。
 func (l *Links) Revoke(ctx context.Context, caller Caller, linkID string) error {
-	if err := RequireOwner(caller); err != nil {
+	if err := l.c.access().CanManage(ctx, caller, ManageTarget{LinkID: linkID}, ManageLinkRevoke); err != nil {
 		return err
 	}
 	sourceID, ok, err := RevokeLink(ctx, l.c, linkID, l.c.NowMs())

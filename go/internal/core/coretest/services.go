@@ -337,7 +337,9 @@ func ServicesContract(t *testing.T, create func(t *testing.T) store.Backend) {
 			info, err := sources.RelayFor(e.ctx, *source)
 			e.must(err)
 			eq(t, info.Nodes, []core.TunnelNode{{URL: "wss://cloud.armadra.test/t/v1", Weight: 1}}, "缺省节点")
-			e.h.Context.TunnelURL = func(id string) string { return "wss://relay.armadra.test/t/v1?src=" + id }
+			e.h.Context.TunnelNodes = func(_ context.Context, id string) ([]core.TunnelNode, error) {
+				return []core.TunnelNode{{URL: "wss://relay.armadra.test/t/v1?src=" + id, Weight: 1}}, nil
+			}
 			info, err = core.NewSources(e.h.Context).RelayFor(e.ctx, *source)
 			e.must(err)
 			eq(t, info.Nodes, []core.TunnelNode{{URL: "wss://relay.armadra.test/t/v1?src=" + sourceID, Weight: 1}}, "装配方给的节点")

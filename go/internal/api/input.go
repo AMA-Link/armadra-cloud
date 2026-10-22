@@ -17,7 +17,8 @@ import (
 //     （oRPC 客户端写的是下标形式；下标按数值排序并入，同一下标出现两次算错）；
 //   - 其余参数只许出现一次（重复算错，不再取最后一个）；a[b]=c 展开成嵌套对象（deepObject）；
 //   - 同一个父键既有平铺写法又有括号写法（tag 与 tag[x]）算错；
-//   - 不成形的括号键（bad[、a[b][c]）当普通键原样保留，由校验拒绝。
+//   - 不成形的括号键（bad[、a[b][c]）当普通键原样保留，由校验拒绝；前缀是 schema 已声明的属性时
+//     （space[kind][x]=team）直接算错，不让它被剪枝后放过。
 //
 // 值都是字符串，数字与布尔按 schema 声明的类型转换（与契约里 z.coerce 的行为一致，空串当 0）。
 // 键按字典序处理，同一份 query 的结果与错误是确定的。
@@ -33,6 +34,12 @@ func queryObject(values url.Values, input *schema.Schema) (map[string]any, error
 			continue
 		}
 		parent, child, bracket := splitBracket(key)
+		if !bracket {
+			// 不成形的括号键，前缀若是 schema 已声明的属性，不能剪枝放过（space[kind][x]=team）。
+			if open := strings.IndexByte(key, '['); open > 0 && declaredProperty(input, key[:open]) {
+				return nil, core.Fail(gen.ErrBadRequest)
+			}
+		}
 		g := groups[parent]
 		if g == nil {
 			g = &group{children: map[string][]string{}}
@@ -109,14 +116,17 @@ func arrayItems(flat []string, children map[string][]string) ([]any, error) {
 		}
 		var entries []indexed
 		for child, values := range children {
-			index, err := strconv.Atoi(child)
-			if child == "" || err != nil || index < 0 || len(values) != 1 {
+			index, ok := canonicalIndex(child)
+			if !ok || len(values) != 1 {
 				return nil, core.Fail(gen.ErrBadRequest)
 			}
 			entries = append(entries, indexed{index, values[0]})
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].index < entries[j].index })
-		for _, entry := range entries {
+		for i, entry := range entries {
+			if entry.index != i { // 下标必须恰为 0..n-1
+				return nil, core.Fail(gen.ErrBadRequest)
+			}
 			list = append(list, entry.value)
 		}
 	}
@@ -125,6 +135,33 @@ func arrayItems(flat []string, children map[string][]string) ([]any, error) {
 		items[i] = item
 	}
 	return items, nil
+}
+
+// canonicalIndex 只认规范十进制：非空、全是数字、除 "0" 本身外不带前导 0（不收 +1、01、空白）。
+func canonicalIndex(text string) (int, bool) {
+	if text == "" || (len(text) > 1 && text[0] == '0') {
+		return 0, false
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return 0, false
+		}
+	}
+	index, err := strconv.Atoi(text)
+	return index, err == nil
+}
+
+// declaredProperty 判断入参 schema 的顶层有没有名为 name 的属性。
+func declaredProperty(input *schema.Schema, name string) bool {
+	if input == nil {
+		return false
+	}
+	for _, property := range input.Properties {
+		if property.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // declaredArray 判断入参 schema 里名为 name 的顶层属性是不是数组。

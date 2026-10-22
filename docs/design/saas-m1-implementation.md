@@ -759,12 +759,29 @@ go/internal/cloud/
 ```go
 // AccessPolicy 决定谁能看到、管理、访问哪台主机（core 不知道团队）。
 type AccessPolicy interface {
-	// Visible 答调用方能看到的主机与来路（owner / team / member / guest / link），按 filter 分页。
+	// Visible 答调用方能看到的主机与来路（owner / team / member / guest / link），按 filter 分页；
+	// 调用方（Sources.List）循环取页直到 next 为空。
 	Visible(ctx context.Context, caller Caller, filter SourceFilter) (page []VisibleSource, next string, err error)
+	// Access 答单台主机能否访问（Get / Assertion）；不能用 Visible 的第一页代替。
+	Access(ctx context.Context, caller Caller, sourceID string) (visible VisibleSource, ok bool, err error)
 	// Intent 答签断言要带的意图；没有访问权答 source_access_denied。
 	Intent(ctx context.Context, caller Caller, source store.SourceRecord) (GrantExtra, error)
 	// CanManage 判定 sources.update/revoke、links.*、grants.* 的管理权（owner 或团队 admin）。
-	CanManage(ctx context.Context, caller Caller, sourceID string, action ManageAction) error
+	// target 只填 LinkID 时由实现从链接解析所属的源；target 全空只来自不带过滤的 links.list，
+	// SaaS 实现必须拒绝或收窄到调用方有管理权的主机，不得放行为全租户。
+	CanManage(ctx context.Context, caller Caller, target ManageTarget, action ManageAction) error
+	// Watch 在 me-stream 连接建立时解析事件可见性。
+	Watch(ctx context.Context, caller Caller) (Watcher, error)
+}
+
+type ManageTarget struct{ SourceID, LinkID string }
+
+// Watcher 是一个连接的事件可见性，三个方法都不做 I/O：Sees 判可见，Refresh 在每个事件分发前
+// 收到它（授予 / 撤销时更新可见集合），Close 在连接关闭时释放订阅。
+type Watcher interface {
+	Sees(sourceID string) bool
+	Refresh(event Event)
+	Close()
 }
 ```
 
@@ -1049,11 +1066,11 @@ type Tx interface {
   | `format: uri`                                | 与 `z.url()` 一致：`url.Parse` 成功、有 scheme 与 host                      |
   | `propertyNames` + `additionalProperties: {}` | 键是字符串、值不限（`z.record(z.string(), z.unknown())`）；剪枝时保留全部键 |
 
-  另补 query 数组：schema 为 `array` 的参数收全部值，认三种写法——重复 `tag=a&tag=b`、`tag[]=a`、`tag[0]=a&tag[1]=b`（官方 oRPC 客户端的写法，下标按数值排序）；非数组参数重复出现、同一父键既平铺又括号（`tag` 与 `tag[x]`、`space` 与 `space[kind]`）都答 400 `bad_request`，不再取最后一个。补完 `UnsupportedInputs` 为空，`internal/api` 的夹具测试与路由测试相应收紧（「每个过程都有入参 schema」）。
+  另补 query 数组：schema 为 `array` 的参数收全部值，认三种写法——重复 `tag=a&tag=b`、`tag[]=a`、`tag[0]=a&tag[1]=b`（官方 oRPC 客户端的写法，下标必须是规范十进制且恰为 0..n−1，否则 400）；非数组参数重复出现、同一父键既平铺又括号（`tag` 与 `tag[x]`、`space` 与 `space[kind]`）都答 400 `bad_request`，不再取最后一个；不成形的括号键（`space[kind][x]`）前缀若是已声明的属性同样答 400，不剪枝放过。补完 `UnsupportedInputs` 为空，`internal/api` 的夹具测试与路由测试相应收紧（「每个过程都有入参 schema」）。
 
   **解释器表达不了、处理器必须自己补的校验**：
   - 带 `.refine` 的过程（例如 `auth.stepUp` 的「口令与 passkey 断言至少给一项」）：JSON Schema 导出里没有这类约束，解释器不会拒绝两项都缺的输入，处理器自己判并答 `bad_request`。
-  - `format: uri` 只保证形状（有 scheme、非空主机名、端口 0–65535、主机字符合法），`javascript://x` 之类 TS 与 Go 两边都接受。`redirectUri` / `returnUrl` 这类会被服务端跳转或写进邮件的地址，处理器必须按来源（团队或租户登记的域名）与协议（只许 `https`，开发环境 `http://localhost`）白名单校验，不能只信 `format`。
+  - `format: uri` 只保证形状（有 scheme、非空主机名、端口 0–65535、主机字符合法；非 ASCII 主机名先经 `golang.org/x/net/idna` 转 punycode 再校验，与 z.url() 对 IDN 的接受一致，另套双向文本规则 `idna.BidiRule()`；已知差异：`127.0.0.999` 这类数字结尾的非法 IPv4 主机，Node 拒绝而 Go 放过，不在本批修），`javascript://x` 之类 TS 与 Go 两边都接受。`redirectUri` / `returnUrl` 这类会被服务端跳转或写进邮件的地址，处理器必须按来源（团队或租户登记的域名）与协议（只许 `https`，开发环境 `http://localhost`）白名单校验，不能只信 `format`。
 
 ## §6 邮件与作业
 
