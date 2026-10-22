@@ -71,7 +71,7 @@ const USAGE = `用法: pnpm e2e --mode personal [选项]
   --server-image IMAGE   用现成的服务器壳镜像（如 ghcr.io/ama-link/armadra-server:<compat.min>）
   --output DIR           result.json 的目录，缺省 .data/e2e
   --relay-data DIR       中继的数据目录用宿主机上的 DIR（绑定挂载，跑完保留），缺省是一次性的卷；
-                         升级与回滚演练用：同一个目录先后交给两个镜像
+                         升级与回滚演练用：同一个目录先后交给两个镜像（Linux 上先 chown 给 uid 10002）
   --relay-password-file F  中继账号口令文件：有就读，没有就生成（0600）；配 --relay-data 复用账号
   --relay-port N         中继端口（缺省随机）
   --keep                 跑完不清理（调试用，之后手动 docker compose -p <项目> down -v）`;
@@ -552,6 +552,23 @@ async function main() {
   );
 
   await report.step("起中继与服务器壳（服务器壳不发布端口）", async () => {
+    // --relay-data：容器里是 uid 10002，Linux 上写不进当前用户的 0755 目录（macOS 的 Docker
+    // Desktop 会映射属主）。用一次性容器（同一个中继镜像，root）把它交给 10002。
+    if (relayData && process.platform === "linux")
+      await exec("docker", [
+        "run",
+        "--rm",
+        "--user",
+        "0",
+        "--entrypoint",
+        "chown",
+        "-v",
+        `${relayData}:/data`,
+        relayImage,
+        "-R",
+        "10002:10002",
+        "/data",
+      ]);
     await compose(["up", "-d", "--wait", "--wait-timeout", "180"]);
     const ps = await compose(["ps", "--format", "json"]);
     const rows = ps.stdout
