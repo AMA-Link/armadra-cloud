@@ -43,7 +43,7 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | es-errors | 1.3.0 | MIT |
 | es-object-atoms | 1.1.2 | MIT |
 | es-set-tostringtag | 2.1.0 | MIT |
-| follow-redirects | 1.16.0 | MIT |
+| follow-redirects | 1.16.1 | MIT |
 | form-data | 4.0.6 | MIT |
 | function-bind | 1.1.2 | MIT |
 | get-intrinsic | 1.3.0 | MIT |
@@ -1078,7 +1078,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## follow-redirects@1.16.0
+## follow-redirects@1.16.1
 
 License: MIT
 Homepage: https://github.com/follow-redirects/follow-redirects
