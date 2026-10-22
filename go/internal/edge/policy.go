@@ -59,6 +59,8 @@ type PolicyOptions struct {
 	CORSOrigins func(sourceID string) []string
 	// Traffic 是流量统计（cloud-api §19）；不给就不统计。
 	Traffic *traffic.Meter
+	// Dispatch 承接 ReleaseUpgradeAsync；不给就自建一个。
+	Dispatch *control.Dispatcher
 }
 
 // TrafficIdentity 是一条通道记到谁名下（流量统计，类别 e2e）：中继令牌的 sub / dev。
@@ -140,13 +142,19 @@ type connection struct {
 type Policy struct {
 	o PolicyOptions
 
-	mu    sync.Mutex
-	conns map[Handle]connection
+	mu       sync.Mutex
+	conns    map[Handle]connection
+	dispatch *control.Dispatcher
+	ownDisp  bool
 }
 
 // NewPolicy 建 Policy。
 func NewPolicy(o PolicyOptions) *Policy {
-	return &Policy{o: o, conns: map[Handle]connection{}}
+	p := &Policy{o: o, conns: map[Handle]connection{}, dispatch: o.Dispatch}
+	if p.dispatch == nil {
+		p.dispatch, p.ownDisp = control.NewDispatcher(0, 0), true
+	}
+	return p
 }
 
 func originOf(r Request) (string, bool) {
@@ -247,6 +255,24 @@ func (p *Policy) ReleaseUpgrade(subject string) {
 	defer cancel()
 	_ = p.o.Control.Limits().Release(ctx, control.LimitEdgeConcurrentAcct, subject)
 }
+
+// ReleaseUpgradeAsync 同 ReleaseUpgrade，但投递给工作协程立即返回：epoll 循环的回调用它，
+// 控制面（redis / postgres）的网络 I/O 不会拖住整条循环。同一个账号的调用保持顺序。
+func (p *Policy) ReleaseUpgradeAsync(subject string) {
+	p.dispatch.Go(subject, func() { p.ReleaseUpgrade(subject) })
+}
+
+// Close 排空并释放自建的工作协程（调用方给的 Dispatcher 归调用方）。关闭之后的投递仍会执行。
+func (p *Policy) Close() {
+	if p.ownDisp {
+		p.dispatch.Close()
+	} else {
+		p.dispatch.Flush(5 * time.Second)
+	}
+}
+
+// Flush 等已投递的控制面调用做完（关闭前、测试用）。
+func (p *Policy) Flush(timeout time.Duration) bool { return p.dispatch.Flush(timeout) }
 
 type admission struct {
 	ok       bool
@@ -354,6 +380,13 @@ func (p *Policy) Untrack(h Handle) {
 	p.mu.Lock()
 	delete(p.conns, h)
 	p.mu.Unlock()
+}
+
+// Tracked 返回已登记的升级连接数（观测与测试用）。
+func (p *Policy) Tracked() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.conns)
 }
 
 // TakeAll 摘掉并交出全部已升级连接（关闭时断开）。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -22,12 +23,21 @@ type keyCache struct {
 	loaded bool
 	issuer string
 	keys   []store.SigningKeyRecord
+	// ticket 是重读的版本号：每次重读开始时取一个新号，读完只有号不小于 applied 才写回，
+	// 慢的旧读不会盖掉后发的新读（或本实例轮换后的失效）。
+	ticket, applied uint64
+	lastRefresh     time.Time
 }
+
+// 查不到 kid 时最短隔多久重读一次。
+const refreshOnMissGap = 5 * time.Second
 
 // Keys 是某个租户的签名钥（读缓存）。
 func (d *DB) Keys(tenantID string) store.KeyStore { return d.keyCache(tenantID) }
 
-// RefreshKeys 让某个租户的签名钥缓存重读（察觉到别的进程 / 节点改了之后调）。
+// RefreshKeys 让某个租户的签名钥缓存重读（察觉到别的进程 / 节点改了之后调；
+// 装配方的存储监视在租户修订号变化时调它，见 store.KeyCacheRefresher）。重读带版本号：
+// 并发的旧读不会盖掉后发的新读。
 func (d *DB) RefreshKeys(ctx context.Context, tenantID string) error {
 	return d.keyCache(tenantID).refresh(ctx)
 }
@@ -50,6 +60,9 @@ func (d *DB) dropKeyCache(tenantID string) {
 	if cache != nil {
 		cache.mu.Lock()
 		cache.loaded = false
+		// 失效之前发出的重读读到的是旧数据，写回要被拒。
+		cache.ticket++
+		cache.applied = cache.ticket
 		cache.mu.Unlock()
 	}
 }
@@ -59,7 +72,40 @@ func readSigningKeys(ctx context.Context, q querier, tenantID string) ([]store.S
 		"SELECT "+keyColumns+" FROM signing_keys WHERE tenant_id = $1 ORDER BY seq", tenantID)
 }
 
+// RefreshOnMiss 实现 store.KeyRefresher：验签查不到 kid 时限频重读。
+func (c *keyCache) RefreshOnMiss(ctx context.Context) error {
+	c.mu.Lock()
+	if c.loaded && time.Since(c.lastRefresh) < c.d.refreshGap {
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Unlock()
+	return c.refresh(ctx)
+}
+
+// begin 为一次重读取版本号。
+func (c *keyCache) begin() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ticket++
+	return c.ticket
+}
+
+// apply 把版本号为 ticket 的读结果写回；比已生效的版本旧就丢弃，答是否写回了。
+func (c *keyCache) apply(ticket uint64, issuer string, keys []store.SigningKeyRecord) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastRefresh = time.Now()
+	if ticket < c.applied {
+		return false // 后发的读（或本实例的失效）已经生效，这份是旧的
+	}
+	c.applied = ticket
+	c.issuer, c.keys, c.loaded = issuer, keys, true
+	return true
+}
+
 func (c *keyCache) refresh(ctx context.Context) error {
+	ticket := c.begin()
 	var issuer string
 	err := c.d.pool.QueryRow(ctx, "SELECT issuer FROM tenants WHERE tenant_id = $1", c.tenantID).Scan(&issuer)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -72,9 +118,7 @@ func (c *keyCache) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	c.issuer, c.keys, c.loaded = issuer, keys, true
-	c.mu.Unlock()
+	c.apply(ticket, issuer, keys)
 	return nil
 }
 

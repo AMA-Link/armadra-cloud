@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"reflect"
 	"slices"
 	"sync"
@@ -367,3 +368,22 @@ func TestOverhead(t *testing.T) {
 		}
 	})
 }
+
+// 热路径：每个 DATA 帧一次 Counter.Bytes。多条连接并发时它们共用 Meter 的锁。
+func benchCounters(b *testing.B, perGoroutineCounter bool) {
+	m := traffic.NewMeter(traffic.MeterOptions{Node: "n", Write: func(context.Context, []traffic.Row) error { return nil }})
+	shared := m.Counter(traffic.Key{SourceID: "s", Subject: "acct:a", Kind: traffic.KindE2E})
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		c := shared
+		if perGoroutineCounter {
+			c = m.Counter(traffic.Key{SourceID: "s", Subject: "acct:" + fmt.Sprint(rand.Int64()), Kind: traffic.KindE2E})
+		}
+		for pb.Next() {
+			c.Bytes(traffic.ToClient, 16384)
+		}
+	})
+}
+
+func BenchmarkCounterBytes(b *testing.B)              { benchCounters(b, true) }
+func BenchmarkCounterBytesSharedCounter(b *testing.B) { benchCounters(b, false) }

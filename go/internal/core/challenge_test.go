@@ -254,3 +254,54 @@ func TestHTTPVerifierTalksToSiteverify(t *testing.T) {
 		t.Fatalf("5xx：%+v", verdict)
 	}
 }
+
+func TestChallengeGateNeedsVerifier(t *testing.T) {
+	if _, err := core.NewChallengeGate(core.ChallengeGateOptions{SiteKey: "k"}); err == nil {
+		t.Fatal("没有 Verifier 构造就该报错，而不是首次校验时 panic")
+	}
+}
+
+// 并发的同一令牌：查与记是一步，只有一个去问提供方，其余按重放拒绝。
+func TestChallengeGateClaimsTokenAtomically(t *testing.T) {
+	ctx := context.Background()
+	release := make(chan struct{})
+	verifier := &blocking{release: release}
+	g, err := core.NewChallengeGate(core.ChallengeGateOptions{
+		SiteKey: "site", Hostnames: []string{"relay.armadra.test"}, Verifier: verifier,
+		Now: func() time.Time { return time.UnixMilli(1_760_000_000_000) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 32
+	results := make(chan string, n)
+	for i := 0; i < n; i++ {
+		go func() { results <- code(g.Check(ctx, core.ScopeLogin, token("same"), "ip")) }()
+	}
+	// 被拒的 n-1 个先回来，放行后剩下那个通过。
+	rejected := 0
+	for rejected < n-1 {
+		if r := <-results; r != "challenge_invalid" {
+			t.Fatalf("重放应是 challenge_invalid：%s", r)
+		}
+		rejected++
+	}
+	close(release)
+	if r := <-results; r != "ok" {
+		t.Fatalf("占到的那个应通过：%s", r)
+	}
+	if verifier.calls.Load() != 1 {
+		t.Fatalf("提供方只该被问一次：%d", verifier.calls.Load())
+	}
+}
+
+type blocking struct {
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (b *blocking) Verify(context.Context, core.VerifyRequest) (core.Verdict, error) {
+	b.calls.Add(1)
+	<-b.release
+	return core.Verdict{OK: true}, nil
+}

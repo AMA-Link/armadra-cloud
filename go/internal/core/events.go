@@ -1,6 +1,9 @@
 package core
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // /v1/me/stream 的事件总线（进程内）。SaaS 换成跨节点的实现时保持同一个形状。
 
@@ -84,43 +87,110 @@ func NewAccessRevoked(sourceID string) AccessRevoked {
 type Audience struct{ LinkID string }
 
 // EventBus 是事件总线：Emit 同步地调每个订阅者，订阅者出错（panic）不影响其它订阅者。
+//
+// 订阅者放在一份写时复制的快照里：Emit 只读快照、不持锁，订阅与退订不会拖住正在进行的扇出，
+// 扇出的代价与当前订阅者数成正比（不看历史订阅编号）。同步订阅者不得阻塞（会拖住发事件的
+// 一方）；要做网络写的（me-stream 把事件推给客户端）用 SubscribeBuffered。
 type EventBus struct {
-	mu        sync.Mutex
-	next      int
-	listeners map[int]func(Event, *Audience)
+	mu   sync.Mutex
+	next uint64
+	subs atomic.Pointer[[]busSub]
+}
+
+type busSub struct {
+	id uint64
+	fn func(Event, *Audience)
 }
 
 // NewEventBus 建一个总线。
-func NewEventBus() *EventBus { return &EventBus{listeners: map[int]func(Event, *Audience){}} }
+func NewEventBus() *EventBus { return &EventBus{} }
 
 // Emit 发一个事件；给了 audience 就只发给那条链接的访客。
 func (b *EventBus) Emit(event Event, audience *Audience) {
-	b.mu.Lock()
-	listeners := make([]func(Event, *Audience), 0, len(b.listeners))
-	for id := 0; id < b.next; id++ {
-		if fn, ok := b.listeners[id]; ok {
-			listeners = append(listeners, fn)
-		}
+	snapshot := b.subs.Load()
+	if snapshot == nil {
+		return
 	}
-	b.mu.Unlock()
-	for _, fn := range listeners {
+	for _, sub := range *snapshot {
 		func() {
 			defer func() { _ = recover() }()
-			fn(event, audience)
+			sub.fn(event, audience)
 		}()
 	}
 }
 
-// Subscribe 订阅事件，答退订函数。
+// Subscribe 订阅事件，答退订函数（重复调用无害）。
 func (b *EventBus) Subscribe(fn func(Event, *Audience)) (unsubscribe func()) {
 	b.mu.Lock()
-	id := b.next
 	b.next++
-	b.listeners[id] = fn
+	id := b.next
+	b.replace(func(old []busSub) []busSub { return append(old[:len(old):len(old)], busSub{id: id, fn: fn}) })
 	b.mu.Unlock()
 	return func() {
 		b.mu.Lock()
-		delete(b.listeners, id)
-		b.mu.Unlock()
+		defer b.mu.Unlock()
+		b.replace(func(old []busSub) []busSub {
+			next := make([]busSub, 0, len(old))
+			for _, sub := range old {
+				if sub.id != id {
+					next = append(next, sub)
+				}
+			}
+			return next
+		})
+	}
+}
+
+// replace 用新快照换掉旧的；调用方持锁。
+func (b *EventBus) replace(edit func([]busSub) []busSub) {
+	var old []busSub
+	if p := b.subs.Load(); p != nil {
+		old = *p
+	}
+	next := edit(old)
+	b.subs.Store(&next)
+}
+
+// SubscribeBuffered 订阅事件，但每个订阅者有自己的有界队列和一条协程：Emit 只往队列里放，
+// 永不阻塞；队列满了就丢掉这条事件并调 onOverflow（nil 则忽略），由订阅者决定是断开还是重新同步。
+// 同一订阅者收到的事件保持发出的顺序。退订后协程退出，队列里没处理的事件丢弃。
+func (b *EventBus) SubscribeBuffered(depth int, fn func(Event, *Audience), onOverflow func()) (unsubscribe func()) {
+	if depth <= 0 {
+		depth = 256
+	}
+	type item struct {
+		event    Event
+		audience *Audience
+	}
+	queue := make(chan item, depth)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case it := <-queue:
+				func() {
+					defer func() { _ = recover() }()
+					fn(it.event, it.audience)
+				}()
+			case <-stop:
+				return
+			}
+		}
+	}()
+	off := b.Subscribe(func(event Event, audience *Audience) {
+		select {
+		case queue <- item{event, audience}:
+		default:
+			if onOverflow != nil {
+				onOverflow()
+			}
+		}
+	})
+	var once sync.Once
+	return func() {
+		off()
+		once.Do(func() { close(stop) })
 	}
 }

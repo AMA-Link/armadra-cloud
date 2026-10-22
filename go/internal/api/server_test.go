@@ -364,6 +364,31 @@ func TestInternalErrorsAreNotLeaked(t *testing.T) {
 	}
 }
 
+// 处理器答了编不出 JSON 的值：兜底的 500 与别处同形（gen 的码、固定文案、带 requestId）。
+func TestUnencodableOutputFallsBackToInternalWithRequestID(t *testing.T) {
+	a, err := api.New(api.Options{
+		Handlers: map[string]api.Handler{"platform.jwks": func(_ context.Context, _ *api.Call) (any, error) {
+			return map[string]any{"bad": make(chan int)}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := srv(t, a)
+	if res.status != http.StatusInternalServerError || res.json["code"] != string(gen.ErrInternal) ||
+		res.json["message"] != core.MessageOf(gen.ErrInternal) {
+		t.Fatalf("兜底答复：%d %s", res.status, res.body)
+	}
+	if id, _ := res.json["requestId"].(string); id == "" {
+		t.Fatalf("兜底答复缺 requestId：%s", res.body)
+	}
+}
+
+func srv(t *testing.T, a *api.API) response {
+	t.Helper()
+	return newServer(t, a).do("GET", "/.well-known/jwks.json", nil, nil)
+}
+
 // 契约里 personal 不实现的过程（含协议 1.4 的团队、邀请、授权、计费、管理员等 SaaS 各组）：
 // personal 一律答 404 not_found，cloud 一律答 501 not_implemented；预留路由不会遮住启用的路由。
 func TestEveryReservedProcedureAnswersByMode(t *testing.T) {

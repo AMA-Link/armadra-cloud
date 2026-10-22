@@ -2,7 +2,10 @@ package core_test
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core/coretest"
@@ -210,4 +213,80 @@ func TestErrorMessagesAreFixedEnglishPhrases(t *testing.T) {
 	wait := core.FailAfter("rate_limited", 1500_001*1000) // 1500.001 ms
 	eq(t, wait.RetryAfter.Milliseconds(), int64(1501), "等待向上取整到毫秒")
 	eq(t, core.FailAfter("rate_limited", -5).RetryAfter.Milliseconds(), int64(0), "负数当 0")
+}
+
+// 退订的订阅者不再留在集合里：反复订阅 / 退订之后扇出仍只调当前的订阅者。
+func TestEventBusUnsubscribeRemovesSubscribers(t *testing.T) {
+	bus := core.NewEventBus()
+	var calls atomic.Int64
+	for i := 0; i < 1000; i++ {
+		off := bus.Subscribe(func(core.Event, *core.Audience) { calls.Add(1) })
+		off()
+		off() // 重复退订无害
+	}
+	keep := bus.Subscribe(func(core.Event, *core.Audience) { calls.Add(1) })
+	defer keep()
+	bus.Emit(core.NewSourceRevoked("a"), nil)
+	eq(t, calls.Load(), int64(1), "只有仍在订阅的收到")
+}
+
+func TestEventBusSubscribeDuringEmit(t *testing.T) {
+	bus := core.NewEventBus()
+	var inner atomic.Int64
+	var off func()
+	off = bus.Subscribe(func(core.Event, *core.Audience) {
+		// 订阅者里订阅 / 退订不会死锁。
+		bus.Subscribe(func(core.Event, *core.Audience) { inner.Add(1) })
+		off()
+	})
+	bus.Emit(core.NewSourceRevoked("a"), nil)
+	bus.Emit(core.NewSourceRevoked("b"), nil)
+	eq(t, inner.Load(), int64(1), "第一次发出时新订阅的在第二次才收到")
+}
+
+// 缓冲订阅：慢的订阅者不拖住 Emit，满了丢事件并通知，顺序保持。
+func TestEventBusBufferedSubscriberNeverBlocksEmit(t *testing.T) {
+	bus := core.NewEventBus()
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	var got []string
+	var overflow atomic.Int64
+	off := bus.SubscribeBuffered(2, func(ev core.Event, _ *core.Audience) {
+		<-gate
+		mu.Lock()
+		got = append(got, ev.EventSource())
+		mu.Unlock()
+	}, func() { overflow.Add(1) })
+	defer off()
+	done := make(chan struct{})
+	go func() {
+		for _, id := range []string{"a", "b", "c", "d", "e", "f"} {
+			bus.Emit(core.NewSourceRevoked(id), nil)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("慢订阅者拖住了 Emit")
+	}
+	if overflow.Load() == 0 {
+		t.Fatal("队列满了应通知溢出")
+	}
+	close(gate)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) < 2 || got[0] != "a" {
+		t.Fatalf("顺序：%v", got)
+	}
 }
