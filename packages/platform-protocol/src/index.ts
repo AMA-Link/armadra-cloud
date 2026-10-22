@@ -3,6 +3,8 @@
 export {
   INTERNODE_PATH,
   JWKS_WELL_KNOWN,
+  MIN_CORE_VERSION_ROLE_ONLY_ASSERTION,
+  MIN_CORE_VERSION_TEAM_ASSERTION,
   PLATFORM_WELL_KNOWN,
   PROTOCOL_HEADER,
   PROTOCOL_VERSION,
@@ -18,6 +20,7 @@ export type {
   AssertionClaims,
   Ed25519PublicJwk,
   JwkSet,
+  NodeTokenClaims,
   RelayTokenClaims,
   SourceJwsClaims,
   TunnelTokenClaims,
@@ -36,4 +39,9 @@ export type {
   RemoteService,
   TunnelStatus,
 } from "./core-api/index.ts";
-export type { ErrorCode, WireError } from "./errors/index.ts";
+export type {
+  ErrorCode,
+  LimitReachedDetails,
+  Quota,
+  WireError,
+} from "./errors/index.ts";

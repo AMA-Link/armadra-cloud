@@ -9,6 +9,7 @@ import {
 import {
   accessClaimsSchema,
   assertionClaimsSchema,
+  nodeTokenClaimsSchema,
   parseScopeClaims,
   relayTokenClaimsSchema,
   scopeClaims,
@@ -32,6 +33,10 @@ import {
   TEST_KEYS,
 } from "../src/fixtures/index.ts";
 import { ASSERTION } from "../src/identity-vectors/constants.ts";
+import {
+  MIN_CORE_VERSION_ROLE_ONLY_ASSERTION,
+  MIN_CORE_VERSION_TEAM_ASSERTION,
+} from "../src/version.ts";
 
 const issuerKey = createPublicKey({
   key: TEST_KEYS.issuer.publicJwk,
@@ -397,5 +402,33 @@ describe("协议 1.1：断言范围与只读令牌", () => {
       "/x/api/identity/login",
     ])
       expect(isIdentityPath(path), path).toBe(false);
+  });
+});
+
+describe("协议 1.4 补充：节点令牌与最低 core 版本", () => {
+  it("node-token.jwt：typ armadra-node，aud relay-node，sub 是节点名", () => {
+    const jws = verified("node-token");
+    expect(jws.header.typ).toBe(TOKEN_TYPES.node);
+    const claims = nodeTokenClaimsSchema.parse(jws.payload);
+    expect(claims.aud).toBe("relay-node");
+    expect(claims.sub).toBe("cf");
+  });
+
+  it("节点令牌拒绝别的受众与非法节点名", () => {
+    const payload = verified("node-token").payload as Record<string, unknown>;
+    expect(
+      nodeTokenClaimsSchema.safeParse({ ...payload, aud: "relay" }).success,
+    ).toBe(false);
+    expect(
+      nodeTokenClaimsSchema.safeParse({ ...payload, sub: "Bad Node" }).success,
+    ).toBe(false);
+  });
+
+  it("MIN_CORE_VERSION_* 是语义化版本号", () => {
+    for (const value of [
+      MIN_CORE_VERSION_TEAM_ASSERTION,
+      MIN_CORE_VERSION_ROLE_ONLY_ASSERTION,
+    ])
+      expect(value).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });

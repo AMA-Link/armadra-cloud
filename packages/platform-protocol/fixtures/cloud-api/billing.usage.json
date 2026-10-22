@@ -13,7 +13,7 @@
     "period": "2026-10",
     "usage": [
       {
-        "metric": "relay.bytes",
+        "metric": "traffic",
         "value": 1024,
         "limit": null
       }

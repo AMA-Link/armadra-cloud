@@ -135,6 +135,61 @@ export const sources = {
         limits: tunnelLimitsSchema,
       }),
     ),
+  /**
+   * 设备信任上报（cloud-api §31，1.4 补充）：core 在团队成员的新设备停在 `device_pending` 时告诉
+   * 控制面，控制面据此推给背书人（`trust.list` / me-stream）。`pendingId` 是 core 侧待信任条目的
+   * id，兼幂等键；设备名与平台由控制面从自己的设备表填。刚被拒绝过的设备在冷却期内答
+   * `status: "rejected"`，且不再通知背书人。
+   */
+  trustRequest: base
+    .route({ method: "POST", path: "/v1/sources/me/trust-requests" })
+    .meta({ scope: ["source"], since: SINCE_0_10 })
+    .errors(
+      errors.pick(
+        "source_access_denied",
+        "not_found",
+        "conflict",
+        "rate_limited",
+        "bad_request",
+      ),
+    )
+    .input(
+      z.object({
+        pendingId: z.string().min(1).max(128),
+        accountId: z.string().min(1),
+        deviceId: z.string().min(1).max(64),
+        /** 至多比现在晚 24 小时。 */
+        expiresAtMs: z.number().int(),
+      }),
+    )
+    .output(
+      z.object({
+        requestId: z.string(),
+        status: z.enum(["pending", "rejected"]),
+      }),
+    ),
+  /** core 回报待信任条目的结果：已批准（`trusted`）或过期（`expired`）；控制面据此撤掉通知。 */
+  trustResolve: base
+    .route({
+      method: "POST",
+      path: "/v1/sources/me/trust-requests/{pendingId}/resolve",
+    })
+    .meta({ scope: ["source"], since: SINCE_0_10 })
+    .errors(
+      errors.pick(
+        "source_access_denied",
+        "not_found",
+        "conflict",
+        "rate_limited",
+      ),
+    )
+    .input(
+      z.object({
+        pendingId: z.string().min(1).max(128),
+        result: z.enum(["trusted", "expired"]),
+      }),
+    )
+    .output(empty),
   list: base
     .route({ method: "GET", path: "/v1/sources" })
     .meta(session)

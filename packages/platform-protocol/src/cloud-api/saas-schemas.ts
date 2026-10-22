@@ -10,6 +10,7 @@ import {
   grantRoleSchema,
   teamRoleSchema,
 } from "../assertion/claims.ts";
+import { quotaSchema } from "../errors/index.ts";
 import { hex32Schema } from "../tunnel/handshake.ts";
 
 const sourceIdSchema = hex32Schema;
@@ -100,9 +101,9 @@ export const teamMemberSchema = z.object({
   reachableHosts: z.number().int().nonnegative().optional(),
 });
 
-/** 一项用量：`metric` 如 `hosts`、`members`、`guests`、`connections`、`relay.bytes`。 */
+/** 一项用量：`metric` 与 `limit_reached` 的 `details.quota` 同一张枚举（cloud-api §21）。 */
 export const usageEntrySchema = z.object({
-  metric: z.string(),
+  metric: quotaSchema,
   value: z.number().nonnegative(),
   /** `null` = 不限。 */
   limit: z.number().nullable(),

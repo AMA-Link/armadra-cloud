@@ -6,6 +6,8 @@ import {
   errors,
   errorStatus,
   isErrorCode,
+  limitReachedDetailsSchema,
+  QUOTAS,
   wireErrorSchema,
 } from "../src/errors/index.ts";
 import { readJsonFixture } from "../src/fixtures/index.ts";
@@ -43,4 +45,22 @@ it("线上错误形状 { code, message, requestId?, details? }", () => {
   expect(wireErrorSchema.safeParse({ message: "x" }).success).toBe(false);
   expect(errorCodeSchema.safeParse("source_taken").success).toBe(true);
   expect(errorCodeSchema.safeParse("SOURCE_TAKEN").success).toBe(false);
+});
+
+it("limit_reached 的 details 是 { quota, used, limit }，quota 取固定枚举", () => {
+  expect(QUOTAS).toEqual([
+    "teams",
+    "hosts",
+    "members",
+    "guests",
+    "concurrent",
+    "traffic",
+  ]);
+  expect(
+    limitReachedDetailsSchema.parse({ quota: "hosts", used: 3, limit: 3 }),
+  ).toEqual({ quota: "hosts", used: 3, limit: 3 });
+  expect(
+    limitReachedDetailsSchema.safeParse({ quota: "cpu", used: 1, limit: 1 })
+      .success,
+  ).toBe(false);
 });
