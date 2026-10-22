@@ -82,7 +82,7 @@ describe("运维端点", () => {
       node: "cf",
       version: "0.9.3",
     });
-    expect(health.headers.get("armadra-protocol")).toBe("1.3");
+    expect(health.headers.get("armadra-protocol")).toBe("1.4");
     const ready = await call("/ready");
     expect(ready.status).toBe(200);
     await ready.arrayBuffer();
@@ -104,7 +104,7 @@ describe("运维端点", () => {
       mode: "personal",
       name: "Test relay",
       issuer: "https://relay.armadra.test",
-      protocol: { major: 1, minor: 3 },
+      protocol: { major: 1, minor: 4 },
       relay: { addressing: "path" },
       webApp: "https://relay.armadra.test/app/",
     });
@@ -119,9 +119,10 @@ describe("运维端点", () => {
     const preflight = await call("/v1/auth/login", { method: "OPTIONS" });
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
-    const orgs = await call("/v1/orgs", { method: "POST", body: "{}" });
-    expect(orgs.status).toBe(404);
-    expect((await json(orgs)).code).toBe("not_found");
+    // 预留的 SaaS 路由（团队，协议 1.4）也是 404。
+    const teams = await call("/v1/teams", { method: "POST", body: "{}" });
+    expect(teams.status).toBe(404);
+    expect((await json(teams)).code).toBe("not_found");
     const wrong = await postJson("/v1/auth/login", {
       account: ACCOUNT,
       password: "definitely-wrong-1",

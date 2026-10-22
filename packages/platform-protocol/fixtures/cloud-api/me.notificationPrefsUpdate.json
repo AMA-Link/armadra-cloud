@@ -1,0 +1,11 @@
+{
+  "input": {
+    "hostPresence": true
+  },
+  "output": {
+    "invitations": true,
+    "accessRequests": true,
+    "hostPresence": true,
+    "security": true
+  }
+}

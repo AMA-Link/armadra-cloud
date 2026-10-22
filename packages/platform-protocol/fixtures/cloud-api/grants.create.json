@@ -1,0 +1,32 @@
+{
+  "input": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "subject": {
+      "kind": "group",
+      "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "role": "editor",
+    "workspaceIds": [
+      "ws_01",
+      "ws_02"
+    ],
+    "expiresAtMs": 1762592000000
+  },
+  "output": {
+    "grantId": "gnt_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "subject": {
+      "kind": "group",
+      "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "role": "editor",
+    "workspaceIds": [
+      "ws_01",
+      "ws_02"
+    ],
+    "expiresAtMs": 1762592000000,
+    "grantedBy": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "createdAtMs": 1760000000000,
+    "revokedAtMs": null
+  }
+}

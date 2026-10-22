@@ -309,10 +309,9 @@ const tokens: Record<string, string> = {
     scp: ["ws:ws_01", "sess:sess_01", "ro"],
     jti: "jti-assertion-scoped-session",
   }),
-  /** 协议 1.1：SaaS 组织成员经团队授予，指定两个工作空间、editor。 */
+  /** 协议 1.4：SaaS 团队成员经团队授予，指定两个工作空间、editor。 */
   "team-grant": jwt(header(TOKEN_TYPES.assertion), {
     ...assertion,
-    org: { orgId: "org_01JAAAAAAAAAAAAAAAAAAAAAAA", role: "member" },
     team: { teamId: "team_01JAAAAAAAAAAAAAAAAAAAAAAA", role: "member" },
     role: "editor",
     scp: ["ws:ws_01", "ws:ws_02"],
@@ -336,7 +335,7 @@ const tokens: Record<string, string> = {
     jti: "jti-relay-0001",
     ver: 1,
   }),
-  /** 协议 1.1：只读、带组织的中继令牌。 */
+  /** 协议 1.4：只读、带团队的中继令牌。 */
   "relay-token-ro": jwt(header(TOKEN_TYPES.relay), {
     iss: ISSUER,
     sub: "guest:lnk_01JAAAAAAAAAAAAAAAAAAAAAAA:r4nd0m",
@@ -345,7 +344,7 @@ const tokens: Record<string, string> = {
     ...times(RELAY_TOKEN.ttlMs),
     jti: "jti-relay-ro-0001",
     ver: 1,
-    org: "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    team: "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
     ro: true,
   }),
   /** 协议 1.3：带 issuer 侧设备 id 的中继令牌。 */
@@ -360,16 +359,16 @@ const tokens: Record<string, string> = {
     dev: device.deviceId,
   }),
   "tunnel-token": tunnelToken,
-  /** 协议 1.1：属于组织的源的隧道令牌。 */
-  "tunnel-token-org": jwt(header(TOKEN_TYPES.tunnel), {
+  /** 协议 1.4：属于团队的源的隧道令牌。 */
+  "tunnel-token-team": jwt(header(TOKEN_TYPES.tunnel), {
     iss: ISSUER,
     sub: SOURCE_ID,
     aud: "relay-tunnel",
     cnf: { jwk: { kty: "OKP", crv: "Ed25519", x: source.publicJwk.x } },
     ...times(TUNNEL_TOKEN.ttlMs),
-    jti: "jti-tunnel-org-0001",
+    jti: "jti-tunnel-team-0001",
     ver: 1,
-    org: "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    team: "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
   }),
   "source-jws": jwt(
     { alg: "EdDSA", kid: SOURCE_ID, typ: TOKEN_TYPES.source },

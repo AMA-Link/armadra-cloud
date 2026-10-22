@@ -1,0 +1,24 @@
+{
+  "input": {
+    "q": "dev",
+    "status": "active",
+    "limit": 100
+  },
+  "output": {
+    "accounts": [
+      {
+        "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "email": "dev@armadra.test",
+        "displayName": "Dev",
+        "emailVerified": true,
+        "status": "active",
+        "plan": "free",
+        "hostCount": 1,
+        "teamCount": 1,
+        "createdAtMs": 1760000000000,
+        "lastSeenAtMs": 1760000000000
+      }
+    ],
+    "nextCursor": null
+  }
+}

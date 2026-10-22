@@ -1,6 +1,9 @@
 {
   "input": {
-    "sourceId": "0123456789abcdef0123456789abcdef"
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "space": {
+      "kind": "personal"
+    }
   },
   "output": {
     "links": [

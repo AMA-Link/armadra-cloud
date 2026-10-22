@@ -1,0 +1,9 @@
+{
+  "input": {
+    "invitationId": "tinv_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "token": "test-invite-token"
+  },
+  "output": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

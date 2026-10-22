@@ -1,0 +1,14 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "name": "Platform 2"
+  },
+  "output": {
+    "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "name": "Platform 2",
+    "memberCount": 2,
+    "createdAtMs": 1760000000000
+  }
+}

@@ -9,6 +9,7 @@ import {
   SCOPES,
   TRAFFIC_KINDS,
 } from "../src/cloud-api/index.ts";
+import { TEAM_ROLES } from "../src/assertion/index.ts";
 import {
   meStreamClientMessageSchema,
   meStreamEventSchema,
@@ -20,18 +21,27 @@ import { listFixtures, readJsonFixture } from "../src/fixtures/index.ts";
 const procedures = listProcedures(cloudContract);
 
 describe("契约结构", () => {
-  it("覆盖设计 §5 的七个域与节点回报（§17）", () => {
+  it("覆盖设计 §5 的域、节点回报（§17）与 1.4 的 SaaS 各组（§21–§28）", () => {
     expect(Object.keys(cloudContract)).toEqual([
       "platform",
       "auth",
       "me",
       "sources",
       "links",
-      "orgs",
+      "teams",
+      "invitations",
+      "groups",
+      "grants",
+      "accessRequests",
+      "trust",
+      "audit",
       "billing",
+      "apiTokens",
+      "admin",
+      "status",
       "relay",
     ]);
-    expect(procedures.length).toBeGreaterThanOrEqual(50);
+    expect(procedures.length).toBeGreaterThanOrEqual(100);
   });
 
   it("「方法 + 路径」唯一", () => {
@@ -122,7 +132,266 @@ describe("cloud-api 夹具", () => {
   );
 });
 
+describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
+  const byKey = new Map(procedures.map((entry) => [entry.key, entry]));
+  const input = (key: string) =>
+    byKey.get(key)?.procedure["~orpc"].inputSchema as z.ZodType;
+
+  it("没有 orgs.* 和 org 范围；计费挂在团队下", () => {
+    expect(procedures.some((entry) => entry.key.startsWith("orgs."))).toBe(
+      false,
+    );
+    expect(SCOPES).not.toContain("org:admin");
+    expect(SCOPES).not.toContain("org:owner");
+    for (const entry of procedures)
+      expect(entry.path, entry.key).not.toContain("/v1/orgs");
+    expect(byKey.get("billing.plan")).toMatchObject({
+      method: "GET",
+      path: "/v1/billing/plan",
+      meta: { scope: ["session", "team:billing"] },
+    });
+    expect(byKey.get("billing.webhook")?.meta.scope).toEqual([
+      "billing-webhook",
+    ]);
+  });
+
+  it("运营后台只用 operator scope", () => {
+    const admin = procedures.filter((entry) => entry.key.startsWith("admin."));
+    expect(admin.length).toBeGreaterThanOrEqual(8);
+    for (const entry of admin) {
+      expect(entry.meta.scope, entry.key).toEqual(["operator"]);
+      expect(entry.path, entry.key).toMatch(/^\/v1\/admin\//);
+    }
+    for (const entry of procedures)
+      if (!entry.key.startsWith("admin."))
+        expect(entry.meta.scope, entry.key).not.toContain("operator");
+  });
+
+  it("新 procedure 的节号、since 与错误码", () => {
+    expect(sectionOf("teams.create")).toBe("§21");
+    expect(sectionOf("invitations.accept")).toBe("§22");
+    expect(sectionOf("groups.setLead")).toBe("§23");
+    expect(sectionOf("grants.effective")).toBe("§24");
+    expect(sectionOf("accessRequests.approve")).toBe("§24");
+    expect(sectionOf("audit.export")).toBe("§25");
+    expect(sectionOf("billing.checkout")).toBe("§26");
+    expect(sectionOf("apiTokens.create")).toBe("§27");
+    expect(sectionOf("admin.incident")).toBe("§28");
+    expect(sectionOf("status.get")).toBe("§28");
+    expect(sectionOf("trust.list")).toBe("§31");
+    expect(sectionOf("auth.deviceGet")).toBe("§29");
+    expect(sectionOf("me.notificationPrefs")).toBe("§29");
+    expect(sectionOf("auth.emailVerify")).toBe("§29");
+    expect(sectionOf("me.spaces")).toBe("§29");
+    expect(sectionOf("sources.transferStart")).toBe("§4");
+    expect(byKey.get("teams.memberRemove")?.errorCodes).toContain(
+      "team_last_owner",
+    );
+    expect(byKey.get("me.delete")?.errorCodes).toContain("team_owner_required");
+    expect(errorStatus("team_role_insufficient")).toBe(403);
+    expect(errorStatus("team_owner_required")).toBe(409);
+    expect(errorStatus("invitation_expired")).toBe(410);
+    expect(errorStatus("transfer_pending")).toBe(409);
+    expect(errorStatus("email_token_invalid")).toBe(400);
+    expect(errorStatus("webhook_signature_invalid")).toBe(401);
+    for (const entry of procedures)
+      if (
+        /^(teams|invitations|groups|grants|accessRequests|trust|audit|apiTokens|admin|status)\./.test(
+          entry.key,
+        )
+      )
+        expect(entry.meta.since, entry.key).toBe("0.10.0");
+  });
+
+  it("注册令牌带空间，缺省个人空间", () => {
+    const schema = input("sources.registrationToken");
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ space: { kind: "personal" } }).success).toBe(
+      true,
+    );
+    expect(
+      schema.safeParse({ space: { kind: "team", teamId: "team_1" } }).success,
+    ).toBe(true);
+    expect(schema.safeParse({ space: { kind: "team" } }).success).toBe(false);
+    expect(
+      schema.safeParse({ space: { kind: "org", orgId: "o" } }).success,
+    ).toBe(false);
+  });
+
+  it("团队角色五档；邀请和角色变更不能给 owner", () => {
+    expect(TEAM_ROLES).toEqual([
+      "owner",
+      "admin",
+      "member",
+      "billing",
+      "guest",
+    ]);
+    const role = input("teams.memberRole");
+    const base = { teamId: "t", accountId: "a" };
+    expect(role.safeParse({ ...base, role: "billing" }).success).toBe(true);
+    expect(role.safeParse({ ...base, role: "owner" }).success).toBe(false);
+    expect(role.safeParse({ ...base, role: "lead" }).success).toBe(false);
+    const invite = input("invitations.create");
+    expect(
+      invite.safeParse({
+        kind: "team",
+        teamId: "t",
+        email: "a@b.test",
+        role: "owner",
+      }).success,
+    ).toBe(false);
+    expect(
+      invite.safeParse({
+        kind: "host",
+        sourceId: "0123456789abcdef0123456789abcdef",
+        email: "a@b.test",
+        role: "viewer",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("space 维度：sources.list、links.list、billing.*、trust.list 收 personal / team，不收别的", () => {
+    for (const key of [
+      "sources.list",
+      "links.list",
+      "billing.plan",
+      "billing.invoices",
+      "trust.list",
+    ]) {
+      const schema = input(key);
+      const shape = (extra: object) => ({
+        ...extra,
+        space: { kind: "team", teamId: "t" },
+      });
+      expect(schema.safeParse(shape({})).success, key).toBe(true);
+      expect(
+        schema.safeParse({ space: { kind: "personal" } }).success,
+        key,
+      ).toBe(true);
+      expect(
+        schema.safeParse({ space: { kind: "org", orgId: "o" } }).success,
+        key,
+      ).toBe(false);
+    }
+    expect(input("billing.plan").safeParse({}).success).toBe(false);
+    expect(byKey.get("trust.list")?.errorCodes).toContain(
+      "team_role_insufficient",
+    );
+  });
+
+  it("设备授权页：deviceGet / deviceDeny；通知偏好里安全类不可改", () => {
+    expect(byKey.get("auth.deviceGet")).toMatchObject({
+      method: "GET",
+      path: "/v1/auth/device",
+    });
+    expect(
+      input("auth.deviceDeny").safeParse({ userCode: "BCDF-GHJK" }).success,
+    ).toBe(true);
+    const update = input("me.notificationPrefsUpdate");
+    expect(update.safeParse({ hostPresence: false }).success).toBe(true);
+    expect(
+      byKey
+        .get("me.notificationPrefs")
+        ?.procedure["~orpc"].outputSchema.safeParse({
+          invitations: true,
+          accessRequests: true,
+          hostPresence: true,
+          security: false,
+        }).success,
+    ).toBe(false);
+  });
+
+  it("控制台要的错误码都在注册表里", () => {
+    for (const code of [
+      "email_token_invalid",
+      "email_token_expired",
+      "team_slug_taken",
+      "team_role_insufficient",
+      "team_last_owner",
+      "team_owner_required",
+      "team_suspended",
+      "team_deleted",
+      "invitation_expired",
+      "invitation_email_mismatch",
+      "member_exists",
+      "host_registration_disabled",
+      "guests_disabled",
+      "anonymous_links_disabled",
+      "plan_feature_unavailable",
+      "transfer_pending",
+      "device_untrusted",
+      "link_frozen",
+    ])
+      expect(isErrorCode(code), code).toBe(true);
+    expect(errorStatus("team_last_owner")).toBe(409);
+    expect(errorStatus("team_deleted")).toBe(410);
+    expect(errorStatus("link_frozen")).toBe(403);
+  });
+
+  it("授予主体四种；GET 列表的分页与时间按 query 字符串收", () => {
+    const create = input("grants.create");
+    const source = "0123456789abcdef0123456789abcdef";
+    for (const subject of [
+      { kind: "team", teamId: "t" },
+      { kind: "member", accountId: "a" },
+      { kind: "group", groupId: "g" },
+      { kind: "guest", accountId: "a" },
+    ])
+      expect(
+        create.safeParse({ sourceId: source, subject, role: "viewer" }).success,
+      ).toBe(true);
+    expect(
+      create.safeParse({
+        sourceId: source,
+        subject: { kind: "team", teamId: "t" },
+        role: "owner",
+      }).success,
+    ).toBe(false);
+    expect(
+      input("audit.list").parse({ teamId: "t", fromMs: "1", toMs: "2" }),
+    ).toEqual({ teamId: "t", fromMs: 1, toMs: 2, limit: 100 });
+    expect(
+      input("audit.list").safeParse({ teamId: "t", limit: "501" }).success,
+    ).toBe(false);
+  });
+});
+
 describe("me.stream 事件", () => {
+  it("协议 1.4 的团队事件", () => {
+    const sourceId = "0123456789abcdef0123456789abcdef";
+    const events = [
+      { type: "memberChanged", teamId: "t", change: "roleChanged", atMs: 1 },
+      {
+        type: "invitationChanged",
+        invitationId: "i",
+        state: "accepted",
+        atMs: 1,
+      },
+      { type: "grantChanged", sourceId, atMs: 1 },
+      { type: "accessRequested", requestId: "r", sourceId, atMs: 1 },
+      { type: "deviceTrustRequested", requestId: "r", sourceId, atMs: 1 },
+      {
+        type: "deviceTrustResolved",
+        requestId: "r",
+        outcome: "trusted",
+        atMs: 1,
+      },
+      {
+        type: "planChanged",
+        space: { kind: "team", teamId: "t" },
+        plan: "team",
+        status: "active",
+        atMs: 1,
+      },
+    ];
+    for (const event of events)
+      expect(meStreamEventSchema.parse(event)).toEqual(event);
+    expect(
+      meStreamEventSchema.safeParse({ type: "memberChanged", teamId: "t" })
+        .success,
+    ).toBe(false);
+  });
+
   it("七种事件按 type 区分", () => {
     const sourceId = "0123456789abcdef0123456789abcdef";
     const events = [
@@ -155,7 +424,7 @@ describe("挑战（§16）与节点回报（§17）", () => {
   const device = { platform: "desktop", name: "Laptop" };
 
   it("协议 1.2：挑战与节点回报的错误码登记在注册表里", () => {
-    expect(PROTOCOL_VERSION).toEqual({ major: 1, minor: 3 });
+    expect(PROTOCOL_VERSION).toEqual({ major: 1, minor: 4 });
     expect(errorStatus("challenge_required")).toBe(400);
     expect(errorStatus("challenge_invalid")).toBe(400);
     expect(errorStatus("storage_unavailable")).toBe(503);

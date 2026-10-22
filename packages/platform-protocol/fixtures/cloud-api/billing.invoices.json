@@ -1,0 +1,26 @@
+{
+  "input": {
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "limit": 20
+  },
+  "output": {
+    "invoices": [
+      {
+        "invoiceId": "inv_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "number": "ARM-0001",
+        "status": "paid",
+        "amount": 4500,
+        "currency": "usd",
+        "periodStartMs": 1757408000000,
+        "periodEndMs": 1760000000000,
+        "issuedAtMs": 1760000000000,
+        "hostedUrl": "https://pay.armadra.test/i/ARM-0001",
+        "pdfUrl": null
+      }
+    ],
+    "nextCursor": null
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "input": {},
+  "output": {
+    "components": [
+      {
+        "id": "relay",
+        "name": "Relay",
+        "state": "operational"
+      },
+      {
+        "id": "console",
+        "name": "Console",
+        "state": "degraded"
+      }
+    ],
+    "notice": null,
+    "updatedAtMs": 1760000000000
+  }
+}

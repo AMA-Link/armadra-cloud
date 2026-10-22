@@ -1,5 +1,10 @@
 {
-  "input": {},
+  "input": {
+    "space": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
   "output": {
     "registrationToken": "test-registration-token",
     "expiresAtMs": 1760000600000,

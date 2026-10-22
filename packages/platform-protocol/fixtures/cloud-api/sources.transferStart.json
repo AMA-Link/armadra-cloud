@@ -1,0 +1,27 @@
+{
+  "input": {
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "to": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "output": {
+    "transferId": "xfer_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "sourceId": "0123456789abcdef0123456789abcdef",
+    "from": {
+      "kind": "personal"
+    },
+    "to": {
+      "kind": "team",
+      "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "status": "pending",
+    "confirmedBy": {
+      "from": true,
+      "to": false
+    },
+    "createdAtMs": 1760000000000,
+    "expiresAtMs": 1760604800000
+  }
+}

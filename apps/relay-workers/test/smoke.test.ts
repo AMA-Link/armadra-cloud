@@ -19,7 +19,7 @@ it("/health、平台信息与隧道入口按生产配置答", async () => {
   expect(info).toMatchObject({
     mode: "personal",
     issuer: ORIGIN,
-    protocol: { major: 1, minor: 3 },
+    protocol: { major: 1, minor: 4 },
     name: "relay.armadra.com",
   });
   // 没有页面产物（仓库里只有 .assetsignore）：不报 webApp，/app/ 答错误页。

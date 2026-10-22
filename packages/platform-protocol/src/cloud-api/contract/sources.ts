@@ -2,7 +2,15 @@ import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
 import { tunnelLimitsSchema } from "../../tunnel/handshake.ts";
-import { base, SINCE_0_1 } from "../meta.ts";
+import { base, SINCE_0_1, SINCE_0_10 } from "../meta.ts";
+import {
+  grantRoleSchema,
+  hostSettingsSchema,
+  hostTagsSchema,
+  spaceSchema,
+  sourceTransferSchema,
+  workspaceIdsSchema,
+} from "../saas-schemas.ts";
 import {
   deviceInputSchema,
   ed25519PublicJwkSchema,
@@ -17,6 +25,8 @@ import {
 
 const session = { scope: ["session"], since: SINCE_0_1 } as const;
 const owner = { scope: ["owner"], since: SINCE_0_1 } as const;
+/** 主机 owner，或团队主机的团队 admin（1.4 起）。 */
+const manager = { scope: ["owner", "team:admin"], since: SINCE_0_10 } as const;
 
 /**
  * 隧道节点（cloud-api §17）：`url` 是完整的 WebSocket 地址，可以带路径与 query（Workers 中继
@@ -46,6 +56,11 @@ export const sourceAccessSchema = z.object({
   via: sourceViaSchema,
   linkId: z.string().nullable(),
   grantedAtMs: z.number().int(),
+  /** 1.4 起：来自哪条授予、角色、范围与到期（访问清单）；personal 不报。 */
+  grantId: z.string().nullable().optional(),
+  role: grantRoleSchema.optional(),
+  workspaceIds: workspaceIdsSchema.optional(),
+  expiresAtMs: z.number().int().nullable().optional(),
 });
 
 export const sources = {
@@ -53,9 +68,18 @@ export const sources = {
     .route({ method: "POST", path: "/v1/sources/registration-tokens" })
     .meta(session)
     .errors(
-      errors.pick("email_unverified", "limit_reached", "org_role_insufficient"),
+      errors.pick(
+        "email_unverified",
+        "limit_reached",
+        "team_role_insufficient",
+        "team_policy_denied",
+        "host_registration_disabled",
+        "team_suspended",
+        "team_deleted",
+      ),
     )
-    .input(z.object({ orgId: z.string().optional() }))
+    // 1.4 起：令牌由某个空间签发，主机就归那个空间；缺省 = 个人空间。
+    .input(z.object({ space: spaceSchema.optional() }))
     .output(
       z.object({
         registrationToken: z.string(),
@@ -114,7 +138,9 @@ export const sources = {
   list: base
     .route({ method: "GET", path: "/v1/sources" })
     .meta(session)
-    .input(z.object({ orgId: z.string().optional() }))
+    // 1.4 起：给 `space` 只列那个空间的主机；缺省列调用者能到达的全部（个人空间 + 各团队）。
+    // GET 里写成 `space[kind]=team&space[teamId]=…`。
+    .input(z.object({ space: spaceSchema.optional() }))
     .output(z.object({ sources: z.array(sourceSummarySchema) })),
   get: base
     .route({ method: "GET", path: "/v1/sources/{sourceId}" })
@@ -131,6 +157,9 @@ export const sources = {
         sourceId: sourceIdSchema,
         name: z.string().min(1).max(128).optional(),
         trustedOrigins: z.array(z.string()).optional(),
+        /** 1.4 起：标签（整组替换）与主机设置（逐项改）。 */
+        tags: hostTagsSchema.optional(),
+        settings: hostSettingsSchema.partial().optional(),
       }),
     )
     .output(sourceDetailSchema),
@@ -145,7 +174,12 @@ export const sources = {
     .route({ method: "POST", path: "/v1/sources/{sourceId}/assertion" })
     .meta(session)
     .errors(
-      errors.pick("source_access_denied", "source_revoked", "rate_limited"),
+      errors.pick(
+        "source_access_denied",
+        "source_revoked",
+        "rate_limited",
+        "team_suspended",
+      ),
     )
     .input(
       z.object({
@@ -169,4 +203,55 @@ export const sources = {
     .errors(errors.pick("not_found"))
     .input(z.object({ sourceId: sourceIdSchema, accountId: z.string() }))
     .output(empty),
+  /**
+   * 转移空间（1.4 起，cloud-api §4）：个人 → 团队由主机 owner 发起、团队 admin 接受；团队 →
+   * 团队两边的 admin 都确认。转移后原空间签过的断言与链接全部作废。
+   */
+  transferStart: base
+    .route({ method: "POST", path: "/v1/sources/{sourceId}/transfer" })
+    .meta(manager)
+    .errors(
+      errors.pick(
+        "not_found",
+        "source_access_denied",
+        "team_role_insufficient",
+        "transfer_pending",
+        "limit_reached",
+        "bad_request",
+      ),
+    )
+    .input(z.object({ sourceId: sourceIdSchema, to: spaceSchema }))
+    .output(sourceTransferSchema),
+  transferList: base
+    .route({ method: "GET", path: "/v1/source-transfers" })
+    .meta({ scope: ["session"], since: SINCE_0_10 })
+    .input(
+      z.object({
+        sourceId: sourceIdSchema.optional(),
+        space: spaceSchema.optional(),
+      }),
+    )
+    .output(z.object({ transfers: z.array(sourceTransferSchema) })),
+  /** 以调用者能代表的一方（主机 owner 或团队 admin）确认；两边都确认后生效。 */
+  transferAccept: base
+    .route({ method: "POST", path: "/v1/source-transfers/{transferId}/accept" })
+    .meta(manager)
+    .errors(
+      errors.pick(
+        "not_found",
+        "team_role_insufficient",
+        "transfer_expired",
+        "limit_reached",
+        "conflict",
+      ),
+    )
+    .input(z.object({ transferId: z.string() }))
+    .output(sourceTransferSchema),
+  /** 任何一方都可以取消或拒绝。 */
+  transferCancel: base
+    .route({ method: "DELETE", path: "/v1/source-transfers/{transferId}" })
+    .meta(manager)
+    .errors(errors.pick("not_found", "team_role_insufficient", "conflict"))
+    .input(z.object({ transferId: z.string() }))
+    .output(sourceTransferSchema),
 };

@@ -1,0 +1,16 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "slug": "dev-team",
+    "name": "Dev Team",
+    "avatarUrl": null,
+    "role": "owner",
+    "plan": "free",
+    "createdAtMs": 1760000000000,
+    "deletedAtMs": null,
+    "purgeAtMs": null
+  }
+}

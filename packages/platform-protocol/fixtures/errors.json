@@ -116,6 +116,72 @@
   "org_slug_taken": {
     "status": 409
   },
+  "team_role_insufficient": {
+    "status": 403
+  },
+  "team_owner_required": {
+    "status": 409
+  },
+  "team_slug_taken": {
+    "status": 409
+  },
+  "team_policy_denied": {
+    "status": 403
+  },
+  "team_suspended": {
+    "status": 403
+  },
+  "invitation_expired": {
+    "status": 410
+  },
+  "invitation_revoked": {
+    "status": 410
+  },
+  "invitation_email_mismatch": {
+    "status": 403
+  },
+  "transfer_pending": {
+    "status": 409
+  },
+  "transfer_expired": {
+    "status": 410
+  },
+  "email_token_invalid": {
+    "status": 400
+  },
+  "email_token_expired": {
+    "status": 410
+  },
+  "webhook_signature_invalid": {
+    "status": 401
+  },
+  "team_last_owner": {
+    "status": 409
+  },
+  "team_deleted": {
+    "status": 410
+  },
+  "member_exists": {
+    "status": 409
+  },
+  "host_registration_disabled": {
+    "status": 403
+  },
+  "guests_disabled": {
+    "status": 403
+  },
+  "anonymous_links_disabled": {
+    "status": 403
+  },
+  "plan_feature_unavailable": {
+    "status": 403
+  },
+  "device_untrusted": {
+    "status": 403
+  },
+  "link_frozen": {
+    "status": 403
+  },
   "relay_token_invalid": {
     "status": 401
   },
