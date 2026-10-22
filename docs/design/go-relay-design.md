@@ -209,7 +209,7 @@ go/
   - 节点下线前给本地隧道发 GOAWAY `rebalance`（grace 30 秒）。
   - 源按 hint 重连到别的节点；客户端通道随旧隧道结束，由客户端重连。
 - **节点注册表与命令**（沿用 Armadra `docs/design/platform/relay.md` §5）：
-  - **节点表**：每个节点每 20 秒写一次 Redis 哈希 `relay:nodes`（node → `{url, weight, version}`，60 秒没续就过期）。控制面的 `heartbeatHint` 从这里取节点列表，按 rendezvous 排序。
+  - **节点表**：每个节点每 20 秒写一次 Redis 哈希 `relay:nodes`（node → `{url, weight, version, draining, connections, tunnels}`，每个字段 `HPEXPIRE` 60 秒，没续就过期）。`url` 是该节点自己的隧道地址（如 `wss://a.edge.<域>/t/v1`），不是共用入口。控制面的 `heartbeatHint` 从这里取节点列表，去掉 `draining` 的，按 rendezvous 排序（[SaaS M1 实施设计](saas-m1-implementation.md) §2.4、§7.3）。
   - **命令频道**：每个节点订阅自己的 `relay:node:<id>`（`closeTunnel`、`kick`），广播仍走 `relay:ctl`。
   - **共享 JWKS**：缓存在 Redis 的 `jwks:<issuer 哈希>` 里，所有节点共用，只有一个节点回源刷新。
   - **跨节点并发**：用 `SADD` / `SREM` / `SCARD` 计数（每条连接一个成员，带过期），取代现在只在本节点计的做法。
