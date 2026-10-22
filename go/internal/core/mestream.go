@@ -107,19 +107,11 @@ type queuedEvent struct {
 // 先后顺序不变。访客能看到的源在 Attach 时解析一次（撤销由 accessRevoked 事件与装配方的复核负责）。
 type attachment struct {
 	caller     Caller
-	sourceID   string
+	sees       func(sourceID string) bool
 	queue      chan queuedEvent
 	done       chan struct{}
 	send       func(Event)
 	onOverflow func()
-}
-
-// visible：这个连接能看到这个源的事件吗（owner 全部，访客只看链接指向的那个）。
-func (a *attachment) visible(sourceID string) bool {
-	if a.caller.Role == RoleOwner {
-		return true
-	}
-	return a.sourceID != "" && a.sourceID == sourceID
 }
 
 // offer 按可见性过滤后放进队列；不做任何 I/O。
@@ -128,7 +120,7 @@ func (a *attachment) offer(event Event, audience *Audience) {
 		if a.caller.LinkID != audience.LinkID {
 			return
 		}
-	} else if !a.visible(event.EventSource()) {
+	} else if !a.sees(event.EventSource()) {
 		return
 	}
 	select {
@@ -165,17 +157,13 @@ func (m *MeStream) Attach(caller Caller, send func(Event), onOverflow func()) (d
 		caller: caller, queue: make(chan queuedEvent, attachQueue), done: make(chan struct{}),
 		send: send, onOverflow: onOverflow,
 	}
-	if caller.Role != RoleOwner && caller.LinkID != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		link, lookupErr := m.c.Ports.Links.Get(ctx, m.c.TenantID, caller.LinkID)
-		cancel()
-		if lookupErr != nil {
-			return nil, lookupErr
-		}
-		if link != nil {
-			a.sourceID = link.SourceID
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	sees, watchErr := m.c.access().Watch(ctx, caller)
+	cancel()
+	if watchErr != nil {
+		return nil, watchErr
 	}
+	a.sees = sees
 	go a.run()
 	offBus := m.c.Subscribe(a.offer)
 	m.mu.Lock()

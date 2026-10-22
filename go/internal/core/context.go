@@ -75,9 +75,15 @@ type Context struct {
 	PasswordPolicy PasswordPolicy
 	// Now 缺省 time.Now。
 	Now func() time.Time
-	// TunnelURL 是源连隧道的节点地址（heartbeatHint 的 nodes[].url，cloud-api §17）；缺省是
-	// issuer 的 wss://…/t/v1。Workers 中继答 …/t/v1?src=<sourceId>，把隧道路由到源的对象。
-	TunnelURL func(sourceID string) string
+	// Policy 是访问策略；nil = personal 的 personalPolicy。
+	Policy AccessPolicy
+	// RelayOrigin 是源的中继来源（Grant / 摘要 / 登记答复里的 relayOrigin）；nil = issuer。
+	RelayOrigin func(sourceID string) string
+	// RelayBaseURL 是源在中继上的根地址；nil = <issuer>/s/<sourceId>。
+	RelayBaseURL func(sourceID string) string
+	// TunnelNodes 是源连隧道的节点（heartbeatHint 的 nodes，cloud-api §17）；nil = issuer 的
+	// wss://…/t/v1 单节点。Workers 中继答 …/t/v1?src=<sourceId>，把隧道路由到源的对象。
+	TunnelNodes func(ctx context.Context, sourceID string) ([]TunnelNode, error)
 	// Challenge 是人机挑战（cloud-api §16）：配置了 siteKey 与 secret 才有；nil = 不要求挑战。
 	Challenge *ChallengeGate
 	Events    *EventBus
@@ -133,4 +139,25 @@ func (c *Context) route(ctx context.Context, sourceID string) (string, bool, err
 		return "", false, nil
 	}
 	return c.Relay.Route(ctx, sourceID)
+}
+
+func (c *Context) relayOrigin(issuer, sourceID string) string {
+	if c.RelayOrigin != nil {
+		return c.RelayOrigin(sourceID)
+	}
+	return issuer
+}
+
+func (c *Context) relayBaseURL(issuer, sourceID string) string {
+	if c.RelayBaseURL != nil {
+		return c.RelayBaseURL(sourceID)
+	}
+	return RelayBaseURL(issuer, sourceID)
+}
+
+func (c *Context) tunnelNodes(ctx context.Context, issuer, sourceID string) ([]TunnelNode, error) {
+	if c.TunnelNodes != nil {
+		return c.TunnelNodes(ctx, sourceID)
+	}
+	return []TunnelNode{{URL: TunnelURL(issuer), Weight: 1}}, nil
 }
