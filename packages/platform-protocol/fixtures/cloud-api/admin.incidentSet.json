@@ -1,0 +1,11 @@
+{
+  "input": {
+    "pauseRegistrations": true,
+    "reason": "spam wave"
+  },
+  "output": {
+    "pauseAssertions": false,
+    "pauseRegistrations": true,
+    "updatedAtMs": 1760000000000
+  }
+}

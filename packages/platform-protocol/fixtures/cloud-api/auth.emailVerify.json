@@ -1,0 +1,9 @@
+{
+  "input": {
+    "token": "test-email-token"
+  },
+  "output": {
+    "email": "dev@armadra.test",
+    "emailVerified": true
+  }
+}

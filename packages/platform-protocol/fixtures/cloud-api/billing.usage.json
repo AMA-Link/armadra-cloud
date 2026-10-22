@@ -1,11 +1,11 @@
 {
   "input": {
-    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
-    "period": "2025-10"
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "period": "2026-10"
   },
   "output": {
-    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA",
-    "period": "2025-10",
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "period": "2026-10",
     "usage": [
       {
         "metric": "relay.bytes",

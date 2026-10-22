@@ -1,0 +1,14 @@
+{
+  "input": {
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "output": {
+    "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "email": "dev@armadra.test",
+    "displayName": "Dev",
+    "isLead": true,
+    "addedAtMs": 1760000000000
+  }
+}

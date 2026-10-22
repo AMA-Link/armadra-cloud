@@ -27,7 +27,7 @@ export const meStreamEventSchema = z.discriminatedUnion("type", [
     type: z.literal("linkUsed"),
     linkId: z.string(),
     sourceId: sourceIdSchema.optional(),
-    orgId: z.string().optional(),
+    teamId: z.string().optional(),
     by: z.object({
       accountId: z.string().optional(),
       guest: z.boolean().optional(),

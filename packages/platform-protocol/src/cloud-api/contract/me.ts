@@ -2,7 +2,15 @@ import { z } from "zod";
 
 import { devicePlatformSchema } from "../../assertion/claims.ts";
 import { errors } from "../../errors/registry.ts";
-import { base, SINCE_0_1, SINCE_0_5 } from "../meta.ts";
+import { base, SINCE_0_1, SINCE_0_5, SINCE_0_10 } from "../meta.ts";
+import {
+  msQuery,
+  nextCursorSchema,
+  pageInputShape,
+  meSpaceSchema,
+  grantSchema,
+  teamMembershipSchema,
+} from "../saas-schemas.ts";
 import {
   empty,
   meSchema,
@@ -45,9 +53,6 @@ export const trafficBucketSchema = z.object({
   bytesToClient: z.number().int().nonnegative(),
 });
 
-/** query 里是字符串：毫秒整数按数字收。 */
-const msQuery = z.coerce.number().int().nonnegative();
-
 export const trafficInputSchema = z.object({
   /** 含：桶起点 ≥ fromMs。 */
   fromMs: msQuery,
@@ -56,6 +61,17 @@ export const trafficInputSchema = z.object({
   sourceId: sourceIdSchema.optional(),
   granularity: z.enum(TRAFFIC_GRANULARITIES).default("hour"),
 });
+
+/** 账号安全日志的一条：登录、新设备、改口令、两步验证变化；本人可见（cloud-api §29）。 */
+export const securityEventSchema = z.object({
+  eventId: z.string(),
+  action: z.string().min(1).max(64),
+  deviceName: z.string().nullable(),
+  ipPrefix: z.string().nullable(),
+  atMs: z.number().int(),
+});
+
+const session10 = { scope: ["session"], since: SINCE_0_10 } as const;
 
 export const me = {
   get: base
@@ -101,4 +117,72 @@ export const me = {
     .errors(errors.pick("bad_request"))
     .input(trafficInputSchema)
     .output(z.object({ buckets: z.array(trafficBucketSchema) })),
+  /** 改邮箱要验证新地址（`auth.emailVerify`），并通知旧地址；验证前旧邮箱照常生效。 */
+  emailChange: base
+    .route({ method: "POST", path: "/v1/me/email" })
+    .meta(session10)
+    .errors(
+      errors.pick(
+        "email_taken",
+        "credentials_invalid",
+        "rate_limited",
+        "bad_request",
+      ),
+    )
+    .input(z.object({ newEmail: z.email(), password: z.string() }))
+    .output(empty),
+  /** 个人空间 + 所属的每个团队（控制台顶部的空间切换用）。 */
+  spaces: base
+    .route({ method: "GET", path: "/v1/me/spaces" })
+    .meta(session10)
+    .input(empty)
+    .output(z.object({ spaces: z.array(meSpaceSchema) })),
+  securityLog: base
+    .route({ method: "GET", path: "/v1/me/security-log" })
+    .meta(session10)
+    .errors(errors.pick("bad_request"))
+    .input(
+      z.object({
+        fromMs: msQuery.optional(),
+        toMs: msQuery.optional(),
+        ...pageInputShape,
+      }),
+    )
+    .output(
+      z.object({
+        events: z.array(securityEventSchema),
+        nextCursor: nextCursorSchema,
+      }),
+    ),
+  /** 注销账号：先转移名下团队的 owner；7 天冷静期，期内再登录可 `deleteCancel`。 */
+  delete: base
+    .route({ method: "POST", path: "/v1/me/delete" })
+    .meta(session10)
+    .errors(
+      errors.pick("credentials_invalid", "team_owner_required", "rate_limited"),
+    )
+    .input(z.object({ password: z.string() }))
+    .output(z.object({ purgeAtMs: z.number().int() })),
+  deleteCancel: base
+    .route({ method: "POST", path: "/v1/me/delete/cancel" })
+    .meta(session10)
+    .errors(errors.pick("conflict"))
+    .input(empty)
+    .output(empty),
+  /** 导出账号、设备、团队身份、授予与安全日志（JSON）；按账号限流。 */
+  export: base
+    .route({ method: "POST", path: "/v1/me/export" })
+    .meta(session10)
+    .errors(errors.pick("rate_limited"))
+    .input(empty)
+    .output(
+      z.object({
+        exportedAtMs: z.number().int(),
+        account: meSchema,
+        devices: z.array(meDeviceSchema),
+        teams: z.array(teamMembershipSchema),
+        grants: z.array(grantSchema),
+        securityLog: z.array(securityEventSchema),
+      }),
+    ),
 };

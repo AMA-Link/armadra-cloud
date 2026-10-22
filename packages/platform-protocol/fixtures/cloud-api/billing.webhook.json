@@ -1,0 +1,10 @@
+{
+  "input": {
+    "provider": "stripe",
+    "id": "evt_test",
+    "type": "invoice.paid"
+  },
+  "output": {
+    "received": true
+  }
+}

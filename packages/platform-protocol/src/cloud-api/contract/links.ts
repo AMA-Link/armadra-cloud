@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
 import { base, SINCE_0_1, SINCE_0_2 } from "../meta.ts";
+import { teamIdSchema, teamInviteRoleSchema } from "../saas-schemas.ts";
 import {
   challengeTokenSchema,
   deviceInputSchema,
@@ -25,24 +26,29 @@ export const createLinkInputSchema = z.discriminatedUnion("kind", [
     /** 0.3.0 起（能力 `links.scope`）；缺省 = 整台、按角色。 */
     scope: linkScopeSchema.optional(),
   }),
+  /** 团队加入链接（1.4 起，取代从未实现的 `org_join`；M2）：接受时要登录云账号。 */
   z.object({
-    kind: z.literal("org_join"),
-    orgId: z.string(),
+    kind: z.literal("team_join"),
+    teamId: teamIdSchema,
     label: z.string().max(128),
+    /** 加入后的角色；缺省 `member`。 */
+    role: teamInviteRoleSchema.exclude(["admin"]).optional(),
     expiresAtMs: z.number().int(),
     maxUses: z.number().int().positive().optional(),
-    sources: z.array(sourceIdSchema).optional(),
+    /** 限邮箱域名（小写）；缺省不限。 */
+    emailDomains: z.array(z.string().min(1).max(253)).max(16).optional(),
   }),
 ]);
 
 export const links = {
   create: base
     .route({ method: "POST", path: "/v1/links" })
-    .meta({ scope: ["owner", "org:admin"], since: SINCE_0_1 })
+    .meta({ scope: ["owner", "team:admin"], since: SINCE_0_1 })
     .errors(
       errors.pick(
         "source_access_denied",
-        "org_role_insufficient",
+        "team_role_insufficient",
+        "team_policy_denied",
         "bad_request",
       ),
     )
@@ -51,7 +57,7 @@ export const links = {
       z.object({
         linkId: z.string(),
         url: z.string(),
-        /** 只有 org_join 与 personal 的 source_invite 返回。 */
+        /** 只有 team_join 与 personal 的 source_invite 返回。 */
         secret: z.string().optional(),
         expiresAtMs: z.number().int(),
       }),
@@ -67,7 +73,7 @@ export const links = {
         label: z.string(),
         role: z.string().optional(),
         sourceName: z.string().optional(),
-        orgName: z.string().optional(),
+        teamName: z.string().optional(),
         /** 0.3.0 起；整台时不出现。 */
         scope: linkScopeSchema.optional(),
         expiresAtMs: z.number().int(),
@@ -106,7 +112,8 @@ export const links = {
         relayBaseUrl: z.string().optional(),
         assertion: z.string().optional(),
         relayToken: z.string().optional(),
-        orgId: z.string().optional(),
+        /** `team_join` 接受后加入的团队（1.4 起）。 */
+        teamId: z.string().optional(),
         /**
          * 源端到端通道的身份公钥指纹（`base32(SHA-256(pub))`，52 字符；cloud-api §20，
          * 0.5.0 起）。只是提示：访客按链接片段第三段（源自己给的指纹前缀）钉扎。
@@ -117,24 +124,24 @@ export const links = {
     ),
   list: base
     .route({ method: "GET", path: "/v1/links" })
-    .meta({ scope: ["owner", "org:admin"], since: SINCE_0_1 })
+    .meta({ scope: ["owner", "team:admin"], since: SINCE_0_1 })
     .input(
       z.object({
         sourceId: sourceIdSchema.optional(),
-        orgId: z.string().optional(),
+        teamId: teamIdSchema.optional(),
       }),
     )
     .output(z.object({ links: z.array(linkSummarySchema) })),
   /** 改备注（`label`）；已撤销的链接也能改，别的字段不动。 */
   update: base
     .route({ method: "PATCH", path: "/v1/links/{linkId}" })
-    .meta({ scope: ["owner", "org:admin"], since: SINCE_0_2 })
+    .meta({ scope: ["owner", "team:admin"], since: SINCE_0_2 })
     .errors(errors.pick("not_found"))
     .input(z.object({ linkId: z.string(), label: z.string().max(128) }))
     .output(linkSummarySchema),
   revoke: base
     .route({ method: "DELETE", path: "/v1/links/{linkId}" })
-    .meta({ scope: ["owner", "org:admin"], since: SINCE_0_1 })
+    .meta({ scope: ["owner", "team:admin"], since: SINCE_0_1 })
     .errors(errors.pick("not_found"))
     .input(z.object({ linkId: z.string() }))
     .output(z.object({})),

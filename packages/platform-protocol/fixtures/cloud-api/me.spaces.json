@@ -1,0 +1,19 @@
+{
+  "input": {},
+  "output": {
+    "spaces": [
+      {
+        "kind": "personal",
+        "plan": "free"
+      },
+      {
+        "kind": "team",
+        "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+        "slug": "dev-team",
+        "name": "Dev Team",
+        "role": "owner",
+        "plan": "free"
+      }
+    ]
+  }
+}

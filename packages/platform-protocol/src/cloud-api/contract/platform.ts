@@ -33,6 +33,18 @@ export const PLATFORM_CAPABILITIES = [
   "auth.password-change",
   /** `me.traffic`（中继流量统计，cloud-api §19，0.5.0 起）。 */
   "me.traffic",
+  // 协议 1.4（cloud-api §21 起）：SaaS 控制面实现了才报；personal 都不报。
+  "teams",
+  "invitations",
+  "groups",
+  "grants",
+  "access-requests",
+  "audit",
+  "api-tokens",
+  "links.team-join",
+  "auth.email-verify",
+  "auth.password-reset",
+  "me.spaces",
 ] as const;
 
 export const platformModeSchema = z.enum(["saas", "personal"]);

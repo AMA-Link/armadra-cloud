@@ -1,7 +1,14 @@
 {
   "input": {
     "sourceId": "0123456789abcdef0123456789abcdef",
-    "name": "Workstation 2"
+    "name": "Workstation 2",
+    "tags": [
+      "build",
+      "gpu"
+    ],
+    "settings": {
+      "allowGuests": false
+    }
   },
   "output": {
     "sourceId": "0123456789abcdef0123456789abcdef",

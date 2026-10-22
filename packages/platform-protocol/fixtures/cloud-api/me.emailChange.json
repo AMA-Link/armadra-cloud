@@ -1,0 +1,7 @@
+{
+  "input": {
+    "newEmail": "dev2@armadra.test",
+    "password": "correct horse battery staple"
+  },
+  "output": {}
+}

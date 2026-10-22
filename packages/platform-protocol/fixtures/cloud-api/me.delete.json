@@ -1,0 +1,8 @@
+{
+  "input": {
+    "password": "correct horse battery staple"
+  },
+  "output": {
+    "purgeAtMs": 1760604800000
+  }
+}

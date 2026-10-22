@@ -1,6 +1,7 @@
 {
   "input": {
-    "orgId": "org_01JAAAAAAAAAAAAAAAAAAAAAAA"
+    "teamId": "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "groupId": "grp_01JAAAAAAAAAAAAAAAAAAAAAAA"
   },
   "output": {
     "members": [
@@ -8,8 +9,8 @@
         "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
         "email": "dev@armadra.test",
         "displayName": "Dev",
-        "role": "admin",
-        "joinedAtMs": 1760000000000
+        "isLead": true,
+        "addedAtMs": 1760000000000
       }
     ]
   }

@@ -1,0 +1,15 @@
+{
+  "input": {
+    "node": "relay-1",
+    "drain": true
+  },
+  "output": {
+    "node": "relay-1",
+    "region": "ap-east",
+    "online": true,
+    "tunnels": 12,
+    "draining": true,
+    "version": "0.10.0",
+    "lastSeenAtMs": 1760000000000
+  }
+}
