@@ -172,11 +172,13 @@ func (c *econn) Write(b []byte, ack int) bool {
 	c.mu.Unlock()
 	if broken {
 		// 写坏了：帧已被接受，经 OnSent 报告 ack 再关连接。
-		c.h.OnSent(c, ack)
+		if ack > 0 {
+			c.h.OnSent(c, ack)
+		}
 		c.closeNow(io.ErrClosedPipe)
 		return true
 	}
-	if sent {
+	if sent && ack > 0 {
 		c.h.OnSent(c, ack)
 	}
 	return true

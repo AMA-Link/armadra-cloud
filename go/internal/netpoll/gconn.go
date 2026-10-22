@@ -95,7 +95,9 @@ func (c *gconn) writeLoop() {
 			c.out, c.acks = c.out[1:], c.acks[1:]
 		}
 		c.mu.Unlock()
-		c.h.OnSent(c, ack)
+		if ack > 0 {
+			c.h.OnSent(c, ack)
+		}
 	}
 }
 
