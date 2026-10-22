@@ -105,11 +105,12 @@
   ],
   "goModules": [
     {
-      "$comment": "go/ 只许 import 标准库、本模块与这里登记的第三方模块：x/crypto 给 scrypt；modernc.org/sqlite（纯 Go，连同它的传递依赖）与 pgx/v5（连同 puddle、x/sync 等）是存储驱动；jsonschema（及它的 x/text）只在测试里校验 cloud-api 夹具，不进生产代码。go.mod 的版本都写精确版本，不用 replace。internal/core 不碰数据面（tunnel、edge），延续「控制核不碰中继内核」的边界。",
+      "$comment": "go/ 只许 import 标准库、本模块与这里登记的第三方模块：x/crypto 给 scrypt；gorilla/websocket 给隧道与 me-stream 的升级；modernc.org/sqlite（纯 Go，连同它的传递依赖）与 pgx/v5（连同 puddle、x/sync 等）是存储驱动；jsonschema（及它的 x/text）只在测试里校验 cloud-api 夹具，不进生产代码。go.mod 的版本都写精确版本，不用 replace。internal/core 不碰数据面（tunnel、edge），延续「控制核不碰中继内核」的边界。",
       "root": "go",
       "allow": [
         "github.com/dustin/go-humanize",
         "github.com/google/uuid",
+        "github.com/gorilla/websocket",
         "github.com/jackc/pgpassfile",
         "github.com/jackc/pgservicefile",
         "github.com/jackc/pgx/v5",

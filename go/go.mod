@@ -3,6 +3,7 @@ module github.com/AMA-Link/armadra-cloud/go
 go 1.27.1
 
 require (
+	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/crypto v0.58.0

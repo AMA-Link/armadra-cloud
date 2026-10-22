@@ -267,7 +267,13 @@ func decodeGoaway(payload []byte) (*gen.GoawayPayload, error) {
 
 // Decode 解一帧。b 必须恰好是一帧（WebSocket 的一条二进制消息）。
 // 返回的 Data 是拷贝，调用方可以复用 b。
-func Decode(b []byte) (Frame, error) {
+func Decode(b []byte) (Frame, error) { return decode(b, true) }
+
+// DecodeView 与 Decode 校验完全相同，但返回的 Data 直接指向 b（不拷贝）。
+// 数据面的热路径用它：调用方在下一次读取前必须用完 Data。
+func DecodeView(b []byte) (Frame, error) { return decode(b, false) }
+
+func decode(b []byte, copyData bool) (Frame, error) {
 	if len(b) < FrameHeaderBytes {
 		return Frame{}, frameErr(ErrBadFrame, "帧只有 %d 字节", len(b))
 	}
@@ -301,7 +307,11 @@ func Decode(b []byte) (Frame, error) {
 		if len(payload) > MaxDataChunk {
 			return Frame{}, frameErr(ErrFrameTooLarge, "DATA %d 字节超过 maxDataChunk", len(payload))
 		}
-		f.Data = append([]byte{}, payload...)
+		if copyData {
+			f.Data = append([]byte{}, payload...)
+		} else {
+			f.Data = payload
+		}
 	case FrameEnd:
 		if err := expect(0); err != nil {
 			return Frame{}, err
