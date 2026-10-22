@@ -116,6 +116,45 @@
   "org_slug_taken": {
     "status": 409
   },
+  "team_role_insufficient": {
+    "status": 403
+  },
+  "team_owner_required": {
+    "status": 409
+  },
+  "team_slug_taken": {
+    "status": 409
+  },
+  "team_policy_denied": {
+    "status": 403
+  },
+  "team_suspended": {
+    "status": 403
+  },
+  "invitation_expired": {
+    "status": 410
+  },
+  "invitation_revoked": {
+    "status": 410
+  },
+  "invitation_email_mismatch": {
+    "status": 403
+  },
+  "transfer_pending": {
+    "status": 409
+  },
+  "transfer_expired": {
+    "status": 410
+  },
+  "email_token_invalid": {
+    "status": 400
+  },
+  "email_token_expired": {
+    "status": 410
+  },
+  "webhook_signature_invalid": {
+    "status": 401
+  },
   "relay_token_invalid": {
     "status": 401
   },
