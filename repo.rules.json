@@ -85,6 +85,16 @@
         "path": "packages/control-store-sql/migrations",
         "kind": "directory"
       }
+    ],
+    "copies": [
+      {
+        "from": "packages/control-store-postgres/migrations",
+        "to": "go/internal/store/postgres/migrations"
+      },
+      {
+        "from": "packages/control-store-sql/migrations",
+        "to": "go/internal/store/sqlite/migrations"
+      }
     ]
   },
   "pinnedVersions": [
