@@ -1,0 +1,64 @@
+default-src 'none'; style-src 'nonce-NONCE'; script-src 'nonce-NONCE'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+=====
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Page unavailable</title>
+<style nonce="NONCE">
+:root{--bg:#1c1c1c;--card:#2c2c2c;--text:rgb(255 255 255/85%);--muted-foreground:rgb(255 255 255/55%);--border:rgb(255 255 255/8%);--brand-solid:#0a6fd6;--on-accent:#fff;--focus-ring:#b8dbff;--hover:rgb(255 255 255/7%);
+--font-ui:-apple-system,"SF Pro Text","PingFang SC",system-ui,"Segoe UI","Microsoft YaHei",sans-serif;color-scheme:dark}
+:root[data-theme="light"]{--bg:#f7f7f7;--card:#fff;--text:rgb(32 32 32/90%);--muted-foreground:rgb(32 32 32/70%);--border:rgb(32 32 32/10%);--brand-solid:#0066cc;--focus-ring:#082340;--hover:rgb(32 32 32/6%);color-scheme:light}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:var(--font-ui);-webkit-font-smoothing:antialiased}
+main{min-height:100dvh;display:grid;place-items:center;padding:24px}
+section{display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;max-width:28rem}
+h1{margin:0;font-size:20px;line-height:28px;font-weight:600;text-wrap:balance}
+a.primary{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border-radius:8px;background:var(--brand-solid);color:var(--on-accent);font-size:14px;font-weight:500;text-decoration:none}
+button.locale{position:fixed;top:12px;right:12px;min-height:44px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--muted-foreground);font:inherit;font-size:13px;cursor:pointer}
+button.locale:hover{background:var(--hover)}
+a.primary:focus-visible,button.locale:focus-visible{outline:3px solid color-mix(in srgb,var(--focus-ring) 50%,transparent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+@media (forced-colors:active){a.primary{border:1px solid ButtonText}}
+</style>
+</head>
+<body data-title="relay.unavailable.title">
+<button class="locale" id="relay-locale" type="button" data-i18n="relay.locale.switch">简体中文</button>
+<main><section>
+<h1 data-i18n="relay.unavailable.title">Page unavailable</h1>
+</section></main>
+<script type="application/json" id="relay-messages">{"zh-CN":{"relay.unavailable.title":"页面不可用","relay.join.title":"加入共享","relay.join.open":"在 Armadra 中打开","relay.locale.switch":"English"},"en":{"relay.unavailable.title":"Page unavailable","relay.join.title":"Join shared source","relay.join.open":"Open in Armadra","relay.locale.switch":"简体中文"}}</script>
+<script nonce="NONCE">
+(function(){
+var M=JSON.parse(document.getElementById("relay-messages").textContent);
+var root=document.documentElement;
+function get(k){try{return localStorage.getItem(k)}catch(e){return null}}
+function put(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+var theme=get("armadra.theme");
+var dark=theme==="dark"||(theme!=="light"&&!(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches));
+root.dataset.theme=dark?"dark":"light";
+var stored=get("armadra.locale");
+var locale=stored==="en"||stored==="zh-CN"?stored:root.lang;
+function apply(){
+  root.lang=locale;
+  var t=M[locale];
+  document.querySelectorAll("[data-i18n]").forEach(function(el){el.textContent=t[el.getAttribute("data-i18n")]});
+  document.title=t[document.body.getAttribute("data-title")];
+}
+document.getElementById("relay-locale").addEventListener("click",function(){
+  locale=locale==="en"?"zh-CN":"en";put("armadra.locale",locale);apply();
+});
+var open=document.getElementById("relay-open");
+if(open){
+  var link=document.body.getAttribute("data-link");
+  var q="link="+encodeURIComponent(link)+"&issuer="+encodeURIComponent(location.origin);
+  if(location.hash.length>1)q+="&s="+encodeURIComponent(location.hash.slice(1));
+  open.href="armadra://join?"+q;
+}
+apply();
+})();
+</script>
+</body>
+</html>

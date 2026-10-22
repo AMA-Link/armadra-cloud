@@ -47,7 +47,7 @@
 | `--database-url-file` / `RELAY_DATABASE_URL_FILE`             |      | 从文件读连接串（口令不出现在进程参数里）                                                                                          |
 | `--database-schema` / `RELAY_DATABASE_SCHEMA`                 |      | 用哪个 schema，缺省连接的缺省 schema                                                                                              |
 | `--control` / `RELAY_CONTROL`                                 |      | `memory`（缺省，单节点）/ `redis` / `postgres`（多节点）                                                                          |
-| `--redis-url` / `RELAY_REDIS_URL`                             |      | `redis://…`；`--control redis` 必填                                                                                               |
+| `--redis-url` / `RELAY_REDIS_URL`                             |      | `redis://…`；`--control redis` 必填，要 Redis 7 以上                                                                              |
 | `--node-id` / `RELAY_NODE_ID`                                 |      | 本节点的名字，多节点时各不相同，缺省 `--host`                                                                                     |
 | `--host` / `RELAY_HOST`                                       | 是   | 对外的 IP 或域名（issuer 与证书 SAN）                                                                                             |
 | `--port` / `RELAY_PORT`                                       |      | 对外端口，缺省 8443（443 时 issuer 省略端口）                                                                                     |
@@ -62,6 +62,10 @@
 | `--account` / `RELAY_PERSONAL_ACCOUNT`                        |      | 存储不存在时自动初始化的账号                                                                                                      |
 | `--password-file` / `RELAY_PERSONAL_PASSWORD_FILE`            |      | 自动初始化的口令文件（之后不再读取）                                                                                              |
 | `--listen` / `RELAY_LISTEN`                                   |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`                                                                                    |
+| `--log-level` / `RELAY_LOG_LEVEL`                             |      | `debug` / `info`（缺省）/ `warn` / `error`                                                                                        |
+| `--name` / `RELAY_NAME`                                       |      | 服务端名称（`platform.info.name`），客户端添加时的缺省显示名；缺省取状态里的 `displayName`，再取 `--host`                         |
+| `--trusted-proxy` / `RELAY_TRUSTED_PROXY`                     |      | 受信反向代理的 IP / CIDR，逗号分隔，如 `127.0.0.1/32,::1/128`；直连对端在列表内才读 `X-Forwarded-For` / `X-Real-IP`，缺省不信任   |
+| `--trusted-proxy-prefer` / `RELAY_TRUSTED_PROXY_PREFER`       |      | 先读哪个头：`forwarded-for`（缺省）/ `real-ip`；要和 `--trusted-proxy` 一起给                                                     |
 | `--metrics-listen` / `RELAY_METRICS_LISTEN`                   |      | `/metrics` 的单独监听（只绑内网地址），缺省不开                                                                                   |
 | `RELAY_METRICS_TOKEN`                                         |      | 设了则 `/metrics` 要 `Authorization: Bearer <令牌>`                                                                               |
 | `--limit-anonymous` / `RELAY_LIMIT_ANONYMOUS`                 |      | 无令牌或令牌无效的请求，按 IP 每分钟上限，缺省 60                                                                                 |

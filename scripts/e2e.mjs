@@ -21,6 +21,12 @@
 // 用 `git archive` 取那一版构建，不动主仓的检出；ARMADRA_REF=worktree 则直接用目录现状；
 // ARMADRA_FETCH=0 不先 fetch。`--server-image` 直接用现成镜像（nightly 的 compat.min）。
 //
+// 对 Go 中继跑同一套用例（不改用例，只换镜像与容器里的命令行）：
+//   E2E_RELAY_DOCKERFILE=go/Dockerfile E2E_RELAY_CLI=armadra-relay pnpm e2e --mode personal
+//   E2E_RELAY_DOCKERFILE  构建中继镜像用的 Dockerfile（缺省 apps/relay/Dockerfile）
+//   E2E_RELAY_CLI         容器里中继命令行的写法（缺省 `node /app/out/cli.js`，空格分隔）
+//   已有镜像时用 --relay-image <镜像> 加 E2E_RELAY_CLI，不构建。
+//
 // 产物：<输出目录>/result.json（缺省 .data/e2e/，每步耗时与结果）。任一步失败非零退出。
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import {
@@ -147,6 +153,11 @@ const project = `armadra-e2e-${randomBytes(4).toString("hex")}`;
 const composeFile = join(root, "deploy/e2e/compose.yml");
 const output = resolve(root, options.values.get("--output") ?? ".data/e2e");
 const relayImage = options.values.get("--relay-image") ?? "armadra-relay:e2e";
+const relayDockerfile =
+  process.env.E2E_RELAY_DOCKERFILE ?? "apps/relay/Dockerfile";
+const relayCli = (process.env.E2E_RELAY_CLI ?? "node /app/out/cli.js")
+  .split(" ")
+  .filter(Boolean);
 const serverImage =
   options.values.get("--server-image") ?? "armadra-server:e2e";
 const keep = options.flags.has("--keep");
@@ -193,7 +204,7 @@ async function buildImages() {
   if (!options.values.has("--relay-image")) {
     await exec(
       "docker",
-      ["build", "-q", "-f", "apps/relay/Dockerfile", "-t", relayImage, "."],
+      ["build", "-q", "-f", relayDockerfile, "-t", relayImage, "."],
       { cwd: root },
     );
   }
@@ -542,8 +553,7 @@ async function main() {
       "exec",
       "-T",
       "relay",
-      "node",
-      "/app/out/cli.js",
+      ...relayCli,
       "personal",
       "status",
       "--data-dir",

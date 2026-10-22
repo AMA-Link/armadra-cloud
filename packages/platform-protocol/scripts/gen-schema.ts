@@ -2,7 +2,7 @@
  * 生成语言无关的 schema 导出 `schema/`（SaaS 设计 §4.5）：给将来非 TypeScript 的实现
  * （Go 版中继内核）生成类型用，随 npm 包与 tarball 发布。
  *
- * - `assertion/*.json`：五种令牌声明与公钥（zod 4 `z.toJSONSchema`）；
+ * - `assertion/*.json`：六种令牌声明与公钥（zod 4 `z.toJSONSchema`）；
  * - `tunnel/*.json`：握手的 hello / challenge / auth / ready / reject 与帧里的 JSON 载荷；
  * - `errors.json`：错误码 → HTTP 状态码；
  * - `e2e/accept.json`：端到端通道 r0 的 JSON；
@@ -32,6 +32,7 @@ import {
   assertionClaimsSchema,
   ed25519PublicJwkSchema,
   jwkSetSchema,
+  nodeTokenClaimsSchema,
   relayTokenClaimsSchema,
   SCOPE_PREFIX,
   SCOPE_READ_ONLY,
@@ -80,6 +81,7 @@ schema("assertion/access-claims.json", accessClaimsSchema);
 schema("assertion/assertion-claims.json", assertionClaimsSchema);
 schema("assertion/relay-token-claims.json", relayTokenClaimsSchema);
 schema("assertion/tunnel-token-claims.json", tunnelTokenClaimsSchema);
+schema("assertion/node-token-claims.json", nodeTokenClaimsSchema);
 schema("assertion/source-jws-claims.json", sourceJwsClaimsSchema);
 schema("assertion/ed25519-public-jwk.json", ed25519PublicJwkSchema);
 schema("assertion/jwk-set.json", jwkSetSchema);
@@ -122,6 +124,11 @@ put("constants.json", {
   subprotocols: {
     relay: version.RELAY_SUBPROTOCOL_PREFIX,
     ticket: version.TICKET_SUBPROTOCOL_PREFIX,
+  },
+  /** 控制面按 `sources.register` 上报的 `coreVersion` 决定签哪种断言（cloud-api §30）。 */
+  minCoreVersion: {
+    teamAssertion: version.MIN_CORE_VERSION_TEAM_ASSERTION,
+    roleOnlyAssertion: version.MIN_CORE_VERSION_ROLE_ONLY_ASSERTION,
   },
   tokens: {
     types: TOKEN_TYPES,

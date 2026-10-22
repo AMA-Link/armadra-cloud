@@ -1,6 +1,8 @@
 package core_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -171,17 +173,34 @@ func TestMeStreamDeliversAccessRevokedOnlyToThatLink(t *testing.T) {
 	}
 	guestA, _, linkA := mk()
 	guestB, _, _ := mk()
+	var mu sync.Mutex
 	var gotA, gotB, gotOwner []string
-	stream.Attach(guestA, func(ev core.Event) { gotA = append(gotA, fmt.Sprintf("%T", ev)) })
-	stream.Attach(guestB, func(ev core.Event) { gotB = append(gotB, fmt.Sprintf("%T", ev)) })
-	detach := stream.Attach(owner, func(ev core.Event) { gotOwner = append(gotOwner, fmt.Sprintf("%T", ev)) })
+	collect := func(into *[]string) func(core.Event) {
+		return func(ev core.Event) {
+			mu.Lock()
+			*into = append(*into, fmt.Sprintf("%T", ev))
+			mu.Unlock()
+		}
+	}
+	read := func(from *[]string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		return fmt.Sprint(*from)
+	}
+	_, _ = stream.Attach(guestA, collect(&gotA), nil)
+	_, _ = stream.Attach(guestB, collect(&gotB), nil)
+	detach, _ := stream.Attach(owner, collect(&gotOwner), nil)
 	e.must(links.Revoke(e.ctx, owner, linkA))
-	eq(t, fmt.Sprint(gotA), "[core.AccessRevoked]", "被撤销的那条链接的访客")
-	eq(t, fmt.Sprint(gotB), "[]", "别的链接的访客")
-	eq(t, fmt.Sprint(gotOwner), "[]", "accessRevoked 带 audience，不发给 owner")
+	// 送达在连接自己的协程里：先等被撤销的访客收到，别的连接这时也该处理完了。
+	waitUntil(t, func() bool { return read(&gotA) == "[core.AccessRevoked]" })
+	time.Sleep(30 * time.Millisecond)
+	eq(t, read(&gotA), "[core.AccessRevoked]", "被撤销的那条链接的访客")
+	eq(t, read(&gotB), "[]", "别的链接的访客")
+	eq(t, read(&gotOwner), "[]", "accessRevoked 带 audience，不发给 owner")
 	detach()
 	e.h.Context.Emit(core.NewSourceRevoked(sourceID), nil)
-	eq(t, fmt.Sprint(gotOwner), "[]", "退订之后不再收到")
+	time.Sleep(30 * time.Millisecond)
+	eq(t, read(&gotOwner), "[]", "退订之后不再收到")
 }
 
 func TestEventBusIsolatesPanickingListeners(t *testing.T) {
@@ -288,5 +307,144 @@ func TestEventBusBufferedSubscriberNeverBlocksEmit(t *testing.T) {
 	defer mu.Unlock()
 	if len(got) < 2 || got[0] != "a" {
 		t.Fatalf("顺序：%v", got)
+	}
+}
+
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("等不到条件成立")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// 数查询次数的端口：Sources.Get 与 Links.Get。
+type countingSources struct {
+	store.SourceStore
+	gets atomic.Int64
+}
+
+func (c *countingSources) Get(ctx context.Context, tenantID, sourceID string) (*store.SourceRecord, error) {
+	c.gets.Add(1)
+	return c.SourceStore.Get(ctx, tenantID, sourceID)
+}
+
+type countingLinks struct {
+	store.LinkStore
+	gets atomic.Int64
+}
+
+func (c *countingLinks) Get(ctx context.Context, tenantID, linkID string) (*store.LinkRecord, error) {
+	c.gets.Add(1)
+	return c.LinkStore.Get(ctx, tenantID, linkID)
+}
+
+// 一个源上线事件不管有多少连接，只查一次源；访客的链接只在 Attach 时查一次，之后每个事件都不再查库。
+func TestMeStreamPresenceLooksUpOncePerEvent(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	sources := e.register(owner, sourceID)
+	links := core.NewLinks(e.h.Context, sources)
+	created, err := links.Create(e.ctx, owner, linkInput(e))
+	e.must(err)
+	accepted, err := links.Accept(e.ctx, core.AcceptInput{LinkID: created.LinkID, Secret: created.Secret}, "ip")
+	e.must(err)
+	guest, err := core.NewAuthenticator(e.h.Context).Authenticate(e.ctx, "Bearer "+accepted.GuestSession.AccessToken)
+	e.must(err)
+
+	counted := *e.h.Context
+	ports := *counted.Ports
+	cs, cl := &countingSources{SourceStore: ports.Sources}, &countingLinks{LinkStore: ports.Links}
+	ports.Sources, ports.Links = cs, cl
+	counted.Ports = &ports
+	stream := core.NewMeStream(&counted)
+
+	var received atomic.Int64
+	for i := 0; i < 3; i++ {
+		attach(t, stream, owner, func(core.Event) { received.Add(1) })
+	}
+	for i := 0; i < 2; i++ {
+		attach(t, stream, guest, func(core.Event) { received.Add(1) })
+	}
+	if got := cl.gets.Load(); got != 2 {
+		t.Fatalf("访客各查一次链接，共 2 次，得 %d", got)
+	}
+	e.h.Publish(core.PresenceEvent{Online: true, SourceID: sourceID, CoreVersion: "1", AtMs: 1})
+	waitUntil(t, func() bool { return received.Load() == 5 })
+	if got := cs.gets.Load(); got != 1 {
+		t.Fatalf("一个事件只查一次源，得 %d", got)
+	}
+	if got := cl.gets.Load(); got != 2 {
+		t.Fatalf("事件分发不再查链接，得 %d", got)
+	}
+	// 同一事件循环里的 bus 事件也不查库。
+	e.h.Context.Emit(core.NewSourceRevoked(sourceID), nil)
+	waitUntil(t, func() bool { return received.Load() == 10 })
+	if cs.gets.Load() != 1 || cl.gets.Load() != 2 {
+		t.Fatalf("bus 事件不该查库：源 %d 链接 %d", cs.gets.Load(), cl.gets.Load())
+	}
+}
+
+// 队列满了丢事件并通知装配方，发事件的一方不被拖住。
+func TestMeStreamOverflowNotifies(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	stream := core.NewMeStream(e.h.Context)
+	release := make(chan struct{})
+	var overflowed atomic.Int64
+	detach, _ := stream.Attach(owner, func(core.Event) { <-release }, func() { overflowed.Add(1) })
+	defer detach()
+	defer close(release)
+	started := time.Now()
+	for i := 0; i < 1000; i++ {
+		e.h.Context.Emit(core.NewSourceRevoked(sourceID), nil)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("发事件被慢连接拖住了")
+	}
+	if overflowed.Load() == 0 {
+		t.Fatal("队列满了应通知 onOverflow")
+	}
+}
+
+func attach(t *testing.T, stream *core.MeStream, caller core.Caller, send func(core.Event)) {
+	t.Helper()
+	detach, err := stream.Attach(caller, send, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(detach)
+}
+
+type failingLinks struct{ store.LinkStore }
+
+func (failingLinks) Get(context.Context, string, string) (*store.LinkRecord, error) {
+	return nil, errors.New("库暂时不可用")
+}
+
+// 访客的链接查不了（库出错）：Attach 返回错误，由装配方关连接让客户端重连，而不是留一条永远收不到事件的连接。
+func TestMeStreamAttachFailsWhenGuestLinkLookupFails(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	sources := e.register(owner, sourceID)
+	links := core.NewLinks(e.h.Context, sources)
+	created, err := links.Create(e.ctx, owner, linkInput(e))
+	e.must(err)
+	accepted, err := links.Accept(e.ctx, core.AcceptInput{LinkID: created.LinkID, Secret: created.Secret}, "ip")
+	e.must(err)
+	guest, err := core.NewAuthenticator(e.h.Context).Authenticate(e.ctx, "Bearer "+accepted.GuestSession.AccessToken)
+	e.must(err)
+	broken := *e.h.Context
+	ports := *broken.Ports
+	ports.Links = failingLinks{ports.Links}
+	broken.Ports = &ports
+	if _, err := core.NewMeStream(&broken).Attach(guest, func(core.Event) {}, nil); err == nil {
+		t.Fatal("链接查不了应返回错误")
+	}
+	if _, err := core.NewMeStream(&broken).Attach(owner, func(core.Event) {}, nil); err != nil {
+		t.Fatalf("owner 不查链接：%v", err)
 	}
 }

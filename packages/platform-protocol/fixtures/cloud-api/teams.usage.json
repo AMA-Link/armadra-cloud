@@ -13,7 +13,7 @@
         "limit": 3
       },
       {
-        "metric": "relay.bytes",
+        "metric": "traffic",
         "value": 1048576,
         "limit": 5368709120
       }

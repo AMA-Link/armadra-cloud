@@ -1,5 +1,6 @@
-// armadra-relay 是中继的命令行。G1 只有开发装配 dev：数据面 + 内存控制面 + 指定的 JWKS 文件 +
-// 回环明文监听，给测试与 bench 用。个人中转与 SaaS 节点的子命令随 G3、G5 加入。
+// armadra-relay 是中继的命令行：personal（个人中转的全部子命令）、health、version、help，
+// 另有给测试与 bench 用的 dev（数据面 + 内存控制面 + 指定的 JWKS 文件 + 回环明文监听）。
+// SaaS 节点（saas serve）随 G5 加入。
 package main
 
 import (
@@ -23,16 +24,12 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/dataplane"
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
+	"github.com/AMA-Link/armadra-cloud/go/internal/personal"
+	"github.com/AMA-Link/armadra-cloud/go/internal/traffic"
 )
 
 // version 由构建注入（-ldflags "-X main.version=…"）。
 var version = "dev"
-
-const usage = `用法: armadra-relay <命令> [选项]
-
-命令:
-  dev      开发装配：只有数据面，内存控制面，回环明文监听
-  version  打印版本`
 
 func main() {
 	tuneGC()
@@ -50,9 +47,10 @@ func tuneGC() {
 
 // 退出码：0 成功，64 用法错误，1 运行出错。
 func run(args []string, stdout, stderr io.Writer) int {
+	personal.Version = version
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, usage)
-		return 64
+		fmt.Fprintln(stdout, personal.Usage)
+		return personal.ExitUsage
 	}
 	switch args[0] {
 	case "version":
@@ -60,12 +58,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "dev":
 		return runDev(args[1:], stdout, stderr)
+	case "health":
+		return personal.Health(personal.EnvFromOS())
+	case "personal":
+		return personal.RunCLI(args[1:], personal.EnvFromOS(), stdout, stderr)
 	case "help", "-h", "--help":
-		fmt.Fprintln(stdout, usage)
+		fmt.Fprintln(stdout, personal.Usage)
 		return 0
+	case "saas":
+		fmt.Fprintf(stderr, "saas 中继还没有提供：现在只有 personal\n\n%s\n", personal.Usage)
+		return personal.ExitUsage
 	}
-	fmt.Fprintf(stderr, "未知命令：%s\n%s\n", args[0], usage)
-	return 64
+	fmt.Fprintf(stderr, "未知命令：%s\n\n%s\n", strings.Join(args, " "), personal.Usage)
+	return personal.ExitUsage
 }
 
 func runDev(args []string, stdout, stderr io.Writer) int {
@@ -78,6 +83,7 @@ func runDev(args []string, stdout, stderr io.Writer) int {
 	metricsListen := fs.String("metrics-listen", "", "指标监听地址（回环）")
 	metricsToken := fs.String("metrics-token", "", "指标的 Bearer 令牌")
 	debug := fs.Bool("debug", false, "开 /debug/pprof 与 /debug/stats")
+	metered := fs.Bool("traffic", false, "开流量计量（写到丢弃的存储，量计数本身的开销）")
 	if err := fs.Parse(args); err != nil {
 		return 64
 	}
@@ -108,6 +114,18 @@ func runDev(args []string, stdout, stderr io.Writer) int {
 	opts := dataplane.Options{
 		Mode: "personal", NodeID: *nodeID, Version: version, Control: ctl,
 		Addressing: edge.PathAddressing(), Log: log,
+	}
+	var meterDone chan struct{}
+	meterCtx, stopMeter := context.WithCancel(context.Background())
+	defer stopMeter()
+	if *metered {
+		meter := traffic.NewMeter(traffic.MeterOptions{
+			Node:  *nodeID,
+			Write: func(context.Context, []traffic.Row) error { return nil },
+		})
+		opts.Traffic = meter
+		meterDone = make(chan struct{})
+		go func() { defer close(meterDone); meter.Run(meterCtx) }()
 	}
 	var plane *dataplane.Plane
 	if *debug {
@@ -152,6 +170,10 @@ func runDev(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	plane.Shutdown(5 * time.Second)
+	if meterDone != nil {
+		stopMeter()
+		<-meterDone
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)

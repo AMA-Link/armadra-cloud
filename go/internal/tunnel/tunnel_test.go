@@ -281,3 +281,18 @@ func TestFramesAndTable(t *testing.T) {
 		}
 	})
 }
+
+// 写协程还没起来（握手刚完成、Start 之前）就来了 GOAWAY：关闭前要把排队的 GOAWAY 帧发出去，
+// 不能只发关闭码（对端靠帧里的 reason 知道是被替换了）。
+func TestGoawayBeforeStartIsDelivered(t *testing.T) {
+	tr := &fakeTransport{}
+	tun := tunnel.New("t1", "0123456789abcdef0123456789abcdef", "0.2.0", tr, testConfig(nil), tunnel.Hooks{})
+	tun.Goaway("replaced", 30*time.Second)
+	got := tr.take()
+	if len(got) != 1 || got[0].Type != protocol.FrameGoaway || got[0].Goaway.Reason != "replaced" {
+		t.Fatalf("关闭前应发出 GOAWAY：%+v", got)
+	}
+	if c := tr.closedWith(); c == nil || c.Code != protocol.CloseTunnelReplaced {
+		t.Fatalf("随后以 replaced 的关闭码关闭：%+v", c)
+	}
+}

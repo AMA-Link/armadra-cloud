@@ -54,6 +54,7 @@ func TestFixtures(t *testing.T) {
 	}
 	relay := e.options(gen.TokenTypeRelay, gen.RelayTokenClaimsSchema, gen.TokenAudienceRelay)
 	tunnel := e.options(gen.TokenTypeTunnel, gen.TunnelTokenClaimsSchema, gen.TokenAudienceTunnel)
+	node := e.options(gen.TokenTypeNode, gen.NodeTokenClaimsSchema, gen.TokenAudienceRelayNode)
 	sourceJWS := e.options(gen.TokenTypeSource, gen.SourceJWSClaimsSchema, e.issuer.Issuer)
 	sourceJWS.ExpectedIss = sourceID
 
@@ -73,6 +74,7 @@ func TestFixtures(t *testing.T) {
 		{"relay-token-dev", relay, ""},
 		{"tunnel-token", tunnel, ""},
 		{"tunnel-token-team", tunnel, ""},
+		{"node-token", node, ""},
 		{"source-jws", sourceJWS, ""},
 		{"expired", assertion(), jose.FailExpired},
 		{"wrong-aud", assertion(), jose.FailAudienceMismatch},

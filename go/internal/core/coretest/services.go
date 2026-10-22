@@ -544,11 +544,23 @@ func ServicesContract(t *testing.T, create func(t *testing.T) store.Backend) {
 					mu.Unlock()
 				}
 			}
-			stream.Attach(owner, record(&toOwner))
-			stream.Attach(guest, record(&toGuest))
+			_, _ = stream.Attach(owner, record(&toOwner), nil)
+			_, _ = stream.Attach(guest, record(&toGuest), nil)
 			e.h.Context.Emit(core.NewSourceRevoked(strings.Repeat("f", 32)), nil)
 			e.h.Publish(core.PresenceEvent{Online: true, SourceID: sourceID, CoreVersion: "1", AtMs: 1})
 			e.h.Publish(core.PresenceEvent{Online: true, SourceID: strings.Repeat("e", 32), CoreVersion: "1", AtMs: 1})
+			// 事件在各连接自己的协程里送达：等 owner 收齐（顺序不变）再核对。
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				mu.Lock()
+				done := len(toOwner) >= 2 && len(toGuest) >= 1
+				mu.Unlock()
+				if done || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			time.Sleep(20 * time.Millisecond) // 多余的事件若有，也该到了
 			mu.Lock()
 			defer mu.Unlock()
 			eq(t, toOwner, []string{"sourceRevoked", "sourceOnline"}, "owner 收到的")

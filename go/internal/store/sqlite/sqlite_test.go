@@ -217,6 +217,10 @@ func TestBackupAndDataVersion(t *testing.T) {
 	if kindOf(t, db.Backup(ctx, target)) != store.KindExists {
 		t.Fatal("备份目标已存在应拒绝")
 	}
+	// 目标建不出来（目录不存在）不是「已存在」：CLI 要退出 1，不是 64。
+	if kindOf(t, db.Backup(ctx, filepath.Join(dir, "none", "backup.db"))) != store.KindCorrupt {
+		t.Fatal("目标建不出来应是 corrupt，不是 exists")
+	}
 	copied, err := sqlite.Open(ctx, target, sqlite.Options{})
 	if err != nil {
 		t.Fatalf("备份要能原样打开：%v", err)
