@@ -232,6 +232,8 @@ CREATE TABLE account_credentials (
 );
 
 CREATE INDEX account_credentials_account ON account_credentials (tenant_id, account_id, kind);
+-- 一个账号至多一个 TOTP。
+CREATE UNIQUE INDEX account_credentials_totp ON account_credentials (tenant_id, account_id) WHERE kind = 'totp';
 
 -- 邮件里的一次性令牌：只存哈希；verify 24 小时，reset 30 分钟，change 24 小时。
 CREATE TABLE email_tokens (
@@ -320,7 +322,8 @@ CREATE INDEX team_members_account ON team_members (tenant_id, account_id);
 -- 前一个的结果而失败。服务层另外在改成员前先 SELECT … FOR UPDATE 团队行，并先查后答 409
 -- team_last_owner；这里是兜底，违反时 SQLSTATE 23514、约束名 team_has_owner。
 -- UPDATE 时新旧两个团队都查（team_id 本不该被改，改了也守得住）。
-CREATE FUNCTION team_owner_check(t_tenant text, t_team text) RETURNS void LANGUAGE plpgsql AS $$
+CREATE FUNCTION team_owner_check(t_tenant text, t_team text) RETURNS void LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
 BEGIN
   PERFORM 1 FROM teams WHERE tenant_id = t_tenant AND team_id = t_team FOR UPDATE;
   IF FOUND AND NOT EXISTS (SELECT 1 FROM team_members
@@ -330,7 +333,8 @@ BEGIN
 END
 $$;
 
-CREATE FUNCTION team_owner_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION team_owner_guard() RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
 BEGIN
   IF TG_OP IN ('UPDATE', 'DELETE') AND TG_TABLE_NAME = 'team_members' THEN
     PERFORM team_owner_check(OLD.tenant_id, OLD.team_id);
@@ -354,6 +358,8 @@ CREATE TABLE groups (
   name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 128),
   created_at_ms bigint NOT NULL,
   PRIMARY KEY (tenant_id, group_id),
+  -- 给 group_members 的复合外键用：组员的 team_id 必须等于组所属的团队。
+  UNIQUE (tenant_id, team_id, group_id),
   FOREIGN KEY (tenant_id, team_id) REFERENCES teams (tenant_id, team_id) ON DELETE CASCADE
 );
 
@@ -368,7 +374,7 @@ CREATE TABLE group_members (
   is_lead boolean NOT NULL DEFAULT false,
   added_at_ms bigint NOT NULL,
   PRIMARY KEY (tenant_id, group_id, account_id),
-  FOREIGN KEY (tenant_id, group_id) REFERENCES groups (tenant_id, group_id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, team_id, group_id) REFERENCES groups (tenant_id, team_id, group_id) ON DELETE CASCADE,
   FOREIGN KEY (tenant_id, team_id, account_id)
     REFERENCES team_members (tenant_id, team_id, account_id) ON DELETE CASCADE
 );
@@ -442,7 +448,10 @@ CREATE TABLE source_grants (
   revoked_at_ms bigint,
   revoked_by text,
   PRIMARY KEY (tenant_id, grant_id),
-  FOREIGN KEY (tenant_id, source_id) REFERENCES sources (tenant_id, source_id) DEFERRABLE INITIALLY DEFERRED
+  FOREIGN KEY (tenant_id, source_id) REFERENCES sources (tenant_id, source_id) DEFERRABLE INITIALLY DEFERRED,
+  -- team 主体就是主机所属的团队；team / member 主体只出现在团队主机上。
+  CHECK (subject_kind <> 'team' OR subject_id = team_id),
+  CHECK (subject_kind NOT IN ('team', 'member') OR team_id IS NOT NULL)
 );
 
 -- 同一主机对同一主体只有一条有效授予（重复建答 409 conflict）。
@@ -472,12 +481,15 @@ CREATE TABLE invitations (
   decided_by text,
   created_at_ms bigint NOT NULL,
   expires_at_ms bigint NOT NULL,
+  -- 主机邀请被接受后授予的到期；NULL = 不过期。与邀请自身的有效期（expires_at_ms）无关。
+  grant_expires_at_ms bigint,
   decided_at_ms bigint,
   sent_at_ms bigint,
   resend_count integer NOT NULL DEFAULT 0,
   PRIMARY KEY (tenant_id, invitation_id),
   FOREIGN KEY (tenant_id, source_id) REFERENCES sources (tenant_id, source_id) DEFERRABLE INITIALLY DEFERRED,
-  CHECK (kind <> 'team' OR (team_id IS NOT NULL AND team_role IS NOT NULL AND source_id IS NULL)),
+  CHECK (kind <> 'team' OR (team_id IS NOT NULL AND team_role IS NOT NULL AND source_id IS NULL
+                            AND host_role IS NULL AND cardinality(workspace_ids) = 0)),
   CHECK (kind <> 'host' OR (source_id IS NOT NULL AND host_role IS NOT NULL AND team_role IS NULL))
 );
 
@@ -537,8 +549,12 @@ CREATE TABLE audit_log (
   action text NOT NULL CHECK (char_length(action) BETWEEN 1 AND 64),
   target_kind text,
   target_id text,
+  -- 涉及的主机（audit.list 的 sourceId 筛选用）。
+  source_id text,
   jti text,
   ip_prefix text,
+  -- 设备名快照（me.securityLog 的 deviceName；设备改名或删除后日志里仍是当时的名字）。
+  device_name text CHECK (char_length(device_name) <= 128),
   -- 运营写操作的理由（契约 §28 必填）；其余为 NULL。
   reason text CHECK (char_length(reason) <= 500),
   PRIMARY KEY (at_ms, event_id)
@@ -551,12 +567,22 @@ CREATE INDEX audit_log_team ON audit_log (tenant_id, team_id, at_ms DESC) WHERE 
 CREATE INDEX audit_log_account ON audit_log (tenant_id, account_id, at_ms DESC) WHERE account_id IS NOT NULL;
 CREATE INDEX audit_log_actor ON audit_log (tenant_id, actor_kind, actor_id, at_ms DESC);
 CREATE INDEX audit_log_target ON audit_log (tenant_id, target_kind, target_id, at_ms DESC);
+CREATE INDEX audit_log_source ON audit_log (tenant_id, team_id, source_id, at_ms DESC) WHERE source_id IS NOT NULL;
 
--- 建一个月的分区（幂等）。兜底分区里若已有这个月的行：在同一事务里先把兜底分区摘下，
--- 建新分区，把那些行搬过去，再把兜底分区挂回。调用方持 pg_advisory_xact_lock。
+-- 建一个月的分区（幂等）。分区名必须是 audit_log_YYYY_MM，边界必须是该 UTC 月的月初与下月月初，否则拒绝（22023）。
+-- 兜底分区里若已有这个月的行：在同一事务里先把兜底分区摘下，建新分区，把那些行搬过去，再把兜底分区挂回。
+-- 调用方持 pg_advisory_xact_lock，并先 SET LOCAL lock_timeout（摘 / 挂分区要父表的排他锁，见 §6）。
 CREATE FUNCTION audit_ensure_partition(month_start_ms bigint, month_end_ms bigint, part_name text)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS void LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
+DECLARE
+  m timestamp := date_trunc('month', to_timestamp(month_start_ms / 1000.0) AT TIME ZONE 'UTC');
 BEGIN
+  IF month_start_ms <> (extract(epoch FROM m) * 1000)::bigint
+     OR month_end_ms <> (extract(epoch FROM m + interval '1 month') * 1000)::bigint
+     OR part_name <> 'audit_log_' || to_char(m, 'YYYY_MM') THEN
+    RAISE EXCEPTION 'invalid audit partition' USING ERRCODE = '22023';
+  END IF;
   IF to_regclass(part_name) IS NOT NULL THEN
     RETURN;
   END IF;
@@ -602,6 +628,9 @@ CREATE TABLE jobs (
 );
 
 CREATE INDEX jobs_due ON jobs (run_at_ms) WHERE done_at_ms IS NULL AND failed_at_ms IS NULL;
+-- 已完成 / 已失败作业的清理（jobs.gc）按时间扫这两个索引。
+CREATE INDEX jobs_done ON jobs (done_at_ms) WHERE done_at_ms IS NOT NULL;
+CREATE INDEX jobs_failed ON jobs (failed_at_ms) WHERE failed_at_ms IS NOT NULL;
 CREATE UNIQUE INDEX jobs_dedupe ON jobs (tenant_id, kind, dedupe_key)
   WHERE dedupe_key IS NOT NULL AND done_at_ms IS NULL AND failed_at_ms IS NULL;
 CREATE UNIQUE INDEX jobs_slot ON jobs (tenant_id, kind, slot_key) WHERE slot_key IS NOT NULL;
@@ -625,6 +654,8 @@ CREATE TABLE outbox_emails (
 );
 
 CREATE INDEX outbox_emails_gc ON outbox_emails (created_at_ms);
+-- 删作业时 ON DELETE SET NULL 要按 job_id 找发件箱行。
+CREATE INDEX outbox_emails_job ON outbox_emails (job_id) WHERE job_id IS NOT NULL;
 
 -- 平台级开关（事故开关等），运营后台写；键见设计 §4.9。
 CREATE TABLE platform_settings (
@@ -638,16 +669,18 @@ CREATE TABLE platform_settings (
 
 -- 已签令牌的索引（Redis cloud:issued:* 的落盘副本，§7.2）：只有标识，没有令牌本身。
 CREATE TABLE cloud_issued_tokens (
-  jti text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  jti text NOT NULL,
   account_id text NOT NULL,
   source_id text NOT NULL,
   device_id text NOT NULL,
-  exp_ms bigint NOT NULL
+  exp_ms bigint NOT NULL,
+  PRIMARY KEY (tenant_id, jti)
 );
 
-CREATE INDEX cloud_issued_tokens_account ON cloud_issued_tokens (account_id, exp_ms);
-CREATE INDEX cloud_issued_tokens_source ON cloud_issued_tokens (source_id, exp_ms);
-CREATE INDEX cloud_issued_tokens_exp ON cloud_issued_tokens (exp_ms);
+CREATE INDEX cloud_issued_tokens_account ON cloud_issued_tokens (tenant_id, account_id, exp_ms);
+CREATE INDEX cloud_issued_tokens_source ON cloud_issued_tokens (tenant_id, source_id, exp_ms);
+CREATE INDEX cloud_issued_tokens_exp ON cloud_issued_tokens (tenant_id, exp_ms);
 
 -- 流量按团队计（能力设计 §11.14）：入口节点写中继令牌的 team；个人空间为空串。
 -- 不进主键：同一小时同一主机换团队只在转移（M2）时发生，按首次写入的团队计。
@@ -667,6 +700,10 @@ CREATE INDEX relay_traffic_team ON relay_traffic_buckets (tenant_id, team_id, bu
 | `audit_ensure_partition`：幂等；兜底分区里已有该月的行时搬进新分区、兜底分区随后为空且仍挂着                                                        | —                                       |
 | `jobs_slot`：同一槽在作业完成后再插仍冲突；`outbox_emails.job_id` 在作业被删后置空                                                                  | —                                       |
 | `devices.transport / scope`、`accounts.*` 新列不被现有端口的 `UPDATE` 改写（端口合同 15 例照旧过）                                                  | —                                       |
+| `group_members` 跨团队：把别团队的成员或别团队的组塞进来被拒；组员随成员 / 组 / 团队删除级联                                                        | SQLSTATE 23503                          |
+| 授予 / 邀请的新 CHECK（team 主体 = 团队、team / member 主体必有 `team_id`、团队邀请不带主机角色与工作区）；`account_credentials_totp` 每账号一个    | 违反即拒                                |
+| `audit_ensure_partition` 拒绝错误的分区名与月边界；函数带固定 `search_path`；`audit_log.device_name` 长度上限、`source_id` 索引                     | SQLSTATE 22023 / 23514                  |
+| `outbox_emails_job`、`jobs_done`、`jobs_failed`、`audit_log_source` 存在；`cloud_issued_tokens` 主键含 `tenant_id`                                  | —                                       |
 
 ## §4 Go 包设计
 
@@ -778,14 +815,14 @@ type AccessPolicy interface {
 
 **邀请**（两类共用一套过程，契约 §22）：
 
-| 步骤     | 规则                                                                                                                                                                                                                                                              |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `create` | team：`team:admin`；角色 `guest` 而团队关了 guest → `403 guests_disabled`；已是成员 `409 member_exists`；同邮箱有待处理的 `409 conflict`；配额（成员数或 guest 数，**待处理邀请也计入**）。host：主机管理权（§4.6）+ 主机设置 `allowGuests`；按邀请人每小时 50 次 |
-| 发信     | 事务里插邀请（`token_hash = NULL`）与发件；作业发信时生成 32 字节令牌、写哈希与 `sent_at_ms`，链接是 `<APP_ORIGIN>/invite/<invitationId>#<令牌>`——**令牌在片段里**，不进服务器与代理日志；页面另发 `Referrer-Policy: no-referrer`                                 |
-| `get`    | 匿名；按 IP 每分钟 60 次；令牌哈希必须对上（否则 `404 not_found`）；答遮掩后的摘要                                                                                                                                                                                |
-| `accept` | 要会话、邮箱已验证、账号邮箱 = 邀请邮箱（`403 invitation_email_mismatch`）；过期 `410 invitation_expired`、撤销 `410 invitation_revoked`；已接受的再接受答原结果。team：插成员（再查配额与 `member_exists`）。host：§4.7                                          |
-| `resend` | 换新令牌（作业里生成）、`expires_at = now + 7 天`、`resend_count + 1`；按邀请每小时 5 次                                                                                                                                                                          |
-| 过期     | 读时把 `pending` 且过期的按 `expired` 答；`invitations.expire` 作业每小时落库并发 `invitationChanged`                                                                                                                                                             |
+| 步骤     | 规则                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create` | team：`team:admin`；角色 `guest` 而团队关了 guest → `403 guests_disabled`；已是成员 `409 member_exists`；同邮箱有待处理的 `409 conflict`；配额（成员数或 guest 数，**待处理邀请也计入**）。host：主机管理权（§4.6）+ 主机设置 `allowGuests`；按邀请人每小时 50 次                                                                                                                                                                                 |
+| 发信     | 事务里插邀请（`token_hash = NULL`）与发件；作业发信时生成 32 字节令牌、写哈希与 `sent_at_ms`，链接是 `<APP_ORIGIN>/invite/<invitationId>#<令牌>`——**令牌在片段里**，不进服务器与代理日志；页面另发 `Referrer-Policy: no-referrer`                                                                                                                                                                                                                 |
+| `get`    | 匿名；按 IP 每分钟 60 次；令牌哈希必须对上（否则 `404 not_found`）；答遮掩后的摘要                                                                                                                                                                                                                                                                                                                                                                |
+| `accept` | 要会话、邮箱已验证、账号邮箱 = 邀请邮箱（`403 invitation_email_mismatch`）；过期 `410 invitation_expired`、撤销 `410 invitation_revoked`；已接受的再接受答原结果。**插入新的 pending 邀请前（`invitations.create`、`resend` 之外的重新邀请同理），同一事务先把同一 `(团队, 邮箱)` 或 `(主机, 邮箱)` 下已过期的 pending 改成 `expired`**，否则过期未处理的行会占着部分唯一索引挡住重新邀请。team：插成员（再查配额与 `member_exists`）。host：§4.7 |
+| `resend` | 换新令牌（作业里生成）、`expires_at = now + 7 天`、`resend_count + 1`；按邀请每小时 5 次                                                                                                                                                                                                                                                                                                                                                          |
+| 过期     | 读时把 `pending` 且过期的按 `expired` 答；`invitations.expire` 作业每小时落库并发 `invitationChanged`                                                                                                                                                                                                                                                                                                                                             |
 
 ### 4.5 主机（`cloud/hosts`，S5a）
 
@@ -840,7 +877,7 @@ type AccessPolicy interface {
 
 - **链接**包一层 `core.Links`：`links.create` 先查管理权与主机设置 `linkCreators`（`driver` 档 = 有效角色为 driver 的人也能签）、团队主机的 `allowGuests`；`links.list` / `update` / `revoke` 加 `space` 过滤；`links.accept` 对团队主机且 `allowAnonymousLinks = false` 时要求带会话（`403 anonymous_links_disabled`）。core 的条件加一与 `max_uses` 语义不变（能力设计 §11.3）；撤销链接经撤销钩子踢 `guest:<linkId>:` 前缀。
 - **主机邀请被接受**落成**云端授予**（契约 §22，#72：主机邀请 = 云端授予 + guest 成员关系，不在 core 里落一张邀请；分享链接仍落成 core 的邀请），一个事务：
-  - 团队主机：接受者不是成员 → 先按团队 `allowGuests` 与 guest 配额加成 `guest` 成员；再建授予（主体 `guest`，若已是 owner / admin / member 则主体 `member`），`origin = invitation`，`role` / `workspace_ids` / `expires_at_ms` 取自邀请。
+  - 团队主机：接受者不是成员 → 先按团队 `allowGuests` 与 guest 配额加成 `guest` 成员；再建授予（主体 `guest`，若已是 owner / admin / member 则主体 `member`），`origin = invitation`，`role` / `workspace_ids` 取自邀请，授予的 `expires_at_ms` 取邀请的 `grant_expires_at_ms`（NULL = 不过期），**不取邀请自身的有效期 `expires_at_ms`**（那只管邀请多久内可接受）。同样，`sources.trustRequest` 插新 pending 前，同一事务先把同 `(源, 设备)` 已过期的 pending 改成 `expired`，否则 `trust_requests_pending` 会挡住重新上报。
   - 个人空间主机：建主体 `guest` 的授予；core 按 §10 Q2 准入。
   - 已有同主体的有效授予 → 按「角色取高、范围并集」更新那一条，不建第二条。
 - **新设备信任**（契约 §31，§10 Q1）：
@@ -916,7 +953,7 @@ type TeamScope struct {
 	role     TeamRole
 }
 
-// Store 是 SaaS 的存储端口，只有 PostgreSQL 实现（postgres.Backend.SaaS()）。
+// Store 是 SaaS 的存储端口，只有 PostgreSQL 实现（(*postgres.DB).SaaS()）。
 type Store interface {
 	// Tx 在一个读已提交事务里执行 fn；fn 返回错误即回滚。提交后按序执行 tx.AfterCommit 登记的回调
 	// （发 Redis 撤销、节点命令、事件）。死锁与序列化失败自动重试 3 次。
@@ -941,7 +978,7 @@ type Tx interface {
 ```
 
 - 每个 Repo 方法的第一个参数是 `tenantID`（或已含它的 `TeamScope`）；团队范围的方法收 `TeamScope`，查询必写 `team_id = $2`。`teams.Require` 是 `TeamScope` 的唯一构造点（同包内的构造函数不导出，由 `store/saas` 暴露给 `cloud/teams` 的受限入口；`repo.rules.json` 守住只有 `cloud/teams` 能 import 它）。
-- 核心端口（`store.Ports`）与 SaaS 端口共用同一个 `pgxpool`；需要同事务写核心表（登记主机、建设备）时由 `postgres` 包提供 `TxPorts(tx)` 把核心端口绑到同一个事务。
+- 核心端口（`store.Ports`）与 SaaS 端口共用同一个 `pgxpool`；需要同事务写核心表（登记主机、建设备）时由 `postgres` 包提供 `TxPorts(tx)` 把核心端口绑到同一个事务。**`TxPorts` 同时定下统一的加锁顺序：团队行 → 账号行 → 其余（`LockTeam`、`LockAccount` 按此序调用，避免两个事务反序互等）；SaaS 事务里绑定的核心端口免掉核心写路径的 `tenants` 行 `FOR UPDATE`（那把租户级锁会把所有 SaaS 写串行化），`devices.Insert` 清理失效设备改为按账号（`subject`）清理，不扫整个租户。**
 - 错误：唯一冲突（23505）按约束名映射成 `team_slug_taken`、`email_taken`、`conflict`；`team_has_owner`（23514）映射成 `team_last_owner`。
 
 ## §5 HTTP 层
@@ -1031,17 +1068,18 @@ type Tx interface {
 | 完成 | 成功置 `done_at_ms`；失败 `run_at_ms = now + min(30 秒 × 2^(attempts-1), 1 小时)`，`last_error` 只记类名或错误码；到 `max_attempts` 置 `failed_at_ms` 并记错误日志                                                                                                                                                                                                              |
 | 幂等 | 每个作业处理器必须可重放：先读状态再动作（例如发信前看 `outbox_emails.sent_at_ms`，清除前看团队是否已清）                                                                                                                                                                                                                                                                       |
 | 清理 | 完成超过 7 天、失败超过 30 天的作业由 `jobs.gc` 删（发件箱的 `job_id` 随之置空）                                                                                                                                                                                                                                                                                                |
+| 分区 | `audit.partitions` 与启动检查调 `audit_ensure_partition` 前，同一事务先 `pg_advisory_xact_lock` 再 `SET LOCAL lock_timeout = '5s'`：摘 / 挂兜底分区要父表的排他锁，拿不到就失败重试，不能无限排在业务写入前面堵住全库                                                                                                                                                           |
 
-| 作业                                                                                  | 触发                        | 动作                                                                                         |
-| ------------------------------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------- |
-| `mail.send`                                                                           | 发件箱                      | §6.3                                                                                         |
-| `grant.expire`                                                                        | 授予有到期时间时排到那一刻  | 写 `revoked_at_ms`（`revoked_by = 'system'`）+ 撤销流程（§4.8）                              |
-| `team.purge`                                                                          | 团队删除                    | §4.4                                                                                         |
-| `relay.revoke`                                                                        | Redis 写撤销失败的兜底      | 重写撤销与命令                                                                               |
-| `invitations.expire`、`trust.expire`、`deviceCodes.gc`、`emailTokens.gc`、`issued.gc` | 每小时（`slot_key` = 小时） | 落库过期并发事件；删过期 24 小时以上的行；删已过期的签发索引与撤销行                         |
-| `outbox.gc`                                                                           | 每天                        | 删发出或失败满 30 天的发件箱行（收件地址等个人信息最多留 30 天）                             |
-| `audit.partitions`、`audit.retention`                                                 | 每天                        | 补建未来两个月分区；按计划删团队审计超期行、账号安全日志满 90 天的行、`DROP` 13 个月前的分区 |
-| `traffic.retention`                                                                   | 每天                        | 删早于 `TRAFFIC_RETENTION_DAYS` 的流量桶（节点侧的清理关掉，G5 N5）                          |
+| 作业                                                                                  | 触发                        | 动作                                                                                                                                                       |
+| ------------------------------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mail.send`                                                                           | 发件箱                      | §6.3                                                                                                                                                       |
+| `grant.expire`                                                                        | 授予有到期时间时排到那一刻  | 写 `revoked_at_ms`（`revoked_by = 'system'`）+ 撤销流程（§4.8）                                                                                            |
+| `team.purge`                                                                          | 团队删除                    | §4.4                                                                                                                                                       |
+| `relay.revoke`                                                                        | Redis 写撤销失败的兜底      | 重写撤销与命令                                                                                                                                             |
+| `invitations.expire`、`trust.expire`、`deviceCodes.gc`、`emailTokens.gc`、`issued.gc` | 每小时（`slot_key` = 小时） | 落库过期并发事件；删过期 24 小时以上的行；删已过期的签发索引（`cloud_issued_tokens`，`tenant_id = $1 AND exp_ms < $2`，走 `tenant_id` 打头的索引）与撤销行 |
+| `outbox.gc`                                                                           | 每天                        | 删发出或失败满 30 天的发件箱行（收件地址等个人信息最多留 30 天）                                                                                           |
+| `audit.partitions`、`audit.retention`                                                 | 每天                        | 补建未来两个月分区；按计划删团队审计超期行、账号安全日志满 90 天的行、`DROP` 13 个月前的分区                                                               |
+| `traffic.retention`                                                                   | 每天                        | 删早于 `TRAFFIC_RETENTION_DAYS` 的流量桶（节点侧的清理关掉，G5 N5）                                                                                        |
 
 ### 6.2 SMTP 适配器（`cloud/mail`）
 
@@ -1091,8 +1129,9 @@ type Tx interface {
 - 实现 `core.RelayPort`（`Route`、`CloseTunnel`、`Disconnect`）与 `core.RevocationSink`，所以核心的撤销路径（登出、链接撤销、刷新重放等）自动走到这里。
 - **落盘**（Redis 里的撤销与索引都能丢，PostgreSQL 里的不能）：
   - 签发：先 `INSERT cloud_issued_tokens`，再写 Redis 的两个有序集合。
+  - 签发索引的查询、重放、清理一律带 `tenant_id = $1`（`cloud_issued_tokens` 的主键与三个索引都以 `tenant_id` 打头），不跨租户扫表。
   - 撤销：先 `INSERT relay_revoked_tokens (jti, exp_ms) ON CONFLICT DO NOTHING`（0002 的表），再 `Plane.Tokens().Revoke`。
-  - **重放**：`serve` 启动时与 Redis 订阅每次重新就绪时（`Plane` 的就绪回调），把未过期的 `relay_revoked_tokens` 全部重写进 Redis（`SET … PXAT … NX`，pipeline 分批），并从 `cloud_issued_tokens` 重建 `cloud:issued:*`；重放完成前不对外答 `/ready`。
+  - **重放**：`serve` 启动时与 Redis 订阅每次重新就绪时（`Plane` 的就绪回调），把未过期的 `relay_revoked_tokens` 全部重写进 Redis（`SET … PXAT … NX`，pipeline 分批），并从 `cloud_issued_tokens`（`WHERE tenant_id = $1 AND exp_ms > now`）重建 `cloud:issued:*`；重放完成前不对外答 `/ready`。
   - 过滤（§4.8 的「acct ∩ src」等）以 PostgreSQL 为准，Redis 的有序集合只是快路径。
 - Redis 本身开 AOF（`appendfsync everysec`，§2.3），重启后多数状态直接在；落盘与重放兜住 AOF 丢的那一秒与整库丢失。
 - 命令：总是经 `relay:ctl` 广播；G5 之后对已知持有节点再额外发 `relay:node:<id>`（§2.4）。
@@ -1162,21 +1201,21 @@ type Tx interface {
 
 ### 9.1 批次表
 
-| 批  | 内容                                                                                                                                                                                                                                                                                                                                      | 依赖                                   | 验收                                                                                                                | 规模  |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----- |
-| S0a | 入参解释器补 `minItems`、`format`（email / uri）、`propertyNames`；`schemagen` 生成；query 数组；`UnsupportedInputs` 清空；`core.Error.Details` 与 `WriteError` 输出 `details`                                                                                                                                                            | —                                      | `pnpm go:check`；全部 `cloud-api` 夹具都有入参 schema；email 正则与协议包同源的一致性测试                           | ~800  |
-| S0b | §3.4 的六个迁移 + `migrations.lock` + 迁移测试（§3.5）；`internal/store/saas` 端口骨架（含 `TeamScope`）、`postgres.Backend.SaaS()`、`Tx` / `AfterCommit` / 错误映射；CHANGELOG 写明个人中转 `--store postgres` 会多出空的 SaaS 表                                                                                                        | —（与 S0a 并行）                       | 迁移测试全过；端口合同 15 例照旧过；**合并前 Opus DDL 冻结审查**；编号合并时取 main 最大号 +1                       | ~1400 |
-| S1a | `core.AccessPolicy` 抽出 + `personalPolicy`、源地址函数、`BuildSourceRecord`（§4.2 标 S1a 的三项），personal 行为逐项不变                                                                                                                                                                                                                 | S0a                                    | 15 + 19 例合同对 personal 全过；`pnpm e2e --mode personal` 不回归；新增策略接口的合同测试                           | ~900  |
-| S1b | `cmd/armadra-cloud`（`serve`、`migrate`、`version`、`keys rotate`、`health`）、配置、租户引导、签名钥包裹、审计分区启动检查；§4.2 标 S1b 的扩展；`httpx`（四枚 Cookie、重复 Cookie、CSRF、Origin、CORS、独立限流器、挑战）；注册、登录、刷新、登出、改口令、提权、`me.get/update/devices/deviceRevoke`、`platform.*`；`relayctl` 内存实现 | S0b、S1a                               | §8.5 的 CSRF / 来源 / Cookie 用例；`platform.info.capabilities` 与 §5.3 一致                                        | ~1500 |
-| S2  | `jobs`（dedupe / slot、NOTIFY、续租）、`mail`（SMTP、模板、发件箱、`outbox.gc`）、`audit` 写入与安全日志写入；`emailVerify`、`emailVerifyResend`、`passwordResetStart/Finish`、`me.emailChange`、新设备提醒                                                                                                                               | S1b                                    | mailpit 集成；令牌只在片段与内存（扫描库与日志）；作业重放幂等；同一时间槽只跑一次                                  | ~1300 |
-| S3  | 设备码五个过程                                                                                                                                                                                                                                                                                                                            | S1b（与 S2 并行）                      | 状态机全分支；轮询过快 429；猜码限流                                                                                | ~600  |
-| S4  | `teams`（14 个过程）、团队邀请、`quota`（团队、成员、guest）、`me.spaces`、`me.get.teams`、团队并发额度写入（经 `relayctl`）                                                                                                                                                                                                              | S2                                     | 角色矩阵（5 角色 × 每过程）；最后一个 owner 并发；删除 / 恢复 / 清除作业；跨团队读不到                              | ~1500 |
-| S5a | `hosts`：登记到空间（含版本门）、目录筛选分页、改名标签设置、撤销；主机配额                                                                                                                                                                                                                                                               | S4                                     | 登记事务与延迟外键；目录筛选与游标；撤销后令牌进撤销表（内存实现断言）                                              | ~1100 |
-| S5b | `grants`（五个过程、有效权限）、`sources.assertion` 的合成与版本门、签发索引（含 `cloud_issued_tokens`）、访问清单、撤销流程（§4.8 前三行）；`grants.Policy`                                                                                                                                                                              | S5a；按人踢的验收依赖 **G5 N2**        | 有效权限表驱动（主体 × 角色 × 范围 × 到期）；版本门取在线隧道版本；收窄即撤销                                       | ~1400 |
-| S6  | 链接加 `space` 与团队设置、主机邀请（两种空间，落成授予）、`trust.list` / `trust.reject`、`sources.trustRequest` / `trustResolve`（#72）                                                                                                                                                                                                  | S5b、#72（P1d）                        | 链接并发 `max_uses`；匿名链接开关；主机邀请成 guest 授予；信任请求幂等、冷却、24 小时上限、按背书人收窄、不含校验码 | ~1200 |
-| S7  | `audit.list`、`me.securityLog`、保留期与分区作业；`teams.usage`、`billing.plan`、`billing.usage`（含按天）、`traffic.retention`；运营：`operators add/totp`、`auth.login{operator}`、`auth.mfaVerify`、`admin.*` M1、事故开关                                                                                                             | S5a；停用即踢的验收依赖 **G5 N2**      | 运营隔离用例；事故开关三项；保留期删除只删本团队                                                                    | ~1500 |
-| S8  | `relayctl` 包装 `control/redis.Plane`（广播外壳与命令取 `cluster/wire.go`，新增字段与种类同 G5 一起加）、撤销与签发索引的落盘与重放、`relay:presence` 订阅与 `last_seen`、`cloud:events` 与 me-stream（票、受众、可见集合缓存）、节点表与 rendezvous、`nodes token` / `revoke`                                                            | S5b（与 S6、S7 并行）                  | 两个控制面实例 + Redis 的事件互通；撤销最终到达假节点；Redis 清空后重放恢复；外壳与 `wire.go` 的往返测试            | ~1300 |
-| S9  | `deploy/saas/compose.yml`（AOF、每节点隧道地址、流量角色）、`armadra-cloud` 镜像（distroless）、`WEB_ROOT` 托管与 CSP、`scripts/e2e.mjs --mode saas`、`deploy/README.md` 与 runbook；TS `apps/cloud` 的去留（§10 Q9）                                                                                                                     | S6、S7、S8、**G5**（经 G3b → G4 → G5） | §8.4 全部场景；`pnpm images:build` 冒烟                                                                             | ~1200 |
+| 批  | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 依赖                                   | 验收                                                                                                                | 规模  |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----- |
+| S0a | 入参解释器补 `minItems`、`format`（email / uri）、`propertyNames`；`schemagen` 生成；query 数组；`UnsupportedInputs` 清空；`core.Error.Details` 与 `WriteError` 输出 `details`                                                                                                                                                                                                                                                                                                      | —                                      | `pnpm go:check`；全部 `cloud-api` 夹具都有入参 schema；email 正则与协议包同源的一致性测试                           | ~800  |
+| S0b | §3.4 的六个迁移 + `migrations.lock` + 迁移测试（§3.5）；`internal/store/saas` 端口骨架（含 `TeamScope`）、`(*postgres.DB).SaaS()`、`Tx` / `AfterCommit` / 错误映射；CHANGELOG 写明个人中转 `--store postgres` 会多出空的 SaaS 表                                                                                                                                                                                                                                                    | —（与 S0a 并行）                       | 迁移测试全过；端口合同 15 例照旧过；**合并前 Opus DDL 冻结审查**；编号合并时取 main 最大号 +1                       | ~1400 |
+| S1a | `core.AccessPolicy` 抽出 + `personalPolicy`、源地址函数、`BuildSourceRecord`（§4.2 标 S1a 的三项），personal 行为逐项不变                                                                                                                                                                                                                                                                                                                                                           | S0a                                    | 15 + 19 例合同对 personal 全过；`pnpm e2e --mode personal` 不回归；新增策略接口的合同测试                           | ~900  |
+| S1b | `cmd/armadra-cloud`（`serve`、`migrate`、`version`、`keys rotate`、`health`）、配置、租户引导、签名钥包裹、审计分区启动检查；§4.2 标 S1b 的扩展；`httpx`（四枚 Cookie、重复 Cookie、CSRF、Origin、CORS、独立限流器、挑战）；注册、登录、刷新、登出、改口令、提权、`me.get/update/devices/deviceRevoke`、`platform.*`；`relayctl` 内存实现；`TxPorts` 与统一加锁顺序（团队→账号→…），SaaS 免掉核心端口的 `tenants` 行 `FOR UPDATE`，`devices.Insert` 清理失效设备改为按账号（§4.11） | S0b、S1a                               | §8.5 的 CSRF / 来源 / Cookie 用例；`platform.info.capabilities` 与 §5.3 一致                                        | ~1500 |
+| S2  | `jobs`（dedupe / slot、NOTIFY、续租）、`mail`（SMTP、模板、发件箱、`outbox.gc`）、`audit` 写入与安全日志写入；`emailVerify`、`emailVerifyResend`、`passwordResetStart/Finish`、`me.emailChange`、新设备提醒                                                                                                                                                                                                                                                                         | S1b                                    | mailpit 集成；令牌只在片段与内存（扫描库与日志）；作业重放幂等；同一时间槽只跑一次                                  | ~1300 |
+| S3  | 设备码五个过程                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | S1b（与 S2 并行）                      | 状态机全分支；轮询过快 429；猜码限流                                                                                | ~600  |
+| S4  | `teams`（14 个过程）、团队邀请、`quota`（团队、成员、guest）、`me.spaces`、`me.get.teams`、团队并发额度写入（经 `relayctl`）；`repo-check` 加白名单：只有 `cloud/teams` 能 import `store/saas/teamscope`                                                                                                                                                                                                                                                                            | S2                                     | 角色矩阵（5 角色 × 每过程）；最后一个 owner 并发；删除 / 恢复 / 清除作业；跨团队读不到                              | ~1500 |
+| S5a | `hosts`：登记到空间（含版本门）、目录筛选分页、改名标签设置、撤销；主机配额                                                                                                                                                                                                                                                                                                                                                                                                         | S4                                     | 登记事务与延迟外键；目录筛选与游标；撤销后令牌进撤销表（内存实现断言）                                              | ~1100 |
+| S5b | `grants`（五个过程、有效权限）、`sources.assertion` 的合成与版本门、签发索引（含 `cloud_issued_tokens`）、访问清单、撤销流程（§4.8 前三行）；`grants.Policy`                                                                                                                                                                                                                                                                                                                        | S5a；按人踢的验收依赖 **G5 N2**        | 有效权限表驱动（主体 × 角色 × 范围 × 到期）；版本门取在线隧道版本；收窄即撤销                                       | ~1400 |
+| S6  | 链接加 `space` 与团队设置、主机邀请（两种空间，落成授予）、`trust.list` / `trust.reject`、`sources.trustRequest` / `trustResolve`（#72）                                                                                                                                                                                                                                                                                                                                            | S5b、#72（P1d）                        | 链接并发 `max_uses`；匿名链接开关；主机邀请成 guest 授予；信任请求幂等、冷却、24 小时上限、按背书人收窄、不含校验码 | ~1200 |
+| S7  | `audit.list`、`me.securityLog`、保留期与分区作业；`teams.usage`、`billing.plan`、`billing.usage`（含按天）、`traffic.retention`；运营：`operators add/totp`、`auth.login{operator}`、`auth.mfaVerify`、`admin.*` M1、事故开关                                                                                                                                                                                                                                                       | S5a；停用即踢的验收依赖 **G5 N2**      | 运营隔离用例；事故开关三项；保留期删除只删本团队                                                                    | ~1500 |
+| S8  | `relayctl` 包装 `control/redis.Plane`（广播外壳与命令取 `cluster/wire.go`，新增字段与种类同 G5 一起加）、撤销与签发索引的落盘与重放、`relay:presence` 订阅与 `last_seen`、`cloud:events` 与 me-stream（票、受众、可见集合缓存）、节点表与 rendezvous、`nodes token` / `revoke`                                                                                                                                                                                                      | S5b（与 S6、S7 并行）                  | 两个控制面实例 + Redis 的事件互通；撤销最终到达假节点；Redis 清空后重放恢复；外壳与 `wire.go` 的往返测试            | ~1300 |
+| S9  | `deploy/saas/compose.yml`（AOF、每节点隧道地址、流量角色）、`armadra-cloud` 镜像（distroless）、`WEB_ROOT` 托管与 CSP、`scripts/e2e.mjs --mode saas`、`deploy/README.md` 与 runbook；TS `apps/cloud` 的去留（§10 Q9）                                                                                                                                                                                                                                                               | S6、S7、S8、**G5**（经 G3b → G4 → G5） | §8.4 全部场景；`pnpm images:build` 冒烟                                                                             | ~1200 |
 
 并行：S0a ∥ S0b；S2 ∥ S3；S6 ∥ S7 ∥ S8。关键路径：S0a → S1a → S1b → S2 → S4 → S5a → S5b → S8 → S9；另一条是中继侧的 G3b → G4 → G5 → S9，两条在 S9 汇合。
 

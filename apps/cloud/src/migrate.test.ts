@@ -32,6 +32,12 @@ it("随包的迁移从 0001 起连续", () => {
     "0001_control_init.sql",
     "0002_relay_control.sql",
     "0003_traffic.sql",
+    "0004_saas_accounts.sql",
+    "0005_saas_teams.sql",
+    "0006_saas_hosts.sql",
+    "0007_saas_grants.sql",
+    "0008_saas_audit.sql",
+    "0009_saas_ops.sql",
   ]);
 });
 
