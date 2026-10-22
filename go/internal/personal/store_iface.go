@@ -29,6 +29,8 @@ const (
 type DatabaseOptions struct {
 	URL    string
 	Schema string
+	// OnError 报告存储的后台失败（签名钥缓存重读失败）；serve 填，错误只带类别。
+	OnError func(operation string, err error)
 }
 
 // SourceSeen 是源上下线的累计（只在内存，按批落盘）。

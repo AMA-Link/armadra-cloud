@@ -14,7 +14,7 @@ const postgresPoolMax = 5
 
 func connectPostgres(ctx context.Context, db DatabaseOptions) (*postgres.DB, error) {
 	pg, err := postgres.Open(ctx, postgres.Options{
-		URL: db.URL, Schema: db.Schema, MaxConns: postgresPoolMax, ApplicationName: "armadra-relay-personal",
+		URL: db.URL, Schema: db.Schema, MaxConns: postgresPoolMax, ApplicationName: "armadra-relay-personal", OnError: db.OnError,
 	})
 	if err != nil {
 		return nil, mapStoreError(StorePostgres, err)

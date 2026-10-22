@@ -171,6 +171,13 @@ func Serve(ctx context.Context, o ServeOptions, deps ServeDeps) (*Running, error
 		return nil, fmt.Errorf("数据目录建不出来：%s", o.DataDir)
 	}
 	issuer := IssuerFor(o)
+	if o.Database != nil {
+		database := *o.Database
+		database.OnError = func(operation string, err error) {
+			logger.Warn("存储后台操作失败", obs.Operation(operation), obs.Error(err))
+		}
+		o.Database = &database
+	}
 	st, err := openOrInit(ctx, o, issuer, now(), logger)
 	if err != nil {
 		return nil, err
