@@ -556,7 +556,7 @@ func TestAuditEnsurePartition(t *testing.T) {
 	}
 	children := func() map[string]bool {
 		rows, err := e.pool.Query(e.ctx, `SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
-		  JOIN pg_class p ON p.oid = i.inhparent WHERE p.relname = 'audit_log' AND p.relnamespace = c.relnamespace`)
+		  JOIN pg_class p ON p.oid = i.inhparent WHERE p.oid = to_regclass('audit_log')`)
 		if err != nil {
 			t.Fatal(err)
 		}
