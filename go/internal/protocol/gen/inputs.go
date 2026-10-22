@@ -18,6 +18,43 @@ var RouteInputs = map[string]*schema.Schema{
 	"platform.health": &schema.Schema{
 		Type: "object",
 	},
+	"auth.register": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "email", Schema: &schema.Schema{
+				Type:          "string",
+				Format:        "email",
+				FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+			}},
+			{Name: "password", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "displayName", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "device", Schema: &schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "platform", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"ios", "android", "desktop", "browser", "server"},
+					}},
+					{Name: "name", Schema: &schema.Schema{
+						Type:      "string",
+						MinLength: schema.Int(1),
+						MaxLength: schema.Int(128),
+					}},
+					{Name: "pushPublicKey", Schema: &schema.Schema{
+						Type: "string",
+					}},
+				},
+				Required: []string{"platform", "name"},
+			}},
+		},
+		Required: []string{"email", "password", "displayName", "device"},
+	},
 	"auth.login": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
@@ -89,6 +126,23 @@ var RouteInputs = map[string]*schema.Schema{
 			{Name: "scope", Schema: &schema.Schema{
 				Const:    "operator",
 				HasConst: true,
+			}},
+		},
+	},
+	"auth.stepUp": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "password", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "totpCode", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "passkeyAssertion", Schema: &schema.Schema{
+				Type: "object",
+				PropertyNames: &schema.Schema{
+					Type: "string",
+				},
 			}},
 		},
 	},
@@ -173,8 +227,60 @@ var RouteInputs = map[string]*schema.Schema{
 			}},
 		},
 	},
+	"auth.passkeyRegister": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "challengeId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "response", Schema: &schema.Schema{
+				Type: "object",
+				PropertyNames: &schema.Schema{
+					Type: "string",
+				},
+			}},
+			{Name: "label", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(64),
+			}},
+		},
+		Required: []string{"challengeId", "response"},
+	},
 	"auth.passkeyLoginOptions": &schema.Schema{
 		Type: "object",
+	},
+	"auth.passkeyLogin": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "challengeId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "response", Schema: &schema.Schema{
+				Type: "object",
+				PropertyNames: &schema.Schema{
+					Type: "string",
+				},
+			}},
+			{Name: "device", Schema: &schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "platform", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"ios", "android", "desktop", "browser", "server"},
+					}},
+					{Name: "name", Schema: &schema.Schema{
+						Type:      "string",
+						MinLength: schema.Int(1),
+						MaxLength: schema.Int(128),
+					}},
+					{Name: "pushPublicKey", Schema: &schema.Schema{
+						Type: "string",
+					}},
+				},
+				Required: []string{"platform", "name"},
+			}},
+		},
+		Required: []string{"challengeId", "response", "device"},
 	},
 	"auth.totpEnroll": &schema.Schema{
 		Type: "object",
@@ -246,6 +352,17 @@ var RouteInputs = map[string]*schema.Schema{
 	"auth.emailVerifyResend": &schema.Schema{
 		Type: "object",
 	},
+	"auth.passwordResetStart": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "email", Schema: &schema.Schema{
+				Type:          "string",
+				Format:        "email",
+				FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+			}},
+		},
+		Required: []string{"email"},
+	},
 	"auth.passwordResetFinish": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
@@ -258,6 +375,21 @@ var RouteInputs = map[string]*schema.Schema{
 			}},
 		},
 		Required: []string{"token", "newPassword"},
+	},
+	"auth.oauthStart": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "provider", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"github", "google"},
+			}},
+			{Name: "redirectUri", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(2048),
+				Format:    "uri",
+			}},
+		},
+		Required: []string{"provider", "redirectUri"},
 	},
 	"auth.oauthFinish": &schema.Schema{
 		Type: "object",
@@ -357,6 +489,20 @@ var RouteInputs = map[string]*schema.Schema{
 			}},
 		},
 		Required: []string{"fromMs", "toMs"},
+	},
+	"me.emailChange": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "newEmail", Schema: &schema.Schema{
+				Type:          "string",
+				Format:        "email",
+				FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+			}},
+			{Name: "password", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"newEmail", "password"},
 	},
 	"me.notificationPrefs": &schema.Schema{
 		Type: "object",
@@ -1220,6 +1366,70 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"teamId"},
 	},
+	"invitations.create": &schema.Schema{
+		AnyOf: []*schema.Schema{
+			&schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "kind", Schema: &schema.Schema{
+						Const:    "team",
+						HasConst: true,
+					}},
+					{Name: "teamId", Schema: &schema.Schema{
+						Type:      "string",
+						MinLength: schema.Int(1),
+					}},
+					{Name: "email", Schema: &schema.Schema{
+						Type:          "string",
+						Format:        "email",
+						FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+					}},
+					{Name: "role", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"admin", "member", "billing", "guest"},
+					}},
+				},
+				Required: []string{"kind", "teamId", "email", "role"},
+			},
+			&schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "kind", Schema: &schema.Schema{
+						Const:    "host",
+						HasConst: true,
+					}},
+					{Name: "sourceId", Schema: &schema.Schema{
+						Type:    "string",
+						Pattern: "^[0-9a-f]{32}$",
+					}},
+					{Name: "email", Schema: &schema.Schema{
+						Type:          "string",
+						Format:        "email",
+						FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+					}},
+					{Name: "role", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"viewer", "editor", "operator", "driver"},
+					}},
+					{Name: "workspaceIds", Schema: &schema.Schema{
+						Type:     "array",
+						MaxItems: schema.Int(64),
+						Items: &schema.Schema{
+							Type:      "string",
+							MinLength: schema.Int(1),
+							MaxLength: schema.Int(128),
+						},
+					}},
+					{Name: "expiresAtMs", Schema: &schema.Schema{
+						Type:    "integer",
+						Minimum: schema.Num(-9007199254740991),
+						Maximum: schema.Num(9007199254740991),
+					}},
+				},
+				Required: []string{"kind", "sourceId", "email", "role"},
+			},
+		},
+	},
 	"invitations.list": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
@@ -1852,6 +2062,50 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"space"},
 	},
+	"billing.checkout": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
+			}},
+			{Name: "plan", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(32),
+			}},
+			{Name: "returnUrl", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(2048),
+				Format:    "uri",
+			}},
+		},
+		Required: []string{"space", "plan"},
+	},
 	"billing.invoices": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
@@ -1896,6 +2150,45 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"space"},
 	},
+	"billing.portal": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "space", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "personal",
+								HasConst: true,
+							}},
+						},
+						Required: []string{"kind"},
+					},
+					&schema.Schema{
+						Type: "object",
+						Properties: []schema.Property{
+							{Name: "kind", Schema: &schema.Schema{
+								Const:    "team",
+								HasConst: true,
+							}},
+							{Name: "teamId", Schema: &schema.Schema{
+								Type:      "string",
+								MinLength: schema.Int(1),
+							}},
+						},
+						Required: []string{"kind", "teamId"},
+					},
+				},
+			}},
+			{Name: "returnUrl", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(2048),
+				Format:    "uri",
+			}},
+		},
+		Required: []string{"space"},
+	},
 	"billing.webhook": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
@@ -1905,6 +2198,34 @@ var RouteInputs = map[string]*schema.Schema{
 			}},
 		},
 		Required: []string{"provider"},
+	},
+	"apiTokens.create": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "name", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "teamId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "scopes", Schema: &schema.Schema{
+				Type:     "array",
+				MinItems: schema.Int(1),
+				Items: &schema.Schema{
+					Type: "string",
+					Enum: []any{"directory:read", "grants:manage", "hosts:manage"},
+				},
+			}},
+			{Name: "expiresAtMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(-9007199254740991),
+				Maximum: schema.Num(9007199254740991),
+			}},
+		},
+		Required: []string{"name", "scopes"},
 	},
 	"apiTokens.list": &schema.Schema{
 		Type: "object",
@@ -2081,6 +2402,47 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"reason"},
 	},
+	"admin.statusPublish": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "components", Schema: &schema.Schema{
+				Type:     "array",
+				MinItems: schema.Int(1),
+				Items: &schema.Schema{
+					Type: "object",
+					Properties: []schema.Property{
+						{Name: "id", Schema: &schema.Schema{
+							Type:      "string",
+							MinLength: schema.Int(1),
+							MaxLength: schema.Int(64),
+						}},
+						{Name: "state", Schema: &schema.Schema{
+							Type: "string",
+							Enum: []any{"operational", "degraded", "outage"},
+						}},
+					},
+					Required: []string{"id", "state"},
+				},
+			}},
+			{Name: "notice", Schema: &schema.Schema{
+				AnyOf: []*schema.Schema{
+					&schema.Schema{
+						Type:      "string",
+						MaxLength: schema.Int(1000),
+					},
+					&schema.Schema{
+						Type: "null",
+					},
+				},
+			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(500),
+			}},
+		},
+		Required: []string{"components", "reason"},
+	},
 	"admin.abuseList": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
@@ -2153,21 +2515,82 @@ var RouteInputs = map[string]*schema.Schema{
 	"status.get": &schema.Schema{
 		Type: "object",
 	},
+	"relay.nodePresence": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "node", Schema: &schema.Schema{
+				Type:    "string",
+				Pattern: "^[a-z0-9][a-z0-9-]{0,62}$",
+			}},
+			{Name: "ttlMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(10000),
+				Maximum: schema.Num(600000),
+			}},
+			{Name: "events", Schema: &schema.Schema{
+				Type:     "array",
+				MinItems: schema.Int(1),
+				MaxItems: schema.Int(256),
+				Items: &schema.Schema{
+					AnyOf: []*schema.Schema{
+						&schema.Schema{
+							Type: "object",
+							Properties: []schema.Property{
+								{Name: "type", Schema: &schema.Schema{
+									Const:    "sourceOnline",
+									HasConst: true,
+								}},
+								{Name: "sourceId", Schema: &schema.Schema{
+									Type:    "string",
+									Pattern: "^[0-9a-f]{32}$",
+								}},
+								{Name: "tunnelId", Schema: &schema.Schema{
+									Type:    "string",
+									Pattern: "^[0-9a-f]{32}$",
+								}},
+								{Name: "coreVersion", Schema: &schema.Schema{
+									Type:      "string",
+									MinLength: schema.Int(1),
+									MaxLength: schema.Int(64),
+								}},
+								{Name: "atMs", Schema: &schema.Schema{
+									Type:    "integer",
+									Minimum: schema.Num(-9007199254740991),
+									Maximum: schema.Num(9007199254740991),
+								}},
+							},
+							Required: []string{"type", "sourceId", "tunnelId", "coreVersion", "atMs"},
+						},
+						&schema.Schema{
+							Type: "object",
+							Properties: []schema.Property{
+								{Name: "type", Schema: &schema.Schema{
+									Const:    "sourceOffline",
+									HasConst: true,
+								}},
+								{Name: "sourceId", Schema: &schema.Schema{
+									Type:    "string",
+									Pattern: "^[0-9a-f]{32}$",
+								}},
+								{Name: "tunnelId", Schema: &schema.Schema{
+									Type:    "string",
+									Pattern: "^[0-9a-f]{32}$",
+								}},
+								{Name: "atMs", Schema: &schema.Schema{
+									Type:    "integer",
+									Minimum: schema.Num(-9007199254740991),
+									Maximum: schema.Num(9007199254740991),
+								}},
+							},
+							Required: []string{"type", "sourceId", "tunnelId", "atMs"},
+						},
+					},
+				},
+			}},
+		},
+		Required: []string{"node", "ttlMs", "events"},
+	},
 }
 
 // UnsupportedInputs 列出入参 schema 用了生成器还不认识的关键字的过程（值是那个关键字）。
-var UnsupportedInputs = map[string]string{
-	"auth.register":           "format",
-	"auth.stepUp":             "propertyNames",
-	"auth.passkeyRegister":    "propertyNames",
-	"auth.passkeyLogin":       "propertyNames",
-	"auth.passwordResetStart": "format",
-	"auth.oauthStart":         "format",
-	"me.emailChange":          "format",
-	"invitations.create":      "format",
-	"billing.checkout":        "format",
-	"billing.portal":          "format",
-	"apiTokens.create":        "minItems",
-	"admin.statusPublish":     "minItems",
-	"relay.nodePresence":      "minItems",
-}
+var UnsupportedInputs = map[string]string{}

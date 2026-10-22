@@ -1,7 +1,8 @@
 // Package schema 是协议包 JSON Schema 导出的最小解释器。
 //
 // 只实现协议包实际会写出的关键字：type、const、enum、pattern、长度与数值界、
-// properties、required、items、prefixItems、maxItems、anyOf。未知字段一律放过
+// properties、required、items、prefixItems、minItems、maxItems、anyOf、format（email、uri）、
+// propertyNames（值不限的 record）。未知字段一律放过
 // （协议 schema 非 strict，更高 minor 加的字段被忽略）。
 // 描述数据（Schema 值）由 tools/schemagen 生成；这里只负责按它校验已解码的 JSON。
 package schema
@@ -10,8 +11,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"unicode/utf8"
 )
@@ -36,8 +39,15 @@ type Schema struct {
 	Items            *Schema
 	// PrefixItems 按位置校验，并要求数组长度恰好相等（与 zod 的 tuple 一致）。
 	PrefixItems []*Schema
+	MinItems    *int
 	MaxItems    *int
 	AnyOf       []*Schema
+	// Format 取 email 或 uri，只对字符串生效。email 按 FormatPattern（协议包导出的
+	// z.email() 正则源码）判；uri 要求 url.Parse 成功且有 scheme 与 host。
+	Format        string
+	FormatPattern string
+	// PropertyNames 非空表示对象的键都要过它（record 的键 schema）；值不限，剪枝时保留全部键。
+	PropertyNames *Schema
 }
 
 // Property 是对象的一个属性。
@@ -74,6 +84,68 @@ func compile(pattern string) *regexp.Regexp {
 	compiled := regexp.MustCompile(pattern)
 	patterns.Store(pattern, compiled)
 	return compiled
+}
+
+// 协议包的邮箱正则（JavaScript 语法）开头带两个否定前瞻，Go 的 RE2 不支持：
+// 前瞻换成等价的直接检查（不以点开头、不含连续两个点），其余部分原样编译。
+const (
+	lookNoLeadingDot = `(?!\.)`
+	lookNoDoubleDot  = `(?!.*\.\.)`
+)
+
+type emailMatcher struct {
+	rest         *regexp.Regexp
+	noLeadingDot bool
+	noDoubleDot  bool
+}
+
+var emailMatchers sync.Map
+
+// EmailMatches 按协议包导出的邮箱正则源码判一个字符串；源码用了本包不认识的前瞻就 panic（生成物有误）。
+func EmailMatches(pattern, value string) bool {
+	cached, ok := emailMatchers.Load(pattern)
+	if !ok {
+		cached, _ = emailMatchers.LoadOrStore(pattern, newEmailMatcher(pattern))
+	}
+	m := cached.(*emailMatcher)
+	if m.noLeadingDot && strings.HasPrefix(value, ".") {
+		return false
+	}
+	if m.noDoubleDot && strings.Contains(value, "..") {
+		return false
+	}
+	return m.rest.MatchString(value)
+}
+
+func newEmailMatcher(pattern string) *emailMatcher {
+	body, ok := strings.CutPrefix(pattern, "^")
+	if !ok {
+		panic("schema: 邮箱正则应以 ^ 开头")
+	}
+	m := &emailMatcher{}
+	for {
+		switch {
+		case !m.noLeadingDot && strings.HasPrefix(body, lookNoLeadingDot):
+			m.noLeadingDot = true
+			body = body[len(lookNoLeadingDot):]
+			continue
+		case !m.noDoubleDot && strings.HasPrefix(body, lookNoDoubleDot):
+			m.noDoubleDot = true
+			body = body[len(lookNoDoubleDot):]
+			continue
+		}
+		break
+	}
+	if strings.Contains(body, "(?!") || strings.Contains(body, "(?=") || strings.Contains(body, "(?<") {
+		panic("schema: 邮箱正则含不认识的前瞻")
+	}
+	m.rest = regexp.MustCompile("^" + body)
+	return m
+}
+
+func uriMatches(value string) bool {
+	u, err := url.Parse(value)
+	return err == nil && u.Scheme != "" && u.Host != ""
 }
 
 // utf16Len 按 UTF-16 码元计长，与 TypeScript 里 zod 对字符串长度的算法一致。
@@ -182,6 +254,19 @@ func (s *Schema) checkString(path, v string) error {
 	if s.Pattern != "" && !compile(s.Pattern).MatchString(v) {
 		return fail(path, "不符合格式 %s", s.Pattern)
 	}
+	switch s.Format {
+	case "":
+	case "email":
+		if !EmailMatches(s.FormatPattern, v) {
+			return fail(path, "不是合法邮箱")
+		}
+	case "uri":
+		if !uriMatches(v) {
+			return fail(path, "不是合法 URL")
+		}
+	default:
+		panic("schema: 未知格式 " + s.Format)
+	}
 	return nil
 }
 
@@ -199,6 +284,9 @@ func (s *Schema) checkNumber(path string, v float64) error {
 }
 
 func (s *Schema) checkArray(path string, v []any) error {
+	if s.MinItems != nil && len(v) < *s.MinItems {
+		return fail(path, "少于 %d 项", *s.MinItems)
+	}
 	if s.MaxItems != nil && len(v) > *s.MaxItems {
 		return fail(path, "多于 %d 项", *s.MaxItems)
 	}
@@ -222,6 +310,13 @@ func (s *Schema) checkArray(path string, v []any) error {
 }
 
 func (s *Schema) checkObject(path string, v map[string]any) error {
+	if s.PropertyNames != nil {
+		for key := range v {
+			if err := s.PropertyNames.validate(path+"/"+key, key); err != nil {
+				return err
+			}
+		}
+	}
 	for _, name := range s.Required {
 		if _, ok := v[name]; !ok {
 			return fail(path+"/"+name, "缺少必填字段")

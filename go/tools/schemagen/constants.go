@@ -28,6 +28,7 @@ var constPrefixes = map[string]string{
 	"e2e.labels":            "E2ELabel",
 	"e2e.limits":            "E2ELimit",
 	"identity":              "Identity",
+	"validation":            "Validation",
 }
 
 func constName(path []string) (string, error) {

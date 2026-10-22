@@ -11,10 +11,16 @@ var knownKeywords = map[string]bool{
 	"pattern": true, "minLength": true, "maxLength": true, "minimum": true,
 	"maximum": true, "exclusiveMinimum": true, "properties": true,
 	"required": true, "items": true, "prefixItems": true, "maxItems": true,
-	"anyOf": true,
+	"anyOf": true, "minItems": true, "format": true, "propertyNames": true,
+	// additionalProperties 只认空对象 {}（值不限），见 literal。
+	"additionalProperties": true,
 	// default 只是注解（不是约束），校验时没有作用，直接略过。
 	"default": true,
 }
+
+// emailPattern 是协议包导出的邮箱正则源码（constants.json 的 validation.emailPattern），
+// 由 generate 在写入入参 schema 之前设置；literal 把它写进每个 format: email 的字面量。
+var emailPattern string
 
 // unsupportedKeyword 是 literal 遇到的、生成器不认识的 schema 关键字。
 type unsupportedKeyword struct{ keyword string }
@@ -244,7 +250,7 @@ func literal(v *value) (string, error) {
 		add("Pattern: %s", quote(p.str))
 	}
 	for _, kw := range []struct{ key, field string }{
-		{"minLength", "MinLength"}, {"maxLength", "MaxLength"}, {"maxItems", "MaxItems"},
+		{"minLength", "MinLength"}, {"maxLength", "MaxLength"}, {"minItems", "MinItems"}, {"maxItems", "MaxItems"},
 	} {
 		if n := v.get(kw.key); n != nil {
 			add("%s: schema.Int(%s)", kw.field, n.num)
@@ -256,6 +262,30 @@ func literal(v *value) (string, error) {
 		if n := v.get(kw.key); n != nil {
 			add("%s: schema.Num(%s)", kw.field, n.num)
 		}
+	}
+	if f := v.get("format"); f != nil {
+		switch f.str {
+		case "email":
+			if emailPattern == "" {
+				return "", fmt.Errorf("format: email 需要 constants.json 的 validation.emailPattern")
+			}
+			add("Format: %s", quote("email"))
+			add("FormatPattern: %s", quote(emailPattern))
+		case "uri":
+			add("Format: %s", quote("uri"))
+		default:
+			return "", &unsupportedKeyword{keyword: "format"}
+		}
+	}
+	if ap := v.get("additionalProperties"); ap != nil && (ap.kind != 'o' || len(ap.keys) != 0) {
+		return "", &unsupportedKeyword{keyword: "additionalProperties"}
+	}
+	if names := v.get("propertyNames"); names != nil {
+		inner, err := literal(names)
+		if err != nil {
+			return "", fmt.Errorf("propertyNames：%w", err)
+		}
+		add("PropertyNames: %s", inner)
 	}
 	if props := v.get("properties"); props != nil {
 		var items []string
