@@ -17,6 +17,7 @@
     "deploy",
     "docs",
     "eslint.config.js",
+    "go",
     "knip.json",
     "migrations.lock",
     "package.json",
