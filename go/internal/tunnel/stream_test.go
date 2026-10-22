@@ -79,9 +79,15 @@ func TestStreamWrite(t *testing.T) {
 		r := newRig(t, func(c *tunnel.Config) { c.StreamWindow = 1 << 20; c.TunnelWindow = 1 << 22 })
 		a, b := r.open(&recSink{}), r.open(&recSink{})
 		r.tr.take()
-		// a 一次排 3 块，b 排 3 块；写端应交错出队而不是先把 a 写完。
+		// 让写端停在第一帧上，攒齐两条流的队列；放开后应交错出队，而不是先把 a 写完。
+		gate := make(chan struct{})
+		r.tr.mu.Lock()
+		r.tr.gate = gate
+		r.tr.mu.Unlock()
 		a.Send(make([]byte, protocol.MaxDataChunk*3))
 		b.Send(make([]byte, protocol.MaxDataChunk*3))
+		close(gate)
+		eventually(t, "6 个 DATA", func() bool { return len(dataFrames(r.tr.takeKeep())) == 6 })
 		var order []uint32
 		for _, f := range dataFrames(r.tr.take()) {
 			order = append(order, f.StreamID)
@@ -89,12 +95,17 @@ func TestStreamWrite(t *testing.T) {
 		if len(order) != 6 {
 			t.Fatalf("顺序 %v", order)
 		}
-		// 前三帧里 a、b 都至少出现一次，说明没有队头阻塞。
-		seen := map[uint32]bool{}
-		for _, id := range order[:3] {
-			seen[id] = true
+		// b 的第一帧必须排在 a 的最后一帧之前，说明没有队头阻塞。
+		firstB, lastA := -1, -1
+		for i, id := range order {
+			if id == b.ID() && firstB < 0 {
+				firstB = i
+			}
+			if id == a.ID() {
+				lastA = i
+			}
 		}
-		if !seen[a.ID()] || !seen[b.ID()] {
+		if firstB < 0 || firstB > lastA {
 			t.Fatalf("没有轮转：%v", order)
 		}
 	})
