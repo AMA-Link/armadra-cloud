@@ -7,11 +7,13 @@
 package schema
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
 	"regexp"
 	"sync"
+	"unicode/utf8"
 )
 
 // Schema 是一条生成出来的校验规则。零值表示不加限制。
@@ -233,4 +235,65 @@ func (s *Schema) checkObject(path string, v map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// Decode 把 JSON 文本按 s 校验后解到 out（结构体指针）。
+//
+// 先解成通用值校验，再剔掉 schema 没列出的字段才解进结构体：encoding/json 对键名不分
+// 大小写，不剔的话，多出来的 "KIND" 会覆盖已校验过的 "kind"。文本不是合法 UTF-8 也算失败。
+func Decode(s *Schema, data []byte, out any) error {
+	if !utf8.Valid(data) {
+		return &Error{Msg: "不是合法 UTF-8"}
+	}
+	var generic any
+	if err := json.Unmarshal(data, &generic); err != nil {
+		return &Error{Msg: "不是合法 JSON"}
+	}
+	if err := s.Validate(generic); err != nil {
+		return err
+	}
+	clean, err := json.Marshal(s.prune(generic))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(clean, out)
+}
+
+// prune 只留下 schema 列出的字段。调用前 value 已经通过校验。
+func (s *Schema) prune(value any) any {
+	if len(s.AnyOf) > 0 {
+		for _, option := range s.AnyOf {
+			if option.validate("", value) == nil {
+				return option.prune(value)
+			}
+		}
+		return value
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		if len(s.Properties) == 0 {
+			return v
+		}
+		out := make(map[string]any, len(v))
+		for _, p := range s.Properties {
+			if item, ok := v[p.Name]; ok {
+				out[p.Name] = p.Schema.prune(item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			switch {
+			case i < len(s.PrefixItems):
+				out[i] = s.PrefixItems[i].prune(item)
+			case s.Items != nil:
+				out[i] = s.Items.prune(item)
+			default:
+				out[i] = item
+			}
+		}
+		return out
+	}
+	return value
 }
