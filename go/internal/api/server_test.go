@@ -2,8 +2,10 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
@@ -316,6 +318,40 @@ func TestRateLimitAnswersRetryAfter(t *testing.T) {
 	r.expect(res, 429, "rate_limited")
 	if res.json["details"].(map[string]any)["retryAfterMs"].(float64) != 1500 || res.header.Get("Retry-After") != "2" {
 		t.Fatalf("限流答复：%s %q", res.body, res.header.Get("Retry-After"))
+	}
+}
+
+func TestWriteErrorEmitsDetails(t *testing.T) {
+	read := func(retry time.Duration, details map[string]any) (map[string]any, string) {
+		rec := httptest.NewRecorder()
+		api.WriteError(rec, gen.ErrForbidden, "req-1", retry, details)
+		var out map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out, rec.Header().Get("Retry-After")
+	}
+	body, retry := read(0, nil)
+	if _, present := body["details"]; present || retry != "" {
+		t.Fatalf("没有详情不该带 details：%v %q", body, retry)
+	}
+	body, _ = read(0, map[string]any{"setting": "memberHosts"})
+	if body["details"].(map[string]any)["setting"] != "memberHosts" {
+		t.Fatalf("详情原样带出：%v", body)
+	}
+	body, retry = read(1500*time.Millisecond, map[string]any{"setting": "x", "retryAfterMs": 1})
+	details := body["details"].(map[string]any)
+	if details["setting"] != "x" || details["retryAfterMs"].(float64) != 1500 || retry != "2" {
+		t.Fatalf("retryAfterMs 以等待时长为准：%v %q", details, retry)
+	}
+}
+
+func TestFailWithDetailsReachTheClient(t *testing.T) {
+	err := core.FailWith(gen.ErrForbidden, map[string]any{"setting": "memberHosts"})
+	rec := httptest.NewRecorder()
+	api.WriteError(rec, err.Code, "req-2", err.RetryAfter, err.Details)
+	if !strings.Contains(rec.Body.String(), `"details":{"setting":"memberHosts"}`) {
+		t.Fatalf("线上形状：%s", rec.Body.String())
 	}
 }
 

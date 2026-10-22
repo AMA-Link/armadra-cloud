@@ -17,6 +17,9 @@ type Error struct {
 	Code gen.ErrorCode
 	// RetryAfter 非零时，答复带 Retry-After 与 details.retryAfterMs。
 	RetryAfter time.Duration
+	// Details 是答复里 details 对象的附加字段（例如 {"setting": "memberHosts"}），不含口令与令牌；
+	// 与 RetryAfter 同时存在时 retryAfterMs 以 RetryAfter 为准。
+	Details map[string]any
 }
 
 func (e *Error) Error() string { return string(e.Code) }
@@ -26,6 +29,18 @@ func (e *Error) Message() string { return MessageOf(e.Code) }
 
 // Fail 造一个只带码的错误。
 func Fail(code gen.ErrorCode) *Error { return &Error{Code: code} }
+
+// FailWith 造一个带详情的错误；details 会被复制，之后改原 map 不影响错误。
+func FailWith(code gen.ErrorCode, details map[string]any) *Error {
+	e := &Error{Code: code}
+	if len(details) > 0 {
+		e.Details = make(map[string]any, len(details))
+		for key, value := range details {
+			e.Details[key] = value
+		}
+	}
+	return e
+}
 
 // FailAfter 造一个带重试等待的错误（等待向上取整到毫秒，负数当 0）。
 func FailAfter(code gen.ErrorCode, wait time.Duration) *Error {

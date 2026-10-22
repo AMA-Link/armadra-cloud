@@ -6,7 +6,7 @@
  * - `tunnel/*.json`：握手的 hello / challenge / auth / ready / reject 与帧里的 JSON 载荷；
  * - `errors.json`：错误码 → HTTP 状态码；
  * - `e2e/accept.json`：端到端通道 r0 的 JSON；
- * - `constants.json`：协议版本、路径、隧道限制、端到端通道常量与身份常量（identity-vectors）。
+ * - `constants.json`：协议版本、路径、隧道限制、端到端通道常量、身份常量（identity-vectors）与入参校验用的邮箱正则。
  *
  * `/v1` 契约的 OpenAPI（`schema/cloud-openapi.json`）由 `tools/contract/generate.mjs`
  * 一起写，这里只校验它在。字节由输入决定，重复运行不变。
@@ -63,6 +63,7 @@ import {
 import { LIMITS } from "../src/tunnel/limits.ts";
 import { e2eAcceptSchema } from "../src/e2e/accept.ts";
 import * as e2e from "../src/e2e/constants.ts";
+import { EMAIL_PATTERN } from "../src/validation.ts";
 import * as version from "../src/version.ts";
 
 const ROOT = fileURLToPath(new URL("../schema/", import.meta.url));
@@ -152,6 +153,7 @@ put("constants.json", {
     limits: e2e.LIMITS_E2E,
   },
   identity: constants,
+  validation: { emailPattern: EMAIL_PATTERN },
 });
 
 // ------------------------------------------------------------ write

@@ -54,7 +54,7 @@ func TestPascal(t *testing.T) {
 }
 
 func TestUnknownKeywordStopsTheGenerator(t *testing.T) {
-	root, err := parseOrdered([]byte(`{"type":"object","properties":{"a":{"type":"string","format":"uri"}},"required":["a"]}`))
+	root, err := parseOrdered([]byte(`{"type":"object","properties":{"a":{"type":"string","format":"date-time"}},"required":["a"]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestInputsMergeParametersAndBody(t *testing.T) {
 		{"name":"n","in":"query","required":false,"schema":{"type":"integer","default":3}}],
 		"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object",
 		"properties":{"a":{"type":"string"}},"required":["a"]}}}}}},
-		"/v1/z":{"get":{"operationId":"z.w","parameters":[{"name":"e","in":"query","required":true,"schema":{"type":"string","format":"email"}}]}}}}`))
+		"/v1/z":{"get":{"operationId":"z.w","parameters":[{"name":"e","in":"query","required":true,"schema":{"type":"string","format":"date-time"}}]}}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,5 +109,33 @@ func TestInputsMergeParametersAndBody(t *testing.T) {
 	}
 	if strings.Contains(text, `"z.w": &schema.Schema`) {
 		t.Error("不支持的过程不该进 RouteInputs")
+	}
+}
+
+// format、minItems、propertyNames 现在都生成成字面量；认不得的 format 与非空 additionalProperties 仍登记为不支持。
+func TestGenInputsHandlesFormatsAndRecords(t *testing.T) {
+	old := emailPattern
+	emailPattern = `^a$`
+	t.Cleanup(func() { emailPattern = old })
+	root, err := parseOrdered([]byte(`{"paths":{"/v1/x":{"post":{"operationId":"x.y",
+		"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object",
+		"properties":{"e":{"type":"string","format":"email"},"u":{"type":"string","format":"uri","maxLength":9},
+		"l":{"type":"array","items":{"type":"string"},"minItems":1},
+		"r":{"type":"object","propertyNames":{"type":"string"},"additionalProperties":{}}},"required":["e"]}}}}}},
+		"/v1/z":{"post":{"operationId":"z.w","requestBody":{"content":{"application/json":{"schema":{"type":"object",
+		"properties":{"m":{"type":"object","additionalProperties":{"type":"string"}}}}}}}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := genInputs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(out)), " ")
+	for _, want := range []string{`Format: "email"`, `FormatPattern: "^a$"`, `Format: "uri"`, `MinItems: schema.Int(1)`,
+		`PropertyNames: &schema.Schema{`, `"z.w": "additionalProperties"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("生成物缺 %q：\n%s", want, text)
+		}
 	}
 }

@@ -75,6 +75,7 @@ func generate(schemaDir string) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	emailPattern = constants.get("validation").get("emailPattern").str
 	if out["constants.go"], err = genConstants(constants); err != nil {
 		return nil, fmt.Errorf("constants.json：%w", err)
 	}

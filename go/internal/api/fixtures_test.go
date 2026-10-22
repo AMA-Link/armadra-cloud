@@ -34,7 +34,10 @@ func TestFixturesPassInputAndOutputSchemas(t *testing.T) {
 	if len(files) != len(gen.Routes) {
 		t.Fatalf("夹具应与路由表一一对应：路由 %d 条，夹具 %d 个", len(gen.Routes), len(files))
 	}
-	checked, unsupported := 0, 0
+	if len(gen.UnsupportedInputs) != 0 {
+		t.Fatalf("每个过程都该有入参 schema，仍不支持：%v", sortedKeys(gen.UnsupportedInputs))
+	}
+	checked := 0
 	for _, file := range files {
 		op := strings.TrimSuffix(file, ".json")
 		t.Run(op, func(t *testing.T) {
@@ -53,11 +56,7 @@ func TestFixturesPassInputAndOutputSchemas(t *testing.T) {
 			}
 			ours, ok := gen.RouteInputs[op]
 			if !ok {
-				if _, listed := gen.UnsupportedInputs[op]; !listed {
-					t.Fatalf("%s 既没有入参 schema，也没登记为不支持", op)
-				}
-				unsupported++
-				return
+				t.Fatalf("%s 没有入参 schema", op)
 			}
 			var value any
 			if err := json.Unmarshal(input, &value); err != nil {
@@ -69,7 +68,9 @@ func TestFixturesPassInputAndOutputSchemas(t *testing.T) {
 			checked++
 		})
 	}
-	t.Logf("%d 个夹具：%d 个入参用生成的 schema 校验，%d 个登记为不支持（%v）", len(files), checked, unsupported, sortedKeys(gen.UnsupportedInputs))
+	if checked != len(files) {
+		t.Fatalf("%d 个夹具只有 %d 个用生成的 schema 校验", len(files), checked)
+	}
 }
 
 func sortedKeys(m map[string]string) []string {

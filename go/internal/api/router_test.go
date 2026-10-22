@@ -88,13 +88,14 @@ func TestRouterRejectsUnknownAndUnsupported(t *testing.T) {
 	}
 }
 
-// 每条路由都有入参 schema，或者明确登记为不支持。
+// 每条路由都有入参 schema，UnsupportedInputs 为空（S0a 之后没有例外）。
 func TestEveryRouteHasAnInputSchema(t *testing.T) {
+	if len(gen.UnsupportedInputs) != 0 {
+		t.Errorf("UnsupportedInputs 应为空：%v", gen.UnsupportedInputs)
+	}
 	for _, route := range gen.Routes {
-		_, has := gen.RouteInputs[route.Procedure]
-		_, unsupported := gen.UnsupportedInputs[route.Procedure]
-		if has == unsupported {
-			t.Errorf("%s：RouteInputs 与 UnsupportedInputs 应恰有一个登记（有 %v，不支持 %v）", route.Procedure, has, unsupported)
+		if _, has := gen.RouteInputs[route.Procedure]; !has {
+			t.Errorf("%s 没有入参 schema", route.Procedure)
 		}
 	}
 }

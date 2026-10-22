@@ -203,5 +203,8 @@
     "TUNNEL_TOKEN": {
       "ttlMs": 3600000
     }
+  },
+  "validation": {
+    "emailPattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
   }
 }
