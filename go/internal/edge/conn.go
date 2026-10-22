@@ -35,6 +35,8 @@ type edgeConn struct {
 	c        netpoll.Conn
 	sourceID string
 	subject  string
+	// release 是 Gate 占的名额（SaaS）；连接结束时连同账号并发一起还。
+	release  func()
 	started  time.Time
 	lastSeen atomic.Int64
 	bucket   int
@@ -373,7 +375,7 @@ func (ec *edgeConn) OnClose(c netpoll.Conn, _ error) {
 	e.wheel.remove(ec)
 	e.policy.Untrack(ec)
 	// 还名额可能做网络 I/O：投递给工作协程，不占住 epoll 循环。
-	e.policy.ReleaseUpgradeAsync(ec.subject)
+	e.policy.ReleaseUpgradeAsync(ec.subject, ec.release)
 	var id uint32
 	if s != nil {
 		id = s.ID()

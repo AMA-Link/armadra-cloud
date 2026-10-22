@@ -61,12 +61,33 @@ type PolicyOptions struct {
 	Traffic *traffic.Meter
 	// Dispatch 承接 ReleaseUpgradeAsync；不给就自建一个。
 	Dispatch *control.Dispatcher
+	// Gate 是模式自己的准入（SaaS：事故开关、团队速率与跨节点并发）；personal 不给。
+	Gate Gate
 }
 
-// TrafficIdentity 是一条通道记到谁名下（流量统计，类别 e2e）：中继令牌的 sub / dev。
+// Gate 是模式自己的准入（SaaS 实施设计 §2.4 的 N4）。
+type Gate interface {
+	// Refuse 在验令牌之前判断（事故开关开着时答 limit_reached）；答空串放行。只读本地状态，不做 I/O。
+	Refuse() gen.ErrorCode
+	// Admit 在通道开成之前占名额。放行时 release 非空，连接结束时恰好调一次（可能做网络 I/O，
+	// 不在 epoll 循环里调）；被拒时答错误码；err 非空按 503 处理。
+	Admit(ctx context.Context, in GateInput) (release func(), code gen.ErrorCode, err error)
+}
+
+// GateInput 是 Gate.Admit 的入参：已验过的中继令牌里的身份。
+type GateInput struct {
+	SourceID string
+	Subject  string
+	DeviceID string
+	// Team 是中继令牌的 team；个人空间为空串。
+	Team string
+}
+
+// TrafficIdentity 是一条通道记到谁名下（流量统计，类别 e2e）：中继令牌的 sub / dev / team。
 type TrafficIdentity struct {
 	Subject  string
 	DeviceID string
+	Team     string
 }
 
 // wsClose 是升级被拒时用来关 WS 的关闭码；没有对应码（如 not_found）的改答 HTTP。
@@ -120,6 +141,10 @@ type Decision struct {
 	Subprotocols []string
 	// Device 是中继令牌的 dev（1.3，可选；只计数）。
 	Device string
+	// Team 是中继令牌的 team（1.4，可选；只计数）。
+	Team string
+	// Release 是 Gate.Admit 占的名额；没有 Gate 时为空。用 Policy.Release 连同账号并发一起还。
+	Release func()
 }
 
 // Handle 是一条已升级连接的句柄；撤销源或访客时被断开。
@@ -127,15 +152,19 @@ type Handle interface {
 	Disconnect()
 }
 
-// ConnectionFilter 是 Take 的条件：都给时要同时满足。
+// ConnectionFilter 是 Take 的条件：给了的都要满足。
 type ConnectionFilter struct {
 	SourceID string
 	// SubjectPrefix 匹配中继令牌 sub 的前缀（访客：guest:<linkId>:）。
 	SubjectPrefix string
+	// Subject 精确匹配中继令牌的 sub（SaaS 按人踢）。
+	Subject string
+	// DeviceID 精确匹配中继令牌的 dev（SaaS 按设备踢）。
+	DeviceID string
 }
 
 type connection struct {
-	sourceID, subject string
+	sourceID, subject, device string
 }
 
 // Policy 是边缘的判定。
@@ -209,6 +238,12 @@ func (p *Policy) DecideUpgrade(ctx context.Context, r Request) (Decision, error)
 		}
 		return d, nil
 	}
+	if p.o.Gate != nil {
+		if code := p.o.Gate.Refuse(); code != "" {
+			p.o.Metrics.EdgeConnection(string(code))
+			return Decision{Code: code, SourceID: addressed.SourceID}, nil
+		}
+	}
 	token, rest := auth.SplitRelaySubprotocol(headerJoined(r.Header, "Sec-WebSocket-Protocol"))
 	adm, err := p.admit(ctx, r, addressed, token)
 	if err != nil {
@@ -234,9 +269,25 @@ func (p *Policy) DecideUpgrade(ctx context.Context, r Request) (Decision, error)
 		p.o.Metrics.EdgeConnection(string(gen.ErrLimitReached))
 		return Decision{Code: gen.ErrLimitReached, SourceID: addressed.SourceID}, nil
 	}
+	var release func()
+	if p.o.Gate != nil {
+		rel, code, err := p.o.Gate.Admit(ctx, GateInput{
+			SourceID: addressed.SourceID, Subject: adm.subject, DeviceID: adm.device, Team: adm.team,
+		})
+		if err != nil || code != "" {
+			p.ReleaseUpgrade(adm.subject)
+			if err != nil {
+				return Decision{}, err
+			}
+			p.o.Metrics.EdgeConnection(string(code))
+			return Decision{Code: code, SourceID: addressed.SourceID}, nil
+		}
+		release = rel
+	}
 	return Decision{
 		Accept: true, Target: addressed, Tunnel: adm.tunnel, Subject: adm.subject,
 		RemoteIP: adm.remoteIP, Subprotocols: []string{gen.E2ESubprotocol}, Device: adm.device,
+		Team: adm.team, Release: release,
 	}, nil
 }
 
@@ -256,10 +307,23 @@ func (p *Policy) ReleaseUpgrade(subject string) {
 	_ = p.o.Control.Limits().Release(ctx, control.LimitEdgeConcurrentAcct, subject)
 }
 
-// ReleaseUpgradeAsync 同 ReleaseUpgrade，但投递给工作协程立即返回：epoll 循环的回调用它，
-// 控制面（redis / postgres）的网络 I/O 不会拖住整条循环。同一个账号的调用保持顺序。
-func (p *Policy) ReleaseUpgradeAsync(subject string) {
-	p.dispatch.Go(subject, func() { p.ReleaseUpgrade(subject) })
+// Release 还回一次已接受的升级占的全部名额（账号并发与 Gate 的名额）。
+func (p *Policy) Release(d Decision) {
+	p.ReleaseUpgrade(d.Subject)
+	if d.Release != nil {
+		d.Release()
+	}
+}
+
+// ReleaseUpgradeAsync 同 ReleaseUpgrade（另还 extra，可为空），但投递给工作协程立即返回：epoll 循环的
+// 回调用它，控制面（redis / postgres）的网络 I/O 不会拖住整条循环。同一个账号的调用保持顺序。
+func (p *Policy) ReleaseUpgradeAsync(subject string, extra func()) {
+	p.dispatch.Go(subject, func() {
+		p.ReleaseUpgrade(subject)
+		if extra != nil {
+			extra()
+		}
+	})
 }
 
 // Close 排空并释放自建的工作协程（调用方给的 Dispatcher 归调用方）。关闭之后的投递仍会执行。
@@ -282,6 +346,7 @@ type admission struct {
 	subject  string
 	remoteIP string
 	device   string
+	team     string
 }
 
 // admit：解析源 → 中继令牌（无效按 IP 限流；有效按令牌与账号限流）→ 找隧道。
@@ -328,6 +393,9 @@ func (p *Policy) admit(ctx context.Context, r Request, target Target, token stri
 	if verified.Claims.Dev != nil {
 		a.device = *verified.Claims.Dev
 	}
+	if verified.Claims.Team != nil {
+		a.team = *verified.Claims.Team
+	}
 	return a, nil
 }
 
@@ -339,7 +407,7 @@ func (p *Policy) OpenE2E(t *tunnel.Tunnel, r Request, remoteIP string, id *Traff
 	var counter *traffic.Counter
 	if id != nil && p.o.Traffic != nil {
 		counter = p.o.Traffic.Counter(traffic.Key{
-			SourceID: t.SourceID(), Subject: id.Subject, DeviceID: id.DeviceID, Kind: traffic.KindE2E,
+			SourceID: t.SourceID(), Subject: id.Subject, DeviceID: id.DeviceID, Kind: traffic.KindE2E, TeamID: id.Team,
 		})
 	}
 	open := &gen.OpenPayload{
@@ -369,9 +437,12 @@ func (p *Policy) OpenE2E(t *tunnel.Tunnel, r Request, remoteIP string, id *Traff
 // ------------------------------------------------------------ 已升级的连接
 
 // Track 登记一条已升级的连接。
-func (p *Policy) Track(h Handle, sourceID, subject string) {
+func (p *Policy) Track(h Handle, sourceID, subject string) { p.TrackDevice(h, sourceID, subject, "") }
+
+// TrackDevice 同 Track，另记中继令牌的 dev（按设备踢用）。
+func (p *Policy) TrackDevice(h Handle, sourceID, subject, device string) {
 	p.mu.Lock()
-	p.conns[h] = connection{sourceID: sourceID, subject: subject}
+	p.conns[h] = connection{sourceID: sourceID, subject: subject, device: device}
 	p.mu.Unlock()
 }
 
@@ -411,6 +482,12 @@ func (p *Policy) Take(f ConnectionFilter) []Handle {
 			continue
 		}
 		if f.SubjectPrefix != "" && !strings.HasPrefix(c.subject, f.SubjectPrefix) {
+			continue
+		}
+		if f.Subject != "" && c.subject != f.Subject {
+			continue
+		}
+		if f.DeviceID != "" && c.device != f.DeviceID {
 			continue
 		}
 		delete(p.conns, h)
