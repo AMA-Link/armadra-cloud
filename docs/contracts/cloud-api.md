@@ -559,7 +559,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §30 协议 1.4 的声明与令牌
 
-协议 1.4（协议包 0.10.0），只做加法，SaaS 从未上线所以从未签发过的 `org` / 部门语义原地改。
+协议 1.4（协议包 0.10.0）。新增的 procedure 与字段是加法；但断言 `team`、令牌 `org` → `team` 的语义是原地改的，只因为 SaaS 从未上线、这些声明从未签发过才安全。
 
 | 位置                          | 1.3                                            | 1.4                                                                                                                                                |
 | ----------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -574,25 +574,27 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 | 契约                          | `orgs.*`、`billing`（挂组织）                  | 删 `orgs.*`；追加 `teams` / `invitations` / `groups` / `grants` / `accessRequests` / `audit` / `billing`（按团队）/ `apiTokens` / `admin`，§21–§29 |
 
 - 断言的 `team` 只在主机属于团队时带；个人空间的主机不带。`role`、`scp` 是合成后的主机角色与范围，语义不变。
-- 老中继收到带 `team` 的令牌照常放行（schema 非 strict，更高 minor 的声明被忽略）；老 core 忽略 `team`。1.3 的签发方没有发过 `org` / 旧 `team`，所以没有需要兼容的存量令牌。
+- **老中继**收到带 `team` 的令牌照常放行（令牌 schema 非 strict，更高 minor 的声明被忽略）。
+- **1.3 的 core 会拒绝**：它按严格的 1.3 `assertionClaimsSchema` 校验断言，`team.role` 取 `owner` / `admin` / `billing` / `guest` 这些 1.4 的值时整张断言无效；它也只认 `org` + `role` 作 SaaS 准入。1.3 的签发方没有发过 `org` / 旧 `team`，所以没有存量令牌需要兼容。
+- **签发规则**：控制面只向登记的 `coreVersion`（`sources.register` 已上报）不低于「采用协议 1.4 的 Armadra 版本」（发版时填具体版本号）的源签带 `team` 的断言；更老的 core 一律不带 `team`（主机属于团队时也不签，答 `403 source_access_denied`）。
 - core 侧（Armadra）的 `cloud/login` 改成以 `team` + `role` 作 SaaS 准入，另在 Armadra 仓提 PR。
 - 新增的 scope（`team:member` / `team:admin` / `team:owner` / `team:billing` / `group:lead` / `operator` / `billing-webhook`）取代 `org:admin` / `org:owner`。
 
 ## §31 设备信任
 
-协议 1.4（设计 `saas-design.md` §11.4）。团队成员第一次从新设备连团队主机，会停在 `device_pending`，要有人从**自己已受信的设备**背书；背书人是主机 owner 与（团队设置允许时）团队 admin，也可以是成员本人从自己另一台已受信的设备。
+协议 1.4（设计 `saas-design.md` §11.4）。团队成员第一次从新设备连团队主机，会停在 `device_pending`，要有人从**自己已受信的设备**背书；缺省的背书人是主机 owner 与团队 admin；团队设置「新设备背书人」可以收窄为只有主机 owner；成员本人从自己另一台已受信的设备背书缺省开启（`memberSelfEndorse`），也可以关。
 
 - **云端不担保设备，也不参与批准。** 批准走端到端通道发到主机，用的是现有的「已受信设备背书」路径；云端看不到也改不了背书内容，否则控制面运营方就能冒充设备。
 - 云端只做两件事：把待信任请求（成员、设备名、平台、6 位 SAS、主机、过期时间）推给背书人——`trust.list` 与 me-stream 的 `deviceTrustRequested` / `deviceTrustResolved`（§32）——以及记下背书人的拒绝（`trust.reject`，请求作废，设备继续停在 `device_pending`）。已被批准或已过期的请求答 `409 conflict`。
-- `trust.list` 缺省列调用者能背书的全部空间，给 `space` 只列那个空间；非背书人答 `403 team_role_insufficient`。`device_untrusted` 表示背书要在已受信的设备上做。
+- `trust.list` / `trust.reject` 的 scope 含 `team:member`：成员只看得到、处理得了自己的待信任请求（`memberSelfEndorse` 开着时），主机 owner / 团队 admin 按 `deviceEndorsers` 设置看到团队里的请求，处理器据此收窄；缺省列调用者能背书的全部空间，给 `space` 只列那个空间；不是背书人答 `403 team_role_insufficient`。`device_untrusted` 表示背书要在已受信的设备上做。
 - 走分享链接进来的访客仍按链接的 `max_devices` 与指纹钉扎，不经这里。
 
 <!-- rpc:begin contract=§31 -->
 
-| procedure      | 方法与路径                                   | scope                  | 错误码                                                                |
-| -------------- | -------------------------------------------- | ---------------------- | --------------------------------------------------------------------- |
-| `trust.list`   | `GET /v1/trust-requests`                     | `owner` / `team:admin` | `team_role_insufficient`、`not_found`                                 |
-| `trust.reject` | `POST /v1/trust-requests/{requestId}/reject` | `owner` / `team:admin` | `not_found`、`team_role_insufficient`、`device_untrusted`、`conflict` |
+| procedure      | 方法与路径                                   | scope                                  | 错误码                                                                |
+| -------------- | -------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------- |
+| `trust.list`   | `GET /v1/trust-requests`                     | `owner` / `team:admin` / `team:member` | `team_role_insufficient`、`not_found`                                 |
+| `trust.reject` | `POST /v1/trust-requests/{requestId}/reject` | `owner` / `team:admin` / `team:member` | `not_found`、`team_role_insufficient`、`device_untrusted`、`conflict` |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 

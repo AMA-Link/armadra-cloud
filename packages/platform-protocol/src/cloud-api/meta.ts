@@ -20,7 +20,7 @@ export const SCOPES = [
   "team:billing",
   /** 分组的组长（含 owner / admin 之外的组长，cloud-api §23）。 */
   "group:lead",
-  /** 运营方后台（cloud-api §27）：运营令牌，不对外公开。 */
+  /** 运营方后台（cloud-api §28）：运营令牌，不对外公开。 */
   "operator",
   /** 支付服务回调（cloud-api §26）：不带账号，按提供方的签名头验证原始请求体。 */
   "billing-webhook",

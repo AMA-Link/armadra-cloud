@@ -5,8 +5,14 @@ import { base, SINCE_0_10 } from "../meta.ts";
 import { empty } from "../schemas.ts";
 import { spaceSchema, trustRequestSchema } from "../saas-schemas.ts";
 
-/** 主机 owner，或（团队主机的）团队 admin：背书人。 */
-const endorser = { scope: ["owner", "team:admin"], since: SINCE_0_10 } as const;
+/**
+ * 背书人：主机 owner、团队 admin，以及成员本人（从自己另一台已受信的设备背书，缺省开）。
+ * `team:member` 只是下限，处理器按团队设置 `deviceEndorsers` / `memberSelfEndorse` 收窄。
+ */
+const endorser = {
+  scope: ["owner", "team:admin", "team:member"],
+  since: SINCE_0_10,
+} as const;
 
 /**
  * 新设备待信任（cloud-api §31，设计 §11.4）。团队成员第一次从新设备连团队主机会停在
