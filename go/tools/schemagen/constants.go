@@ -13,6 +13,7 @@ var constPrefixes = map[string]string{
 	"paths":                 "Path",
 	"headers":               "Header",
 	"subprotocols":          "Subprotocol",
+	"minCoreVersion":        "MinCoreVersion",
 	"tokens.types":          "TokenType",
 	"tokens.audiences":      "TokenAudience",
 	"tokens.claimsVersion":  "ClaimsVersion",

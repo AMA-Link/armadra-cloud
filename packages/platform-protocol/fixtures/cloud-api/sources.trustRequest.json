@@ -1,0 +1,12 @@
+{
+  "input": {
+    "pendingId": "pend_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "accountId": "acct_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "deviceId": "dev_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "expiresAtMs": 1760000600000
+  },
+  "output": {
+    "requestId": "trq_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "status": "pending"
+  }
+}

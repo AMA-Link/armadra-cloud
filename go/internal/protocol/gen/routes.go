@@ -63,6 +63,8 @@ var Routes = []Route{
 	{Procedure: "sources.registrationToken", Method: "POST", Path: "/v1/sources/registration-tokens"},
 	{Procedure: "sources.register", Method: "POST", Path: "/v1/sources/register"},
 	{Procedure: "sources.heartbeatHint", Method: "GET", Path: "/v1/sources/me/relay"},
+	{Procedure: "sources.trustRequest", Method: "POST", Path: "/v1/sources/me/trust-requests"},
+	{Procedure: "sources.trustResolve", Method: "POST", Path: "/v1/sources/me/trust-requests/{pendingId}/resolve"},
 	{Procedure: "sources.list", Method: "GET", Path: "/v1/sources"},
 	{Procedure: "sources.get", Method: "GET", Path: "/v1/sources/{sourceId}"},
 	{Procedure: "sources.update", Method: "PATCH", Path: "/v1/sources/{sourceId}"},

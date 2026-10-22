@@ -676,6 +676,46 @@ var RouteInputs = map[string]*schema.Schema{
 	"sources.heartbeatHint": &schema.Schema{
 		Type: "object",
 	},
+	"sources.trustRequest": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "pendingId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "accountId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+			{Name: "deviceId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(64),
+			}},
+			{Name: "expiresAtMs", Schema: &schema.Schema{
+				Type:    "integer",
+				Minimum: schema.Num(-9007199254740991),
+				Maximum: schema.Num(9007199254740991),
+			}},
+		},
+		Required: []string{"pendingId", "accountId", "deviceId", "expiresAtMs"},
+	},
+	"sources.trustResolve": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "pendingId", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(128),
+			}},
+			{Name: "result", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"trusted", "expired"},
+			}},
+		},
+		Required: []string{"pendingId", "result"},
+	},
 	"sources.list": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{

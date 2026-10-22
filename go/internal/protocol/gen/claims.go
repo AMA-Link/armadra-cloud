@@ -81,6 +81,18 @@ type JWKSet struct {
 	Keys []Ed25519PublicJWK `json:"keys"`
 }
 
+// NodeTokenClaims 对应 schema assertion/node-token-claims.json。
+type NodeTokenClaims struct {
+	Iss string  `json:"iss"`
+	Iat int64   `json:"iat"`
+	Exp int64   `json:"exp"`
+	Nbf *int64  `json:"nbf,omitempty"`
+	Jti string  `json:"jti"`
+	Sub string  `json:"sub"`
+	Aud string  `json:"aud"`
+	Ver float64 `json:"ver"`
+}
+
 // RelayTokenClaims 对应 schema assertion/relay-token-claims.json。
 type RelayTokenClaims struct {
 	Iss  string  `json:"iss"`
@@ -390,6 +402,52 @@ var JWKSetSchema = &schema.Schema{
 		}},
 	},
 	Required: []string{"keys"},
+}
+
+// NodeTokenClaimsSchema 是 assertion/node-token-claims.json 的校验规则。
+var NodeTokenClaimsSchema = &schema.Schema{
+	Type: "object",
+	Properties: []schema.Property{
+		{Name: "iss", Schema: &schema.Schema{
+			Type:      "string",
+			MinLength: schema.Int(1),
+		}},
+		{Name: "iat", Schema: &schema.Schema{
+			Type:    "integer",
+			Minimum: schema.Num(0),
+			Maximum: schema.Num(9007199254740991),
+		}},
+		{Name: "exp", Schema: &schema.Schema{
+			Type:    "integer",
+			Minimum: schema.Num(0),
+			Maximum: schema.Num(9007199254740991),
+		}},
+		{Name: "nbf", Schema: &schema.Schema{
+			Type:    "integer",
+			Minimum: schema.Num(0),
+			Maximum: schema.Num(9007199254740991),
+		}},
+		{Name: "jti", Schema: &schema.Schema{
+			Type:      "string",
+			MinLength: schema.Int(8),
+			MaxLength: schema.Int(128),
+		}},
+		{Name: "sub", Schema: &schema.Schema{
+			Type:    "string",
+			Pattern: "^[a-z0-9][a-z0-9-]{0,62}$",
+		}},
+		{Name: "aud", Schema: &schema.Schema{
+			Type:     "string",
+			Const:    "relay-node",
+			HasConst: true,
+		}},
+		{Name: "ver", Schema: &schema.Schema{
+			Type:     "number",
+			Const:    float64(1),
+			HasConst: true,
+		}},
+	},
+	Required: []string{"iss", "iat", "exp", "jti", "sub", "aud", "ver"},
 }
 
 // RelayTokenClaimsSchema 是 assertion/relay-token-claims.json 的校验规则。

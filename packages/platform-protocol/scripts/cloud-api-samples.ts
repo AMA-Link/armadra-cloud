@@ -549,6 +549,19 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     output: { ...sourceDetail, name: "Workstation 2" },
   },
   "sources.revoke": { input: { sourceId: SOURCE_ID }, output: {} },
+  "sources.trustRequest": {
+    input: {
+      pendingId: "pend_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      accountId: ACCOUNT_ID,
+      deviceId: "dev_01JAAAAAAAAAAAAAAAAAAAAAAA",
+      expiresAtMs: NOW + 600_000,
+    },
+    output: { requestId: "trq_01JAAAAAAAAAAAAAAAAAAAAAAA", status: "pending" },
+  },
+  "sources.trustResolve": {
+    input: { pendingId: "pend_01JAAAAAAAAAAAAAAAAAAAAAAA", result: "trusted" },
+    output: {},
+  },
   "sources.assertion": {
     input: { sourceId: SOURCE_ID, device },
     output: {
@@ -677,7 +690,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       period: "2026-10",
       usage: [
         { metric: "hosts", value: 2, limit: 3 },
-        { metric: "relay.bytes", value: 1_048_576, limit: 5_368_709_120 },
+        { metric: "traffic", value: 1_048_576, limit: 5_368_709_120 },
       ],
     },
   },
@@ -907,7 +920,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     output: {
       space: { kind: "personal" },
       period: "2026-10",
-      usage: [{ metric: "relay.bytes", value: 1024, limit: null }],
+      usage: [{ metric: "traffic", value: 1024, limit: null }],
       series: [
         { startMs: 1_759_276_800_000, relayBytes: 512 },
         { startMs: 1_759_363_200_000, relayBytes: 512 },
