@@ -3,6 +3,7 @@ package httpx_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -307,5 +308,35 @@ func TestMapErrorTurnsStoreConflictsIntoCoreErrors(t *testing.T) {
 	plain := errors.New("x")
 	if httpx.MapError(plain) != plain || httpx.MapError(nil) != nil {
 		t.Fatal("其余原样返回")
+	}
+}
+
+// 按 IP 的限流键：IPv6 截到 /64，同一段里换地址绕不开；IPv4 与别的 /64 各有自己的桶。
+func TestIPv6RateKeysUseSlash64(t *testing.T) {
+	memory := control.NewMemory(control.MemoryOptions{Limits: httpx.Rules})
+	limits := httpx.NewLimits(memory.Limits())
+	ctx := context.Background()
+	for i := 0; i < 10; i++ {
+		if err := limits.Check(ctx, httpx.LimitRegisterIP, fmt.Sprintf("2001:db8:1:2::%x", i+1)); err != nil {
+			t.Fatalf("前十次放行（同一 /64 里每次换地址）：%v", err)
+		}
+	}
+	if err := limits.Check(ctx, httpx.LimitRegisterIP, "2001:db8:1:2:ffff:ffff:ffff:ffff"); err == nil {
+		t.Fatal("同一 /64 共用一个桶，第 11 次应被限")
+	}
+	if err := limits.Check(ctx, httpx.LimitRegisterIP, "2001:db8:1:3::1"); err != nil {
+		t.Fatalf("另一个 /64 有自己的桶：%v", err)
+	}
+	if err := limits.Check(ctx, httpx.LimitRegisterIP, "198.51.100.7"); err != nil {
+		t.Fatalf("IPv4 不受影响：%v", err)
+	}
+	// 不是 .ip 的键（账号、设备）不规整。
+	for i := 0; i < 3; i++ {
+		if err := limits.Check(ctx, httpx.LimitResetEmail, fmt.Sprintf("2001:db8:1:2::%x", i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := limits.Check(ctx, httpx.LimitResetEmail, "2001:db8:1:2::d"); err != nil {
+		t.Fatalf("邮箱键原样：%v", err)
 	}
 }

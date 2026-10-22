@@ -25,6 +25,8 @@ type Options struct {
 	Store  saas.Store
 	Gate   *httpx.Gate
 	Limits *httpx.Limits
+	// Unknown 存未注册邮箱的失败计数与锁定（多实例共享的 Redis 版）；nil = 进程内计数。
+	Unknown core.UnknownStore
 }
 
 // Service 是账号服务。
@@ -33,11 +35,15 @@ type Service struct {
 	store  saas.Store
 	gate   *httpx.Gate
 	limits *httpx.Limits
+	// unknown 给未注册的邮箱同样计失败、同样锁定：锁定不暴露邮箱有没有注册。
+	unknown core.UnknownAccounts
 }
 
 // New 建账号服务。
 func New(options Options) *Service {
-	return &Service{c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits}
+	s := &Service{c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits}
+	s.unknown.Store = options.Unknown
+	return s
 }
 
 func (s *Service) tenant() string { return s.c.TenantID }

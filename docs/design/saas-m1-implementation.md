@@ -1013,7 +1013,7 @@ type Tx interface {
 - **同名 Cookie 重复**（`Cookie` 头里同一个名字出现两次以上，常见于 Cookie 投放攻击）→ `401 unauthenticated` 并在答复里清掉这些 Cookie（契约 §1 的最终写法），不挑其中一个用。
 - **传输绑定**：`transport = cookie` 的设备的访问令牌只认从 Cookie 来；`bearer` 的只认从头来；对不上答 `401 unauthenticated`。登录类过程按请求定传输：带 `Origin = APP_ORIGIN` 且不带 `Authorization` → Cookie 传输（响应 `Set-Cookie`、体里不含 `refreshToken`、含 `csrfToken`）；否则 Bearer 传输。
 - **不混用**：同一请求既有任一会话 Cookie 又有 `Authorization` → `400 bad_request`（能力设计 §11.6）；两套会话 Cookie 同时存在是允许的，按过程挑：`admin.*` 与带 `scope: "operator"` 的刷新 / 登出用运营那一套，其余用普通那一套。
-- **刷新与登出**：`auth.refresh` 不带 `refreshToken` 时取对应的刷新 Cookie；成功后两枚一起换新。`auth.logout` 撤销设备并用 `Max-Age=0` 清掉该会话的两枚 Cookie。
+- **刷新与登出**：`auth.refresh` 不带 `refreshToken` 时取对应的刷新 Cookie；成功后两枚一起换新。`auth.logout` 撤销设备并用 `Max-Age=0` 清掉该会话的两枚 Cookie。无论认证成败都清；访问 Cookie 缺失或过期时，用同范围的刷新 Cookie 找到设备再撤销（仍要求 `Origin` 等于控制台来源、`X-Armadra-CSRF` 用该设备的值）。
 
 ### 5.2 CSRF 与来源
 
@@ -1032,7 +1032,7 @@ type Tx interface {
 
 ### 5.4 限流与挑战
 
-速率桶在 Redis（`cloud:limit:`，§2.4 的独立限流器），窗口固定；`429` 带 `details.retryAfterMs` 与 `Retry-After`。
+速率桶在 Redis（`cloud:limit:`，§2.4 的独立限流器），窗口固定；`429` 带 `details.retryAfterMs` 与 `Retry-After`。键以 `.ip` 结尾的种类按客户端 IP 限流，**IPv6 截到所在的 /64**（只影响限流键）。
 
 | 种类                                | 键            | 额度                 | 过程                                                              |
 | ----------------------------------- | ------------- | -------------------- | ----------------------------------------------------------------- |

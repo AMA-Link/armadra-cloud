@@ -97,6 +97,8 @@ type txWriter func(ctx context.Context, tenantID string, fn func(tx pgx.Tx) (boo
 type ports struct {
 	d  *DB
 	tx pgx.Tx
+	// rowLock 为真（SaaSPorts）：每次写自己开事务，但不锁 tenants 行、不加修订号；读-改-写靠行锁。
+	rowLock bool
 }
 
 // q 是读用的连接：绑定模式读事务自己（看得到本事务的写）。
@@ -113,11 +115,22 @@ func (p ports) write(ctx context.Context, tenantID string, fn func(tx pgx.Tx) (b
 		_, err := fn(p.tx)
 		return err
 	}
+	if p.rowLock {
+		return p.d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
+			_, err := fn(tx)
+			return err
+		})
+	}
 	return p.d.write(ctx, tenantID, fn)
 }
 
 // Ports 是控制核全部存储端口。
 func (d *DB) Ports() *store.Ports { return portsOf(ports{d: d}) }
+
+// SaaSPorts 是 SaaS 控制面平时用的核心端口（不在 SaaS 事务里时）：每次写一个独立事务，读-改-写靠行锁，
+// 不锁 tenants 行、不加租户修订号（否则所有登录、刷新、最近使用落盘都在租户行上排队，还会让各实例的
+// 签名钥监视白白重读），设备清理只看这个账号。在 SaaS 事务（saas.Tx）的闭包里不能用它，用 tx.Ports()。
+func (d *DB) SaaSPorts() *store.Ports { return portsOf(ports{d: d, rowLock: true}) }
 
 func portsOf(p ports) *store.Ports {
 	return &store.Ports{
@@ -205,7 +218,7 @@ func (v devices) Insert(ctx context.Context, tenantID string, device store.Devic
 		query := "SELECT " + deviceColumns + ` FROM devices
 			 WHERE tenant_id = $1 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= $2)`
 		args := []any{tenantID, nowMs}
-		if v.tx != nil {
+		if v.tx != nil || v.rowLock {
 			query += " AND subject = $3"
 			args = append(args, device.Subject)
 		}

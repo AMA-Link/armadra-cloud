@@ -47,7 +47,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	relayOrigin := func(sourceID string) string { return "https://" + sourceID + ".src." + cfg.RelayDomain }
 
 	coreCtx := &core.Context{
-		TenantID: TenantID, Ports: db.Ports(), Signer: core.NewSigner(db.Keys(TenantID), now),
+		TenantID: TenantID, Ports: db.SaaSPorts(), Signer: core.NewSigner(db.Keys(TenantID), now),
 		Limits: limits, Relay: relay.Relay(), Revocations: relay.Revocations(),
 		PasswordPolicy: core.DefaultPasswordPolicy, Now: now, Events: core.NewEventBus(),
 		RelayOrigin: relayOrigin, RelayBaseURL: relayOrigin,
@@ -67,7 +67,12 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	saasStore := db.SaaS()
 
 	handlers := map[string]api.Handler{}
-	for name, handler := range accounts.New(accounts.Options{Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits}).Handlers() {
+	for name, handler := range accounts.New(accounts.Options{
+		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits,
+		Unknown: httpx.NewUnknownLockouts(redisClient, func(err error) {
+			logger.Warn("登录失败计数后台操作失败", obs.Operation("lockout"), obs.Error(err))
+		}),
+	}).Handlers() {
 		handlers[name] = handler
 	}
 	webApp := ""

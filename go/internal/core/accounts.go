@@ -86,6 +86,9 @@ func (m *memoryUnknown) Fail(_ context.Context, name string, nowMs int64) (int64
 	return 0, false, nil
 }
 
+// NewMemoryUnknownStore 是进程内的未知名字失败计数（缺省，也是共享存储失败时的退路）。
+func NewMemoryUnknownStore() UnknownStore { return &memoryUnknown{} }
+
 // UnknownAccounts 是不存在的账号名的失败计数与锁定：与存在的账号走同一套 NextLockout，连续失败达阈值后
 // 同样答 account_locked，所以锁定不暴露某个名字（SaaS：规范化邮箱）有没有注册。被锁着的名字也做一次口令
 // 派生，答复时延与存在的账号一致。零值可用（内存计数）；设 Store 换成共享存储。

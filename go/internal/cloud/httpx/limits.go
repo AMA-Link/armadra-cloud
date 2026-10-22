@@ -2,8 +2,10 @@ package httpx
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
@@ -61,15 +63,24 @@ var _ core.RateLimiter = (*Limits)(nil)
 // NewLimits 包一个限流器。
 func NewLimits(limiter control.Limiter) *Limits { return &Limits{limiter: limiter} }
 
+// limitKey 规整限流键：种类以 .ip 结尾的键是客户端 IP，IPv6 截到 /64（一个终端用户常有整段 /64，
+// 不截就能靠换地址绕开限流）。只影响限流键，不影响别处用到的 IP。
+func limitKey(kind control.LimitKind, key string) string {
+	if strings.HasSuffix(string(kind), ".ip") {
+		return clientip.RateKey(key)
+	}
+	return key
+}
+
 // Hit 实现 core.RateLimiter。
 func (l *Limits) Hit(ctx context.Context, kind core.LimitKind, key string) (core.LimitResult, error) {
-	result, err := l.limiter.Hit(ctx, control.LimitKind(kind), key)
+	result, err := l.limiter.Hit(ctx, control.LimitKind(kind), limitKey(control.LimitKind(kind), key))
 	return core.LimitResult{Allowed: result.Allowed, RetryAfter: result.RetryAfter}, err
 }
 
 // Check 记一次，超限答 429 rate_limited（带 details.retryAfterMs 与 Retry-After）。
 func (l *Limits) Check(ctx context.Context, kind control.LimitKind, key string) error {
-	result, err := l.limiter.Hit(ctx, kind, key)
+	result, err := l.limiter.Hit(ctx, kind, limitKey(kind, key))
 	if err != nil {
 		return err
 	}

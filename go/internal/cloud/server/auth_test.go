@@ -516,3 +516,77 @@ func TestMeCookieSessionCSRFAndSelfRevoke(t *testing.T) {
 		t.Fatalf("撤销自己要清 Cookie：%v", res.header.Values("Set-Cookie"))
 	}
 }
+
+// 锁定不暴露邮箱有没有注册：未注册的邮箱同样计失败、同样在第 6 次答 account_locked，形状一致。
+func TestUnregisteredEmailLocksLikeRegistered(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	registered := r.email()
+	r.registerBearer(registered)
+	unregistered := "ghost-" + r.email()
+	for i := 0; i < 5; i++ {
+		r.expect(r.login(registered, "wrong-password-123", nil), 401, "credentials_invalid")
+		r.expect(r.login(unregistered, "wrong-password-123", nil), 401, "credentials_invalid")
+	}
+	// 已注册的账号用对口令也被锁着；未注册的同样答 account_locked。
+	a := r.login(registered, password, nil)
+	b := r.login(unregistered, password, nil)
+	r.expect(a, 429, "account_locked")
+	r.expect(b, 429, "account_locked")
+	if len(a.json) != len(b.json) || a.json["message"] != b.json["message"] {
+		t.Fatalf("形状要一致：%s / %s", a.body, b.body)
+	}
+	for _, res := range []response{a, b} {
+		details, ok := res.json["details"].(map[string]any)
+		if !ok || details["retryAfterMs"] == nil || res.header.Get("Retry-After") == "" {
+			t.Fatalf("锁定带重试等待：%s", res.body)
+		}
+		if wait := details["retryAfterMs"].(float64); wait <= 0 || wait > 60_000 {
+			t.Fatalf("首次锁定约 1 分钟：%v", wait)
+		}
+	}
+	// 过了锁定期，未注册的邮箱同样解锁、可以再试。
+	r.clock.Advance(2 * time.Minute)
+	r.expect(r.login(unregistered, "wrong-password-123", nil), 401, "credentials_invalid")
+	r.expect(r.login(registered, password, nil), 200, "")
+}
+
+// 访问 Cookie 过期后，用刷新 Cookie 也能登出并撤销设备；无论成败都清两枚 Cookie。
+func TestLogoutWithExpiredAccessCookieUsesRefreshCookie(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	c := r.registerCookie(r.email())
+	r.clock.Advance(20 * time.Minute) // 访问令牌 15 分钟到期
+	r.expect(r.do("GET", "/v1/me", nil, hdr("Cookie", c.cookieHeader("__Host-armadra-cloud"))), 401, "unauthenticated")
+
+	cookies := c.cookieHeader("__Host-armadra-cloud-refresh") // 只有刷新 Cookie（访问 Cookie 已过期被浏览器丢掉）
+	cleared := func(res response) bool {
+		names := map[string]bool{}
+		for _, cookie := range setCookies(res) {
+			names[cookie.Name] = cookie.MaxAge == -1
+		}
+		return len(names) == 2 && names["__Host-armadra-cloud"] && names["__Host-armadra-cloud-refresh"]
+	}
+	// 缺 Origin、缺 / 错 CSRF：拒绝，设备不撤销，Cookie 照清。
+	for name, h := range map[string]headers{
+		"缺 Origin": hdr("Cookie", cookies, "X-Armadra-CSRF", c.csrf),
+		"缺 CSRF":   hdr("Cookie", cookies, "Origin", appOrigin),
+		"错 CSRF":   hdr("Cookie", cookies, "Origin", appOrigin, "X-Armadra-CSRF", "wrong"),
+	} {
+		res := r.do("POST", "/v1/auth/logout", map[string]any{}, h)
+		r.expect(res, 403, "forbidden")
+		if !cleared(res) {
+			t.Fatalf("%s：失败也要清 Cookie：%v", name, res.header.Values("Set-Cookie"))
+		}
+	}
+	other := r.registerCookie(r.email())
+	res := r.do("POST", "/v1/auth/logout", map[string]any{}, hdr("Cookie", cookies, "Origin", appOrigin, "X-Armadra-CSRF", other.csrf))
+	r.expect(res, 403, "forbidden") // 别的设备的 CSRF 值
+	res = r.do("POST", "/v1/auth/logout", map[string]any{}, hdr("Cookie", cookies, "Origin", appOrigin, "X-Armadra-CSRF", c.csrf))
+	r.expect(res, 200, "")
+	if !cleared(res) {
+		t.Fatalf("登出要清两枚：%v", res.header.Values("Set-Cookie"))
+	}
+	// 设备已撤销：刷新 Cookie 不能再换新。
+	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{}, hdr("Origin", appOrigin, "Cookie", cookies)), 401, "session_revoked")
+	// 什么凭据都没有的登出：401，同样不留 Cookie。
+	r.expect(r.do("POST", "/v1/auth/logout", map[string]any{}, hdr("Origin", appOrigin)), 401, "unauthenticated")
+}

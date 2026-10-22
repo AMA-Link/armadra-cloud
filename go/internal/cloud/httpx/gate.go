@@ -81,6 +81,14 @@ func (g *Gate) CheckOrigin(r *http.Request) error {
 	return nil
 }
 
+// CheckCSRF 核对请求头里的 CSRF 值是否是该设备的值；不符答 403 forbidden。
+func (g *Gate) CheckCSRF(r *http.Request, deviceID string) error {
+	if !g.csrf.Check(deviceID, r.Header.Get(HeaderCSRF)) {
+		return core.Fail(gen.ErrForbidden)
+	}
+	return nil
+}
+
 // TransportFor 定登录类过程建的设备走哪种传输：带 Origin = 控制台来源（恰好一次）且不带
 // Authorization → Cookie；否则 Bearer。
 func (g *Gate) TransportFor(r *http.Request) core.Transport {
@@ -146,8 +154,10 @@ func (g *Gate) Authenticate(ctx context.Context, call *api.Call) (core.Caller, e
 		if wantOps != operator {
 			return core.Caller{}, core.Fail(gen.ErrUnauthenticated)
 		}
-		if mutating(r) && call.Procedure != "auth.refresh" && !g.csrf.Check(caller.DeviceID, r.Header.Get(HeaderCSRF)) {
-			return core.Caller{}, core.Fail(gen.ErrForbidden)
+		if mutating(r) && call.Procedure != "auth.refresh" {
+			if err := g.CheckCSRF(r, caller.DeviceID); err != nil {
+				return core.Caller{}, err
+			}
 		}
 	}
 	if scopedSessionProcedure(call.Procedure) && operatorInput(call) && !operator {

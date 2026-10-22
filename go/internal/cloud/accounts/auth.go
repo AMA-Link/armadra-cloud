@@ -104,12 +104,12 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var record *store.AccountRecord
-	if account != nil {
-		record = &account.AccountRecord
+	if account == nil {
+		// 未注册的邮箱同样计失败、同样锁定（达阈值后也答 account_locked），锁着时也做口令派生：
+		// 答案与时延都和已注册的账号一致，不暴露邮箱是否注册。
+		return nil, s.unknown.Login(ctx, s.c.NowMs, email, in.Password)
 	}
-	// 账号不存在走等时派生（record 为 nil），答同样的 credentials_invalid。
-	if err := core.VerifyPassword(ctx, s.c, record, in.Password, s.nowMs()); err != nil {
+	if err := core.VerifyPassword(ctx, s.c, &account.AccountRecord, in.Password, s.nowMs()); err != nil {
 		return nil, err
 	}
 	// 停用在口令比对之后答，不让没有口令的人枚举停用账号。
@@ -194,17 +194,55 @@ func (s *Service) refresh(ctx context.Context, call *api.Call) (any, error) {
 	return s.respond(ctx, call, *refreshed, session.RefreshToken, account)
 }
 
-// logout 是 auth.logout：撤销本设备（经撤销钩子撤已签令牌、踢人），清掉该会话的两枚 Cookie。
+// logout 是 auth.logout：撤销本设备（经撤销钩子撤已签令牌、踢人）。Cookie 会话无论成败都清掉该范围的
+// 两枚 Cookie；访问 Cookie 缺失或过期时，改用同范围的刷新 Cookie 找到设备再撤销（仍要求 Origin 等于控制台
+// 来源、CSRF 用这台设备的值），这样令牌过期的浏览器也能登出。
 func (s *Service) logout(ctx context.Context, call *api.Call) (any, error) {
+	scope := core.SessionScopeSession
+	if operator, _ := call.Input["scope"].(string); operator == "operator" {
+		scope = core.SessionScopeOperator
+	}
+	access, refresh := httpx.CookieNames(scope)
+	cookies := httpx.ParseCookies(call.Request)
+	viaCookie := call.Request.Header.Get("Authorization") == "" && (cookies.Has(access) || cookies.Has(refresh))
+	if viaCookie {
+		s.gate.ClearSession(call.Header, scope)
+	}
 	caller, err := call.Caller(ctx)
 	if err != nil {
+		if code, _ := core.CodeOf(err); viaCookie && code == gen.ErrUnauthenticated {
+			return s.logoutByRefreshCookie(ctx, call, scope, cookies.Value(refresh))
+		}
 		return nil, err
 	}
 	if _, err := core.RevokeDevice(ctx, s.c, caller.DeviceID); err != nil {
 		return nil, err
 	}
-	if caller.Transport == core.TransportCookie {
-		s.gate.ClearSession(call.Header, caller.Scope)
+	return map[string]any{}, nil
+}
+
+// logoutByRefreshCookie 用刷新 Cookie 登出：令牌必须是这台 cookie 设备当前的刷新令牌，范围对得上。
+func (s *Service) logoutByRefreshCookie(ctx context.Context, call *api.Call, scope core.SessionScope, token string) (any, error) {
+	if token == "" {
+		return nil, core.Fail(gen.ErrUnauthenticated)
+	}
+	if err := s.gate.CheckOrigin(call.Request); err != nil {
+		return nil, err
+	}
+	deviceID, _, _ := strings.Cut(token, ".")
+	device, err := s.c.Ports.Devices.Get(ctx, s.tenant(), deviceID)
+	if err != nil {
+		return nil, err
+	}
+	if device == nil || device.RevokedAtMs != nil || core.TransportOf(*device) != core.TransportCookie ||
+		core.ScopeOf(*device) != scope || !core.SameHex(core.RefreshHash(token), device.RefreshHash) {
+		return nil, core.Fail(gen.ErrUnauthenticated)
+	}
+	if err := s.gate.CheckCSRF(call.Request, device.DeviceID); err != nil {
+		return nil, err
+	}
+	if _, err := core.RevokeDevice(ctx, s.c, device.DeviceID); err != nil {
+		return nil, err
 	}
 	return map[string]any{}, nil
 }
