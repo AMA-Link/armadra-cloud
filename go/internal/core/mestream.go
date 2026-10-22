@@ -32,13 +32,15 @@ type ticketEntry struct {
 type MeStream struct {
 	c *Context
 
-	mu      sync.Mutex
-	tickets map[string]ticketEntry
+	mu          sync.Mutex
+	tickets     map[string]ticketEntry
+	attached    map[*attachment]struct{}
+	offPresence func()
 }
 
 // NewMeStream 建 me-stream 核。
 func NewMeStream(c *Context) *MeStream {
-	return &MeStream{c: c, tickets: map[string]ticketEntry{}}
+	return &MeStream{c: c, tickets: map[string]ticketEntry{}, attached: map[*attachment]struct{}{}}
 }
 
 func (m *MeStream) sweep(nowMs int64) {
@@ -93,57 +95,138 @@ func (m *MeStream) StillValid(ctx context.Context, caller Caller) (bool, error) 
 	return IsLiveDevice(*device, m.c.NowMs()), nil
 }
 
-// sees：这个调用方能看到这个源吗（访客只看链接指向的那个）。
-func (m *MeStream) sees(ctx context.Context, caller Caller, sourceID string) bool {
-	if caller.Role == RoleOwner {
-		return true
-	}
-	if caller.LinkID == "" {
-		return false
-	}
-	link, err := m.c.Ports.Links.Get(ctx, m.c.TenantID, caller.LinkID)
-	return err == nil && link != nil && link.SourceID == sourceID
+// 每个连接的事件队列深度；满了就丢这条事件并通知装配方（它决定断开还是重新同步）。
+const attachQueue = 256
+
+type queuedEvent struct {
+	event    Event
+	audience *Audience
 }
 
-// Attach 订阅这个调用方能看到的事件；答退订。
-func (m *MeStream) Attach(caller Caller, send func(Event)) (detach func()) {
-	deliver := func(event Event, audience *Audience) {
-		if audience != nil {
-			if caller.LinkID == audience.LinkID {
-				send(event)
-			}
+// attachment 是一个连接：自己的有界队列和一条协程，发事件的一方只往队列里放，永不阻塞，
+// 先后顺序不变。访客能看到的源在 Attach 时解析一次（撤销由 accessRevoked 事件与装配方的复核负责）。
+type attachment struct {
+	caller     Caller
+	sourceID   string
+	queue      chan queuedEvent
+	done       chan struct{}
+	send       func(Event)
+	onOverflow func()
+}
+
+// visible：这个连接能看到这个源的事件吗（owner 全部，访客只看链接指向的那个）。
+func (a *attachment) visible(sourceID string) bool {
+	if a.caller.Role == RoleOwner {
+		return true
+	}
+	return a.sourceID != "" && a.sourceID == sourceID
+}
+
+// offer 按可见性过滤后放进队列；不做任何 I/O。
+func (a *attachment) offer(event Event, audience *Audience) {
+	if audience != nil {
+		if a.caller.LinkID != audience.LinkID {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if m.sees(ctx, caller, event.EventSource()) {
-			send(event)
+	} else if !a.visible(event.EventSource()) {
+		return
+	}
+	select {
+	case a.queue <- queuedEvent{event, audience}:
+	default:
+		if a.onOverflow != nil {
+			a.onOverflow()
 		}
 	}
-	offBus := m.c.Subscribe(deliver)
-	offPresence := func() {}
-	if m.c.Presence != nil {
-		offPresence = m.c.Presence.Subscribe(func(presence PresenceEvent) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			source, err := m.c.Ports.Sources.Get(ctx, m.c.TenantID, presence.SourceID)
-			if err != nil || source == nil || source.RevokedAtMs != nil {
-				return
+}
+
+func (a *attachment) run() {
+	for {
+		select {
+		case <-a.done:
+			return
+		case item := <-a.queue:
+			func() {
+				defer func() { _ = recover() }()
+				a.send(item.event)
+			}()
+		}
+	}
+}
+
+// Attach 订阅这个调用方能看到的事件；答退订。send 在连接自己的协程里被调用（不在发事件的协程里）；
+// 队列满了丢掉事件并调 onOverflow（可为 nil）。
+//
+// 源上下线：整个 MeStream 只订阅一次在线事件，每个事件只查一次源与 issuer，再分发给各连接。
+func (m *MeStream) Attach(caller Caller, send func(Event), onOverflow func()) (detach func()) {
+	a := &attachment{
+		caller: caller, queue: make(chan queuedEvent, attachQueue), done: make(chan struct{}),
+		send: send, onOverflow: onOverflow,
+	}
+	if caller.Role != RoleOwner && caller.LinkID != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		link, err := m.c.Ports.Links.Get(ctx, m.c.TenantID, caller.LinkID)
+		cancel()
+		if err == nil && link != nil {
+			a.sourceID = link.SourceID
+		}
+	}
+	go a.run()
+	offBus := m.c.Subscribe(a.offer)
+	m.mu.Lock()
+	m.attached[a] = struct{}{}
+	if len(m.attached) == 1 && m.c.Presence != nil {
+		m.offPresence = m.c.Presence.Subscribe(m.onPresence)
+	}
+	m.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			offBus()
+			m.mu.Lock()
+			delete(m.attached, a)
+			var stop func()
+			if len(m.attached) == 0 {
+				stop, m.offPresence = m.offPresence, nil
 			}
-			if presence.Online {
-				issuer, err := m.c.Signer.Issuer(ctx)
-				if err != nil {
-					return
-				}
-				deliver(NewSourceOnline(presence.SourceID, presence.AtMs, issuer), nil)
-				return
+			m.mu.Unlock()
+			if stop != nil {
+				stop()
 			}
-			deliver(NewSourceOffline(presence.SourceID, presence.AtMs), nil)
+			close(a.done)
 		})
 	}
-	return func() {
-		offBus()
-		offPresence()
+}
+
+// onPresence：一个在线事件查一次源（与 issuer），再分发给各连接。
+func (m *MeStream) onPresence(presence PresenceEvent) {
+	m.mu.Lock()
+	targets := make([]*attachment, 0, len(m.attached))
+	for a := range m.attached {
+		targets = append(targets, a)
+	}
+	m.mu.Unlock()
+	if len(targets) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	source, err := m.c.Ports.Sources.Get(ctx, m.c.TenantID, presence.SourceID)
+	if err != nil || source == nil || source.RevokedAtMs != nil {
+		return
+	}
+	var event Event
+	if presence.Online {
+		issuer, err := m.c.Signer.Issuer(ctx)
+		if err != nil {
+			return
+		}
+		event = NewSourceOnline(presence.SourceID, presence.AtMs, issuer)
+	} else {
+		event = NewSourceOffline(presence.SourceID, presence.AtMs)
+	}
+	for _, a := range targets {
+		a.offer(event, nil)
 	}
 }
 

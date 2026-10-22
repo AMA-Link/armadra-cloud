@@ -149,7 +149,7 @@ func (m *MeStream) attach(conn *websocket.Conn, caller core.Caller) {
 			c.stop()
 		}
 	}
-	detach := m.core.Attach(caller, func(event core.Event) { send(event) })
+	detach := m.core.Attach(caller, func(event core.Event) { send(event) }, c.stop)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
