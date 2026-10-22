@@ -182,7 +182,7 @@ func (s *Signer) Sign(ctx context.Context, typ string, claims Claims, options Si
 	if err != nil {
 		return SignedToken{}, err
 	}
-	token, err := jose.Sign(private, jose.Header{Kid: key.Kid, Typ: typ}, json.RawMessage(body))
+	token, err := jose.SignPayload(private, jose.Header{Kid: key.Kid, Typ: typ}, body)
 	if err != nil {
 		return SignedToken{}, err
 	}

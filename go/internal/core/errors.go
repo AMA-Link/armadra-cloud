@@ -61,7 +61,6 @@ var messages = map[gen.ErrorCode]string{
 	gen.ErrInternal:                 "Internal error",
 	gen.ErrForbidden:                "Forbidden",
 	gen.ErrUnavailable:              "Unavailable",
-	gen.ErrNotImplemented:           "Not implemented",
 	gen.ErrCredentialsInvalid:       "Account or password is incorrect",
 	gen.ErrAccountLocked:            "Too many failed sign-in attempts; try again later",
 	gen.ErrSessionExpired:           "Session expired",

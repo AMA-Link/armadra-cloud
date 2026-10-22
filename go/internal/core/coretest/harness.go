@@ -47,6 +47,8 @@ type Options struct {
 	NowMs          int64
 	DisallowGuests bool
 	Policy         core.PasswordPolicy
+	// Existing 为真时租户与签名钥已经在库里（兼容夹具用），不再建。
+	Existing bool
 	// Limit 非空时决定每次限流的结果（缺省不限流）。
 	Limit func(kind core.LimitKind, key string) core.LimitResult
 }
@@ -86,16 +88,18 @@ func NewHarness(t testing.TB, backend store.Backend, options Options) *Harness {
 		Backend: backend, Clock: &Clock{ms: options.NowMs},
 		online: map[string]string{}, presence: map[int]func(core.PresenceEvent){},
 	}
-	settings := store.TenantSettings{Issuer: options.Issuer, AllowGuests: !options.DisallowGuests, TrustedOrigins: []string{}}
-	if err := backend.CreateTenant(ctx, options.TenantID, store.Tenant{TenantSettings: settings}); err != nil {
-		t.Fatal(err)
-	}
-	key, err := store.GenerateSigningKey("k1", options.NowMs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := backend.AddSigningKey(ctx, options.TenantID, key); err != nil {
-		t.Fatal(err)
+	if !options.Existing {
+		settings := store.TenantSettings{Issuer: options.Issuer, AllowGuests: !options.DisallowGuests, TrustedOrigins: []string{}}
+		if err := backend.CreateTenant(ctx, options.TenantID, store.Tenant{TenantSettings: settings}); err != nil {
+			t.Fatal(err)
+		}
+		key, err := store.GenerateSigningKey("k1", options.NowMs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.AddSigningKey(ctx, options.TenantID, key); err != nil {
+			t.Fatal(err)
+		}
 	}
 	bus := core.NewEventBus()
 	bus.Subscribe(func(event core.Event, _ *core.Audience) {
