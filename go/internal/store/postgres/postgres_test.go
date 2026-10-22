@@ -5,9 +5,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/pgtest"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
@@ -201,5 +203,56 @@ func TestRevisionAndRotateKey(t *testing.T) {
 	}
 	if again, _, _ := db.Revision(ctx, "default"); again != after {
 		t.Fatalf("没有改动不该加修订：%d → %d", after, again)
+	}
+}
+
+// 两个节点共用一个库：A 轮换后 B 的缓存还是旧的；验签查不到 kid 时 B 限频重读一次就能认出新钥，
+// 对随便编的 kid 不会反复打库。
+func TestSignerRefreshesOnUnknownKid(t *testing.T) {
+	ctx := context.Background()
+	url, schema := pgtest.Schema(t)
+	open := func() *postgres.DB {
+		db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, KeyRefreshGap: time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	a, b := open(), open()
+	if err := a.CreateTenant(ctx, "default", store.Tenant{TenantSettings: storetest.Settings()}); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := store.GenerateSigningKey("k1", storetest.Now)
+	if err := a.AddSigningKey(ctx, "default", first); err != nil {
+		t.Fatal(err)
+	}
+	signer := core.NewSigner(b.Keys("default"), func() time.Time { return time.UnixMilli(storetest.Now) })
+	if _, ok, err := signer.Key(ctx, "k1"); err != nil || !ok {
+		t.Fatalf("k1：%v %v", ok, err)
+	}
+	if _, err := a.RotateKey(ctx, "default", storetest.Now+1000); err != nil {
+		t.Fatal(err)
+	}
+	if keys, _ := b.Keys("default").SigningKeys(ctx); len(keys) != 1 {
+		t.Fatalf("B 的缓存应还是旧的：%d", len(keys))
+	}
+	time.Sleep(1100 * time.Millisecond) // 过了重读的最短间隔
+	if _, ok, err := signer.Key(ctx, "k2"); err != nil || !ok {
+		t.Fatalf("查不到 kid 应触发重读而认出 k2：%v %v", ok, err)
+	}
+	// 再轮换一次，限频窗口内查不到：不再重读。
+	if _, err := a.RotateKey(ctx, "default", storetest.Now+2000); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := signer.Key(ctx, "k3"); ok {
+		t.Fatal("限频窗口内不该再重读")
+	}
+	// 装配方的存储监视察觉修订号变化后主动重读，立即可见。
+	if err := b.RefreshKeys(ctx, "default"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := signer.Key(ctx, "k3"); !ok {
+		t.Fatal("RefreshKeys 之后应认出 k3")
 	}
 }
