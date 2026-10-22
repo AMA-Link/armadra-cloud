@@ -118,15 +118,21 @@ func Split(token string) (Parts, error) {
 
 // Sign 用私钥签一个 compact JWS。头的字段顺序固定为 alg、kid、typ；claims 用 encoding/json 序列化。
 func Sign(key ed25519.PrivateKey, header Header, claims any) (string, error) {
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	return SignPayload(key, header, payload)
+}
+
+// SignPayload 签一个已经序列化好的载荷（JSON 对象文本，原样进令牌，不再转义）：声明的字段顺序
+// 与转义由调用方定（控制核按 TypeScript 的顺序、不转义 <>& 写出载荷）。
+func SignPayload(key ed25519.PrivateKey, header Header, payload []byte) (string, error) {
 	header.Alg = "EdDSA"
 	if header.Kid == "" {
 		return "", errors.New("头里缺 kid")
 	}
 	headerJSON, err := json.Marshal(header)
-	if err != nil {
-		return "", err
-	}
-	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", err
 	}
