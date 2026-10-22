@@ -53,7 +53,7 @@ func TestSigningKeysWrappedWithMasterKey(t *testing.T) {
 		t.Fatalf("读时应解开：%v %v", len(keys), err)
 	}
 	signer := core.NewSigner(db.Keys("cloud"), nil)
-	if _, err := signer.Sign(ctx, "armadra-access", core.Claims{{"sub", "x"}}, core.SignOptions{TTL: 60_000}); err != nil {
+	if _, err := signer.Sign(ctx, "armadra-access", core.Claims{{Key: "sub", Value: "x"}}, core.SignOptions{TTL: 60_000}); err != nil {
 		t.Fatalf("包裹的钥应能签发：%v", err)
 	}
 	if _, err := db.RotateKey(ctx, "cloud", 2); err != nil {

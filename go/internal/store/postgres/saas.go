@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
 
@@ -35,9 +36,9 @@ func (s *saasStore) Tx(ctx context.Context, fn func(tx saas.Tx) error) error {
 
 // once 跑一次事务；提交成功后才执行登记的回调。
 func (s *saasStore) once(ctx context.Context, fn func(tx saas.Tx) error) error {
-	t := &saasTx{reader: reader{}}
+	t := &saasTx{d: s.d}
 	err := s.d.tx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
-		t.q = tx
+		t.q, t.pgx = tx, tx
 		return fn(t)
 	})
 	if err != nil {
@@ -90,15 +91,21 @@ func (r reader) Ping(ctx context.Context) error {
 
 type saasTx struct {
 	reader
-	after []func(ctx context.Context)
+	d      *DB
+	pgx    pgx.Tx
+	after  []func(ctx context.Context)
+	locked lockState
 }
+
+// lockState 记本事务已拿过哪类锁，用来强制统一的加锁顺序（团队 → 账号 → 其余）。
+type lockState struct{ account bool }
 
 var _ saas.Tx = (*saasTx)(nil)
 
 func (t *saasTx) AfterCommit(fn func(ctx context.Context)) { t.after = append(t.after, fn) }
 
-func (t *saasTx) Accounts() saas.AccountRepo       { return accountRepo{t.q} }
-func (t *saasTx) Teams() saas.TeamRepo             { return teamRepo{t.q} }
+func (t *saasTx) Accounts() saas.AccountRepo       { return accountRepo{q: t.q, locked: &t.locked} }
+func (t *saasTx) Teams() saas.TeamRepo             { return teamRepo{q: t.q, locked: &t.locked} }
 func (t *saasTx) Invitations() saas.InvitationRepo { return struct{}{} }
 func (t *saasTx) Hosts() saas.HostRepo             { return struct{}{} }
 func (t *saasTx) Grants() saas.GrantRepo           { return struct{}{} }
@@ -108,15 +115,31 @@ func (t *saasTx) Jobs() saas.JobRepo               { return struct{}{} }
 func (t *saasTx) Settings() saas.SettingsRepo      { return struct{}{} }
 func (t *saasTx) Issued() saas.IssuedRepo          { return struct{}{} }
 
-type accountRepo struct{ q querier }
+// Ports 把核心端口绑到本事务（TxPorts）。
+func (t *saasTx) Ports() *store.Ports { return portsOf(ports{d: t.d, tx: t.pgx}) }
+
+// TxPorts 是 tx.Ports() 的另一种写法：把核心端口绑到 SaaS 事务 tx 上。tx 必须来自本库的 SaaS().Tx。
+func (d *DB) TxPorts(tx saas.Tx) *store.Ports { return tx.Ports() }
+
+type accountRepo struct {
+	q      querier
+	locked *lockState
+}
 
 func (r accountRepo) LockAccount(ctx context.Context, tenantID, accountID string) (bool, error) {
+	r.locked.account = true
 	return lockRow(ctx, r.q, "SELECT 1 FROM accounts WHERE tenant_id = $1 AND account_id = $2 FOR UPDATE", tenantID, accountID)
 }
 
-type teamRepo struct{ q querier }
+type teamRepo struct {
+	q      querier
+	locked *lockState
+}
 
 func (r teamRepo) LockTeam(ctx context.Context, tenantID, teamID string) (bool, error) {
+	if r.locked.account {
+		return false, saas.ErrLockOrder
+	}
 	return lockRow(ctx, r.q, "SELECT 1 FROM teams WHERE tenant_id = $1 AND team_id = $2 FOR UPDATE", tenantID, teamID)
 }
 
