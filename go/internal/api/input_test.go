@@ -56,7 +56,10 @@ func TestDecodeInputDropsUnlistedFields(t *testing.T) {
 	if !reflect.DeepEqual(out, map[string]any{"refreshToken": "abc"}) {
 		t.Fatalf("未列出的字段应被丢掉：%+v", out)
 	}
-	if _, err := decodeInput(gen.RouteInputs["auth.refresh"], map[string]any{}); err == nil {
+	if _, err := decodeInput(gen.RouteInputs["auth.refresh"], map[string]any{}); err != nil {
+		t.Fatalf("refreshToken 可省：%v", err)
+	}
+	if _, err := decodeInput(gen.RouteInputs["auth.login"], map[string]any{}); err == nil {
 		t.Fatal("缺必填字段应被拒绝")
 	}
 }

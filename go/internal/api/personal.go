@@ -108,18 +108,35 @@ func PersonalHandlers(c *core.Context, options PersonalOptions) (map[string]Hand
 		},
 		"auth.refresh": func(ctx context.Context, call *Call) (any, error) {
 			var in struct {
-				RefreshToken string `json:"refreshToken"`
+				RefreshToken *string `json:"refreshToken"`
+				Scope        string  `json:"scope"`
 			}
 			if err := call.Bind(&in); err != nil {
 				return nil, err
 			}
-			result, err := core.Refresh(ctx, c, in.RefreshToken)
+			// personal 没有运营账号：scope 一律 403；refreshToken 必带，缺了按失效处理（cloud-api §28）。
+			if in.Scope == "operator" {
+				return nil, core.Fail(gen.ErrForbidden)
+			}
+			if in.RefreshToken == nil {
+				return nil, core.Fail(gen.ErrSessionRevoked)
+			}
+			result, err := core.Refresh(ctx, c, *in.RefreshToken)
 			return sessionResult(result, err)
 		},
 		"auth.logout": func(ctx context.Context, call *Call) (any, error) {
 			caller, err := session(ctx, call)
 			if err != nil {
 				return nil, err
+			}
+			var in struct {
+				Scope string `json:"scope"`
+			}
+			if err := call.Bind(&in); err != nil {
+				return nil, err
+			}
+			if in.Scope == "operator" {
+				return nil, core.Fail(gen.ErrForbidden)
 			}
 			if _, err := core.RevokeDevice(ctx, c, caller.DeviceID); err != nil {
 				return nil, err
