@@ -18,7 +18,7 @@ import {
   revokeDevice,
   type Authenticator,
 } from "./sessions.ts";
-import { createSources } from "./sources.ts";
+import { createSources, type SourceListQuery } from "./sources.ts";
 import { createTraffic, type TrafficSummaryInput } from "./traffic.ts";
 
 /** personal 报的能力（契约 `PLATFORM_CAPABILITIES` 的子集）。 */
@@ -97,6 +97,7 @@ export function createPersonalProcedures(
           : [...PERSONAL_CAPABILITIES],
         relay: { addressing: "path" },
         webApp: options.webApp(),
+        registrationsOpen: true,
         ...(context.challenge ? { challenge: context.challenge.info() } : {}),
       };
     },
@@ -182,8 +183,12 @@ export function createPersonalProcedures(
       ),
     "sources.heartbeatHint": async ({ authorization }) =>
       sources.relayFor(await sources.authenticateSource(authorization)),
-    "sources.list": async ({ caller }) => ({
-      sources: await sources.list(await caller()),
+    "sources.list": async ({ input, caller }) => ({
+      sources: await sources.list(
+        await caller(),
+        input as unknown as SourceListQuery,
+      ),
+      nextCursor: null,
     }),
     "sources.get": async ({ input, caller }) =>
       sources.get(await caller(), input.sourceId as string),
