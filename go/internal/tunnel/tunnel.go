@@ -724,6 +724,14 @@ func (t *Tunnel) writer() {
 			}
 			return
 		}
+		// 一直有活干时也要到点心跳，否则 PING 发不出去、路由 TTL 过期。
+		select {
+		case <-ticker.C:
+			if !t.tick() {
+				return
+			}
+		default:
+		}
 		if len(batch) > 0 {
 			continue
 		}

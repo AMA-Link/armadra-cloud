@@ -66,6 +66,19 @@ func (ec *edgeConn) stream() *tunnel.Stream {
 	return ec.s
 }
 
+func (ec *edgeConn) isFinished() bool {
+	ec.mu.Lock()
+	defer ec.mu.Unlock()
+	return ec.finished
+}
+
+// conn 取连接（Adopt 返回之前为空）。
+func (ec *edgeConn) conn() netpoll.Conn {
+	ec.mu.Lock()
+	defer ec.mu.Unlock()
+	return ec.c
+}
+
 // bind 记下连接：netpoll 的回调可能抢在 Adopt 返回之前到达。
 func (ec *edgeConn) bind(c netpoll.Conn) {
 	ec.mu.Lock()
@@ -84,6 +97,12 @@ func (ec *edgeConn) attach(s *tunnel.Stream) {
 	ec.mu.Lock()
 	if ec.s != nil {
 		ec.mu.Unlock()
+		return
+	}
+	if ec.finished {
+		// 连接在流接上之前就没了（OnClose 已跑过、没有流可重置）：这条流不能留在流表里。
+		ec.mu.Unlock()
+		s.Abort()
 		return
 	}
 	ec.s = s
@@ -110,8 +129,8 @@ func (ec *edgeConn) attach(s *tunnel.Stream) {
 
 // Disconnect 实现 Handle：立即断开（撤销源或访客、关闭服务时）。
 func (ec *edgeConn) Disconnect() {
-	if ec.c != nil {
-		ec.c.Close()
+	if c := ec.conn(); c != nil {
+		c.Close()
 	}
 }
 
@@ -336,6 +355,8 @@ func (ec *edgeConn) OnClose(c netpoll.Conn, _ error) {
 		code = 1006
 	}
 	e := ec.e
+	// TODO(G3)：下面的控制面调用（ReleaseUpgrade）现在同步跑在 epoll 循环上，内存控制面没问题；
+	// redis / postgres 实现必须改成异步，免得拖住整条循环。
 	e.wheel.remove(ec)
 	e.policy.Untrack(ec)
 	e.policy.ReleaseUpgrade(ec.subject)
@@ -387,13 +408,21 @@ func (ec *edgeConn) Reset(s *tunnel.Stream, _ protocol.RstCode) {
 }
 
 // Resume：上行挂起的字节发完了，恢复读客户端。
-func (ec *edgeConn) Resume(*tunnel.Stream) { ec.c.Resume() }
+func (ec *edgeConn) Resume(*tunnel.Stream) {
+	if c := ec.conn(); c != nil {
+		c.Resume()
+	}
+}
 
 // tick 是 ping 轮的一次访问：空闲超时就断开，否则发 ping。
 func (ec *edgeConn) tick(nowMs int64, idle time.Duration) {
-	if nowMs-ec.lastSeen.Load() >= idle.Milliseconds() {
-		ec.c.Close()
+	c := ec.conn()
+	if c == nil {
 		return
 	}
-	ec.c.Write(pingFrame, 0)
+	if nowMs-ec.lastSeen.Load() >= idle.Milliseconds() {
+		c.Close()
+		return
+	}
+	c.Write(pingFrame, 0)
 }

@@ -185,6 +185,7 @@ func (h *Hub) Serve(sock Socket) {
 	}
 	timer := time.AfterFunc(o.HandshakeTimeout, func() {
 		if settle("timeout") {
+			cancel() // 握手卡在令牌校验或限流上时一并取消
 			sock.Close(protocol.CloseBadFrame, "handshake_timeout")
 		}
 	})
@@ -345,6 +346,8 @@ func (h *Hub) closed(t *Tunnel, info CloseInfo) {
 		delete(h.current, t.SourceID())
 	}
 	h.mu.Unlock()
+	// TODO(G3)：下面的删路由与发下线事件现在同步跑在关闭它的协程上（可能是 epoll 循环），
+	// 内存控制面没问题；redis / postgres 实现必须改成异步。
 	o.Log.Info("隧道已关闭", obs.SourceID(t.SourceID()), obs.TunnelID(t.ID()), obs.Code(int(info.Code)), obs.Reason(info.Reason))
 	if !isCurrent || info.Replaced {
 		return

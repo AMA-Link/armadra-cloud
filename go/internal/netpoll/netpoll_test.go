@@ -326,3 +326,43 @@ func TestManyConns(t *testing.T) {
 		t.Errorf("连接数 %d，应为 %d", p.Size(), n)
 	}
 }
+
+// 关连接时丢弃的帧由 shutdown 报 ack，写协程不能再报一次，否则隧道窗口会虚增。
+func TestAckExactlyOnce(t *testing.T) {
+	forBoth(t, func(t *testing.T, wrap bool) {
+		for round := 0; round < 40; round++ {
+			h := newRecorder()
+			c, client, _ := pair(t, wrap, h)
+			go func() { _, _ = io.Copy(io.Discard, client) }()
+			total := 0
+			for i := 0; i < 50; i++ {
+				if c.Write(bytes.Repeat([]byte{1}, 4096), 1) {
+					total++
+				}
+			}
+			time.Sleep(time.Duration(round%4) * time.Millisecond)
+			c.Close()
+			<-h.closed
+			time.Sleep(10 * time.Millisecond)
+			if got := h.acked(); got != total {
+				t.Fatalf("第 %d 轮：写了 %d 帧，ack 合计 %d", round, total, got)
+			}
+		}
+	})
+}
+
+func TestAdoptAfterClose(t *testing.T) {
+	p, err := netpoll.New(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	go func() { c, _ := net.Dial("tcp", ln.Addr().String()); time.Sleep(50 * time.Millisecond); _ = c.Close() }()
+	nc, _ := ln.Accept()
+	defer nc.Close()
+	if _, err := p.Adopt(nc, newRecorder()); err != netpoll.ErrClosed {
+		t.Fatalf("关闭后的 Poller 不该再接管：%v", err)
+	}
+}

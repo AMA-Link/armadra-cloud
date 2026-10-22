@@ -90,12 +90,15 @@ func (c *gconn) writeLoop() {
 			return
 		}
 		c.mu.Lock()
+		// 只有这个协程亲手出队的帧才由它报 ack；连接已关时 shutdown 已把它记成丢弃并报过了。
+		report := false
 		if !c.closed && len(c.out) > 0 {
 			c.out[0] = nil
 			c.out, c.acks = c.out[1:], c.acks[1:]
+			report = true
 		}
 		c.mu.Unlock()
-		if ack > 0 {
+		if report && ack > 0 {
 			c.h.OnSent(c, ack)
 		}
 	}

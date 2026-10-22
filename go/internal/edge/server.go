@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/auth"
@@ -50,7 +51,12 @@ type Edge struct {
 	wheel  *wheel
 	own    bool
 	once   sync.Once
+	// stopping 为真后不再接受新的升级（关闭服务的第一步）。
+	stopping atomic.Bool
 }
+
+// StopAccepting 停止接受新的通道升级；已升级的连接不动。
+func (e *Edge) StopAccepting() { e.stopping.Store(true) }
 
 // New 建 Edge，并启动 ping 时间轮。
 func New(o Options) (*Edge, error) {
@@ -186,6 +192,10 @@ func upgradeResponse(key, subprotocol string) []byte {
 // ServeUpgrade 处理源地址上的 WS 升级：判定 → 完成升级 → 开 OPEN kind e2e → 两边透传。
 // 被拒时先完成升级再以映射后的关闭码关闭（浏览器读不到升级失败的状态码）。
 func (e *Edge) ServeUpgrade(w http.ResponseWriter, r *http.Request) {
+	if e.stopping.Load() {
+		httperr.Write(w, gen.ErrUnavailable, httperr.Options{})
+		return
+	}
 	req := e.request(r)
 	d, err := e.policy.DecideUpgrade(r.Context(), req)
 	if err != nil {
@@ -217,17 +227,23 @@ func (e *Edge) ServeUpgrade(w http.ResponseWriter, r *http.Request) {
 	_ = nc.SetDeadline(time.Time{})
 	ec := &edgeConn{e: e, sourceID: d.Target.SourceID, subject: d.Subject, started: time.Now()}
 	ec.lastSeen.Store(time.Now().UnixMilli())
+	// 先登记再接管：接管后任何时刻连接都可能关掉，OnClose 要能把登记摘干净。
+	e.wheel.add(ec)
+	e.policy.Track(ec, d.Target.SourceID, d.Subject)
 	c, err := e.o.Poller.Adopt(nc, ec)
 	if err != nil {
+		e.wheel.remove(ec)
+		e.policy.Untrack(ec)
 		_ = nc.Close()
 		e.policy.ReleaseUpgrade(d.Subject)
 		return
 	}
 	ec.bind(c)
-	e.wheel.add(ec)
-	e.policy.Track(ec, d.Target.SourceID, d.Subject)
 	c.Write(upgradeResponse(key, gen.E2ESubprotocol), 0)
 
+	if ec.isFinished() {
+		return // 101 都没写出去，连接已经没了：不开流
+	}
 	s, code := e.policy.OpenE2E(d.Tunnel, req, d.RemoteIP, &TrafficIdentity{Subject: d.Subject, DeviceID: d.Device}, ec)
 	if code != "" {
 		closeCode, ok := WSCloseCode(code)

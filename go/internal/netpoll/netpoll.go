@@ -12,9 +12,13 @@
 package netpoll
 
 import (
+	"errors"
 	"net"
 	"time"
 )
+
+// ErrClosed 表示 Poller 已关闭，不再接管连接。
+var ErrClosed = errors.New("netpoll：已关闭")
 
 // Handler 接住一条连接的事件。OnRead 对同一条连接串行调用；OnSent、OnClose 可能来自任意协程。
 type Handler interface {

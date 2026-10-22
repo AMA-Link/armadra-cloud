@@ -333,6 +333,25 @@ func TestPipeUpstream(t *testing.T) {
 	})
 }
 
+func TestPipeAttachAfterClose(t *testing.T) {
+	t.Run("连接在流接上之前就没了：接上时重置这条流，不留在流表里", func(t *testing.T) {
+		p := newPipe(t, nil)
+		// 退回「101 之后、流还没接上」的状态，然后连接关闭（OnClose 看不到流，没东西可重置）。
+		p.ec.mu.Lock()
+		p.ec.s = nil
+		p.ec.mu.Unlock()
+		p.ec.OnClose(p.conn, nil)
+		if p.tun.StreamCount() != 1 {
+			t.Fatalf("OnClose 不该动流：%d", p.tun.StreamCount())
+		}
+		p.ec.attach(p.s)
+		p.cap.wait(t, p.cap.has(protocol.FrameRst, protocol.RstClientGone))
+		if p.tun.StreamCount() != 0 {
+			t.Fatal("流应已摘掉")
+		}
+	})
+}
+
 func TestPipeDownstream(t *testing.T) {
 	t.Run("源的 DATA 作为二进制消息发出，写进内核后才补信用", func(t *testing.T) {
 		p := newPipe(t, func(c *tunnel.Config) { c.StreamWindow = 1000; c.TunnelWindow = 4000 })

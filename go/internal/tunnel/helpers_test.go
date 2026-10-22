@@ -21,6 +21,8 @@ type fakeTransport struct {
 	terminated bool
 	// gate 非空时，Send 先等它关闭（测试用来让写端停在第一帧上，攒齐几条流的队列）。
 	gate chan struct{}
+	// delay 非零时每次 Send 睡这么久（模拟写得慢的链路）。
+	delay time.Duration
 }
 
 type closeRec struct {
@@ -34,6 +36,9 @@ func (f *fakeTransport) Send(b []byte) error {
 	f.mu.Unlock()
 	if gate != nil {
 		<-gate
+	}
+	if f.delay > 0 {
+		time.Sleep(f.delay)
 	}
 	fr, err := protocol.Decode(b)
 	if err != nil {

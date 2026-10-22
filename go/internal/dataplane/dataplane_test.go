@@ -686,6 +686,50 @@ func TestTraffic(t *testing.T) {
 	})
 }
 
+// 客户端在 101 前后任意时刻断开：流、并发名额与登记都要收干净（否则能把源的流数占满）。
+func TestAbruptDisconnect(t *testing.T) {
+	h := newHarness(t, harnessOptions{control: control.MemoryOptions{Limits: map[control.LimitKind]control.LimitRule{
+		control.LimitEdgeConcurrentAcct: {Concurrent: true, Max: 4},
+	}}})
+	h.core(relayenv.CoreOptions{Capabilities: []string{"e2e"}})
+	for i := 0; i < 80; i++ {
+		raw, err := net.Dial("tcp", h.srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(raw, "GET %s/_relay/e2e HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
+			"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+			"Sec-WebSocket-Protocol: armadra-e2e.1, armadra-relay.%s\r\n\r\n", h.sourcePath(), h.relayToken(relayenv.Claims{"sub": "acct_x", "jti": relayenv.NewJTI()}))
+		if i%2 == 0 {
+			time.Sleep(time.Duration(i%5) * time.Millisecond)
+		}
+		_ = raw.(*net.TCPConn).SetLinger(0) // RST，贴近「掉线」
+		_ = raw.Close()
+	}
+	eventually(t, "流收干净", func() bool { return h.streams() == 0 })
+	eventually(t, "并发名额收回", func() bool {
+		probe := h.channel(h.relayToken(relayenv.Claims{"sub": "acct_x"}))
+		_, _, open := probe.outcome()
+		_ = probe.c.Close()
+		return open
+	})
+	eventually(t, "登记收干净", func() bool {
+		time.Sleep(20 * time.Millisecond)
+		return h.streams() == 0
+	})
+}
+
+func TestStopAccepting(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	h.core(relayenv.CoreOptions{Capabilities: []string{"e2e"}})
+	h.plane.Edge.StopAccepting()
+	d := websocket.Dialer{Subprotocols: []string{"armadra-e2e.1", "armadra-relay." + h.relayToken(nil)}}
+	_, res, err := d.Dial(h.e2eURL(), nil)
+	if err == nil || res == nil || res.StatusCode != 503 {
+		t.Fatalf("停止接受后应答 503：%v %v", res, err)
+	}
+}
+
 func TestRouting(t *testing.T) {
 	t.Run("/ready 逐项探测，失败答 503", func(t *testing.T) {
 		ok := true

@@ -14,6 +14,7 @@ type linuxPoller struct {
 	loops []*loop
 	next  atomic.Uint32
 	count atomic.Int64
+	shut  atomic.Bool
 }
 
 func newPoller(n int) (poller, error) {
@@ -34,6 +35,9 @@ func newPoller(n int) (poller, error) {
 }
 
 func (p *linuxPoller) adopt(nc net.Conn, h Handler) (Conn, error) {
+	if p.shut.Load() {
+		return nil, ErrClosed
+	}
 	tcp, ok := nc.(*net.TCPConn)
 	if !ok {
 		return newGConn(nc, h, &p.count), nil
@@ -49,6 +53,9 @@ func (p *linuxPoller) adopt(nc net.Conn, h Handler) (Conn, error) {
 	l := p.loops[int(p.next.Add(1))%len(p.loops)]
 	c := &econn{fd: fd, nc: nc, l: l, h: h, count: &p.count}
 	if err := l.add(c); err != nil {
+		if p.shut.Load() {
+			return nil, ErrClosed
+		}
 		// epoll 不可用：退回每连接协程。
 		return newGConn(nc, h, &p.count), nil
 	}
@@ -57,6 +64,7 @@ func (p *linuxPoller) adopt(nc net.Conn, h Handler) (Conn, error) {
 }
 
 func (p *linuxPoller) close() {
+	p.shut.Store(true)
 	for _, l := range p.loops {
 		l.stop()
 	}

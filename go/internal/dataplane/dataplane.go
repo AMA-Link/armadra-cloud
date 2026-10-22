@@ -139,8 +139,9 @@ func pathOf(r *http.Request) string {
 	return path
 }
 
-// Shutdown 按顺序收尾：隧道发 GOAWAY 并等排空 → 断开边缘连接 → 停边缘。
+// Shutdown 按顺序收尾：不再接新通道 → 隧道发 GOAWAY 并等排空 → 断开边缘连接 → 停边缘。
 func (p *Plane) Shutdown(grace time.Duration) {
+	p.Edge.StopAccepting()
 	p.Hub.Shutdown(grace)
 	p.Edge.CloseAll()
 	p.Edge.Close()

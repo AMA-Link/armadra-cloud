@@ -49,10 +49,22 @@ func newLoop() (*loop, error) {
 }
 
 func (l *loop) stop() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.stopped.Swap(true) {
 		return
 	}
 	_ = l.file.Close()
+}
+
+// ctl 是带停止保护的 epoll_ctl：stop 之后 epfd 号可能被别的文件复用，不能再对它下手。
+func (l *loop) ctl(op int, fd int, ev *syscall.EpollEvent) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.stopped.Load() {
+		return syscall.EBADF
+	}
+	return syscall.EpollCtl(l.epfd, op, fd, ev)
 }
 
 func (l *loop) add(c *econn) error {
@@ -61,7 +73,7 @@ func (l *loop) add(c *econn) error {
 	l.mu.Unlock()
 	c.mu.Lock()
 	c.armed = evIn
-	err := syscall.EpollCtl(l.epfd, syscall.EPOLL_CTL_ADD, c.fd, &syscall.EpollEvent{Events: evIn, Fd: int32(c.fd)})
+	err := l.ctl(syscall.EPOLL_CTL_ADD, c.fd, &syscall.EpollEvent{Events: evIn, Fd: int32(c.fd)})
 	c.mu.Unlock()
 	if err != nil {
 		l.mu.Lock()
@@ -72,7 +84,7 @@ func (l *loop) add(c *econn) error {
 }
 
 func (l *loop) remove(c *econn) {
-	_ = syscall.EpollCtl(l.epfd, syscall.EPOLL_CTL_DEL, c.fd, nil)
+	_ = l.ctl(syscall.EPOLL_CTL_DEL, c.fd, nil)
 	l.mu.Lock()
 	if l.conns[int32(c.fd)] == c {
 		delete(l.conns, int32(c.fd))
@@ -158,7 +170,7 @@ func (c *econn) rearmLocked() {
 		return
 	}
 	c.armed = want
-	_ = syscall.EpollCtl(c.l.epfd, syscall.EPOLL_CTL_MOD, c.fd, &syscall.EpollEvent{Events: want, Fd: int32(c.fd)})
+	_ = c.l.ctl(syscall.EPOLL_CTL_MOD, c.fd, &syscall.EpollEvent{Events: want, Fd: int32(c.fd)})
 }
 
 // Write 实现 Conn：队列空时先直接写，写不完的排队并关注 EPOLLOUT。

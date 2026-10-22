@@ -3,6 +3,7 @@ package tunnel_test
 import (
 	"bytes"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,6 +70,50 @@ func TestHeartbeat(t *testing.T) {
 			t.Fatalf("%+v", f)
 		}
 	})
+}
+
+// 上行一直有数据时写协程也要按时发 PING，否则源收不到心跳、路由 TTL 过期而隧道还活着。
+func TestHeartbeatUnderLoad(t *testing.T) {
+	r := newRig(t, func(c *tunnel.Config) {
+		c.Heartbeat = 40 * time.Millisecond
+		c.HeartbeatMisses = 1000 // 这里不测断开
+		c.StreamWindow, c.TunnelWindow = 1<<30, 1<<30
+	})
+	r.tr.delay = 2 * time.Millisecond
+	var streams []*tunnel.Stream
+	for i := 0; i < 8; i++ {
+		streams = append(streams, r.open(&recSink{}))
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, s := range streams {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			buf := make([]byte, 4096)
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					s.Send(buf)
+					time.Sleep(time.Millisecond)
+				}
+			}
+		}()
+	}
+	time.Sleep(600 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	pings := 0
+	for _, f := range r.tr.takeKeep() {
+		if f.Type == protocol.FramePing {
+			pings++
+		}
+	}
+	if pings < 5 {
+		t.Fatalf("600 ms 内心跳周期 40 ms，应至少发出 5 个 PING，实际 %d", pings)
+	}
 }
 
 func TestGoaway(t *testing.T) {
