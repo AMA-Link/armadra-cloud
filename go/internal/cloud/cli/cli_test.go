@@ -215,7 +215,7 @@ func TestServeBootstrapsHealthReadyAndAnswers501(t *testing.T) {
 	var wrapped, partitions int
 	_ = running.DB.Pool().QueryRow(context.Background(), "SELECT count(*)::int FROM signing_keys WHERE private_key_wrap = 'aes256gcm-v1'").Scan(&wrapped)
 	_ = running.DB.Pool().QueryRow(context.Background(), `SELECT count(*)::int FROM pg_inherits i JOIN pg_class p ON p.oid = i.inhparent
-	  JOIN pg_class c ON c.oid = i.inhrelid WHERE p.relname = 'audit_log' AND c.relname LIKE 'audit_log_2%'`).Scan(&partitions)
+	  JOIN pg_class c ON c.oid = i.inhrelid WHERE p.oid = to_regclass('audit_log') AND c.relname LIKE 'audit_log_2%'`).Scan(&partitions)
 	if wrapped != 1 || partitions != 3 {
 		t.Fatalf("引导结果：包裹的钥 %d，分区 %d", wrapped, partitions)
 	}

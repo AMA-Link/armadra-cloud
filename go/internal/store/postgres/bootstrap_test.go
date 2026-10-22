@@ -106,7 +106,7 @@ func TestEnsureAuditPartitions(t *testing.T) {
 	count := func() int {
 		var n int
 		if err := db.Pool().QueryRow(ctx, `SELECT count(*)::int FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
-		  JOIN pg_class p ON p.oid = i.inhparent WHERE p.relname = 'audit_log' AND c.relname LIKE 'audit_log_2%'`).Scan(&n); err != nil {
+		  JOIN pg_class p ON p.oid = i.inhparent WHERE p.oid = to_regclass('audit_log') AND c.relname LIKE 'audit_log_2%'`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
