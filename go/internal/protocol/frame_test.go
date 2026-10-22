@@ -362,3 +362,27 @@ func TestGoldenSequence(t *testing.T) {
 		}
 	}
 }
+
+// DecodeView 与 Decode 校验相同，只是 Data 不拷贝。
+func TestDecodeView(t *testing.T) {
+	golden := testutil.Fixture(t, "tunnel/data-64k.bin")
+	buf := append([]byte{}, golden...)
+	view, err := protocol.DecodeView(buf)
+	if err != nil || len(view.Data) != protocol.MaxDataChunk {
+		t.Fatalf("DecodeView：%v", err)
+	}
+	copied, err := protocol.Decode(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf[protocol.FrameHeaderBytes] ^= 0xff
+	if view.Data[0] == golden[protocol.FrameHeaderBytes] {
+		t.Error("DecodeView 的 Data 应指向原缓冲")
+	}
+	if copied.Data[0] != golden[protocol.FrameHeaderBytes] {
+		t.Error("Decode 的 Data 应是拷贝")
+	}
+	if _, err := protocol.DecodeView([]byte{99, 0, 0, 0, 0}); protocol.CodeOf(err) != protocol.ErrBadFrame {
+		t.Errorf("坏帧应同样被拒：%v", err)
+	}
+}
