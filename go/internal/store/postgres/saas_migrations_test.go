@@ -401,8 +401,8 @@ func TestDeferredSourceForeignKeys(t *testing.T) {
 	e.account("a1")
 	e.source("s1")
 	e.must(`INSERT INTO source_spaces (tenant_id, source_id, owner_account_id, created_at_ms, updated_at_ms) VALUES ($1, 's1', 'a1', 1, 1)`, saasTenant)
-	e.must(`INSERT INTO source_grants (tenant_id, grant_id, source_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
-	  VALUES ($1, 'g1', 's1', 'member', 'a1', 'viewer', 'a1', 1, 1)`, saasTenant)
+	e.must(`INSERT INTO source_grants (tenant_id, grant_id, source_id, team_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
+	  VALUES ($1, 'g1', 's1', 't1', 'member', 'a1', 'viewer', 'a1', 1, 1)`, saasTenant)
 	e.must(`INSERT INTO invitations (tenant_id, invitation_id, kind, email, source_id, host_role, state, invited_by, created_at_ms, expires_at_ms)
 	  VALUES ($1, 'i1', 'host', 'x@x.test', 's1', 'viewer', 'pending', 'a1', 1, 9)`, saasTenant)
 	e.must(`INSERT INTO trust_requests (tenant_id, request_id, source_id, pending_id, account_id, device_id, device_name, platform, state, requested_at_ms, expires_at_ms)
@@ -478,8 +478,8 @@ func TestSaaSChecksAndPartialIndexes(t *testing.T) {
 	})
 	t.Run("同一主机对同一主体只有一条有效授予", func(t *testing.T) {
 		ins := func(id string) error {
-			return e.exec(`INSERT INTO source_grants (tenant_id, grant_id, source_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
-			  VALUES ($1, $2, 's1', 'member', 'a1', 'viewer', 'a1', 1, 1)`, saasTenant, id)
+			return e.exec(`INSERT INTO source_grants (tenant_id, grant_id, source_id, team_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
+			  VALUES ($1, $2, 's1', 't1', 'member', 'a1', 'viewer', 'a1', 1, 1)`, saasTenant, id)
 		}
 		if err := ins("g1"); err != nil {
 			t.Fatal(err)
@@ -489,8 +489,8 @@ func TestSaaSChecksAndPartialIndexes(t *testing.T) {
 		if err := ins("g2"); err != nil {
 			t.Fatalf("撤销后应可再授：%v", err)
 		}
-		reject(t, e.exec(`INSERT INTO source_grants (tenant_id, grant_id, source_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
-		  VALUES ($1, 'g3', 's1', 'robot', 'a1', 'viewer', 'a1', 1, 1)`, saasTenant), "23514", "")
+		reject(t, e.exec(`INSERT INTO source_grants (tenant_id, grant_id, source_id, team_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
+		  VALUES ($1, 'g3', 's1', 't1', 'robot', 'a1', 'viewer', 'a1', 1, 1)`, saasTenant), "23514", "")
 	})
 	t.Run("user_code 格式与唯一（待处理 / 已批准期间）", func(t *testing.T) {
 		ins := func(hash, code, status string) error {
@@ -681,6 +681,136 @@ func TestPlatformSettingsAndTrafficTeam(t *testing.T) {
 	if n := e.count("SELECT count(*)::int FROM relay_traffic_buckets WHERE team_id <> ''"); n != 1 {
 		t.Fatalf("团队流量桶：%d", n)
 	}
-	e.must("INSERT INTO cloud_issued_tokens (jti, account_id, source_id, device_id, exp_ms) VALUES ('j1', 'a', 's', 'd', 9)")
-	reject(t, e.exec("INSERT INTO cloud_issued_tokens (jti, account_id, source_id, device_id, exp_ms) VALUES ('j1', 'a', 's', 'd', 9)"), "23505", "")
+	e.must("INSERT INTO cloud_issued_tokens (tenant_id, jti, account_id, source_id, device_id, exp_ms) VALUES ($1, 'j1', 'a', 's', 'd', 9)", saasTenant)
+	reject(t, e.exec("INSERT INTO cloud_issued_tokens (tenant_id, jti, account_id, source_id, device_id, exp_ms) VALUES ($1, 'j1', 'a', 's', 'd', 9)", saasTenant), "23505", "cloud_issued_tokens_pkey")
+	// 不同租户的 jti 互不冲突。
+	e.must("INSERT INTO tenants (tenant_id, issuer, allow_guests, trusted_origins_json, revision) VALUES ('other', 'https://o.test', false, '[]', 0)")
+	e.must("INSERT INTO cloud_issued_tokens (tenant_id, jti, account_id, source_id, device_id, exp_ms) VALUES ('other', 'j1', 'a', 's', 'd', 9)")
+}
+
+// 冻结审查补的约束：group_members 的跨团队保护、授予 / 邀请 CHECK、TOTP 唯一、审计列与分区校验、索引。
+func TestFreezeReviewAdditions(t *testing.T) {
+	e := openSaaS(t)
+	for _, id := range []string{"a1", "a2", "a3"} {
+		e.account(id)
+	}
+	e.team("t1", "a1")
+	e.team("t2", "a2")
+	e.source("s1")
+	e.must(`INSERT INTO groups (tenant_id, group_id, team_id, name, created_at_ms) VALUES ($1, 'g1', 't1', 'g', 1)`, saasTenant)
+
+	t.Run("group_members 不能塞别团队的成员或别团队的组", func(t *testing.T) {
+		// a2 是 t2 的成员，不是 t1 的。
+		reject(t, e.exec(`INSERT INTO group_members (tenant_id, group_id, team_id, account_id, added_at_ms) VALUES ($1, 'g1', 't1', 'a2', 1)`, saasTenant), "23503", "")
+		// 组 g1 属于 t1，却声称 team_id = t2（a2 确是 t2 成员）。
+		reject(t, e.exec(`INSERT INTO group_members (tenant_id, group_id, team_id, account_id, added_at_ms) VALUES ($1, 'g1', 't2', 'a2', 1)`, saasTenant), "23503", "")
+		e.must(`INSERT INTO team_members (tenant_id, team_id, account_id, role, joined_at_ms) VALUES ($1, 't1', 'a3', 'member', 1)`, saasTenant)
+		e.must(`INSERT INTO group_members (tenant_id, group_id, team_id, account_id, added_at_ms) VALUES ($1, 'g1', 't1', 'a3', 1)`, saasTenant)
+		// 成员离队即出组；删组连带组员。
+		e.must(`DELETE FROM team_members WHERE team_id = 't1' AND account_id = 'a3'`)
+		if n := e.count("SELECT count(*)::int FROM group_members"); n != 0 {
+			t.Fatalf("离队应出组：%d", n)
+		}
+		e.must(`INSERT INTO team_members (tenant_id, team_id, account_id, role, joined_at_ms) VALUES ($1, 't1', 'a3', 'member', 1)`, saasTenant)
+		e.must(`INSERT INTO group_members (tenant_id, group_id, team_id, account_id, added_at_ms) VALUES ($1, 'g1', 't1', 'a3', 1)`, saasTenant)
+		e.must(`DELETE FROM groups WHERE group_id = 'g1'`)
+		if n := e.count("SELECT count(*)::int FROM group_members"); n != 0 {
+			t.Fatalf("删组应带走组员：%d", n)
+		}
+	})
+	t.Run("已是成员映射的主键名", func(t *testing.T) {
+		reject(t, e.exec(`INSERT INTO team_members (tenant_id, team_id, account_id, role, joined_at_ms) VALUES ($1, 't1', 'a1', 'member', 1)`, saasTenant), "23505", "team_members_pkey")
+	})
+	t.Run("授予：team 主体必须等于团队，team / member 主体必须有 team_id", func(t *testing.T) {
+		ins := func(id, kind, subject string, team any) error {
+			return e.exec(`INSERT INTO source_grants (tenant_id, grant_id, source_id, team_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
+			  VALUES ($1, $2, 's1', $5, $3, $4, 'viewer', 'a1', 1, 1)`, saasTenant, id, kind, subject, team)
+		}
+		reject(t, ins("g1", "team", "t2", "t1"), "23514", "")
+		reject(t, ins("g2", "team", "t1", nil), "23514", "")
+		reject(t, ins("g3", "member", "a1", nil), "23514", "")
+		if err := ins("g4", "team", "t1", "t1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := ins("g5", "guest", "a3", nil); err != nil { // guest 在个人空间主机上不需要 team_id
+			t.Fatal(err)
+		}
+	})
+	t.Run("团队邀请不带主机角色与工作区", func(t *testing.T) {
+		ins := func(id, hostRole string, workspaces string) error {
+			return e.exec(`INSERT INTO invitations (tenant_id, invitation_id, kind, email, team_id, team_role, host_role, workspace_ids, state, invited_by, created_at_ms, expires_at_ms)
+			  VALUES ($1, $2, 'team', $2 || '@x.test', 't1', 'member', NULLIF($3, ''), $4::text[], 'pending', 'a1', 1, 2)`, saasTenant, id, hostRole, workspaces)
+		}
+		reject(t, ins("v1", "viewer", "{}"), "23514", "")
+		reject(t, ins("v2", "", "{w1}"), "23514", "")
+		if err := ins("v3", "", "{}"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("主机邀请的授予到期独立于邀请有效期", func(t *testing.T) {
+		e.must(`INSERT INTO invitations (tenant_id, invitation_id, kind, email, source_id, host_role, state, invited_by, created_at_ms, expires_at_ms, grant_expires_at_ms)
+		  VALUES ($1, 'hv', 'host', 'g@x.test', 's1', 'viewer', 'pending', 'a1', 1, 2, 999)`, saasTenant)
+		var grantExp *int64
+		if err := e.pool.QueryRow(e.ctx, "SELECT grant_expires_at_ms FROM invitations WHERE invitation_id = 'hv'").Scan(&grantExp); err != nil || grantExp == nil || *grantExp != 999 {
+			t.Fatalf("grant_expires_at_ms：%v %v", grantExp, err)
+		}
+		e.must(`UPDATE invitations SET state = 'expired' WHERE invitation_id = 'hv'`)
+	})
+	t.Run("每个账号至多一个 TOTP", func(t *testing.T) {
+		ins := func(id, kind string) error {
+			return e.exec(`INSERT INTO account_credentials (tenant_id, credential_id, account_id, kind, created_at_ms) VALUES ($1, $2, 'a1', $3, 1)`, saasTenant, id, kind)
+		}
+		if err := ins("c1", "totp"); err != nil {
+			t.Fatal(err)
+		}
+		reject(t, ins("c2", "totp"), "23505", "account_credentials_totp")
+		if err := ins("c3", "passkey"); err != nil {
+			t.Fatalf("别的凭据类型不受限：%v", err)
+		}
+	})
+	t.Run("审计：设备名快照长度与主机列", func(t *testing.T) {
+		reject(t, e.exec(`INSERT INTO audit_log (at_ms, event_id, tenant_id, actor_kind, action, device_name) VALUES (1, 'x1', 'cloud', 'system', 'x', repeat('d', 129))`), "23514", "")
+		e.must(`INSERT INTO audit_log (at_ms, event_id, tenant_id, team_id, actor_kind, action, device_name, source_id) VALUES (1, 'x2', 'cloud', 't1', 'system', 'x', repeat('d', 128), 's1')`)
+	})
+	t.Run("audit_ensure_partition 拒绝错误的分区名与月边界", func(t *testing.T) {
+		from := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+		to := time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+		call := func(from, to int64, name string) error {
+			return e.exec("SELECT audit_ensure_partition($1, $2, $3)", from, to, name)
+		}
+		reject(t, call(from, to, "audit_log_2027_04"), "22023", "")   // 名字与月份不符
+		reject(t, call(from, to, "evil; DROP TABLE x"), "22023", "")  // 名字不合规
+		reject(t, call(from+1, to, "audit_log_2027_03"), "22023", "") // 不是月初
+		reject(t, call(from, to+1, "audit_log_2027_03"), "22023", "") // 月末不对
+		reject(t, call(from, to+86_400_000, "audit_log_2027_03"), "22023", "")
+		if err := call(from, to, "audit_log_2027_03"); err != nil {
+			t.Fatalf("合法调用应成功：%v", err)
+		}
+	})
+	t.Run("函数固定 search_path", func(t *testing.T) {
+		for _, fn := range []string{"team_owner_check", "team_owner_guard", "audit_ensure_partition"} {
+			var cfg []string
+			if err := e.pool.QueryRow(e.ctx, `SELECT coalesce(proconfig, '{}') FROM pg_proc WHERE proname = $1 AND pronamespace = current_schema()::regnamespace`, fn).Scan(&cfg); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, c := range cfg {
+				found = found || len(c) > 12 && c[:12] == "search_path="
+			}
+			if !found {
+				t.Errorf("%s 缺 search_path：%v", fn, cfg)
+			}
+		}
+	})
+	t.Run("新索引都在", func(t *testing.T) {
+		for _, idx := range []string{"outbox_emails_job", "jobs_done", "jobs_failed", "audit_log_source", "account_credentials_totp", "cloud_issued_tokens_exp"} {
+			if e.count("SELECT count(*)::int FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1", idx) != 1 {
+				t.Errorf("缺索引 %s", idx)
+			}
+		}
+		if n := e.count(`SELECT count(*)::int FROM information_schema.key_column_usage WHERE table_schema = current_schema()
+		  AND table_name = 'cloud_issued_tokens' AND constraint_name = 'cloud_issued_tokens_pkey' AND column_name = 'tenant_id'`); n != 1 {
+			t.Error("cloud_issued_tokens 主键应含 tenant_id")
+		}
+	})
 }

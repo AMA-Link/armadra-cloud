@@ -26,6 +26,7 @@ func TestMapSaaSError(t *testing.T) {
 		want gen.ErrorCode
 	}{
 		{"团队 slug", pg("23505", "teams_slug"), gen.ErrTeamSlugTaken},
+		{"已是成员", pg("23505", "team_members_pkey"), gen.ErrMemberExists},
 		{"邮箱", pg("23505", "accounts_email"), gen.ErrEmailTaken},
 		{"别的唯一冲突", pg("23505", "source_grants_active"), gen.ErrConflict},
 		{"最后一个 owner", pg("23514", "team_has_owner"), gen.ErrTeamLastOwner},

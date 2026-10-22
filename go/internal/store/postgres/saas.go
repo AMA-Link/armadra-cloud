@@ -66,6 +66,8 @@ func mapSaaSError(err error) error {
 		switch {
 		case pgErr.ConstraintName == saas.ConstraintTeamSlug:
 			return &saas.Error{Code: saas.ErrTeamSlugTaken.Code, Constraint: pgErr.ConstraintName}
+		case pgErr.ConstraintName == saas.ConstraintTeamMembersPK:
+			return &saas.Error{Code: saas.ErrMemberExists.Code, Constraint: pgErr.ConstraintName}
 		case pgErr.ConstraintName == saas.ConstraintAccountsEmail:
 			return &saas.Error{Code: saas.ErrEmailTaken.Code, Constraint: pgErr.ConstraintName}
 		default:

@@ -24,8 +24,11 @@ it("随包的迁移编号从 1 起连续，SQL 不带事务语句", () => {
   expect(() => checkAvailable(migrations)).not.toThrow();
   for (const migration of migrations) {
     expect(migration.sha384).toMatch(/^[0-9a-f]{96}$/);
-    // 事务语句带分号；plpgsql 函数体里的 BEGIN 没有分号，不算。
-    expect(migration.sql).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/im);
+    // 先剥掉 $$…$$ 函数体（plpgsql 的 BEGIN / END 不是事务语句），再按语句开头匹配事务控制。
+    const outside = migration.sql.replace(/\$\$[\s\S]*?\$\$/g, "");
+    expect(outside).not.toMatch(
+      /^\s*(BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT)\b/im,
+    );
   }
 });
 
@@ -34,4 +37,22 @@ it("不是迁移文件名答 null；不是 UTF-8 拒绝", () => {
   expect(() =>
     migrationFile("0001_x.sql", new Uint8Array([0xff, 0xfe, 0xfd])),
   ).toThrow();
+});
+
+it("事务语句检查对函数体外的 BEGIN / START TRANSACTION / END 等都能发现", () => {
+  const strip = (sql: string) => sql.replace(/\$\$[\s\S]*?\$\$/g, "");
+  const pattern =
+    /^\s*(BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT)\b/im;
+  expect(strip("CREATE FUNCTION f() AS $$\nBEGIN\nEND\n$$;")).not.toMatch(
+    pattern,
+  );
+  for (const word of [
+    "BEGIN",
+    "START TRANSACTION",
+    "COMMIT",
+    "END",
+    "ROLLBACK",
+    "ABORT",
+  ])
+    expect(strip(`SELECT 1;\n${word}\n`)).toMatch(pattern);
 });

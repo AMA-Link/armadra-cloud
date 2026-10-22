@@ -27,6 +27,7 @@ var (
 	ErrEmailTaken    = &Error{Code: gen.ErrEmailTaken}
 	ErrConflict      = &Error{Code: gen.ErrConflict}
 	ErrTeamLastOwner = &Error{Code: gen.ErrTeamLastOwner}
+	ErrMemberExists  = &Error{Code: gen.ErrMemberExists}
 )
 
 // 约束与索引名（迁移 0004–0009）。
@@ -34,4 +35,5 @@ const (
 	ConstraintTeamSlug      = "teams_slug"
 	ConstraintAccountsEmail = "accounts_email"
 	ConstraintTeamHasOwner  = "team_has_owner"
+	ConstraintTeamMembersPK = "team_members_pkey"
 )

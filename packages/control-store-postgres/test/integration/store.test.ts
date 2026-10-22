@@ -109,6 +109,7 @@ function snapshot(): TenantSnapshot {
 
 describe("迁移", () => {
   it("空 schema 跑到最新；再开一次不重跑；并发打开只有一个真正执行", async () => {
+    const migrations = loadMigrations();
     const schema = fresh();
     await schema.create();
     const sql = connectPostgres({
@@ -122,15 +123,13 @@ describe("迁移", () => {
         migratePostgres(sql),
         migratePostgres(sql),
       ]);
-      expect(counts.sort()).toEqual([0, 0, 3]);
+      expect(counts.sort()).toEqual([0, 0, migrations.length]);
       expect(await migratePostgres(sql)).toBe(0);
       const ledger =
         await sql`SELECT id, name FROM cloud_migrations ORDER BY id`;
-      expect(ledger.map((row) => row.name)).toEqual([
-        "0001_control_init",
-        "0002_relay_control",
-        "0003_traffic",
-      ]);
+      expect(ledger.map((row) => row.name)).toEqual(
+        migrations.map((migration) => migration.name),
+      );
     } finally {
       await sql.end({ timeout: 5 });
     }
