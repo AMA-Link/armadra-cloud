@@ -20,6 +20,7 @@ export const RULES = [
   "migrations",
   "pinned-versions",
   "package-dependencies",
+  "go-modules",
 ];
 
 // ------------------------------------------------------------------ helpers
@@ -464,6 +465,156 @@ function checkPackageDependencies(context, problems) {
   }
 }
 
+// ------------------------------------------------------------ go-modules
+
+/** go.mod 里 require 的模块（含 // indirect）与 replace / exclude 指令。 */
+export function parseGoMod(text) {
+  const modules = [];
+  const directives = [];
+  let module = null;
+  let block = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/\/\/.*$/, "").trim();
+    if (line === "") continue;
+    if (block !== null) {
+      if (line === ")") {
+        block = null;
+        continue;
+      }
+      if (block === "require") {
+        const [path, version] = line.split(/\s+/);
+        modules.push({ path, version });
+      } else directives.push(`${block} ${line}`);
+      continue;
+    }
+    const opened = line.match(/^(require|replace|exclude|retract|tool)\s*\($/);
+    if (opened) {
+      block = opened[1];
+      continue;
+    }
+    const single = line.match(
+      /^(require|replace|exclude|retract|tool)\s+(.*)$/,
+    );
+    if (single) {
+      if (single[1] === "require") {
+        const [path, version] = single[2].split(/\s+/);
+        modules.push({ path, version });
+      } else directives.push(`${single[1]} ${single[2]}`);
+      continue;
+    }
+    const named = line.match(/^module\s+(\S+)$/);
+    if (named) module = named[1];
+  }
+  return { module, modules, directives };
+}
+
+/** .go 源码里 import 的路径（单行与括号块；注释里的不算）。 */
+export function goImports(source) {
+  const text = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  const found = [];
+  for (const block of text.matchAll(/^import\s*\(([\s\S]*?)^\)/gm)) {
+    for (const line of block[1].split("\n")) {
+      const match = line.match(/^\s*(?:[\w.]+\s+)?"([^"]+)"/);
+      if (match) found.push(match[1]);
+    }
+  }
+  for (const match of text.matchAll(/^import\s+(?:[\w.]+\s+)?"([^"]+)"/gm)) {
+    found.push(match[1]);
+  }
+  return found;
+}
+
+const underModule = (path, module) =>
+  path === module || path.startsWith(`${module}/`);
+
+/**
+ * Go 代码的依赖边界：`go.mod` 的 require 只许登记过的模块（不得有 replace / exclude），
+ * `.go` 里只许 import 标准库、本模块与登记过的模块；`internalBoundaries` 里某个目录下
+ * 的代码不许 import 列出的本模块子路径（例如 `internal/core` 不碰 `internal/tunnel`）；
+ * `testOnly` 里的模块只许出现在 `_test.go` 与 `testutil/` 下。
+ */
+function checkGoModules(context, problems) {
+  for (const rule of context.rules.goModules ?? []) {
+    const modPath = `${rule.root}/go.mod`;
+    const text = context.files.includes(modPath)
+      ? readIfPresent(context.root, modPath)
+      : null;
+    if (text === null) {
+      problems.push(`Go 模块规则指向的 go.mod 不存在：${modPath}`);
+      continue;
+    }
+    const mod = parseGoMod(text);
+    const allowed = rule.allow ?? [];
+    for (const { path, version } of mod.modules) {
+      if (!allowed.includes(path)) {
+        problems.push(
+          `${modPath} 引入了未登记的模块：${path}（先登记进 repo.rules.json 的 goModules）`,
+        );
+      }
+      if (
+        !/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+incompatible)?$/.test(
+          version ?? "",
+        )
+      ) {
+        problems.push(`${modPath} 的 ${path} 必须写精确版本：${version}`);
+      }
+    }
+    for (const directive of mod.directives) {
+      if (/^(replace|exclude) /.test(directive))
+        problems.push(
+          `${modPath} 不许用 ${directive.split(" ")[0]}：${directive}`,
+        );
+    }
+    for (const path of allowed) {
+      if (!mod.modules.some((one) => one.path === path))
+        problems.push(`goModules 登记了 go.mod 里没有的模块，可移除：${path}`);
+    }
+    if (!mod.module) {
+      problems.push(`${modPath} 没有 module 行`);
+      continue;
+    }
+    const prefix = `${rule.root}/`;
+    for (const path of context.files) {
+      if (!path.startsWith(prefix) || !path.endsWith(".go")) continue;
+      const source = readIfPresent(context.root, path);
+      if (source === null) continue;
+      for (const target of goImports(source)) {
+        const external = target.split("/")[0].includes(".");
+        if (
+          external &&
+          !underModule(target, mod.module) &&
+          !allowed.some((one) => underModule(target, one))
+        ) {
+          problems.push(`${path} import 了未登记的模块：${target}`);
+        }
+        const testOnly = (rule.testOnly ?? []).find((one) =>
+          underModule(target, one),
+        );
+        if (
+          testOnly &&
+          !path.endsWith("_test.go") &&
+          !path.includes("/testutil/")
+        ) {
+          problems.push(
+            `${path} 在生产代码里 import 了只许测试用的模块：${target}`,
+          );
+        }
+        for (const boundary of rule.internalBoundaries ?? []) {
+          if (!path.startsWith(`${rule.root}/${boundary.from}/`)) continue;
+          for (const forbidden of boundary.forbid) {
+            if (underModule(target, `${mod.module}/${forbidden}`))
+              problems.push(
+                `${path} 不得 import ${target}（${boundary.from} 不碰 ${forbidden}）`,
+              );
+          }
+        }
+      }
+    }
+  }
+}
+
 const CHECKS = {
   "docs-index": checkDocsIndex,
   links: checkLinks,
@@ -474,6 +625,7 @@ const CHECKS = {
   migrations: checkMigrations,
   "pinned-versions": checkPinnedVersions,
   "package-dependencies": checkPackageDependencies,
+  "go-modules": checkGoModules,
 };
 
 /** 对一个仓库根跑规则，返回问题列表；空列表表示通过。 */
