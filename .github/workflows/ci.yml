@@ -22,12 +22,16 @@ env:
 
 jobs:
   # 先判断改了什么（workspace#9）：只改文档（Markdown 与 docs/，契约与第三方声明
-  # 除外）时只跑下面的 docs 作业，完整检查与端到端跳过；推到 main 同理。
+  # 除外）或只改 go/ 时，TS 的完整检查与端到端跳过，只跑下面的 docs 作业（格式与仓库规则）；
+  # 反过来，没碰 go/ 与它的输入（协议包的 schema、夹具、身份向量，常见口令表）时 go 作业跳过。
+  # go/go.mod 与 go.sum 两边都算：第三方声明（notices:check）在 TS 作业里核对。
+  # 推到 main 同理。
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      go: ${{ steps.diff.outputs.go }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -39,14 +43,19 @@ jobs:
         run: |
           set -euo pipefail
           code=false
+          go=false
           if [ -z "${BASE:-}" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || [ "$GITHUB_REF_TYPE" = tag ]; then
             code=true
+            go=true
           else
             files=$(git diff --name-only "$BASE" HEAD)
-            [ -z "$files" ] && code=true
+            [ -z "$files" ] && code=true && go=true
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
+                go/go.mod | go/go.sum) code=true; go=true ;;
+                go/*) go=true ;;
+                packages/platform-protocol/schema/* | packages/platform-protocol/fixtures/* | packages/platform-protocol/src/identity-vectors/* | packages/control-core/src/common-passwords.txt | scripts/go-check.mjs | .github/workflows/* | package.json | repo.rules.json) code=true; go=true ;;
                 THIRD_PARTY_NOTICES.md | docs/contracts/*) code=true ;;
                 *.md | docs/* | .github/ISSUE_TEMPLATE/*) ;;
                 *) code=true ;;
@@ -54,7 +63,8 @@ jobs:
             done <<< "$files"
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "只改文档：$([ $code = false ] && echo 是 || echo 否)"
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+          echo "TS 检查：$([ $code = true ] && echo 要跑 || echo 跳过)；Go 检查：$([ $go = true ] && echo 要跑 || echo 跳过)"
 
   docs:
     needs: changes
@@ -71,6 +81,32 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm format:check
       - run: pnpm repo:check
+
+  # Go：gofmt、go vet、staticcheck、race 测试与生成物新鲜度（pnpm go:check），
+  # amd64 与 arm64 各一遍。只需要 Node 和 pnpm 来跑检查脚本，不装依赖。
+  go:
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    name: go (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - run: pnpm go:check
 
   check:
     needs: changes
@@ -108,11 +144,16 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+      # notices:check 要从 Go 模块缓存读许可证。
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go/go.mod
+          cache: false
 
       - run: pnpm install --frozen-lockfile
 
       # libs:build + prettier + eslint（只有 error 失败）+ typecheck + repo:check +
-      # contract:check + protocol:check（夹具与向量）+ ci:workflows + notices:check
+      # contract:check + protocol:check（夹具与向量）+ ci:workflows + notices:check（含 Go 模块）
       - run: pnpm check
 
       - run: pnpm repo:test
