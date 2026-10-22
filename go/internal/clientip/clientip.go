@@ -1,4 +1,6 @@
-package edge
+// Package clientip 是客户端 IP 的取法与受信代理配置（Go 设计 §3.5）：中继边缘与控制面共用，
+// 不依赖数据面，所以单独成包（internal/cloud 不 import internal/edge）。
+package clientip
 
 import (
 	"errors"
