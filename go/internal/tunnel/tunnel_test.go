@@ -122,7 +122,7 @@ func TestGoaway(t *testing.T) {
 
 	t.Run("GOAWAY/同源替换：GOAWAY replaced，关闭码 4491，标记 replaced", func(t *testing.T) {
 		r := newRig(t, nil)
-		r.tun.Goaway("replaced", 0)
+		r.tun.Goaway("replaced", tunnel.DefaultGrace)
 		got := r.tr.take()
 		if len(got) != 1 || got[0].Goaway.Reason != "replaced" {
 			t.Fatalf("%+v", got)

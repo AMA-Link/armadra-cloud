@@ -82,7 +82,7 @@ func (h *Hub) onCommand(c control.NodeCommand) {
 		return
 	}
 	if c.Type == control.CommandKick {
-		t.Goaway("replaced", 0)
+		t.Goaway("replaced", DefaultGrace)
 		return
 	}
 	t.Close(protocol.CloseTunnelGoaway, "closed_by_control")
@@ -290,7 +290,7 @@ func (h *Hub) ready(ctx context.Context, sock Socket, hello gen.Hello) (*Tunnel,
 	h.all[tunnel] = struct{}{}
 	h.mu.Unlock()
 	if previous != nil {
-		previous.Goaway("replaced", 0)
+		previous.Goaway("replaced", DefaultGrace)
 	}
 	if err := o.Control.Routes().Set(ctx, hello.SourceID, control.Route{
 		Node:        o.NodeID,

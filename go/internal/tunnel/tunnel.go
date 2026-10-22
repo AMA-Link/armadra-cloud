@@ -471,10 +471,13 @@ func (t *Tunnel) receiveGoaway(g *gen.GoawayPayload) {
 
 // ------------------------------------------------------------ GOAWAY 与关闭
 
+// DefaultGrace 让 Goaway 取配置的宽限期。
+const DefaultGrace time.Duration = -1
+
 // Goaway 发 GOAWAY，不再开新流；旧流自然结束后（或 grace 到了）关闭：
-// replaced 用 4491，其余 4492。grace 为 0 时取配置的宽限期。
+// replaced 用 4491，其余 4492。grace 为 DefaultGrace 时取配置的宽限期，为 0 立即强关。
 func (t *Tunnel) Goaway(reason string, grace time.Duration) {
-	if grace <= 0 {
+	if grace < 0 {
 		grace = t.cfg.GoawayGrace
 	}
 	t.mu.Lock()
