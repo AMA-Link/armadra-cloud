@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "revision": 7,
+  "issuer": "https://relay.armadra.test",
+  "account": {
+    "name": "owner",
+    "password": {
+      "kdf": "scrypt",
+      "cost": 32768,
+      "block": 8,
+      "parallel": 1,
+      "length": 32,
+      "salt": "BwcHBwcHBwcHBwcHBwcHBw==",
+      "hash": "pnK6K1WmsZUGrhy11+YELD2Y8Dg1oAZlqs51re7fwkc="
+    },
+    "createdAtMs": 1759913600000,
+    "updatedAtMs": 1759913600000,
+    "failures": 2,
+    "lockedUntilMs": 0,
+    "lastFailureAtMs": 1759996400000
+  },
+  "signingKeys": [
+    {
+      "kid": "k1",
+      "privateKeyPkcs8": "MC4CAQAwBQYDK2VwBCIEIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+      "publicJwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w",
+        "kid": "k1",
+        "alg": "EdDSA",
+        "use": "sig"
+      },
+      "activeFromMs": 1759992800000,
+      "retiredAtMs": 1760001800000
+    },
+    {
+      "kid": "k2",
+      "privateKeyPkcs8": "MC4CAQAwBQYDK2VwBCIEIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
+      "publicJwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+        "kid": "k2",
+        "alg": "EdDSA",
+        "use": "sig"
+      },
+      "activeFromMs": 1759996400000,
+      "retiredAtMs": null
+    }
+  ],
+  "sources": [
+    {
+      "sourceId": "0123456789abcdef0123456789abcdef",
+      "name": "workstation",
+      "kind": "desktop",
+      "publicJwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "Zr5-Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo"
+      },
+      "coreVersion": "0.9.2",
+      "capabilities": [
+        "terminal",
+        "e2e"
+      ],
+      "registeredAtMs": 1759920000000,
+      "lastSeenAtMs": 1759999995000,
+      "revokedAtMs": null,
+      "trustedOrigins": [
+        "https://app.armadra.test"
+      ]
+    },
+    {
+      "sourceId": "fedcba9876543210fedcba9876543210",
+      "name": "old laptop",
+      "kind": "server",
+      "publicJwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0"
+      },
+      "coreVersion": "0.8.0",
+      "capabilities": [],
+      "registeredAtMs": 1759910000000,
+      "lastSeenAtMs": null,
+      "revokedAtMs": 1759999000000,
+      "trustedOrigins": []
+    }
+  ],
+  "registrationTokens": [
+    {
+      "tokenHash": "eb9e2ad9206bc929eb858ff813a1298d828987041b6685a623e179412feb1bd0",
+      "expiresAtMs": 1760000600000
+    }
+  ],
+  "devices": [
+    {
+      "deviceId": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "subject": "acct:owner",
+      "platform": "desktop",
+      "name": "laptop",
+      "refreshHash": "0b61ee9340f32fc84c2183b6a8c84e6c4dfa5b3422418c17c445f4ae484a05d1",
+      "previousRefreshHash": null,
+      "rotation": 3,
+      "createdAtMs": 1759914000000,
+      "expiresAtMs": 1762000000000,
+      "revokedAtMs": null,
+      "lastSeenAtMs": 1759999940000
+    },
+    {
+      "deviceId": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+      "subject": "acct:owner",
+      "platform": "browser",
+      "name": "old browser",
+      "refreshHash": "22007b4f5b4452e0cb7c2d55a6fbaa8798b9ccf4bdf3b0e910b9dff3e6da0aae",
+      "previousRefreshHash": "2ef798f52417af3ac7f6ce1f2371ea923cf41266d90af32e2548d5bd46aea1f3",
+      "rotation": 2,
+      "createdAtMs": 1759910000000,
+      "expiresAtMs": 1762000000000,
+      "revokedAtMs": 1759998000000,
+      "lastSeenAtMs": null
+    },
+    {
+      "deviceId": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
+      "subject": "guest:1111111111111111:abcd1234",
+      "platform": "browser",
+      "name": "guest",
+      "refreshHash": "a392f41eda7f275bdef479746920429113f82d8d54ad49a96e8622df7ea309f4",
+      "previousRefreshHash": null,
+      "rotation": 1,
+      "createdAtMs": 1759999000000,
+      "expiresAtMs": 1762000000000,
+      "revokedAtMs": null,
+      "lastSeenAtMs": null
+    }
+  ],
+  "links": [
+    {
+      "linkId": "1111111111111111",
+      "sourceId": "0123456789abcdef0123456789abcdef",
+      "invitationId": "inv-fixture",
+      "label": "friend",
+      "role": "viewer",
+      "secretHash": "9b17a4baad2a3d1cf365967565c9e0fc7c88fc6bdd2a2bf942a57708cfe6ab0a",
+      "maxUses": 3,
+      "uses": 1,
+      "createdAtMs": 1759999000000,
+      "expiresAtMs": 1762000000000,
+      "revokedAtMs": null,
+      "scope": {
+        "workspaceId": "ws_01",
+        "readOnly": true
+      }
+    },
+    {
+      "linkId": "2222222222222222",
+      "sourceId": "0123456789abcdef0123456789abcdef",
+      "invitationId": "inv-revoked",
+      "label": "",
+      "role": "editor",
+      "secretHash": "ee3cc8c11635efbeb6756a4098189c9cd4b34624bb1c6e4362ddf7359979fbe6",
+      "maxUses": null,
+      "uses": 0,
+      "createdAtMs": 1759998000000,
+      "expiresAtMs": 1762000000000,
+      "revokedAtMs": 1759999500000
+    }
+  ],
+  "settings": {
+    "allowGuests": true,
+    "trustedOrigins": [
+      "https://app.armadra.test"
+    ],
+    "rateLimits": {
+      "token": 600
+    },
+    "displayName": "Fixture relay",
+    "trustedProxy": {
+      "proxies": [
+        "10.0.0.0/8"
+      ],
+      "prefer": "forwarded-for"
+    }
+  }
+}

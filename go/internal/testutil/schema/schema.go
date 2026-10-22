@@ -1,7 +1,7 @@
 // Package schema 用 JSON Schema 校验 cloud-api 夹具的形状。只在测试里用。
 //
 // schema 取自协议包导出的 cloud-openapi.json：每个过程（operationId）的 200 响应。
-// 这一批只证明夹具能通过自校验；G2 的控制核服务会拿它校验真实的响应。
+// 夹具的输入与输出都用它校验；控制核的 HTTP 层测试也拿它校验真实的响应。
 package schema
 
 import (
@@ -18,12 +18,32 @@ import (
 // OpenAPI 是编译好的过程输出 schema。
 type OpenAPI struct {
 	outputs map[string]*jsonschema.Schema
+	inputs  map[string]*inputSchemas
+}
+
+// inputSchemas 是一个过程的入参 schema：路径 / query 参数各一个，加上请求体（有就有）。
+type inputSchemas struct {
+	params map[string]*jsonschema.Schema
+	// required 是必填参数名。
+	required []string
+	body     *jsonschema.Schema
 }
 
 type document struct {
 	Paths map[string]map[string]struct {
 		OperationID string `json:"operationId"`
-		Responses   map[string]struct {
+		Parameters  []struct {
+			Name     string          `json:"name"`
+			In       string          `json:"in"`
+			Required bool            `json:"required"`
+			Schema   json.RawMessage `json:"schema"`
+		} `json:"parameters"`
+		RequestBody *struct {
+			Content map[string]struct {
+				Schema json.RawMessage `json:"schema"`
+			} `json:"content"`
+		} `json:"requestBody"`
+		Responses map[string]struct {
 			Content map[string]struct {
 				Schema json.RawMessage `json:"schema"`
 			} `json:"content"`
@@ -65,7 +85,39 @@ func Load(t testing.TB, path string) *OpenAPI {
 			urls[op.OperationID] = url
 		}
 	}
-	out := &OpenAPI{outputs: map[string]*jsonschema.Schema{}}
+	out := &OpenAPI{outputs: map[string]*jsonschema.Schema{}, inputs: map[string]*inputSchemas{}}
+	for _, methods := range doc.Paths {
+		for _, op := range methods {
+			in := &inputSchemas{params: map[string]*jsonschema.Schema{}}
+			compile := func(name string, raw json.RawMessage) *jsonschema.Schema {
+				url := "https://armadra.test/openapi/in/" + op.OperationID + "/" + name + ".json"
+				inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := compiler.AddResource(url, inst); err != nil {
+					t.Fatal(err)
+				}
+				compiled, err := compiler.Compile(url)
+				if err != nil {
+					t.Fatalf("%s 的入参 %s 编译失败：%v", op.OperationID, name, err)
+				}
+				return compiled
+			}
+			for _, param := range op.Parameters {
+				in.params[param.Name] = compile("param-"+param.Name, param.Schema)
+				if param.Required {
+					in.required = append(in.required, param.Name)
+				}
+			}
+			if op.RequestBody != nil {
+				if body, ok := op.RequestBody.Content["application/json"]; ok {
+					in.body = compile("body", body.Schema)
+				}
+			}
+			out.inputs[op.OperationID] = in
+		}
+	}
 	for id, url := range urls {
 		compiled, err := compiler.Compile(url)
 		if err != nil {
@@ -115,4 +167,49 @@ func (s Sample) All() []json.RawMessage {
 		return []json.RawMessage{s.Output}
 	}
 	return nil
+}
+
+// ValidateInput 校验一个过程的入参（JSON 对象）：参数名对应的键按参数 schema 校验，其余的键整体
+// 按请求体 schema 校验；必填参数不能缺。夹具里的 input 就是这个形状。
+func (o *OpenAPI) ValidateInput(op string, instance []byte) error {
+	in, ok := o.inputs[op]
+	if !ok {
+		return fmt.Errorf("没有过程 %s", op)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(instance, &fields); err != nil {
+		return err
+	}
+	for _, name := range in.required {
+		if _, present := fields[name]; !present {
+			return fmt.Errorf("缺少必填参数 %s", name)
+		}
+	}
+	rest := map[string]json.RawMessage{}
+	for key, raw := range fields {
+		schema, isParam := in.params[key]
+		if !isParam {
+			rest[key] = raw
+			continue
+		}
+		value, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+		if err != nil {
+			return err
+		}
+		if err := schema.Validate(value); err != nil {
+			return fmt.Errorf("参数 %s：%w", key, err)
+		}
+	}
+	if in.body == nil {
+		return nil
+	}
+	body, err := json.Marshal(rest)
+	if err != nil {
+		return err
+	}
+	value, err := jsonschema.UnmarshalJSON(bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	return in.body.Validate(value)
 }

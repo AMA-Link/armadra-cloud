@@ -17,7 +17,7 @@ func TestGenerateIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"claims.go", "constants.go", "errors.go", "routes.go", "tunnel.go"}
+	want := []string{"claims.go", "constants.go", "errors.go", "inputs.go", "routes.go", "tunnel.go"}
 	if len(first) != len(want) {
 		t.Fatalf("生成了 %d 个文件，应为 %d 个", len(first), len(want))
 	}
@@ -83,5 +83,31 @@ func TestNestedObjectsWithTheSameShapeShareAType(t *testing.T) {
 func TestDuplicateKeysAreRejected(t *testing.T) {
 	if _, err := parseOrdered([]byte(`{"a":1,"a":2}`)); err == nil {
 		t.Fatal("重复的键应报错")
+	}
+}
+
+func TestInputsMergeParametersAndBody(t *testing.T) {
+	root, err := parseOrdered([]byte(`{"paths":{"/v1/x/{id}":{"post":{"operationId":"x.y",
+		"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},
+		{"name":"n","in":"query","required":false,"schema":{"type":"integer","default":3}}],
+		"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object",
+		"properties":{"a":{"type":"string"}},"required":["a"]}}}}}},
+		"/v1/z":{"get":{"operationId":"z.w","parameters":[{"name":"e","in":"query","required":true,"schema":{"type":"string","format":"email"}}]}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := genInputs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	for _, want := range []string{`"x.y": &schema.Schema{`, `{Name: "id"`, `{Name: "n"`, `{Name: "a"`, `Required: []string{"id", "a"}`,
+		`var UnsupportedInputs = map[string]string{`, `"z.w": "format"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("生成物缺 %q：\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `"z.w": &schema.Schema`) {
+		t.Error("不支持的过程不该进 RouteInputs")
 	}
 }

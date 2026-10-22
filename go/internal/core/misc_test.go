@@ -1,0 +1,213 @@
+package core_test
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/AMA-Link/armadra-cloud/go/internal/core"
+	"github.com/AMA-Link/armadra-cloud/go/internal/core/coretest"
+	"github.com/AMA-Link/armadra-cloud/go/internal/store"
+)
+
+func TestTrafficSummary(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	traffic := core.NewTraffic(e.h.Context)
+	row := func(subject string, bucket int64) store.TrafficRow {
+		return store.TrafficRow{BucketStartMs: bucket * store.HourMs, Node: "n", SourceID: sourceID, Subject: subject, Kind: "ws", Connections: 1}
+	}
+	e.must(e.h.Context.Ports.Traffic.Upsert(e.ctx, "t1", []store.TrafficRow{row("acct:alice", 1), row("guest:1111111111111111:ab", 2)}))
+
+	input := core.TrafficSummaryInput{FromMs: 0, ToMs: 10 * store.HourMs}
+	rows, err := traffic.Summary(e.ctx, owner, input)
+	e.must(err)
+	eq(t, len(rows), 2, "账号本人看全部")
+	guest := core.Caller{Subject: "guest:1111111111111111:ab", DeviceID: "d", Role: core.RoleGuest, LinkID: "1111111111111111"}
+	rows, err = traffic.Summary(e.ctx, guest, input)
+	e.must(err)
+	eq(t, len(rows), 1, "访客只看自己的")
+	rows, err = traffic.Summary(e.ctx, owner, core.TrafficSummaryInput{FromMs: 10 * store.HourMs, ToMs: 20 * store.HourMs})
+	e.must(err)
+	if rows == nil || len(rows) != 0 {
+		t.Fatalf("没有行时答空数组而不是 null：%v", rows)
+	}
+	_, err = traffic.Summary(e.ctx, owner, core.TrafficSummaryInput{FromMs: 5, ToMs: 5})
+	eq(t, code(err), "bad_request", "from ≥ to")
+}
+
+func TestTrafficSummaryRefusesMoreThanTheCap(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	var rows []store.TrafficRow
+	for i := 0; i < core.TrafficMaxRows+1; i++ {
+		rows = append(rows, store.TrafficRow{BucketStartMs: store.HourMs, Node: fmt.Sprintf("n%05d", i), SourceID: sourceID, Subject: "acct:alice", Kind: "ws"})
+	}
+	e.must(e.h.Context.Ports.Traffic.Upsert(e.ctx, "t1", rows))
+	_, err := core.NewTraffic(e.h.Context).Summary(e.ctx, owner, core.TrafficSummaryInput{FromMs: 0, ToMs: 2 * store.HourMs})
+	eq(t, code(err), "bad_request", "超过 10,000 行")
+	got, err := core.NewTraffic(e.h.Context).Summary(e.ctx, owner, core.TrafficSummaryInput{FromMs: 0, ToMs: 2 * store.HourMs, SourceID: "ffffffffffffffffffffffffffffffff"})
+	e.must(err)
+	eq(t, len(got), 0, "按别的源过滤")
+}
+
+func TestRevocationByJTIShape(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	sources := e.register(owner, sourceID)
+	now := e.h.Clock.Ms()
+	revoked := func(jti string) bool {
+		r, err := core.IsRevokedJTI(e.ctx, e.h.Context, jti, now)
+		e.must(err)
+		return r
+	}
+	grant, err := sources.Assertion(e.ctx, owner, sourceID, nil)
+	e.must(err)
+	relayJTI := claimsOf(t, grant.RelayToken)["jti"].(string)
+	if revoked(relayJTI) {
+		t.Fatal("有效的中继令牌")
+	}
+	if !revoked("t.ffffffffffffffffffffffffffffffff.abc") || revoked("t."+sourceID+".abc") {
+		t.Fatal("隧道令牌按源判断")
+	}
+	for _, jti := range []string{"", "x", "t", "t.", "r.", "a.", "r.d", "zz.a.b", "unknown.shape"} {
+		want := jti == "t" || jti == "t." || jti == "r." || jti == "a." || jti == "r.d"
+		if got := revoked(jti); got != want {
+			t.Errorf("jti %q 撤销 = %v，应为 %v", jti, got, want)
+		}
+	}
+	// 设备过期 → 中继令牌失效。
+	expired, err := core.IsRevokedJTI(e.ctx, e.h.Context, relayJTI, now+31*24*3600*1000)
+	e.must(err)
+	if !expired {
+		t.Fatal("设备过期后中继令牌应失效")
+	}
+	// 源撤销 → 中继令牌失效。
+	e.must(sources.Revoke(e.ctx, owner, sourceID))
+	if !revoked(relayJTI) {
+		t.Fatal("源撤销后中继令牌应失效")
+	}
+}
+
+func TestReplayCache(t *testing.T) {
+	cache := core.NewReplayCache(1000, 3)
+	if cache.Seen("a", 0, 100) || !cache.Seen("a", 0, 200) {
+		t.Fatal("第一次记下，第二次是重放")
+	}
+	if cache.Seen("a", 0, 1200) {
+		t.Fatal("过了保留时间不再算重放")
+	}
+	// 到上限时先清过期的，再淘汰最早记下的。
+	cache = core.NewReplayCache(1000, 3)
+	for i, id := range []string{"a", "b", "c"} {
+		if cache.Seen(id, 0, int64(100+i)) {
+			t.Fatal("新键")
+		}
+	}
+	if cache.Seen("d", 0, 110) {
+		t.Fatal("新键")
+	}
+	if cache.Seen("a", 0, 111) { // a 是最早的，被淘汰了
+		t.Fatal("最早的应被淘汰")
+	}
+	if !cache.Seen("d", 0, 112) {
+		t.Fatal("d 还在")
+	}
+}
+
+func TestMeStreamTickets(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	stream := core.NewMeStream(e.h.Context)
+
+	ticket := stream.Ticket(owner)
+	eq(t, ticket.ExpiresAtMs, e.h.Clock.Ms()+30_000, "票 30 秒")
+	e.h.Clock.Set(e.h.Clock.Ms() + 30_000)
+	_, ok, err := stream.Redeem(e.ctx, ticket.Ticket)
+	e.must(err)
+	if ok {
+		t.Fatal("过期的票不能兑换")
+	}
+	e.h.Clock.Set(coretest.DefaultNow)
+	// 设备被撤销之后票作废。
+	ticket = stream.Ticket(owner)
+	_, err = core.RevokeDevice(e.ctx, e.h.Context, owner.DeviceID)
+	e.must(err)
+	if _, ok, _ := stream.Redeem(e.ctx, ticket.Ticket); ok {
+		t.Fatal("设备失效后票不能兑换")
+	}
+	valid, err := stream.StillValid(e.ctx, owner)
+	e.must(err)
+	if valid {
+		t.Fatal("设备已撤销")
+	}
+	// 票存哈希：明文不在内存表里是实现细节，这里只确认随机且不重复。
+	a, b := stream.Ticket(owner), stream.Ticket(owner)
+	if a.Ticket == b.Ticket || len(a.Ticket) != 43 {
+		t.Fatalf("票应随机：%q %q", a.Ticket, b.Ticket)
+	}
+	stream.Clear()
+	if _, ok, _ := stream.Redeem(e.ctx, a.Ticket); ok {
+		t.Fatal("Clear 之后票作废")
+	}
+}
+
+func TestMeStreamDeliversAccessRevokedOnlyToThatLink(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	sources := e.register(owner, sourceID)
+	links := core.NewLinks(e.h.Context, sources)
+	stream := core.NewMeStream(e.h.Context)
+	mk := func() (core.Caller, core.LinkAccepted, string) {
+		created, err := links.Create(e.ctx, owner, linkInput(e))
+		e.must(err)
+		accepted, err := links.Accept(e.ctx, core.AcceptInput{LinkID: created.LinkID, Secret: created.Secret}, "ip")
+		e.must(err)
+		guest, err := core.NewAuthenticator(e.h.Context).Authenticate(e.ctx, "Bearer "+accepted.GuestSession.AccessToken)
+		e.must(err)
+		return guest, accepted, created.LinkID
+	}
+	guestA, _, linkA := mk()
+	guestB, _, _ := mk()
+	var gotA, gotB, gotOwner []string
+	stream.Attach(guestA, func(ev core.Event) { gotA = append(gotA, fmt.Sprintf("%T", ev)) })
+	stream.Attach(guestB, func(ev core.Event) { gotB = append(gotB, fmt.Sprintf("%T", ev)) })
+	detach := stream.Attach(owner, func(ev core.Event) { gotOwner = append(gotOwner, fmt.Sprintf("%T", ev)) })
+	e.must(links.Revoke(e.ctx, owner, linkA))
+	eq(t, fmt.Sprint(gotA), "[core.AccessRevoked]", "被撤销的那条链接的访客")
+	eq(t, fmt.Sprint(gotB), "[]", "别的链接的访客")
+	eq(t, fmt.Sprint(gotOwner), "[]", "accessRevoked 带 audience，不发给 owner")
+	detach()
+	e.h.Context.Emit(core.NewSourceRevoked(sourceID), nil)
+	eq(t, fmt.Sprint(gotOwner), "[]", "退订之后不再收到")
+}
+
+func TestEventBusIsolatesPanickingListeners(t *testing.T) {
+	bus := core.NewEventBus()
+	var got []string
+	bus.Subscribe(func(core.Event, *core.Audience) { panic("订阅者出错") })
+	off := bus.Subscribe(func(ev core.Event, _ *core.Audience) { got = append(got, ev.EventSource()) })
+	bus.Emit(core.NewSourceRevoked("a"), nil)
+	off()
+	bus.Emit(core.NewSourceRevoked("b"), nil)
+	eq(t, fmt.Sprint(got), "[a]", "出错的订阅者不影响别的，退订后不再收")
+}
+
+func TestIdentityFingerprintIs52LowercaseBase32(t *testing.T) {
+	fp := core.IdentityFingerprint(make([]byte, 32))
+	eq(t, len(fp), 52, "长度")
+	for _, r := range fp {
+		if !(r >= 'a' && r <= 'z' || r >= '2' && r <= '7') {
+			t.Fatalf("字符 %q 不在小写 base32 字母表里", r)
+		}
+	}
+}
+
+func TestErrorMessagesAreFixedEnglishPhrases(t *testing.T) {
+	eq(t, core.MessageOf("account_locked"), "Too many failed sign-in attempts; try again later", "account_locked")
+	eq(t, core.MessageOf("not_implemented"), "not_implemented", "没有专门文案的码答码本身")
+	eq(t, core.MessageOf("bad_request"), "Bad request", "bad_request")
+	eq(t, core.Fail("not_found").Error(), "not_found", "Error()")
+	wait := core.FailAfter("rate_limited", 1500_001*1000) // 1500.001 ms
+	eq(t, wait.RetryAfter.Milliseconds(), int64(1501), "等待向上取整到毫秒")
+	eq(t, core.FailAfter("rate_limited", -5).RetryAfter.Milliseconds(), int64(0), "负数当 0")
+}

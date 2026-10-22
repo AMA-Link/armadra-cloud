@@ -470,6 +470,29 @@ func TestSignRequiresKid(t *testing.T) {
 	}
 }
 
+// SignPayload 把载荷原样放进令牌（不转义 <>&，字段顺序由调用方定），签名照样验得过。
+func TestSignPayloadKeepsBytes(t *testing.T) {
+	_, source := testutil.Keys(t)
+	payload := `{"z":1,"a":"<&>"}`
+	token, err := jose.SignPayload(source.Private, jose.Header{Kid: "k", Typ: "t"}, []byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, err := jose.Split(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(parts.Payload) != payload {
+		t.Fatalf("载荷应原样：%s", parts.Payload)
+	}
+	if !ed25519.Verify(source.Public, parts.SigningInput, parts.Signature) {
+		t.Fatal("签名应验得过")
+	}
+	if _, err := jose.SignPayload(source.Private, jose.Header{}, []byte(payload)); err == nil {
+		t.Fatal("头里缺 kid 应报错")
+	}
+}
+
 // IsRevoked 缺了要报错，不能悄悄跳过撤销检查；Keys 与 Schema 缺了也是报错而不是 panic。
 func TestVerifyRequiresOptions(t *testing.T) {
 	e := newEnv(t)
