@@ -18,17 +18,16 @@ import (
 // 端到端通道管道的单元测试：假 netpoll.Conn 加真隧道（假传输），对应 e2e-pipe.ts 的行为。
 
 type fakeConn struct {
-	mu          sync.Mutex
-	writes      [][]byte
-	acks        []int
-	paused      bool
-	pauses      int
-	resumes     int
-	closed      bool
-	afterFlush  bool
-	autoSent    bool
-	h           netpoll.Handler
-	closeAction func()
+	mu         sync.Mutex
+	writes     [][]byte
+	acks       []int
+	paused     bool
+	pauses     int
+	resumes    int
+	closed     bool
+	afterFlush bool
+	autoSent   bool
+	h          netpoll.Handler
 }
 
 func (f *fakeConn) Write(b []byte, ack int) bool {

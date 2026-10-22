@@ -52,9 +52,7 @@ func canonical(value string) (string, bool) {
 		if tail[0] == '/' || tail[0] == '\\' {
 			tail = tail[1:]
 		}
-		if strings.HasPrefix(tail, "?") {
-			tail = tail[1:] // query 必须为空：要么到头，要么紧跟 #
-		}
+		tail = strings.TrimPrefix(tail, "?") // query 必须为空：要么到头，要么紧跟 #
 		if tail != "#" && tail != "" {
 			return "", false
 		}

@@ -38,7 +38,6 @@ type FakeCore struct {
 	mu       sync.Mutex
 	opens    []gen.OpenPayload
 	goaways  []string
-	requests int
 	closed   chan struct{}
 	closeErr error
 

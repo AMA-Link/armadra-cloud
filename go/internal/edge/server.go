@@ -48,7 +48,6 @@ type Edge struct {
 	o      Options
 	policy *Policy
 	wheel  *wheel
-	nextID uint32
 	own    bool
 	once   sync.Once
 }
