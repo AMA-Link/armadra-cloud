@@ -14,11 +14,18 @@ it("随包的迁移编号从 1 起连续，SQL 不带事务语句", () => {
     "0001_control_init",
     "0002_relay_control",
     "0003_traffic",
+    "0004_saas_accounts",
+    "0005_saas_teams",
+    "0006_saas_hosts",
+    "0007_saas_grants",
+    "0008_saas_audit",
+    "0009_saas_ops",
   ]);
   expect(() => checkAvailable(migrations)).not.toThrow();
   for (const migration of migrations) {
     expect(migration.sha384).toMatch(/^[0-9a-f]{96}$/);
-    expect(migration.sql).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\b/im);
+    // 事务语句带分号；plpgsql 函数体里的 BEGIN 没有分号，不算。
+    expect(migration.sql).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/im);
   }
 });
 

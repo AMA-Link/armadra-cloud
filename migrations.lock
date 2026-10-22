@@ -2,7 +2,13 @@
   "packages/control-store-postgres/migrations": {
     "0001_control_init.sql": "9b3c961eccbafdbc3b13e7a03f9c639e31473b4021268fc9477e7834d25a9259",
     "0002_relay_control.sql": "a4c5904211f5024e7bdb15100c5edce56e999bbe93cd7ca04521736b9f49cf71",
-    "0003_traffic.sql": "56ac73f63e768d1ba9ea49dfdf272aa063ea4aa09982aa7e457f24c33dd9dce9"
+    "0003_traffic.sql": "56ac73f63e768d1ba9ea49dfdf272aa063ea4aa09982aa7e457f24c33dd9dce9",
+    "0004_saas_accounts.sql": "4ef57eb555114dff12721382a6d83ebc1405dd140f28ce06a8462c59acc52f90",
+    "0005_saas_teams.sql": "6e8ad04d22699cc94d0b0e3335256af66708393792a9864ad8e5480cf7f01f18",
+    "0006_saas_hosts.sql": "6a6874e85f6ad542e3dd6ae02a727e241f34b12df14e22a25ac98b2e09694175",
+    "0007_saas_grants.sql": "094507b6945f5c34ab08c140a004c21d3f61206a3200d30451159bea288e107b",
+    "0008_saas_audit.sql": "61adadf8c99fe99ab0b5ddb7182d60621b79c5bb2a92a7340340a8741b78e1d8",
+    "0009_saas_ops.sql": "126564ad74dc8da0f4a9d2d1124f6ff79cb1180d421b34849d06ca498f64b6bf"
   },
   "packages/control-store-sql/migrations": {
     "0001_init.sql": "b72ee6d046fd94a97c62d0b187d1c4281fab922ad74eca498df2dd58afa8e64a",
