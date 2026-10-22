@@ -210,6 +210,10 @@ type Backend interface {
 	CreateTenant(ctx context.Context, tenantID string, tenant Tenant) error
 	// AddAccount 直接放一个账号（建租户与测试装配用）。
 	AddAccount(ctx context.Context, tenantID string, account AccountRecord) error
+	// AddSigningKey 加一把签名钥（建租户、导入时用）。
+	AddSigningKey(ctx context.Context, tenantID string, key SigningKeyRecord) error
+	// RotateKey 轮换（rotate-key）：追加新钥，其余未退役的定在一小时后退役，早已退役的删掉。答新 kid。
+	RotateKey(ctx context.Context, tenantID string, nowMs int64) (kid string, err error)
 	ImportTenant(ctx context.Context, tenantID string, snapshot TenantSnapshot) error
 	ExportTenant(ctx context.Context, tenantID string) (TenantSnapshot, error)
 	// Revision 是租户当前的修订号（跨进程变更检测）；没有这个租户 ok 为 false。
