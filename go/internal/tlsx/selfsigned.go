@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"errors"
+	"io/fs"
 	"math/big"
 	"net"
 	"os"
@@ -126,7 +128,13 @@ func tlsErr(msg string) error { return &Error{Msg: msg} }
 
 func loadOrCreateCA(dir string, now time.Time) (*ca, error) {
 	certFile, keyFile := filepath.Join(dir, CACert), filepath.Join(dir, CAKey)
-	if exists(certFile) || exists(keyFile) {
+	certThere, certErr := present(certFile)
+	keyThere, keyErr := present(keyFile)
+	if certErr != nil || keyErr != nil {
+		// 读不到不等于没有：绝不在这种情况下重建并覆盖已有的 CA。
+		return nil, tlsErr("自签 CA 读不出来，拒绝启动：检查 tls/ca.crt 与 tls/ca.key")
+	}
+	if certThere || keyThere {
 		c, err := loadCA(certFile, keyFile)
 		if err != nil {
 			return nil, err
@@ -178,9 +186,16 @@ func loadCA(certFile, keyFile string) (*ca, error) {
 	return &ca{certPEM: certData, cert: cert, key: key}, nil
 }
 
-func exists(path string) bool {
+// present 区分「不存在」与「读不到」：只有确定不存在才答 false、nil。
+func present(path string) (bool, error) {
 	_, err := os.Stat(path)
-	return err == nil
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	}
+	return false, err
 }
 
 // usableLeaf 读已有叶证书；剩余不足、不是这张 CA 签的、私钥对不上或没覆盖 names 时答 nil。

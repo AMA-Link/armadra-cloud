@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -230,12 +231,17 @@ func challengeHandler(ch *Challenges, redirectOrigin string) http.Handler {
 }
 
 func loadOrCreateAccountKey(file string) (*ecdsa.PrivateKey, error) {
-	if data, err := os.ReadFile(file); err == nil {
+	data, err := os.ReadFile(file)
+	switch {
+	case err == nil:
 		key, err := parseECKey(data)
 		if err != nil {
 			return nil, tlsErr("ACME 账户密钥读不出来：检查 acme/account.key")
 		}
 		return key, nil
+	case !errors.Is(err, fs.ErrNotExist):
+		// 读不到不等于没有：绝不覆盖已有的账户密钥。
+		return nil, tlsErr("ACME 账户密钥读不出来：检查 acme/account.key")
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
