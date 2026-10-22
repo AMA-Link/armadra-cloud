@@ -325,7 +325,7 @@ func TestBackpressure(t *testing.T) {
 func TestReconnect(t *testing.T) {
 	t.Run("源断开 → 路由删除、4404；重连后路由更新、通道恢复", func(t *testing.T) {
 		h := newHarness(t, harnessOptions{})
-		core := h.core(relayenv.CoreOptions{Capabilities: []string{"e2e"}})
+		// 先订阅再连：sourceOnline 是隧道就绪之后异步发的。
 		var emu sync.Mutex
 		var events []control.PresenceType
 		h.env.Control.Presence().Subscribe(func(e control.PresenceEvent) {
@@ -333,6 +333,7 @@ func TestReconnect(t *testing.T) {
 			events = append(events, e.Type)
 			emu.Unlock()
 		})
+		core := h.core(relayenv.CoreOptions{Capabilities: []string{"e2e"}})
 		first := h.channel(h.relayToken(nil))
 		if _, _, open := first.outcome(); !open {
 			t.Fatal("通道应开成")
@@ -355,10 +356,18 @@ func TestReconnect(t *testing.T) {
 		if _, _, open := h.channel(h.relayToken(nil)).outcome(); !open {
 			t.Fatal("重连后通道应恢复")
 		}
+		eventually(t, "在线事件", func() bool {
+			emu.Lock()
+			defer emu.Unlock()
+			return len(events) == 3
+		})
 		emu.Lock()
 		defer emu.Unlock()
-		if len(events) != 2 || events[0] != control.PresenceSourceOffline || events[1] != control.PresenceSourceOnline {
-			t.Fatalf("在线事件 %v", events)
+		want := []control.PresenceType{control.PresenceSourceOnline, control.PresenceSourceOffline, control.PresenceSourceOnline}
+		for i := range want {
+			if events[i] != want[i] {
+				t.Fatalf("在线事件 %v", events)
+			}
 		}
 	})
 
