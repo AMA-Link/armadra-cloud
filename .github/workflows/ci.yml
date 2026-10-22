@@ -54,7 +54,7 @@ jobs:
               [ -z "$f" ] && continue
               case "$f" in
                 go/go.mod | go/go.sum) code=true; go=true ;;
-                go/*) go=true ;;
+                go/*) code=true; go=true ;; # 镜像（apps/relay/Dockerfile）由 go/ 构建：只改 go/ 也要构建并冒烟
                 packages/control-store-*/* | packages/control-core/src/* | packages/cloud-shared/src/jwt.ts | apps/relay/src/personal/state.ts | apps/relay/src/personal/snapshot.ts) code=true; go=true ;;
                 packages/platform-protocol/schema/* | packages/platform-protocol/fixtures/* | packages/platform-protocol/src/identity-vectors/* | packages/control-core/src/common-passwords.txt | scripts/go-check.mjs | .github/workflows/* | package.json | repo.rules.json) code=true; go=true ;;
                 THIRD_PARTY_NOTICES.md | docs/contracts/*) code=true ;;

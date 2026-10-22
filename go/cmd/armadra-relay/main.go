@@ -1,6 +1,6 @@
 // armadra-relay 是中继的命令行：personal（个人中转的全部子命令）、health、version、help，
 // 另有给测试与 bench 用的 dev（数据面 + 内存控制面 + 指定的 JWKS 文件 + 回环明文监听）。
-// SaaS 节点（saas serve）随 G5 加入。
+// saas serve 现在是与 Node 版空壳一致的占位（internal/saas），G5 换成真正的 SaaS 中继节点。
 package main
 
 import (
@@ -25,6 +25,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/personal"
+	"github.com/AMA-Link/armadra-cloud/go/internal/saas"
 	"github.com/AMA-Link/armadra-cloud/go/internal/traffic"
 )
 
@@ -66,8 +67,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, personal.Usage)
 		return 0
 	case "saas":
-		fmt.Fprintf(stderr, "saas 中继还没有提供：现在只有 personal\n\n%s\n", personal.Usage)
-		return personal.ExitUsage
+		return saas.Run(args[1:], personal.EnvFromOS(), version, personal.Usage, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "未知命令：%s\n\n%s\n", strings.Join(args, " "), personal.Usage)
 	return personal.ExitUsage

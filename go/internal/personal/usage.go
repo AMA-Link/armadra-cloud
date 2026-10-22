@@ -5,6 +5,7 @@ const Usage = `用法: armadra-relay <命令> [选项]
 
   personal init|serve|status|passwd|rotate-key|links|traffic|migrate|backup|doctor
                                                        单人中转；缺省不带外部数据库，多节点可选 PostgreSQL / Redis
+  saas serve                                           多租户中继（配置走 RELAY_* 环境变量）
   dev --jwks F --issuer ISS [--listen H:P]             开发装配：只有数据面，内存控制面，回环明文监听
   health                                               探活本机 /health（镜像的 HEALTHCHECK 用）
   version                                              打印版本
