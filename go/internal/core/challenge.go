@@ -263,6 +263,9 @@ func NewChallengeGate(options ChallengeGateOptions) (*ChallengeGate, error) {
 	if len(scope) == 0 {
 		return nil, errors.New("挑战范围为空")
 	}
+	if options.Verifier == nil {
+		return nil, errors.New("挑战缺 Verifier")
+	}
 	var hostnames []string
 	for _, item := range options.Hostnames {
 		if item = strings.ToLower(strings.TrimSpace(item)); item != "" {
@@ -289,9 +292,14 @@ func challengeTokenHash(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (g *ChallengeGate) remember(hash string, nowMs int64) {
+// claim 是「查」和「记」合成的一步：这个令牌哈希还没用过就占下并答 true；用过（且未过期）答 false。
+// 并发的同一令牌只有一个能占到，去问提供方。
+func (g *ChallengeGate) claim(hash string, nowMs int64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if until, ok := g.seen[hash]; ok && until > nowMs {
+		return false
+	}
 	if len(g.seen) >= maxSeen {
 		for key, until := range g.seen {
 			if until <= nowMs {
@@ -303,13 +311,7 @@ func (g *ChallengeGate) remember(hash string, nowMs int64) {
 		g.seen = map[string]int64{}
 	}
 	g.seen[hash] = nowMs + ChallengeTokenTTL.Milliseconds()
-}
-
-func (g *ChallengeGate) replayed(hash string, nowMs int64) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	until, ok := g.seen[hash]
-	return ok && until > nowMs
+	return true
 }
 
 func (g *ChallengeGate) reject(procedure ChallengeScope, reasons []string) error {
@@ -346,11 +348,10 @@ func (g *ChallengeGate) Check(ctx context.Context, procedure ChallengeScope, cha
 	}
 	nowMs := g.now().UnixMilli()
 	hash := challengeTokenHash(token)
-	if g.replayed(hash, nowMs) {
+	// 查与记是一步：并发的同一令牌只有一个去问提供方，其余按重放拒绝。
+	if !g.claim(hash, nowMs) {
 		return g.reject(procedure, []string{"replayed"})
 	}
-	// 先占位：并发的同一令牌只有一个去问提供方。
-	g.remember(hash, nowMs)
 	request := VerifyRequest{
 		Token: token, RemoteIP: ip, IdempotencyKey: newUUID(),
 		Action: ChallengeActions[procedure], Hostnames: g.hostnames,
