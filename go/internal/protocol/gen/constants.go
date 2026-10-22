@@ -7,7 +7,7 @@ package gen
 
 const (
 	ProtocolMajor                            = 1
-	ProtocolMinor                            = 3
+	ProtocolMinor                            = 4
 	PathTunnel                               = "/t/v1"
 	PathInternode                            = "/x/v1"
 	PathPlatformWellKnown                    = "/.well-known/armadra-platform"
