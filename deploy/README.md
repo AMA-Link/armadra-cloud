@@ -47,7 +47,7 @@
 | `--database-url-file` / `RELAY_DATABASE_URL_FILE`             |      | 从文件读连接串（口令不出现在进程参数里）                                                                                          |
 | `--database-schema` / `RELAY_DATABASE_SCHEMA`                 |      | 用哪个 schema，缺省连接的缺省 schema                                                                                              |
 | `--control` / `RELAY_CONTROL`                                 |      | `memory`（缺省，单节点）/ `redis` / `postgres`（多节点）                                                                          |
-| `--redis-url` / `RELAY_REDIS_URL`                             |      | `redis://…`；`--control redis` 必填                                                                                               |
+| `--redis-url` / `RELAY_REDIS_URL`                             |      | `redis://…`；`--control redis` 必填，要 Redis 7 以上                                                                              |
 | `--node-id` / `RELAY_NODE_ID`                                 |      | 本节点的名字，多节点时各不相同，缺省 `--host`                                                                                     |
 | `--host` / `RELAY_HOST`                                       | 是   | 对外的 IP 或域名（issuer 与证书 SAN）                                                                                             |
 | `--port` / `RELAY_PORT`                                       |      | 对外端口，缺省 8443（443 时 issuer 省略端口）                                                                                     |

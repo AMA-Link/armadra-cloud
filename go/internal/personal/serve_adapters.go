@@ -9,8 +9,6 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
-	"github.com/AMA-Link/armadra-cloud/go/internal/store"
-	"github.com/AMA-Link/armadra-cloud/go/internal/traffic"
 )
 
 // limiterAdapter 把控制面的限流器接成控制核要的 RateLimiter。
@@ -54,21 +52,6 @@ func (a relayAdapter) CloseTunnel(sourceID string) {
 
 func (a relayAdapter) Disconnect(f core.ConnectionFilter) {
 	a.disconnect(edge.ConnectionFilter{SourceID: f.SourceID, SubjectPrefix: f.SubjectPrefix})
-}
-
-// trafficWriter 把计量器的一批行加进存储（同键相加）。
-func trafficWriter(ts store.TrafficStore) traffic.Writer {
-	return func(ctx context.Context, rows []traffic.Row) error {
-		out := make([]store.TrafficRow, len(rows))
-		for i, row := range rows {
-			out[i] = store.TrafficRow{
-				BucketStartMs: row.BucketStartMs, Node: row.Node, SourceID: row.SourceID,
-				Subject: row.Subject, DeviceID: row.DeviceID, Kind: string(row.Kind),
-				Connections: row.Connections, BytesToSource: row.BytesToSource, BytesToClient: row.BytesToClient,
-			}
-		}
-		return ts.Upsert(ctx, store.DefaultTenant, out)
-	}
 }
 
 // storedRateLimits 是租户设置里的限流额度（settings.rateLimits）。

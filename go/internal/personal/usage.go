@@ -34,7 +34,7 @@ serve:
   --database-url-file F    从文件读连接串（或 RELAY_DATABASE_URL_FILE），口令不出现在进程参数里
   --database-schema S      用哪个 schema（或 RELAY_DATABASE_SCHEMA），默认连接的缺省 schema
   --control C              memory | redis | postgres（或 RELAY_CONTROL），默认 memory；多节点选 redis 或 postgres
-  --redis-url URL          Redis 地址（或 RELAY_REDIS_URL），--control redis 用
+  --redis-url URL          Redis 地址（或 RELAY_REDIS_URL），--control redis 用；要 Redis 7 以上
   --node-id ID             本节点的名字（或 RELAY_NODE_ID），多节点时各不相同，默认 --host
   --host HOST              对外的 IP 或域名（或 RELAY_HOST）
   --port PORT              端口，默认 8443

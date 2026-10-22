@@ -26,6 +26,8 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
+	"github.com/AMA-Link/armadra-cloud/go/internal/store/pgtest"
+	"github.com/AMA-Link/armadra-cloud/go/internal/traffic"
 )
 
 // syncBuffer 是并发安全的日志去处。
@@ -258,18 +260,18 @@ func TestServeRefusals(t *testing.T) {
 			t.Fatalf("应是 not_initialized：%v", err)
 		}
 	})
-	t.Run("多节点控制面需要 G3a", func(t *testing.T) {
+	t.Run("Redis 连不上拒绝启动且不带地址", func(t *testing.T) {
 		dir := initAt(t, "http://127.0.0.1:1")
 		options, err := ParseServe([]string{
 			"--data-dir", dir, "--host", "127.0.0.1", "--tls", "plain", "--listen", "127.0.0.1:0",
-			"--public-origin", "http://127.0.0.1:1", "--control", "redis", "--redis-url", "redis://127.0.0.1:1",
+			"--public-origin", "http://127.0.0.1:1", "--control", "redis", "--redis-url", "redis://secretuser:secretpass@127.0.0.1:1",
 		}, Env{}, dir)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_, err = Serve(context.Background(), options, ServeDeps{Log: obs.Nop()})
-		if err == nil || !strings.Contains(err.Error(), "G3a") {
-			t.Fatalf("应提示需要 G3a：%v", err)
+		if err == nil || strings.Contains(err.Error(), "secretpass") || !strings.Contains(err.Error(), "Redis") {
+			t.Fatalf("应拒绝且不带口令：%v", err)
 		}
 	})
 }
@@ -527,7 +529,7 @@ func TestPresenceFlush(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pres := running.Cluster.Plane.Presence()
+	pres := running.Cluster.Presence()
 	if err := pres.Publish(ctx, control.PresenceEvent{Type: control.PresenceSourceOnline, SourceID: "s1", CoreVersion: "2.0.0", AtMs: nowMs + 5}); err != nil {
 		t.Fatal(err)
 	}
@@ -547,21 +549,30 @@ func TestPresenceFlush(t *testing.T) {
 	}
 }
 
-// 流量统计经适配器写进存储的同一张表。
-func TestTrafficWriterAdapter(t *testing.T) {
+// 流量计量器落库到存储的同一张表（同键相加）；保留天数 0 时不计量。
+func TestTrafficMeterFlushesToStore(t *testing.T) {
 	running, _, _ := plainServe(t)
 	ctx := context.Background()
-	write := trafficWriter(running.Store.Ports().Traffic)
-	rows := []trafficRowForTest{{bucket: 3_600_000, source: "s1", subject: "acct:me", device: "d", kind: "e2e", conns: 2, up: 10, down: 20}}
-	if err := write(ctx, toTrafficRows(rows)); err != nil {
+	if running.Meter == nil {
+		t.Fatal("缺省应有流量计量器")
+	}
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 2; i++ {
+		running.Meter.Add(traffic.Sample{
+			Key: traffic.Key{SourceID: "s1", Subject: "acct:me", DeviceID: "d", Kind: "e2e"}, At: at,
+			Connections: 2, BytesToSource: 10, BytesToClient: 20,
+		})
+	}
+	if err := running.Meter.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := write(ctx, toTrafficRows(rows)); err != nil {
-		t.Fatal(err)
-	}
-	got, err := running.Store.Ports().Traffic.Query(ctx, store.DefaultTenant, store.TrafficQuery{ToMs: 7_200_000, Limit: 10})
-	if err != nil || len(got) != 1 || got[0].Connections != 4 || got[0].BytesToSource != 20 || got[0].BytesToClient != 40 {
+	got, err := running.Store.Ports().Traffic.Query(ctx, store.DefaultTenant, store.TrafficQuery{ToMs: at.Add(2 * time.Hour).UnixMilli(), Limit: 10})
+	if err != nil || len(got) != 1 || got[0].Connections != 4 || got[0].BytesToSource != 20 || got[0].BytesToClient != 40 || got[0].Node != "127.0.0.1" {
 		t.Fatalf("同键相加：%+v %v", got, err)
+	}
+	off, _, _ := plainServe(t, "--traffic-retention-days", "0")
+	if off.Meter != nil {
+		t.Fatal("保留天数 0 不记录")
 	}
 }
 
@@ -612,4 +623,79 @@ func TestServeACMEWithPebble(t *testing.T) {
 	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "relay.test" {
 		t.Fatalf("证书应覆盖 relay.test：%v", leaf.DNSNames)
 	}
+}
+
+// 多节点控制面：--control postgres 与 --control redis 起得来，/ready 多报 database / redis；
+// 两个节点共用同一个库时，一个节点上的源上线事件另一个节点收得到。
+func TestServeClusterControl(t *testing.T) {
+	redisURL := os.Getenv("REDIS_URL")
+	t.Run("postgres", func(t *testing.T) {
+		databaseURL, schema := pgtest.Schema(t)
+		{
+			db := &DatabaseOptions{URL: databaseURL, Schema: schema}
+			dir := filepath.Join(t.TempDir(), "data")
+			st, err := CreateState(context.Background(), CreateStateInput{
+				DataDir: dir, Account: "me", Password: testPassword, Issuer: "http://127.0.0.1:1", Store: StorePostgres, Database: db,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = st.Close()
+			args := []string{
+				"--tls", "plain", "--public-origin", "http://127.0.0.1:1", "--store", "postgres", "--control", "postgres",
+				"--database-url", databaseURL, "--database-schema", schema,
+			}
+			a, _ := startServe(t, dir, append(args, "--node-id", "node-a"), ServeDeps{})
+			b, _ := startServe(t, dir, append(args, "--node-id", "node-b"), ServeDeps{})
+			_, _, data := request(t, http.DefaultClient, "GET", a.URL+"/ready", nil, "")
+			if !strings.Contains(string(data), "database") {
+				t.Fatalf("/ready 应报 database：%s", data)
+			}
+			got := make(chan control.PresenceEvent, 1)
+			off := b.Cluster.Presence().Subscribe(func(ev control.PresenceEvent) {
+				select {
+				case got <- ev:
+				default:
+				}
+			})
+			defer off()
+			// 订阅连接就绪需要一点时间：重发直到另一个节点收到。
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				_ = a.Cluster.Presence().Publish(context.Background(), control.PresenceEvent{
+					Type: control.PresenceSourceOnline, SourceID: "s1", Node: "node-a", CoreVersion: "1", AtMs: 1,
+				})
+				select {
+				case ev := <-got:
+					if ev.SourceID != "s1" || ev.Node != "node-a" {
+						t.Fatalf("事件不对：%+v", ev)
+					}
+					return
+				case <-time.After(200 * time.Millisecond):
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("另一个节点没收到在线事件")
+				}
+			}
+		}
+	})
+	t.Run("redis", func(t *testing.T) {
+		if redisURL == "" {
+			if os.Getenv("CI") != "" {
+				t.Fatal("CI 里 REDIS_URL 必须设")
+			}
+			t.Skip("没设 REDIS_URL，跳过 Redis 控制面用例")
+		}
+		{
+			dir := initAt(t, "http://127.0.0.1:1")
+			a, _ := startServe(t, dir, []string{
+				"--tls", "plain", "--public-origin", "http://127.0.0.1:1", "--control", "redis", "--redis-url", redisURL,
+				"--node-id", "node-a",
+			}, ServeDeps{})
+			_, _, data := request(t, http.DefaultClient, "GET", a.URL+"/ready", nil, "")
+			if !strings.Contains(string(data), "redis") {
+				t.Fatalf("/ready 应报 redis：%s", data)
+			}
+		}
+	})
 }

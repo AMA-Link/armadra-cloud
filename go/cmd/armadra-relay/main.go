@@ -25,6 +25,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/personal"
+	"github.com/AMA-Link/armadra-cloud/go/internal/traffic"
 )
 
 // version 由构建注入（-ldflags "-X main.version=…"）。
@@ -82,6 +83,7 @@ func runDev(args []string, stdout, stderr io.Writer) int {
 	metricsListen := fs.String("metrics-listen", "", "指标监听地址（回环）")
 	metricsToken := fs.String("metrics-token", "", "指标的 Bearer 令牌")
 	debug := fs.Bool("debug", false, "开 /debug/pprof 与 /debug/stats")
+	metered := fs.Bool("traffic", false, "开流量计量（写到丢弃的存储，量计数本身的开销）")
 	if err := fs.Parse(args); err != nil {
 		return 64
 	}
@@ -112,6 +114,18 @@ func runDev(args []string, stdout, stderr io.Writer) int {
 	opts := dataplane.Options{
 		Mode: "personal", NodeID: *nodeID, Version: version, Control: ctl,
 		Addressing: edge.PathAddressing(), Log: log,
+	}
+	var meterDone chan struct{}
+	meterCtx, stopMeter := context.WithCancel(context.Background())
+	defer stopMeter()
+	if *metered {
+		meter := traffic.NewMeter(traffic.MeterOptions{
+			Node:  *nodeID,
+			Write: func(context.Context, []traffic.Row) error { return nil },
+		})
+		opts.Traffic = meter
+		meterDone = make(chan struct{})
+		go func() { defer close(meterDone); meter.Run(meterCtx) }()
 	}
 	var plane *dataplane.Plane
 	if *debug {
@@ -156,6 +170,10 @@ func runDev(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	plane.Shutdown(5 * time.Second)
+	if meterDone != nil {
+		stopMeter()
+		<-meterDone
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)

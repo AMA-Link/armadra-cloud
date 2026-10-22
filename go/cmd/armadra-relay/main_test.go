@@ -2,8 +2,15 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestRun(t *testing.T) {
@@ -42,5 +49,65 @@ func TestRequireLoopback(t *testing.T) {
 		if err := requireLoopback(addr); (err == nil) != ok {
 			t.Errorf("%s：err=%v，应为 ok=%v", addr, err, ok)
 		}
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// dev 带与不带 --traffic 都能起来、答 /health、收到 SIGTERM 后正常退出。
+func TestDevTrafficFlag(t *testing.T) {
+	jwks := filepath.Join(t.TempDir(), "jwks.json")
+	if err := os.WriteFile(jwks, []byte(`{"keys":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range [][]string{nil, {"--traffic"}} {
+		t.Run(strings.Join(extra, " "), func(t *testing.T) {
+			var out, errOut lockedBuffer
+			done := make(chan int, 1)
+			args := append([]string{"dev", "--jwks", jwks, "--issuer", "https://x"}, extra...)
+			go func() { done <- run(args, &out, &errOut) }()
+			var ready struct {
+				URL string `json:"url"`
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for ready.URL == "" {
+				for _, line := range strings.Split(out.String(), "\n") {
+					_ = json.Unmarshal([]byte(line), &ready)
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("没等到就绪行：%q %q", out.String(), errOut.String())
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			resp, err := http.Get(ready.URL + "/health")
+			if err != nil || resp.StatusCode != 200 {
+				t.Fatalf("/health：%v %v", resp, err)
+			}
+			_ = resp.Body.Close()
+			_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+			select {
+			case code := <-done:
+				if code != 0 {
+					t.Fatalf("退出码 %d：%q", code, errOut.String())
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("收到 SIGTERM 后没退出")
+			}
+		})
 	}
 }

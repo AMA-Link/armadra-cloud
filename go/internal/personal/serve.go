@@ -18,7 +18,11 @@ import (
 	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
+	clusterpkg "github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
+	"github.com/AMA-Link/armadra-cloud/go/internal/control/factory"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/dataplane"
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
@@ -26,6 +30,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/tlsx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/traffic"
+	"github.com/AMA-Link/armadra-cloud/go/internal/trafficstore"
 	"github.com/AMA-Link/armadra-cloud/go/internal/web"
 )
 
@@ -71,6 +76,8 @@ type Running struct {
 	Cluster *Cluster
 	Core    *core.Context
 	Stream  *MeStream
+	// Meter 是流量计量器；--traffic-retention-days 0 时为 nil。
+	Meter *traffic.Meter
 
 	flush func(ctx context.Context)
 	close func()
@@ -252,9 +259,13 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	signer := core.NewSigner(st.Keys(), now)
 	revokeCtx := &core.Context{TenantID: store.DefaultTenant, Ports: st.Ports()}
 	stored := st.Tenant()
-	cluster, err := newCluster(ctx, ClusterInput{
-		Kind: o.Control, NodeID: o.NodeID, Redis: o.RedisURL, Database: o.Database,
-		Memory: control.MemoryOptions{
+	var pool *pgxpool.Pool
+	if owner, ok := st.(poolOwner); ok {
+		pool = owner.PostgresPool()
+	}
+	cluster, err := openCluster(ctx, ClusterInput{
+		Kind: factory.Kind(o.Control), NodeID: o.NodeID, RedisURL: o.RedisURL, Database: o.Database, Pool: pool,
+		Options: clusterpkg.Options{
 			Issuer: issuer, Mode: "personal", Now: now,
 			JWKS: func(ctx context.Context) ([]byte, error) {
 				set, err := signer.JWKS(ctx)
@@ -267,9 +278,9 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 			Revoked: func(ctx context.Context, jti string) (bool, error) {
 				return core.IsRevokedJTI(ctx, revokeCtx, jti, now().UnixMilli())
 			},
-		},
-		OnError: func(err error, operation string) {
-			logger.Warn("控制面后台操作失败", obs.Operation(operation), obs.Error(err))
+			OnError: func(operation string, err error) {
+				logger.Warn("控制面后台操作失败", obs.Operation(operation), obs.Error(err))
+			},
 		},
 	})
 	if err != nil {
@@ -287,10 +298,10 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	events := core.NewEventBus()
 	coreCtx := &core.Context{
 		TenantID: store.DefaultTenant, Ports: st.Ports(), Signer: signer,
-		Limits:   limiterAdapter{cluster.Plane.Limits()},
-		Presence: presenceAdapter{cluster.Plane.Presence()},
+		Limits:   limiterAdapter{cluster.Limits()},
+		Presence: presenceAdapter{cluster.Presence()},
 		Relay: relayAdapter{
-			routes: cluster.Plane.Routes(), command: cluster.Command, disconnect: disconnect,
+			routes: cluster.Routes(), command: cluster.Command, disconnect: disconnect,
 		},
 		PasswordPolicy: core.DefaultPasswordPolicy, Now: now, Events: events,
 	}
@@ -384,7 +395,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	var meter *traffic.Meter
 	if retentionDays > 0 {
 		meter = traffic.NewMeter(traffic.MeterOptions{
-			Node: o.NodeID, Write: trafficWriter(st.Ports().Traffic), Now: now,
+			Node: o.NodeID, Write: trafficstore.Writer(st.Ports().Traffic, store.DefaultTenant), Now: now,
 			OnError: func(err error, dropped int) {
 				logger.Warn("流量统计写入失败", obs.Error(err), obs.Dropped(dropped))
 			},
@@ -399,7 +410,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 		probes[name] = probe
 	}
 	plane, err = dataplane.New(dataplane.Options{
-		Mode: "personal", NodeID: o.NodeID, Version: Version, Control: cluster.Plane,
+		Mode: "personal", NodeID: o.NodeID, Version: Version, Control: cluster.Cluster,
 		Addressing: edge.PathAddressing(), Log: logger,
 		CORSOrigins: func(string) []string { return core.TrustedOriginsOf(st.Tenant().TenantSettings) },
 		ClientIP:    clientIP, Traffic: meter, Probes: probes,
@@ -498,7 +509,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	// 源上下线：记最近在线与版本（只在内存累计，和设备的 lastSeen 一起每 5 分钟落盘）。
 	var seenMu sync.Mutex
 	seen := map[string]SourceSeen{}
-	offPresence := cluster.Plane.Presence().Subscribe(func(ev control.PresenceEvent) {
+	offPresence := cluster.Presence().Subscribe(func(ev control.PresenceEvent) {
 		seenMu.Lock()
 		defer seenMu.Unlock()
 		entry := SourceSeen{AtMs: ev.AtMs}
@@ -599,7 +610,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	var closeOnce sync.Once
 	running = &Running{
 		URL: url, Issuer: issuer, MetricsURL: metricsURL, Fingerprint: fingerprint, Store: st, Plane: plane,
-		Cluster: cluster, Core: coreCtx, Stream: stream, flush: flush,
+		Cluster: cluster, Core: coreCtx, Stream: stream, Meter: meter, flush: flush,
 	}
 	running.close = func() {
 		closeOnce.Do(func() {

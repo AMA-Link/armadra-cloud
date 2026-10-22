@@ -10,7 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
+	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
 )
 
 // storeLabels 是存储的显示名（status / doctor / 日志）。
@@ -187,6 +190,14 @@ type dbStore struct {
 	ownWrite  func(ctx context.Context)
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// PostgresPool 是存储为 PostgreSQL 时的连接池（--control postgres 共用）；其余答 nil。
+func (s *dbStore) PostgresPool() *pgxpool.Pool {
+	if pg, ok := s.b.(*postgres.DB); ok {
+		return pg.Pool()
+	}
+	return nil
 }
 
 func (s *dbStore) Kind() StoreKind      { return s.kind }
