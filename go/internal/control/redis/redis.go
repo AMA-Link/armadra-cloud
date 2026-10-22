@@ -408,7 +408,12 @@ func (p *Plane) Command(c control.NodeCommand) {
 }
 
 func (p *Plane) remoteHit(ctx context.Context, id string, window time.Duration) (int64, time.Duration, error) {
-	reply, err := p.hitScript.Run(ctx, p.client, []string{p.limitKey(id)}, window.Milliseconds()).Slice()
+	return runHit(ctx, p.hitScript, p.client, p.limitKey(id), window)
+}
+
+// runHit 跑限流脚本：键里 INCR，首次设窗口，答窗口内的第几次与窗口还剩多久。
+func runHit(ctx context.Context, script *goredis.Script, client goredis.Scripter, key string, window time.Duration) (int64, time.Duration, error) {
+	reply, err := script.Run(ctx, client, []string{key}, window.Milliseconds()).Slice()
 	if err != nil {
 		return 0, 0, err
 	}
