@@ -13,3 +13,6 @@ docs/contracts/cloud-openapi.json
 packages/platform-protocol/fixtures
 packages/platform-protocol/schema
 packages/platform-protocol/src/identity-vectors/vectors.json
+# 兼容夹具：TypeScript 版写出来的状态文件、测试值与 PostgreSQL 转储，字节由 make-fixtures.mjs 决定
+go/testdata/compat/*.json
+go/testdata/compat/*.sql
