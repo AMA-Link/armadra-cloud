@@ -12,6 +12,8 @@
 - **CSRF 值从哪来**（1.4 补充）：Cookie 会话的 CSRF 值由 `auth.login`、`auth.mfaVerify`、`auth.refresh` 的响应字段 `csrfToken` 给出，页面刷新后由 `me.get` 的 `csrfToken` 取回；前端只放内存。Cookie 会话上每个非 GET 请求必须带 `X-Armadra-CSRF`，值等于它，对不上答 `403 forbidden`。同一请求不同时带 Cookie 与 Bearer。Bearer 会话与 personal 不用 Cookie，响应里没有 `csrfToken`（字段可缺）。
 - **运营会话 Cookie**（1.4 补充）：运营范围的会话是另一枚 Cookie `__Host-armadra-ops`，不覆盖普通会话 `__Host-armadra-cloud`，两者可同时存在；它同样配 `X-Armadra-CSRF`（值取自签出它的那次 `auth.login` / `auth.mfaVerify` 响应的 `csrfToken`，用于 `__Host-armadra-ops` 的请求），寿命 1 小时，只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，其余 procedure 一律不认。详见 §28。
 - **Cookie 会话的刷新与登出**（1.4 补充）：`auth.refresh` 的 `refreshToken` 可省——Cookie 会话的刷新凭据在 Cookie 里（`__Host-armadra-cloud` / `__Host-armadra-ops`），不进请求体；Bearer 客户端（原生、核心）照旧必带。`auth.refresh` 与 `auth.logout` 多可选入参 `scope?: "operator"`：不带作用于普通控制台会话（`__Host-armadra-cloud`），带则作用于运营会话（`__Host-armadra-ops`）；各自要对应那枚 Cookie 的 `X-Armadra-CSRF`。personal 不用 Cookie、没有运营账号：`refreshToken` 缺了答 `session_revoked`（与令牌无效同码），`scope: "operator"` 答 `403 forbidden`（与 `auth.login` 一致）。两个字段都是入参上的可选追加，已部署中继不受影响。
+- **`auth.refresh` 免 CSRF**（1.4 补充）：页面刷新后前端还没有 CSRF 值，所以 `auth.refresh` 不要求 `X-Armadra-CSRF`（普通与运营会话都一样）；刷新 Cookie 是 `SameSite=Strict` 且路径限定在 `/v1/auth/refresh`，跨站带不上，不需要。其余所有 Cookie 认证的写请求（含 `auth.logout`）照旧必带；`auth.refresh` 的响应返回新的 `csrfToken`。
+- **GET 里的对象入参**（1.4 补充）：对象入参一律写成方括号的 deepObject，如 `space[kind]=team&space[teamId]=t1`；不用点号，也不把 JSON 串塞进一个参数。服务端（含 Go 的 personal 路由）只按这种写法解析。
 
 ## §2 账号与会话
 
@@ -496,7 +498,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §28 运营后台
 
-1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud`），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。personal 没有运营账号：`scope: "operator"` 一律答 `403 forbidden`。`auth.refresh` / `auth.logout` 带 `scope: "operator"` 作用于这枚 Cookie（要它的 CSRF 值），不带则作用于普通会话，见 §1。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。
+1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud`），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。personal 没有运营账号：`scope: "operator"` 一律答 `403 forbidden`。`auth.refresh` / `auth.logout` 带 `scope: "operator"` 作用于这枚 Cookie（要它的 CSRF 值），不带则作用于普通会话，见 §1。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。运营会话的 `auth.refresh` 同样免 CSRF（§1），`auth.logout` 要 `__Host-armadra-ops` 对应的 CSRF 值。
 
 协议 1.4。单独的 scope `operator`（运营令牌，`Authorization: Bearer`），不对外公开。只读元数据：账号与团队的计划、用量、主机数、状态——看不到任何内容与令牌，也不提供「以用户身份登录」。
 
