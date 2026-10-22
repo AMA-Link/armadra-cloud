@@ -27,6 +27,8 @@ type keyCache struct {
 	// 慢的旧读不会盖掉后发的新读（或本实例轮换后的失效）。
 	ticket, applied uint64
 	lastRefresh     time.Time
+	// lastMiss 是上一次因查不到 kid 而发起重读的时刻（成败都算，失败也限频）。
+	lastMiss time.Time
 }
 
 // 查不到 kid 时最短隔多久重读一次。
@@ -73,14 +75,23 @@ func readSigningKeys(ctx context.Context, q querier, tenantID string) ([]store.S
 }
 
 // RefreshOnMiss 实现 store.KeyRefresher：验签查不到 kid 时限频重读。
+// 间隔内（含上一次重读失败之后）什么也不做；名额在持锁时占下，并发的未命中只有一个去读库。
+// 重读失败只报告、当作「kid 不认识」（调用方答 401），不把库的错误冒成 500。
 func (c *keyCache) RefreshOnMiss(ctx context.Context) error {
 	c.mu.Lock()
-	if c.loaded && time.Since(c.lastRefresh) < c.d.refreshGap {
+	now := time.Now()
+	if now.Sub(c.lastRefresh) < c.d.refreshGap && c.loaded || now.Sub(c.lastMiss) < c.d.refreshGap {
 		c.mu.Unlock()
 		return nil
 	}
+	c.lastMiss = now
 	c.mu.Unlock()
-	return c.refresh(ctx)
+	if err := c.refresh(ctx); err != nil {
+		if c.d.onError != nil {
+			c.d.onError("signing key refresh", err)
+		}
+	}
+	return nil
 }
 
 // begin 为一次重读取版本号。

@@ -54,7 +54,7 @@ func TestTwoNodeControlPlane(t *testing.T) {
 			t.Cleanup(func() { _ = db.Close() })
 			return func(env *relayenv.Env, node string) control.Cluster {
 				c, err := factory.Open(context.Background(), factory.Config{
-					Kind: factory.Postgres, PostgresURL: url, PostgresSchema: schema, Options: options(env, node),
+					Kind: factory.Postgres, PostgresURL: url, PostgresSchema: schema, PostgresChannelPrefix: schema + "_", Options: options(env, node),
 				})
 				if err != nil {
 					t.Fatal(err)

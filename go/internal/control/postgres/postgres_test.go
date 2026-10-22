@@ -2,8 +2,10 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -317,4 +319,64 @@ func TestSweepRemovesExpiredRows(t *testing.T) {
 		return routes == 1 && limits == 1 && tokens == 1
 	})
 	_ = n
+}
+
+// 非首次的重读失败不能当没事继续：返回错误、退避、重连、重新监听、再读。
+func TestReloadFailureRetriesInsteadOfFailingOpen(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	var fail atomic.Int32
+	n := e.node("node-a", func(o *cp.Options) {
+		o.ReloadFault = func() error {
+			if fail.Add(-1) >= 0 {
+				return errors.New("注入的查询失败")
+			}
+			fail.Store(0)
+			return nil
+		}
+	})
+	fail.Store(0)
+	terminateListener(t, e, n)
+	fail.Store(2)
+	if _, err := e.admin.Exec(ctx, "INSERT INTO relay_revoked_tokens (jti, exp_ms) VALUES ('during-outage', $1)", time.Now().Add(time.Minute).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	controltest.Eventually(t, "重读失败后重试，断线期间的撤销最终生效", func() bool {
+		r, _ := n.Tokens().IsRevoked(ctx, "during-outage")
+		return r
+	})
+	if !n.errors.has("listener") {
+		t.Fatal("重读失败应报告并重连")
+	}
+}
+
+func TestPeriodicReloadCatchesMissedNotifications(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	n := e.node("node-a", func(o *cp.Options) { o.ReloadEvery = 100 * time.Millisecond })
+	if _, err := e.admin.Exec(ctx, "INSERT INTO relay_revoked_tokens (jti, exp_ms) VALUES ('silent', $1)", time.Now().Add(time.Minute).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	controltest.Eventually(t, "周期重读到静默写入的撤销", func() bool {
+		r, _ := n.Tokens().IsRevoked(ctx, "silent")
+		return r
+	})
+}
+
+func TestLivenessCheckKeepsListenerWorking(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	a := e.node("node-a", func(o *cp.Options) { o.LivenessEvery = 50 * time.Millisecond })
+	b := e.node("node-b", nil)
+	time.Sleep(400 * time.Millisecond)
+	if err := b.Tokens().Revoke(ctx, "after-idle", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	controltest.Eventually(t, "空闲之后仍收到通知", func() bool {
+		r, _ := a.Tokens().IsRevoked(ctx, "after-idle")
+		return r
+	})
+	if a.errors.has("listener") {
+		t.Fatal("活性检查不该把正常的连接判成断线")
+	}
 }

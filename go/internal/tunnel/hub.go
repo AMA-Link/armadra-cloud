@@ -149,11 +149,12 @@ func (h *Hub) Shutdown(grace time.Duration) {
 		t.Goaway("shutdown", grace)
 	}
 	deadline := time.After(grace + 5*time.Second)
+wait:
 	for _, t := range list {
 		select {
 		case <-t.Closed():
 		case <-deadline:
-			return
+			break wait // 宽限到了：不再等，但分发器照样排空 / 关闭
 		}
 	}
 	// 隧道关闭时投递的删路由与下线事件：等做完，免得进程先退出而路由留到过期。
@@ -336,13 +337,19 @@ func (h *Hub) ready(ctx context.Context, sock Socket, hello gen.Hello) (*Tunnel,
 		return nil, nil
 	}
 	tunnel.Start()
-	_ = o.Control.Presence().Publish(ctx, control.PresenceEvent{
+	// 上线事件与下线事件走同一个源的同一条队列，先后顺序不会倒。
+	online := control.PresenceEvent{
 		Type:        control.PresenceSourceOnline,
 		SourceID:    hello.SourceID,
 		Node:        o.NodeID,
 		TunnelID:    tunnelID,
 		CoreVersion: hello.CoreVersion,
 		AtMs:        time.Now().UnixMilli(),
+	}
+	h.dispatch.Go(hello.SourceID, func() {
+		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = o.Control.Presence().Publish(c, online)
 	})
 	o.Log.Info("隧道已就绪", obs.SourceID(hello.SourceID), obs.TunnelID(tunnelID))
 	return tunnel, nil
@@ -370,6 +377,7 @@ func (h *Hub) closed(t *Tunnel, info CloseInfo) {
 	// 删路由与发下线事件可能做网络 I/O：投递给工作协程，不占住这里的协程（可能是 epoll 循环）。
 	// 同一个源的删除与下线事件同一条队列，先后顺序不变。
 	sourceID, tunnelID := t.SourceID(), t.ID()
+	atMs := time.Now().UnixMilli() // 关闭发生的时刻，不是队列里轮到它的时刻
 	h.dispatch.Go(sourceID, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -379,7 +387,7 @@ func (h *Hub) closed(t *Tunnel, info CloseInfo) {
 			SourceID: sourceID,
 			Node:     o.NodeID,
 			TunnelID: tunnelID,
-			AtMs:     time.Now().UnixMilli(),
+			AtMs:     atMs,
 		})
 	})
 }

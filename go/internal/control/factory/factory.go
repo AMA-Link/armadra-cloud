@@ -54,6 +54,8 @@ type Config struct {
 	PostgresPool   *pgxpool.Pool
 	PostgresURL    string
 	PostgresSchema string
+	// PostgresChannelPrefix 加在 NOTIFY 频道名前（频道是整库共用的；同库跑多套中继或并行的测试时用）。
+	PostgresChannelPrefix string
 }
 
 // Open 建控制面。redis / postgres 连不上、表不在都在这里报错（拒绝启动）。
@@ -69,6 +71,7 @@ func Open(ctx context.Context, c Config) (control.Cluster, error) {
 	case Postgres:
 		return postgres.New(ctx, postgres.Options{
 			Options: c.Options, Pool: c.PostgresPool, URL: c.PostgresURL, Schema: c.PostgresSchema,
+			ChannelPrefix: c.PostgresChannelPrefix,
 		})
 	}
 	return nil, fmt.Errorf("--control 只能是 memory、redis 或 postgres：%s", c.Kind)

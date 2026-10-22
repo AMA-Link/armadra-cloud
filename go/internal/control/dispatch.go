@@ -79,6 +79,7 @@ func (d *Dispatcher) Go(key string, fn func()) {
 func (d *Dispatcher) Overflowed() int64 { return d.overflowed.Load() }
 
 // Flush 等到调用时已在队列里的任务都执行完，或 timeout 到；答是否排空。
+// 有队列满、放不下栅栏的，那条队列没等，答 false。
 func (d *Dispatcher) Flush(timeout time.Duration) bool {
 	d.mu.RLock()
 	if d.closed {
@@ -86,13 +87,15 @@ func (d *Dispatcher) Flush(timeout time.Duration) bool {
 		return true
 	}
 	var wg sync.WaitGroup
+	skipped := false
 	for _, ch := range d.shards {
 		wg.Add(1)
 		barrier := func() { wg.Done() }
 		select {
 		case ch <- barrier:
 		default:
-			wg.Done() // 队列满：不等（溢出的任务本来就不保证顺序）
+			wg.Done() // 队列满：放不下栅栏，这一条不等，最后答 false
+			skipped = true
 		}
 	}
 	d.mu.RUnlock()
@@ -100,7 +103,7 @@ func (d *Dispatcher) Flush(timeout time.Duration) bool {
 	go func() { wg.Wait(); close(done) }()
 	select {
 	case <-done:
-		return true
+		return !skipped
 	case <-time.After(timeout):
 		return false
 	}

@@ -256,3 +256,44 @@ func TestSignerRefreshesOnUnknownKid(t *testing.T) {
 		t.Fatal("RefreshKeys 之后应认出 k3")
 	}
 }
+
+// 未命中重读失败：报告、当作 kid 不认识（不冒 500），且失败也限频。
+func TestMissRefreshFailureIsReportedAndRateLimited(t *testing.T) {
+	ctx := context.Background()
+	url, schema := pgtest.Schema(t)
+	var mu sync.Mutex
+	var reports []string
+	db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, KeyRefreshGap: 300 * time.Millisecond,
+		OnError: func(op string, err error) { mu.Lock(); reports = append(reports, op+":"+err.Error()); mu.Unlock() }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateTenant(ctx, "default", store.Tenant{TenantSettings: storetest.Settings()}); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := store.GenerateSigningKey("k1", storetest.Now)
+	if err := db.AddSigningKey(ctx, "default", first); err != nil {
+		t.Fatal(err)
+	}
+	signer := core.NewSigner(db.Keys("default"), func() time.Time { return time.UnixMilli(storetest.Now) })
+	if _, ok, err := signer.Key(ctx, "k1"); err != nil || !ok {
+		t.Fatal(err)
+	}
+	_ = db.Close() // 之后读库都失败
+	time.Sleep(350 * time.Millisecond)
+	for i := 0; i < 3; i++ {
+		if _, ok, err := signer.Key(ctx, "kX"); err != nil || ok {
+			t.Fatalf("重读失败应当作不认识的 kid，而不是报错：%v %v", ok, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reports) != 1 || !strings.HasPrefix(reports[0], "signing key refresh:") {
+		t.Fatalf("失败也要限频：%v", reports)
+	}
+	for _, r := range reports {
+		if strings.Contains(r, url) {
+			t.Fatalf("报告带了连接串：%s", r)
+		}
+	}
+}
