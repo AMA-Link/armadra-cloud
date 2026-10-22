@@ -53,6 +53,9 @@ type Options struct {
 	KeyRefreshGap time.Duration
 	// Now 缺省 time.Now；账本的 applied_at_ms 用它。
 	Now func() int64
+	// MasterKey 是主密钥（32 字节）：给了就把新写的签名私钥用 aes256gcm-v1 包裹，并能读已包裹的；
+	// 没给则写 none，读到包裹过的拒绝（SaaS 实现方案 §2.2）。
+	MasterKey []byte
 }
 
 var schemaName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
@@ -65,8 +68,9 @@ type DB struct {
 	onError    func(string, error)
 	onCommit   func(string, int64)
 
-	keysMu sync.Mutex
-	keys   map[string]*keyCache
+	keysMu  sync.Mutex
+	keys    map[string]*keyCache
+	wrapper *store.Wrapper
 }
 
 var (
@@ -147,7 +151,14 @@ func Open(ctx context.Context, options Options) (*DB, error) {
 	if gap <= 0 {
 		gap = refreshOnMissGap
 	}
-	db := &DB{pool: pool, schema: options.Schema, refreshGap: gap, onError: sanitizedReport(options.OnError), onCommit: options.OnCommit, keys: map[string]*keyCache{}}
+	var wrapper *store.Wrapper
+	if options.MasterKey != nil {
+		if wrapper, err = store.NewWrapper(options.MasterKey); err != nil {
+			pool.Close()
+			return nil, store.Errorf(store.KindUnknown, "%v", err)
+		}
+	}
+	db := &DB{wrapper: wrapper, pool: pool, schema: options.Schema, refreshGap: gap, onError: sanitizedReport(options.OnError), onCommit: options.OnCommit, keys: map[string]*keyCache{}}
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
@@ -235,3 +246,6 @@ func sanitizedReport(fn func(string, error)) func(string, error) {
 	}
 	return func(op string, err error) { fn(op, unreachable(err)) }
 }
+
+// Wrapper 是主密钥包裹器；没给主密钥时为 nil。TOTP 种子等秘密用它包裹后才落库。
+func (d *DB) Wrapper() *store.Wrapper { return d.wrapper }

@@ -69,8 +69,8 @@ func (d *DB) dropKeyCache(tenantID string) {
 	}
 }
 
-func readSigningKeys(ctx context.Context, q querier, tenantID string) ([]store.SigningKeyRecord, error) {
-	return list(ctx, q, func(s scanner) (store.SigningKeyRecord, error) { return toSigningKey(s) },
+func (d *DB) readSigningKeys(ctx context.Context, q querier, tenantID string) ([]store.SigningKeyRecord, error) {
+	return list(ctx, q, func(s scanner) (store.SigningKeyRecord, error) { return d.toSigningKey(tenantID, s) },
 		"SELECT "+keyColumns+" FROM signing_keys WHERE tenant_id = $1 ORDER BY seq", tenantID)
 }
 
@@ -125,7 +125,7 @@ func (c *keyCache) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	keys, err := readSigningKeys(ctx, c.d.pool, c.tenantID)
+	keys, err := c.d.readSigningKeys(ctx, c.d.pool, c.tenantID)
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func (c *keyCache) SigningKeys(ctx context.Context) ([]store.SigningKeyRecord, e
 // AddSigningKey 加一把钥（建租户、导入时用）。
 func (d *DB) AddSigningKey(ctx context.Context, tenantID string, key store.SigningKeyRecord) error {
 	err := d.write(ctx, tenantID, func(tx pgx.Tx) (bool, error) {
-		return true, insertSigningKey(ctx, tx, tenantID, key)
+		return true, d.insertSigningKey(ctx, tx, tenantID, key)
 	})
 	d.dropKeyCache(tenantID)
 	return err
@@ -173,7 +173,7 @@ func (d *DB) AddSigningKey(ctx context.Context, tenantID string, key store.Signi
 // RotateKey 轮换（rotate-key）：追加新钥，其余未退役的定在一小时后退役，早已退役的删掉。答新 kid。
 func (d *DB) RotateKey(ctx context.Context, tenantID string, nowMs int64) (kid string, err error) {
 	err = d.write(ctx, tenantID, func(tx pgx.Tx) (bool, error) {
-		before, err := readSigningKeys(ctx, tx, tenantID)
+		before, err := d.readSigningKeys(ctx, tx, tenantID)
 		if err != nil {
 			return false, err
 		}
@@ -202,7 +202,7 @@ func (d *DB) RotateKey(ctx context.Context, tenantID string, nowMs int64) (kid s
 		}
 		for _, key := range after {
 			if !known[key.Kid] {
-				if err := insertSigningKey(ctx, tx, tenantID, key); err != nil {
+				if err := d.insertSigningKey(ctx, tx, tenantID, key); err != nil {
 					return false, err
 				}
 			}
