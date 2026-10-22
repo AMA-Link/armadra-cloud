@@ -101,8 +101,14 @@ func IsLiveDevice(device store.DeviceRecord, nowMs int64) bool {
 }
 
 // NewDevice 是建设备的纯函数：答设备记录与刷新令牌明文（只此一次），不读写存储，持久化由调用方
-// （在自己的事务里）做。ttl 为 0 时取刷新令牌寿命；bearer / session 在记录里留空（个人中转的形状不变）。
+// （在自己的事务里）做。ttl 为 0 时取刷新令牌寿命，运营范围的 ttl 为 0 或超过 1 小时一律取 OperatorSessionTTL；bearer / session 在记录里留空（个人中转的形状不变）。
 func NewDevice(subject string, device DeviceInput, transport Transport, scope SessionScope, nowMs int64, ttl time.Duration) (store.DeviceRecord, string) {
+	if scope == SessionScopeOperator {
+		// 运营会话的绝对寿命不超过 1 小时：不给或给得更长都收到上限。
+		if ttl <= 0 || ttl > OperatorSessionTTL {
+			ttl = OperatorSessionTTL
+		}
+	}
 	if ttl == 0 {
 		ttl = RefreshTTL
 	}

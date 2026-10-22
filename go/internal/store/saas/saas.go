@@ -65,14 +65,22 @@ type Tx interface {
 	// AfterCommit 登记一个提交成功之后才执行的回调；回滚、重试时丢弃。回调里的失败只能记录，不能回滚事务。
 	AfterCommit(fn func(ctx context.Context))
 	// Ports 是绑定到本事务的核心端口（建设备、登记主机等和 SaaS 表写在同一个事务里）：不锁 tenants 行、
-	// 不加租户修订号，devices.Insert 的失效设备清理只看这个账号。加锁顺序：团队行 → 账号行 → 其余。
+	// 不加租户修订号，devices.Insert 的失效设备清理只看这个账号。加锁顺序：团队行 → 账号行 → 其余，
+	// 同类按 id 升序；读-改-写在绑定事务里一律行锁（FOR UPDATE）。
+	//
+	// 禁止在 Tx 闭包里调用用独立 Ports（DB.Ports / DB.SaaSPorts）的 core 函数：独立端口走别的连接，
+	// 会等本事务持有的行锁而挂死；闭包里一律用 tx.Ports()，并用 core.Context.Bound 换掉 Ports 与撤销钩子
+	// （钩子要经 AfterCommit 投递，见 relayctl.Deferred）。
 	Ports() *store.Ports
 }
 
 // AccountRepo 是账号相关的仓储。
 type AccountRepo interface {
-	// LockAccount 对账号行 SELECT … FOR UPDATE，答它存不存在。统一加锁顺序里排在团队行之后。
+	// LockAccount 对账号行 SELECT … FOR UPDATE，答它存不存在。统一加锁顺序里排在团队行之后；
+	// 同一事务里多次调用，id 必须升序，否则 ErrLockOrder。锁失败不改变顺序状态。
 	LockAccount(ctx context.Context, tenantID, accountID string) (found bool, err error)
+	// LockAccounts 一次锁多个账号：先升序去重再逐个锁（两个事务要同一批账号时不会反序互等）。
+	LockAccounts(ctx context.Context, tenantID string, accountIDs ...string) error
 	// Create 插一个账号（邮箱已转小写）；邮箱已被占用答 ErrEmailTaken。
 	Create(ctx context.Context, tenantID string, account Account) error
 	// SetDisplayName 改显示名。
@@ -84,6 +92,8 @@ type TeamRepo interface {
 	// LockTeam 对团队行 SELECT … FOR UPDATE，答它存不存在。改成员前先锁它，
 	// 与 team_owner_guard 触发器用同一把锁（设计 §3.4 0005）。同一事务里必须先于 LockAccount，否则 ErrLockOrder。
 	LockTeam(ctx context.Context, tenantID, teamID string) (found bool, err error)
+	// LockTeams 一次锁多个团队：升序去重再逐个锁。同一事务里单个调用 LockTeam 的 id 也必须升序。
+	LockTeams(ctx context.Context, tenantID string, teamIDs ...string) error
 }
 
 // 其余仓储先立名字，方法随各批加入。

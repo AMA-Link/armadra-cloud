@@ -170,11 +170,12 @@ func TestSaaSTxMapsConstraintErrors(t *testing.T) {
 
 	// 仓储：LockTeam / LockAccount。
 	err := s.Tx(ctx, func(tx saas.Tx) error {
-		if ok, err := tx.Teams().LockTeam(ctx, "cloud", "t1"); err != nil || !ok {
-			return fmt.Errorf("LockTeam t1：%v %v", ok, err)
-		}
+		// 同类多行按 id 升序加锁：nope 排在 t1 前面。
 		if ok, err := tx.Teams().LockTeam(ctx, "cloud", "nope"); err != nil || ok {
 			return fmt.Errorf("LockTeam nope：%v %v", ok, err)
+		}
+		if ok, err := tx.Teams().LockTeam(ctx, "cloud", "t1"); err != nil || !ok {
+			return fmt.Errorf("LockTeam t1：%v %v", ok, err)
 		}
 		if ok, err := tx.Accounts().LockAccount(ctx, "cloud", "a1"); err != nil || !ok {
 			return fmt.Errorf("LockAccount a1：%v %v", ok, err)

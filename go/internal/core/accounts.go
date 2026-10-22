@@ -60,6 +60,60 @@ const maxUnknownNames = 1_000
 // burnPasswordCheck 是未知账号时的等时派生；测试里换成计数器，断言它确实被调用。
 var burnPasswordCheck = identity.BurnPasswordCheck
 
+// UnknownStore 是未知名字的失败计数的存放处：单进程用内存（缺省），多实例的 SaaS 用 Redis。
+type UnknownStore interface {
+	// Fail 记一次对 name 的失败登录：此刻已被锁着答 (锁到的时刻, true) 且不计数；否则按 NextLockout 记账，
+	// 答 (0, false)。
+	Fail(ctx context.Context, name string, nowMs int64) (lockedUntilMs int64, locked bool, err error)
+}
+
+type memoryUnknown struct {
+	mu    sync.Mutex
+	names map[string]Lockout
+}
+
+func (m *memoryUnknown) Fail(_ context.Context, name string, nowMs int64) (int64, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	previous := m.names[name]
+	if previous.LockedUntilMs > nowMs {
+		return previous.LockedUntilMs, true, nil
+	}
+	if m.names == nil || len(m.names) >= maxUnknownNames {
+		m.names = map[string]Lockout{}
+	}
+	m.names[name] = NextLockout(previous, nowMs)
+	return 0, false, nil
+}
+
+// UnknownAccounts 是不存在的账号名的失败计数与锁定：与存在的账号走同一套 NextLockout，连续失败达阈值后
+// 同样答 account_locked，所以锁定不暴露某个名字（SaaS：规范化邮箱）有没有注册。被锁着的名字也做一次口令
+// 派生，答复时延与存在的账号一致。零值可用（内存计数）；设 Store 换成共享存储。
+type UnknownAccounts struct {
+	Store UnknownStore
+
+	memory memoryUnknown
+}
+
+// Login 记一次对未知名字的登录失败：锁着答 account_locked（带重试等待），否则答 credentials_invalid。
+func (u *UnknownAccounts) Login(ctx context.Context, nowMs func() int64, name, password string) error {
+	name = truncateRunes(name, 128)
+	store := u.Store
+	if store == nil {
+		store = &u.memory
+	}
+	burnPasswordCheck(password)
+	now := nowMs()
+	until, locked, err := store.Fail(ctx, name, now)
+	if err != nil {
+		return err
+	}
+	if locked {
+		return FailAfter(gen.ErrAccountLocked, time.Duration(until-now)*time.Millisecond)
+	}
+	return Fail(gen.ErrCredentialsInvalid)
+}
+
 // LoginInput 是登录的入参。
 type LoginInput struct {
 	Account   string
@@ -80,14 +134,12 @@ type ChangePasswordInput struct {
 type Accounts struct {
 	c *Context
 
-	mu sync.Mutex
-	// unknown 是不存在的账号名的失败计数，只在内存。
-	unknown map[string]Lockout
+	unknownNames UnknownAccounts
 }
 
 // NewAccounts 建账号服务。
 func NewAccounts(c *Context) *Accounts {
-	return &Accounts{c: c, unknown: map[string]Lockout{}}
+	return &Accounts{c: c}
 }
 
 func lockedFor(lockout Lockout, nowMs int64) time.Duration {
@@ -101,22 +153,8 @@ func accountLockout(a *store.AccountRecord) Lockout {
 	return Lockout{Failures: a.Failures, LockedUntilMs: a.LockedUntilMs, LastFailureAtMs: a.LastFailureAtMs}
 }
 
-func (a *Accounts) loginUnknown(name, password string) error {
-	nowMs := a.c.NowMs()
-	a.mu.Lock()
-	previous := a.unknown[name]
-	a.mu.Unlock()
-	if wait := lockedFor(previous, nowMs); wait > 0 {
-		return FailAfter(gen.ErrAccountLocked, wait)
-	}
-	burnPasswordCheck(password)
-	a.mu.Lock()
-	if len(a.unknown) >= maxUnknownNames {
-		a.unknown = map[string]Lockout{}
-	}
-	a.unknown[name] = NextLockout(previous, a.c.NowMs())
-	a.mu.Unlock()
-	return Fail(gen.ErrCredentialsInvalid)
+func (a *Accounts) loginUnknown(ctx context.Context, name, password string) error {
+	return a.unknownNames.Login(ctx, a.c.NowMs, name, password)
 }
 
 // recordFailure 失败一次：记进账号的锁定计数。
@@ -139,6 +177,8 @@ func VerifyPassword(ctx context.Context, c *Context, account *store.AccountRecor
 		return Fail(gen.ErrCredentialsInvalid)
 	}
 	if wait := lockedFor(accountLockout(account), nowMs); wait > 0 {
+		// 锁着不比对口令，但也做一次等价的派生：答复时延与未知名字一致（不暴露谁注册过）。
+		burnPasswordCheck(password)
 		return FailAfter(gen.ErrAccountLocked, wait)
 	}
 	ok := identity.VerifyPassword(password, account.Password)
@@ -177,7 +217,7 @@ func (a *Accounts) Login(ctx context.Context, input LoginInput, ip string) (Sess
 		return Session{}, err
 	}
 	if account == nil {
-		return Session{}, a.loginUnknown(truncateRunes(input.Account, 128), input.Password)
+		return Session{}, a.loginUnknown(ctx, input.Account, input.Password)
 	}
 	if err := VerifyPassword(ctx, a.c, account, input.Password, a.c.NowMs()); err != nil {
 		return Session{}, err
