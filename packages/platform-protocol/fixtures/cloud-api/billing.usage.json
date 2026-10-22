@@ -3,7 +3,8 @@
     "space": {
       "kind": "personal"
     },
-    "period": "2026-10"
+    "period": "2026-10",
+    "granularity": "day"
   },
   "output": {
     "space": {
@@ -15,6 +16,16 @@
         "metric": "relay.bytes",
         "value": 1024,
         "limit": null
+      }
+    ],
+    "series": [
+      {
+        "startMs": 1759276800000,
+        "relayBytes": 512
+      },
+      {
+        "startMs": 1759363200000,
+        "relayBytes": 512
       }
     ]
   }

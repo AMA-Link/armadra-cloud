@@ -182,6 +182,12 @@
   "link_frozen": {
     "status": 403
   },
+  "registrations_paused": {
+    "status": 503
+  },
+  "operator_mfa_required": {
+    "status": 403
+  },
   "relay_token_invalid": {
     "status": 401
   },

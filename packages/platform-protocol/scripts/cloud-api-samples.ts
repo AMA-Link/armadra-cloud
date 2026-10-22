@@ -11,6 +11,7 @@ const NOW = 1_760_000_000_000;
 const ISSUER = "https://cloud.armadra.test";
 const RELAY_ORIGIN = "https://relay.armadra.test";
 
+const CSRF_TOKEN = "test-csrf-token";
 const device = { platform: "desktop", name: "Dev laptop" };
 const session = {
   accessToken: "test-access-token",
@@ -32,6 +33,7 @@ const sourceSummary = {
   online: true,
   lastSeenAtMs: NOW,
   owner: true,
+  ownerName: "Dev",
   via: "owner",
   relayOrigin: RELAY_ORIGIN,
   coreVersion: "0.2.0",
@@ -219,6 +221,16 @@ const member = {
   displayName: "Dev",
   role: "admin",
   joinedAtMs: NOW,
+  groups: [{ groupId: GROUP_ID, name: "Platform" }],
+};
+const guestMember = {
+  accountId: "acct_01JBBBBBBBBBBBBBBBBBBBBBBB",
+  email: "guest@armadra.test",
+  displayName: "Guest",
+  role: "guest",
+  joinedAtMs: NOW,
+  groups: [],
+  reachableHosts: 2,
 };
 const link = {
   linkId: "lnk_01JAAAAAAAAAAAAAAAAAAAAAAA",
@@ -257,6 +269,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
         capabilities: ["auth.password", "auth.device-code", "me.stream"],
         relay: { addressing: "subdomain" },
         webApp: "https://app.armadra.test",
+        registrationsOpen: false,
       },
       // 0.3.1 起可选的服务端名称（个人中转 `--name`）。
       {
@@ -267,6 +280,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
         capabilities: ["auth.password", "me.stream"],
         relay: { addressing: "path" },
         webApp: null,
+        registrationsOpen: true,
       },
       // 0.3.5 起：要求挑战（Workers 个人中转开了 Turnstile）。
       {
@@ -276,6 +290,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
         capabilities: ["auth.password", "me.stream", "challenge.turnstile"],
         relay: { addressing: "path" },
         webApp: `${RELAY_ORIGIN}/app/`,
+        registrationsOpen: true,
         challenge: {
           provider: "turnstile",
           siteKey: "test-site-key",
@@ -320,16 +335,22 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
     outputs: [
       { session },
+      // 1.4 补充：Cookie 会话多带 csrfToken；运营范围登录 `scope: "operator"`。
+      { session, csrfToken: CSRF_TOKEN },
       { mfa: { challengeId: "mfa_01", methods: ["totp", "recovery"] } },
     ],
   },
   "auth.mfaVerify": {
     input: { challengeId: "mfa_01", code: "123456" },
-    output: { session },
+    output: { session, csrfToken: CSRF_TOKEN },
   },
   "auth.refresh": {
     input: { refreshToken: "test-refresh-token" },
-    output: { session },
+    output: { session, csrfToken: CSRF_TOKEN },
+  },
+  "auth.stepUp": {
+    input: { password: "correct horse battery staple" },
+    output: { elevatedUntilMs: NOW + 10 * 60_000 },
   },
   "auth.logout": { input: {}, output: {} },
   "auth.deviceStart": {
@@ -408,7 +429,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     input: { code: "123456" },
     output: { recoveryCodes: ["uvwxy-zabcd"] },
   },
-  "me.get": { input: {}, output: me },
+  "me.get": { input: {}, output: { ...me, csrfToken: CSRF_TOKEN } },
   "me.update": {
     input: { displayName: "Dev 2" },
     output: { ...me, displayName: "Dev 2" },
@@ -508,8 +529,14 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
   },
   "sources.list": {
-    input: { space: { kind: "team", teamId: TEAM_ID } },
-    output: { sources: [sourceSummary] },
+    input: {
+      space: { kind: "team", teamId: TEAM_ID },
+      status: "online",
+      tag: ["prod"],
+      q: "work",
+      limit: 50,
+    },
+    output: { sources: [sourceSummary], nextCursor: null },
   },
   "sources.get": { input: { sourceId: SOURCE_ID }, output: sourceDetail },
   "sources.update": {
@@ -627,7 +654,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
   },
   "teams.members": {
     input: { teamId: TEAM_ID },
-    output: { members: [member] },
+    output: { members: [member, guestMember] },
   },
   "teams.memberRole": {
     input: { teamId: TEAM_ID, accountId: ACCOUNT_ID, role: "admin" },
@@ -831,7 +858,6 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
             displayName: "Dev",
           },
           device: { name: "Dev iPhone", platform: "ios" },
-          sas: "482913",
           requestedAtMs: NOW,
           expiresAtMs: NOW + 600_000,
         },
@@ -873,11 +899,19 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
   },
   "billing.usage": {
-    input: { space: { kind: "personal" }, period: "2026-10" },
+    input: {
+      space: { kind: "personal" },
+      period: "2026-10",
+      granularity: "day",
+    },
     output: {
       space: { kind: "personal" },
       period: "2026-10",
       usage: [{ metric: "relay.bytes", value: 1024, limit: null }],
+      series: [
+        { startMs: 1_759_276_800_000, relayBytes: 512 },
+        { startMs: 1_759_363_200_000, relayBytes: 512 },
+      ],
     },
   },
   "billing.checkout": {
