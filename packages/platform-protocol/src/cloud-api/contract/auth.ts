@@ -121,8 +121,22 @@ export const auth = {
   refresh: base
     .route({ method: "POST", path: "/v1/auth/refresh" })
     .meta(anonymous)
-    .errors(errors.pick("session_expired", "session_revoked"))
-    .input(z.object({ refreshToken: z.string() }))
+    .errors(errors.pick("session_expired", "session_revoked", "forbidden"))
+    .input(
+      z.object({
+        /**
+         * 1.4 补充：可省。Cookie 会话（网页控制台）的刷新凭据在 `__Host-armadra-cloud` /
+         * `__Host-armadra-ops` Cookie 里，不带；Bearer 客户端（原生、核心）照旧必带。
+         * personal 中继实际上仍要求带：缺了答 `session_revoked`（cloud-api §1 / §2）。
+         */
+        refreshToken: z.string().optional(),
+        /**
+         * 1.4 补充：不带作用于普通控制台会话（`__Host-armadra-cloud`），带 `"operator"`
+         * 作用于运营会话（`__Host-armadra-ops`）；各自要对应的 CSRF 值。personal 答 `403 forbidden`。
+         */
+        scope: z.literal("operator").optional(),
+      }),
+    )
     .output(cookieSessionResultSchema),
   /**
    * 在已有会话上再验证（1.4 补充，cloud-api §2）：口令、两步验证码、通行密钥断言至少给一项；
@@ -158,7 +172,13 @@ export const auth = {
   logout: base
     .route({ method: "POST", path: "/v1/auth/logout" })
     .meta(session)
-    .input(empty)
+    .errors(errors.pick("forbidden"))
+    .input(
+      z.object({
+        /** 1.4 补充：同 `auth.refresh` 的 `scope`——不带登出普通控制台会话，带 `"operator"` 登出运营会话。 */
+        scope: z.literal("operator").optional(),
+      }),
+    )
     .output(empty),
   deviceStart: base
     .route({ method: "POST", path: "/v1/auth/device/start" })
