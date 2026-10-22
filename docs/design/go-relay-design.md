@@ -125,7 +125,7 @@ go/
   - `tunnel/*.bin` 编解码逐字节一致，`handshake.json` 走完四步。
   - `assertion/*.jwt` 验签与声明校验，含负例 `wrong-alg`、`wrong-aud`、`expired`。
   - `identity-vectors/vectors.json` 测 scrypt 与令牌哈希。
-  - `cloud-api/<procedure>.json` 共 68 个：每个过程的输入与输出都要通过 JSON Schema 校验。只在测试里用校验库。
+  - `cloud-api/<procedure>.json` 全部：每个过程的输入与输出都要通过 JSON Schema 校验。只在测试里用校验库。
   - `errors.json` 校验错误码与 HTTP 状态的映射。
 - **端口与服务合同**：`control-core/src/testing/ports-contract.ts`（15 例）与 `services-contract.ts`（19 例）逐例翻译成 Go 测试，三种存储都要过。今后改合同时两边同改。
 
@@ -244,7 +244,7 @@ go/
 | 运行约定   | uid 10002、`/data` 卷、端口 8443；`WEB_IMAGE` 构建参数照旧把 `/app/web` 拷进来                                 |
 | 入口与检查 | `ENTRYPOINT ["armadra-relay"]`，缺省 `saas serve`；健康检查 `armadra-relay health`                             |
 | 镜像名     | `ghcr.io/ama-link/armadra-relay:<v>` 与 `:latest` 不变；`release.yml` 的规则不变（tag 等于版本号、冒烟后推送） |
-| 切换版本   | 统一版本号，切换算功能变化，发 `v0.10.0`（§9 Q5）                                                              |
+| 切换版本   | 统一版本号，切换算功能变化，用切换时的下一个 minor（§9 Q5）                                                    |
 
 ### 3.9 SaaS 控制面（G6，Go）
 
@@ -367,9 +367,9 @@ G6 只管怎么落地：
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---- |
 | G0   | Go 模块骨架、mise、CI `go` 作业、repo 规则、notices、`tools/schemagen`；`internal/protocol` 与 `internal/jose`，以及夹具测试                                                  | —                 | 夹具与身份向量全过；生成物新鲜度检查进 CI                                                                         | Sonnet                                   | M    |
 | G1   | 数据面：`tunnel`、`edge`（含 `netpoll`）、`control/memory`、限流、`traffic`（内存）、`obs`；`armadra-relay` 只有数据面的开发装配                                              | G0                | 夹具驱动的隧道测试；把 `relay-kernel` 测试用例翻译过来；`bench` 达到 §3.3 的指标                                  | Opus                                     | L    |
-| G2   | `store`（sqlite / postgres、迁移 embed、账本、拒绝规则、statefile 导入）、`core` 全部服务、`api` 路由                                                                         | G0                | 15 + 19 例合同测试；68 个 cloud-api 夹具做形状校验；TS 与 Go 交替读写同一个库                                     | Opus                                     | L    |
+| G2   | `store`（sqlite / postgres、迁移 embed、账本、拒绝规则、statefile 导入）、`core` 全部服务、`api` 路由                                                                         | G0                | 15 + 19 例合同测试；全部 cloud-api 夹具做形状校验；TS 与 Go 交替读写同一个库                                      | Opus                                     | L    |
 | G3   | `personal` 装配与全部子命令、`tlsx`（四种 TLS）、`web`、me-stream、撤销监视、`control/redis` 与 `control/postgres`、关闭顺序                                                  | G1、G2            | 命令行参数与 `deploy/README.md` 逐项对照；ACME 对 pebble（`pnpm dev:up --profile acme`）；doctor、backup、migrate | Sonnet（ACME 与撤销用 Opus）             | L    |
-| G4   | 切换：`apps/relay/Dockerfile` 改成 Go，`scripts/relay-personal.mjs`、`e2e.mjs` 指向 Go；Armadra 探针 PR（§4.3）；更新记录与部署文档；发 v0.10.0                               | G3                | §5 的端到端与 Armadra 探针全过；数据目录升级与回滚各演练一次                                                      | Opus                                     | M    |
+| G4   | 切换：`apps/relay/Dockerfile` 改成 Go，`scripts/relay-personal.mjs`、`e2e.mjs` 指向 Go；Armadra 探针 PR（§4.3）；更新记录与部署文档；发切换时的下一个 minor                   | G3                | §5 的端到端与 Armadra 探针全过；数据目录升级与回滚各演练一次                                                      | Opus                                     | M    |
 | G4.1 | 删除 TS 的 `apps/relay` 与 `relay-runtime-node`（`relay-kernel` / `control-core` / `control-store-*` 留给 Workers）；更新 AGENTS.md 边界                                      | G4 发布后一个版本 | `pnpm check`；Workers 端到端照旧过                                                                                | Sonnet                                   | S    |
 | G5   | SaaS 中继节点：子域寻址、Redis 控制面接线、节点令牌、`/x/v1` 节点间转发、rendezvous 排序的 hint、GOAWAY 再平衡、新指标；`pnpm e2e --mode saas`                                | G4                | 两节点端到端；关掉 #51                                                                                            | Opus                                     | L    |
 | G6   | SaaS 控制面，按 [SaaS 能力设计](saas-design.md) §9 分期：M1 按模块拆 PR（账号 → 团队 → 主机与授予 → 分享 → 审计与邮件 → 配额），之后是 M2、M3；控制台页面在 Armadra 仓另开 PR | G2、G5            | 各模块的集成测试；`pnpm e2e --mode saas` 走真实账号与团队流程                                                     | Opus（账号、团队、授予）/ Sonnet（其余） | XL   |
@@ -384,7 +384,7 @@ G6 只管怎么落地：
 | 两套控制核（TS 给 Workers、Go 给节点）慢慢分叉 | Workers 冻结功能；合同测试两边都跑；新功能只进 Go，Workers 要用就先评估     |
 | 逐项对齐漏了边角行为                           | 现有 e2e 用例不改，直接对 Go 镜像跑；把 Node 版的单测逐条翻译，不是重新设计 |
 | `modernc.org/sqlite` 的兼容性或性能            | G2 先跑兼容测试与压测；不行就换 cgo 驱动，代价是交叉编译与静态链接          |
-| JSON 的 null 与「字段缺省」和 zod 不一致       | 68 个夹具做形状校验；协议包导出的 JSON Schema 是判据                        |
+| JSON 的 null 与「字段缺省」和 zod 不一致       | 全部夹具做形状校验；协议包导出的 JSON Schema 是判据                         |
 | 事件循环在少核上调度饿死（压测里出现过）       | 小批处理 + 让出写进实现规范；性能套件里查调度延迟                           |
 | 切换时老部署升级失败                           | 同一个库格式，可以回滚到 TS 镜像；G4 演练升级与回滚                         |
 
@@ -396,7 +396,7 @@ G6 只管怎么落地：
 | Q2  | SaaS 控制面部署在哪里（Go 不能上 Workers）                                            | M1 与中继节点同机 compose（一台 VM + PG + Redis）；规模上去再拆                            |
 | Q3  | SQLite 驱动：纯 Go（modernc）还是 cgo（mattn）                                        | modernc，保住静态二进制                                                                    |
 | Q4  | 切换后删除 TS 的 `apps/relay` 与 `relay-runtime-node` 的时机                          | 切换版之后的下一个版本（G4.1）                                                             |
-| Q5  | 切换版的版本号                                                                        | v0.10.0，三仓统一                                                                          |
+| Q5  | 切换版的版本号                                                                        | 切换时的下一个 minor，三仓统一（协议 1.4 先随 v0.10.0 发布，切换版不预先占号）             |
 | Q6  | 运行镜像底座：`debian:bookworm-slim` + tini，还是 distroless static                   | distroless static（没有 shell，体积小）；需要排障时用调试镜像                              |
 | Q7  | 线上 `relay.armadra.com` 要不要换成 Go 节点                                           | 先不换（D2，Workers 继续服务）；Go 节点在 SaaS 域名上线并稳定后再评估                      |
 

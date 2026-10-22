@@ -287,11 +287,12 @@ M1 用「团队全员」与「单个成员」两种授予主体就够了。分�
 
 迁移遵守现有规则：编号接 main 最大号、文件进 `migrations.lock`、已发布的不改、坏库拒绝启动。
 
-## §6 断言、令牌与协议的变化（协议 1.4，只做加法）
+## §6 断言、令牌与协议的变化（协议 1.4）
 
 - **断言声明**：
   - `team { teamId, role: owner|admin|member|billing|guest }`：所属团队与团队角色。主机属于个人空间时不带。
-  - `team` 在协议 1.3 里定义为部门、角色 `lead|member`，从没签发过，所以这次改语义安全；同一 PR 更新协议包、契约与夹具。
+  - `team` 在协议 1.3 里定义为部门、角色 `lead|member`，从没签发过，所以原地改语义；同一 PR 更新协议包、契约与夹具。
+  - **兼容**：1.3 的 core 严格校验断言，见到 1.4 的 `team.role` 会拒绝整张断言。所以控制面只给登记的 `coreVersion` 不低于「采用协议 1.4 的 Armadra 版本」的源签带 `team` 的断言（契约 §30）。
   - `role`、`scp` 是合成后的主机角色与范围，语义不变。
   - `org` 保留给 §1.4 的组织。
 - **令牌**：
@@ -299,7 +300,8 @@ M1 用「团队全员」与「单个成员」两种授予主体就够了。分�
   - 隧道令牌同样带 `team`。
 - **契约**：
   - 现有预留的 `orgs.*`（从没实现）整组换成 `teams.*`，另加 `groups.*`、`invitations.*`、`grants.*`、`accessRequests.*`、`audit.*`、`apiTokens.*`。
-  - `billing.*` 的路径从 `/v1/orgs/{orgId}/…` 改成 `/v1/teams/{teamId}/…`。
+  - `billing.*` 的路径从 `/v1/orgs/{orgId}/…` 改成 `/v1/billing/…`，带 `space` 入参，个人空间也能用（契约 §26）。
+  - `sources.list`、`links.list`、`sources.registrationToken` 用同一个 `space` 入参（`{ kind: "personal" } | { kind: "team", teamId }`）。
   - 契约 §N 只追加，`cloud-api.md` 新增「团队」「授予」「审计」「计费」几节。
 - **core 侧（Armadra 要配合改）**：现在 `cloud/login` 把 `org` + `role` 当作 SaaS 的准入条件（`apps/desktop/src/core/identity/cloud/login.ts:207-212`，「组织就是准入」），`team` 只写进审计。
   - 改成 `team` + `role` 准入：带了就不再需要邀请令牌，按 `role` 建成员，授予随后按声明同步，沿用 `multi-tenant-saas-design.md` §3.3(a)。
@@ -307,24 +309,28 @@ M1 用「团队全员」与「单个成员」两种授予主体就够了。分�
   - 审计照旧记 `team`。
   - 这个改动跟协议 1.4 的协议包一起，在 Armadra 开一个 PR。
 
-## §7 API 一览（按组，详细形状进 `cloud-api.md`）
+## §7 API 一览
 
-| 组                 | 过程                                                                                                                                               |           期           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------: |
-| `auth.*`           | 现有过程 + `register`、`emailVerify`、`passwordResetStart/Finish`、`device*`（M1）；`totp*`、`passkey*`、`oauth*`（M2）；`sso*`（M3）              |         M1–M3          |
-| `me.*`             | 现有过程 + `update`、`emailChange`、`spaces`（个人 + 所属团队）、`securityLog`、`delete`、`export`                                                 |         M1–M2          |
-| `teams.*`          | `create`、`list`、`get`、`update`、`delete`、`restore`、`transferOwnership`、`members`、`memberRole`、`memberRemove`、`leave`、`settings`、`usage` |           M1           |
-| `invitations.*`    | 团队邀请与主机邀请：`create`、`list`、`revoke`、`get`（匿名看摘要）、`accept`、`decline`                                                           |           M1           |
-| `groups.*`         | `create`、`update`、`delete`、`members`、`memberAdd`、`memberRemove`、`setLead`                                                                    |           M2           |
-| `sources.*`        | 现有过程 + `update`（名称、标签、设置）、`transfer*`、`accessList`、`accessRevoke`                                                                 |         M1–M2          |
-| `grants.*`         | `list`（按主机或按主体）、`create`、`update`、`revoke`、`effective`（某人对某主机的有效权限）                                                      |           M1           |
-| `accessRequests.*` | `create`、`list`、`approve`、`deny`                                                                                                                |           M2           |
-| `links.*`          | 现有过程，加空间维度                                                                                                                               |           M1           |
-| `audit.*`          | `list`、`export`                                                                                                                                   |         M1–M2          |
-| `billing.*`        | `plan`、`usage`、`checkout`、`portal`、`webhook`（支付服务回调，单独鉴权）                                                                         | M1（plan / usage）、M2 |
-| `apiTokens.*`      | `create`、`list`、`revoke`                                                                                                                         |           M2           |
-| `admin.*`          | 运营后台，单独的 scope `operator`，不对外公开                                                                                                      |         M1–M2          |
-| `relay.*`          | 现有过程                                                                                                                                           |           —            |
+详细形状、方法、路径与 scope 以契约 `cloud-api.md` §21–§32 为准（协议 1.4，#63）。按组：
+
+| 组                 | 过程                                                                                                                                                                                                                 |           期           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------: |
+| `auth.*`           | 现有过程 + `register`、`emailVerify`、`emailVerifyResend`、`passwordResetStart/Finish`、`device*`（含 `deviceGet`、`deviceDeny`）（M1）；`totp*`、`passkey*`、`oauthStart/Finish/Unlink`（M2）；`sso*`（M3，未预留） |         M1–M3          |
+| `me.*`             | 现有过程 + `update`、`emailChange`、`spaces`、`securityLog`、`notificationPrefs`、`notificationPrefsUpdate`、`delete`、`deleteCancel`、`export`；`me.get` 带 `scopes`、`teams`                                       |         M1–M2          |
+| `teams.*`          | `create`、`list`、`get`、`update`、`delete`、`restore`、`transferOwnership`、`members`、`memberRole`、`memberRemove`、`leave`、`settings`、`settingsUpdate`、`usage`                                                 |           M1           |
+| `invitations.*`    | 团队邀请与主机邀请：`create`、`list`、`get`（匿名看摘要）、`accept`、`decline`、`revoke`、`resend`                                                                                                                   |           M1           |
+| `groups.*`         | `list`、`create`、`update`、`delete`、`members`、`memberAdd`、`memberRemove`、`setLead`                                                                                                                              |           M2           |
+| `sources.*`        | 现有过程 + `update`（名称、标签、设置）、`transferStart`、`transferList`、`transferAccept`、`transferCancel`、`accessList`、`accessRevoke`                                                                           |         M1–M2          |
+| `grants.*`         | `list`、`create`、`update`、`revoke`、`effective`；按标签授予未预留（M2 再加）                                                                                                                                       |           M1           |
+| `accessRequests.*` | `create`、`list`、`approve`、`deny`                                                                                                                                                                                  |           M2           |
+| `trust.*`          | `list`、`reject`（§11.4；批准走端到端，不经云端）                                                                                                                                                                    |           M1           |
+| `links.*`          | 现有过程，加 `space` 维度                                                                                                                                                                                            |           M1           |
+| `audit.*`          | `list`、`export`                                                                                                                                                                                                     |         M1–M2          |
+| `billing.*`        | `plan`、`usage`、`invoices`、`checkout`、`portal`、`webhook`（支付服务回调，单独鉴权）                                                                                                                               | M1（plan / usage）、M2 |
+| `apiTokens.*`      | `create`、`list`、`revoke`                                                                                                                                                                                           |           M2           |
+| `admin.*`          | 运营后台，scope `operator`：租户、账号与团队状态、中继节点与排空、事故开关、状态发布、滥用与冻结链接、功能开关                                                                                                       |         M1–M2          |
+| `status.get`       | 匿名的服务状态                                                                                                                                                                                                       |           M2           |
+| `relay.*`          | 现有过程                                                                                                                                                                                                             |           —            |
 
 ## §8 客户端与控制台（Armadra）
 
