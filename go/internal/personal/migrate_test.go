@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -481,5 +482,47 @@ func TestMigratePostgresToSQLiteNeedsDatabase(t *testing.T) {
 	var ue *UsageError
 	if !errors.As(err, &ue) || !strings.HasPrefix(ue.Msg, "要给 --database-url") {
 		t.Fatalf("应是用法错误：%v", err)
+	}
+}
+
+// 源库里不止 default 一个租户：拒绝，而不是只迁 default（同 Node 的 verify）。
+func TestMigrateRefusesMultiTenantSource(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyDataDir(t)
+	if _, err := MigrateStore(ctx, dir, StoreSQLite, MigrateOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := sqlite.Open(ctx, filepath.Join(dir, DatabaseFile), sqlite.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CreateTenant(ctx, "other", store.Tenant{TenantSettings: store.TenantSettings{Issuer: "https://x", TrustedOrigins: []string{}}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Close()
+	_, err = MigrateStore(ctx, dir, StorePostgres, MigrateOpts{Database: &DatabaseOptions{URL: "postgres://u:p@127.0.0.1:1/x"}})
+	var state *StateError
+	if !errors.As(err, &state) || state.Code != Invalid || !strings.Contains(state.Msg, "租户不对") {
+		t.Fatalf("应拒绝多租户的源：%v", err)
+	}
+	if !exists(filepath.Join(dir, DatabaseFile)) {
+		t.Fatal("拒绝时源库不动")
+	}
+}
+
+// 备份目标建不出来是运行出错（退出码 1），不是用法错误。
+func TestBackupTargetUncreatableIsInvalid(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyDataDir(t)
+	if _, err := MigrateStore(ctx, dir, StoreSQLite, MigrateOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	err := RunBackup(ctx, dir, filepath.Join(t.TempDir(), "none", "b.db"), nil, func(string) {})
+	var state *StateError
+	if !errors.As(err, &state) || state.Code != Invalid {
+		t.Fatalf("应是 Invalid（退出 1）：%v", err)
+	}
+	if code := exitFor(err, io.Discard); code != 1 {
+		t.Fatalf("退出码 %d，应为 1", code)
 	}
 }

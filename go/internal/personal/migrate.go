@@ -195,6 +195,11 @@ func openMigrateSource(ctx context.Context, dataDir string, db *DatabaseOptions)
 		if err != nil {
 			return nil, asStateError(err)
 		}
+		// 先核对它是个人中转的库（只有 default 一个租户、一个账号），免得只迁了其中一个租户。
+		if err := verify(ctx, kind, d); err != nil {
+			_ = d.Close()
+			return nil, err
+		}
 		snap, err := d.ExportTenant(ctx, store.DefaultTenant)
 		_ = d.Close()
 		if err != nil {
@@ -222,6 +227,10 @@ func openMigrateSource(ctx context.Context, dataDir string, db *DatabaseOptions)
 		d, err := postgres.Open(ctx, postgresOptions(db))
 		if err != nil {
 			return nil, asStateError(err)
+		}
+		if err := verify(ctx, kind, d); err != nil {
+			_ = d.Close()
+			return nil, err
 		}
 		snap, err := d.ExportTenant(ctx, store.DefaultTenant)
 		_ = d.Close()
