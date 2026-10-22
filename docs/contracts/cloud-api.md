@@ -10,9 +10,10 @@
 - 预留：SaaS 服务端的业务路由（总计划 §12.2）已在契约与路由表里，实现落地前统一答 501 `{ code: "not_implemented", message, requestId }`；`GET /health` 已实现。
 - 认证：云会话用 `Authorization: Bearer <accessToken>`；源对控制面用 `Authorization: Source <jws>`；浏览器来源改用 `__Host-armadra-cloud` Cookie + `X-Armadra-CSRF`。
 - **CSRF 值从哪来**（1.4 补充）：Cookie 会话的 CSRF 值由 `auth.login`、`auth.mfaVerify`、`auth.refresh` 的响应字段 `csrfToken` 给出，页面刷新后由 `me.get` 的 `csrfToken` 取回；前端只放内存。Cookie 会话上每个非 GET 请求必须带 `X-Armadra-CSRF`，值等于它，对不上答 `403 forbidden`。同一请求不同时带 Cookie 与 Bearer。Bearer 会话与 personal 不用 Cookie，响应里没有 `csrfToken`（字段可缺）。
+- **Cookie 名与属性**（1.4 补充，最终）：普通会话两枚——访问 Cookie `__Host-armadra-cloud`、刷新 Cookie `__Host-armadra-cloud-refresh`；运营会话两枚——`__Host-armadra-ops`、`__Host-armadra-ops-refresh`。四枚都是 `Secure; HttpOnly; SameSite=Strict; Path=/`，不带 `Domain`（`__Host-` 前缀的要求），**不做路径限定**。请求里带了同名的重复 Cookie（同一个名字出现两次以上）一律答 `401 unauthenticated`，并在响应里清掉这些 Cookie，客户端重新登录。刷新 Cookie 免 CSRF，见下。
 - **运营会话 Cookie**（1.4 补充）：运营范围的会话是另一枚 Cookie `__Host-armadra-ops`，不覆盖普通会话 `__Host-armadra-cloud`，两者可同时存在；它同样配 `X-Armadra-CSRF`（值取自签出它的那次 `auth.login` / `auth.mfaVerify` 响应的 `csrfToken`，用于 `__Host-armadra-ops` 的请求），寿命 1 小时，只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，其余 procedure 一律不认。详见 §28。
-- **Cookie 会话的刷新与登出**（1.4 补充）：`auth.refresh` 的 `refreshToken` 可省——Cookie 会话的刷新凭据在 Cookie 里（`__Host-armadra-cloud` / `__Host-armadra-ops`），不进请求体；Bearer 客户端（原生、核心）照旧必带。`auth.refresh` 与 `auth.logout` 多可选入参 `scope?: "operator"`：不带作用于普通控制台会话（`__Host-armadra-cloud`），带则作用于运营会话（`__Host-armadra-ops`）；各自要对应那枚 Cookie 的 `X-Armadra-CSRF`。personal 不用 Cookie、没有运营账号：`refreshToken` 缺了答 `session_revoked`（与令牌无效同码），`scope: "operator"` 答 `403 forbidden`（与 `auth.login` 一致）。两个字段都是入参上的可选追加，已部署中继不受影响。
-- **`auth.refresh` 免 CSRF**（1.4 补充）：页面刷新后前端还没有 CSRF 值，所以 `auth.refresh` 不要求 `X-Armadra-CSRF`（普通与运营会话都一样）；刷新 Cookie 是 `SameSite=Strict` 且路径限定在 `/v1/auth/refresh`，跨站带不上，不需要。其余所有 Cookie 认证的写请求（含 `auth.logout`）照旧必带；`auth.refresh` 的响应返回新的 `csrfToken`。
+- **Cookie 会话的刷新与登出**（1.4 补充）：`auth.refresh` 的 `refreshToken` 可省——Cookie 会话的刷新凭据在刷新 Cookie 里（`__Host-armadra-cloud-refresh` / `__Host-armadra-ops-refresh`），不进请求体；Bearer 客户端（原生、核心）照旧必带。`auth.refresh` 与 `auth.logout` 多可选入参 `scope?: "operator"`：不带作用于普通控制台会话（`__Host-armadra-cloud`），带则作用于运营会话（`__Host-armadra-ops`）；各自要对应那枚 Cookie 的 `X-Armadra-CSRF`。personal 不用 Cookie、没有运营账号：`refreshToken` 缺了答 `session_revoked`（与令牌无效同码），`scope: "operator"` 答 `403 forbidden`（与 `auth.login` 一致）。两个字段都是入参上的可选追加，已部署中继不受影响。
+- **`auth.refresh` 免 CSRF**（1.4 补充）：页面刷新后前端还没有 CSRF 值，所以 `auth.refresh` 不要求 `X-Armadra-CSRF`（普通与运营会话都一样）；刷新 Cookie（`__Host-armadra-cloud-refresh` / `__Host-armadra-ops-refresh`）是 `SameSite=Strict`，跨站请求带不上，所以不需要；它不做路径限定（`Path=/`，`__Host-` 前缀不允许别的路径），但服务端只在 `auth.refresh` 与 `auth.logout` 上读它。其余所有 Cookie 认证的写请求（含 `auth.logout`）照旧必带；`auth.refresh` 的响应返回新的 `csrfToken`。
 - **GET 里的对象入参**（1.4 补充）：对象入参一律写成方括号的 deepObject，如 `space[kind]=team&space[teamId]=t1`；不用点号，也不把 JSON 串塞进一个参数。服务端（含 Go 的 personal 路由）只按这种写法解析。
 
 ## §2 账号与会话
@@ -332,7 +333,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **角色** `owner` / `admin` / `member` / `billing` / `guest`（`guest` 是外部协作者，不占席位，不能进分组，团队设置可关）。每个团队至少一个 owner：最后一个 owner 不能离开、降级或被移除（`409 team_last_owner`），要先 `teams.transferOwnership`（目标必须是 admin）。
 - **删除**：`teams.delete` 先要求没有在线主机，进入 30 天恢复期（`purgeAtMs`），期内 `teams.restore`，之后清除；恢复期内对该团队的其余调用答 `410 team_deleted`。已是成员再被邀请 / 加入答 `409 member_exists`。
 - **设置** `teams.settings`：M1 为 `membersCanRegisterHosts`、`defaultHostRole`、`allowGuests`、`allowAnonymousLinks`、新设备背书人 `deviceEndorsers` / `memberSelfEndorse`；M2 起生效的 `requireMfa`、`sessionMaxAgeMs`、`allowedEmailDomains`。设置禁止某个操作时答 `403`：成员登记主机 `host_registration_disabled`、guest `guests_disabled`、匿名接受分享链接 `anonymous_links_disabled`（接受链接 `links.accept`），其余设置项答通用的 `team_policy_denied`，`details.setting` 写是哪一项；界面按码取文案。当前计划不含的功能（如分组、访问申请、强制两步验证）答 `403 plan_feature_unavailable`，与按数量计的 `429 limit_reached` 区分。
-- **配额**：只有 Free 时硬上限答 `429 limit_reached`，`details` 写哪个配额、当前用量与上限；`teams.usage` 列主机数、成员数、guest 数、同时连接数、本月流量对照上限。
+- **配额**：只有 Free 时硬上限答 `429 limit_reached`，`details` 是 `{ quota, used, limit }`（协议包 `./errors` 的 `limitReachedDetailsSchema`）；`quota` 取 `teams`（个人账号能建的团队数）、`hosts`、`members`、`guests`（团队内数量）、`concurrent`（同时连接数）、`traffic`（本月中继流量，字节）。`teams.usage` / `billing.usage` 的用量项 `{ metric, value, limit }` 的 `metric` 取同一张枚举。
 - 团队被运营方停用后拒绝签断言与登记主机（`403 team_suspended`）。
 - 未验证邮箱的账号可以登录，但不能建团队、登记主机、签链接、被授予（`403 email_unverified`）。
 
@@ -365,7 +366,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 - 邮件里的链接带一次性 `token`；`invitations.get` 匿名可调，只答摘要（遮掩后的邮箱、团队 / 主机名、角色、邀请人），不泄露更多。接受要登录云账号且邮箱与被邀请的一致（`403 invitation_email_mismatch`）。
 - 过期答 `410 invitation_expired`，已撤销答 `410 invitation_revoked`，其余无效情形答 `404 not_found`。接受是幂等的：已接受的再次接受答原结果。
-- 主机邀请在 core 侧与分享链接落成同一张邀请，core 的接受与消费逻辑不变（设计 §11.3）。
+- 主机邀请由云端实现为**云端授予加 guest 成员关系**，不落成 core 的邀请：接受后控制面登记一条对该主机的授予（`grants`，§24），之后按授予向 core 签带 `role` / `scp` 的断言。分享链接仍落成 core 的邀请，core 的接受与消费逻辑不变（设计 §11.3）。
 - `invitations.resend`：换新令牌、重新计 7 天、旧链接作废，按邀请限流。
 - `invitations.list` 的 `box = sent`（缺省）列自己能管的邀请，`received` 列发给自己邮箱的待处理邀请。
 
@@ -498,7 +499,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §28 运营后台
 
-1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud`），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。personal 没有运营账号：`scope: "operator"` 一律答 `403 forbidden`。`auth.refresh` / `auth.logout` 带 `scope: "operator"` 作用于这枚 Cookie（要它的 CSRF 值），不带则作用于普通会话，见 §1。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。运营会话的 `auth.refresh` 同样免 CSRF（§1），`auth.logout` 要 `__Host-armadra-ops` 对应的 CSRF 值。
+1.4 补充：`admin.*` 除 Bearer 运营令牌外，也接受**运营会话**——`auth.login` 带 `scope: "operator"` 签出的 Cookie `__Host-armadra-ops`（配刷新 Cookie `__Host-armadra-ops-refresh`，二者都是 `Path=/`；访问寿命 1 小时，不覆盖普通会话 `__Host-armadra-cloud` / `__Host-armadra-cloud-refresh`；同名重复 Cookie 的处理见 §1），此时照样校验 `X-Armadra-CSRF`（§1）。只对账号带 `operator` 范围且开了两步验证的运营账号签出：非运营账号答 `403 forbidden`，运营账号没开两步验证答 `403 operator_mfa_required`；走两步验证时范围随挑战带到 `auth.mfaVerify`。personal 没有运营账号：`scope: "operator"` 一律答 `403 forbidden`。`auth.refresh` / `auth.logout` 带 `scope: "operator"` 作用于这枚 Cookie（要它的 CSRF 值），不带则作用于普通会话，见 §1。该 Cookie 只对 `admin.*` 与它自己的 `auth.logout` / `auth.refresh` 有效，过期后回到全新登录。运营会话的 `auth.refresh` 同样免 CSRF（§1），`auth.logout` 要 `__Host-armadra-ops` 对应的 CSRF 值。
 
 协议 1.4。单独的 scope `operator`（运营令牌，`Authorization: Bearer`），不对外公开。只读元数据：账号与团队的计划、用量、主机数、状态——看不到任何内容与令牌，也不提供「以用户身份登录」。
 
@@ -599,8 +600,9 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - 断言的 `team` 只在主机属于团队时带；个人空间的主机不带。`role`、`scp` 是合成后的主机角色与范围，语义不变。
 - **老中继**收到带 `team` 的令牌照常放行（令牌 schema 非 strict，更高 minor 的声明被忽略）。
 - **1.3 的 core 会拒绝**：它按严格的 1.3 `assertionClaimsSchema` 校验断言，`team.role` 取 `owner` / `admin` / `billing` / `guest` 这些 1.4 的值时整张断言无效；它也只认 `org` + `role` 作 SaaS 准入。1.3 的签发方没有发过 `org` / 旧 `team`，所以没有存量令牌需要兼容。
-- **签发规则**：控制面只向登记的 `coreVersion`（`sources.register` 已上报）不低于「采用协议 1.4 的 Armadra 版本」（发版时填具体版本号）的源签带 `team` 的断言；更老的 core 一律不带 `team`（主机属于团队时也不签，答 `403 source_access_denied`）。
+- **签发规则**：控制面只向登记的 `coreVersion`（`sources.register` 已上报）不低于协议包常量 `MIN_CORE_VERSION_TEAM_ASSERTION` 的源签带 `team` 的断言（只带 `role` / `scp`、不带 `team` 的断言用 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`）；两个常量都是语义化版本号，也导出在 `schema/constants.json` 的 `minCoreVersion`，现在都是 `0.10.0`——这是第一个采用协议 1.4 的 Armadra 版本的占位，发版时填定；更老的 core 一律不带 `team`（主机属于团队时也不签，答 `403 source_access_denied`）。
 - core 侧（Armadra）的 `cloud/login` 改成以 `team` + `role` 作 SaaS 准入，另在 Armadra 仓提 PR。
+- **节点令牌**（1.4 补充）：运营方给每个中继节点发的令牌（§17 的 `relay-node` scope）有了固定的声明：头 `typ = armadra-node`，`{ iss, sub = 节点名, aud = "relay-node", iat, exp, jti, ver }`（`nodeTokenClaimsSchema`，`schema/assertion/node-token-claims.json`，夹具 `fixtures/assertion/node-token.jwt`）。现有已部署的中继继续用原来的不透明节点令牌；这是新增的声明格式，不改变任何已部署 procedure。
 - 新增的 scope（`team:member` / `team:admin` / `team:owner` / `team:billing` / `group:lead` / `operator` / `billing-webhook`）取代 `org:admin` / `org:owner`。
 
 ## §31 设备信任
@@ -612,13 +614,16 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - `trust.list` / `trust.reject` 的 scope 含 `team:member`：成员只看得到、处理得了自己的待信任请求（`memberSelfEndorse` 开着时），主机 owner / 团队 admin 按 `deviceEndorsers` 设置看到团队里的请求，处理器据此收窄；缺省列调用者能背书的全部空间，给 `space` 只列那个空间；不是背书人答 `403 team_role_insufficient`。`device_untrusted` 表示背书要在已受信的设备上做。
 - **校验码（SAS）云端不经手**（1.4 补充：`trustRequest` 删去 `sas`）：校验码只在新设备与主机之间的端到端通道里产生，由新设备显示；背书人把新设备上显示的码输入自己已受信的设备，由端到端通道在主机侧核对，核对通过才批准。`trust.list` 与 me-stream 的 `deviceTrustRequested` 都没有这个字段。
 - 走分享链接进来的访客仍按链接的 `max_devices` 与指纹钉扎，不经这里。
+- **core 的上报**（1.4 补充，scope `source`，`Authorization: Source <jws>`，同 `sources.heartbeatHint`）：core 在团队成员的新设备停在 `device_pending` 时调 `sources.trustRequest`，入参 `{ pendingId, accountId, deviceId, expiresAtMs }`——`pendingId` 是 core 侧待信任条目的 id，兼作幂等键（同一 `pendingId` 重复调答同一个 `requestId`）；`expiresAtMs` 至多比现在晚 24 小时（超出答 `400 bad_request`）；设备名与平台由控制面从自己的设备表填，不由 core 报。答 `{ requestId, status }`：`pending` 表示已登记并通知背书人；刚被背书人拒绝过的设备在冷却期内答 `rejected`，不再通知。条目被批准或过期后 core 调 `sources.trustResolve`（`{ result: "trusted" | "expired" }`），控制面撤掉通知并发 `deviceTrustResolved`（§32）。错误码：`source_access_denied`（源已不在团队或账号不是该团队成员）、`not_found`（`pendingId` 或设备不存在）、`conflict`（已解决的请求再次登记 / 解决）、`rate_limited`。已部署的中继不实现这两条（personal 答 `404 not_found`，cloud 实现前答 `501 not_implemented`）。
 
 <!-- rpc:begin contract=§31 -->
 
-| procedure      | 方法与路径                                   | scope                                  | 错误码                                                                |
-| -------------- | -------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------- |
-| `trust.list`   | `GET /v1/trust-requests`                     | `owner` / `team:admin` / `team:member` | `team_role_insufficient`、`not_found`                                 |
-| `trust.reject` | `POST /v1/trust-requests/{requestId}/reject` | `owner` / `team:admin` / `team:member` | `not_found`、`team_role_insufficient`、`device_untrusted`、`conflict` |
+| procedure              | 方法与路径                                               | scope                                  | 错误码                                                                         |
+| ---------------------- | -------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------ |
+| `sources.trustRequest` | `POST /v1/sources/me/trust-requests`                     | `source`                               | `source_access_denied`、`not_found`、`conflict`、`rate_limited`、`bad_request` |
+| `sources.trustResolve` | `POST /v1/sources/me/trust-requests/{pendingId}/resolve` | `source`                               | `source_access_denied`、`not_found`、`conflict`、`rate_limited`                |
+| `trust.list`           | `GET /v1/trust-requests`                                 | `owner` / `team:admin` / `team:member` | `team_role_insufficient`、`not_found`                                          |
+| `trust.reject`         | `POST /v1/trust-requests/{requestId}/reject`             | `owner` / `team:admin` / `team:member` | `not_found`、`team_role_insufficient`、`device_untrusted`、`conflict`          |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
