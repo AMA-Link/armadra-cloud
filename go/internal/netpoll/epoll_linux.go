@@ -49,9 +49,12 @@ func newLoop() (*loop, error) {
 }
 
 func (l *loop) stop() {
+	// 先在锁里置位（等在途的 epoll_ctl 结束），再在锁外关文件：
+	// 关文件要等循环里的 epoll_wait 回调退出，回调又要读锁，不能握着写锁等。
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.stopped.Swap(true) {
+	already := l.stopped.Swap(true)
+	l.mu.Unlock()
+	if already {
 		return
 	}
 	_ = l.file.Close()
