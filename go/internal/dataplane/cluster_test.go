@@ -109,11 +109,21 @@ func TestTwoNodeControlPlane(t *testing.T) {
 			})
 
 			// 3. B 发的命令到达持有隧道的 A：closeTunnel → 隧道关闭、路由删除、下线事件。
-			b.Command(control.NodeCommand{Type: control.CommandCloseTunnel, SourceID: h.env.SourceID})
-			select {
-			case <-core.Closed():
-			case <-time.After(10 * time.Second):
-				t.Fatal("closeTunnel 之后隧道应关闭")
+			// 命令经 Redis 发布 / 订阅是至多一次：订阅连接恰好在重连时会丢。命令是幂等的，
+			// 没生效就重发，直到超时才算失败（断言不变：命令最终到达持有隧道的节点）。
+			closeTunnel := control.NodeCommand{Type: control.CommandCloseTunnel, SourceID: h.env.SourceID}
+			b.Command(closeTunnel)
+			closeDeadline := time.After(15 * time.Second)
+		closing:
+			for {
+				select {
+				case <-core.Closed():
+					break closing
+				case <-time.After(time.Second):
+					b.Command(closeTunnel)
+				case <-closeDeadline:
+					t.Fatal("closeTunnel 之后隧道应关闭")
+				}
 			}
 			eventually(t, "路由被删、B 收到下线事件", func() bool {
 				r, _ := b.Routes().Get(ctx, h.env.SourceID)
@@ -124,8 +134,14 @@ func TestTwoNodeControlPlane(t *testing.T) {
 
 			// kick → 持有隧道的 A 发 GOAWAY replaced（源收到后自己重连）。
 			again := h.core(relayenv.CoreOptions{Capabilities: []string{"e2e"}})
-			b.Command(control.NodeCommand{Type: control.CommandKick, SourceID: h.env.SourceID, Reason: "test"})
+			kick := control.NodeCommand{Type: control.CommandKick, SourceID: h.env.SourceID, Reason: "test"}
+			b.Command(kick)
+			resent := time.Now()
 			eventually(t, "A 的隧道收到 GOAWAY replaced", func() bool {
+				if time.Since(resent) > time.Second { // 同上：至多一次的发布，没到就重发
+					b.Command(kick)
+					resent = time.Now()
+				}
 				for _, reason := range again.Goaways() {
 					if reason == "replaced" {
 						return true
