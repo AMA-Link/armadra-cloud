@@ -21,11 +21,12 @@
 // 用 `git archive` 取那一版构建，不动主仓的检出；ARMADRA_REF=worktree 则直接用目录现状；
 // ARMADRA_FETCH=0 不先 fetch。`--server-image` 直接用现成镜像（nightly 的 compat.min）。
 //
-// 对 Go 中继跑同一套用例（不改用例，只换镜像与容器里的命令行）：
-//   E2E_RELAY_DOCKERFILE=go/Dockerfile E2E_RELAY_CLI=armadra-relay pnpm e2e --mode personal
+// 中继镜像缺省由 apps/relay/Dockerfile 构建（Go 实现）。对上一版 Node 镜像跑同一套用例（回滚演练），
+// 不改用例，只换镜像与容器里的命令行：
+//   E2E_RELAY_CLI="node /app/out/cli.js" pnpm e2e --mode personal --relay-image ghcr.io/ama-link/armadra-relay:<上一版>
 //   E2E_RELAY_DOCKERFILE  构建中继镜像用的 Dockerfile（缺省 apps/relay/Dockerfile）
-//   E2E_RELAY_CLI         容器里中继命令行的写法（缺省 `node /app/out/cli.js`，空格分隔）
-//   已有镜像时用 --relay-image <镜像> 加 E2E_RELAY_CLI，不构建。
+//   E2E_RELAY_CLI         容器里中继命令行的写法（缺省 `armadra-relay`，空格分隔）
+//   已有镜像时用 --relay-image <镜像>，不构建。
 //
 // 产物：<输出目录>/result.json（缺省 .data/e2e/，每步耗时与结果）。任一步失败非零退出。
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
@@ -69,6 +70,10 @@ const USAGE = `用法: pnpm e2e --mode personal [选项]
   --relay-image IMAGE    用现成的中继镜像
   --server-image IMAGE   用现成的服务器壳镜像（如 ghcr.io/ama-link/armadra-server:<compat.min>）
   --output DIR           result.json 的目录，缺省 .data/e2e
+  --relay-data DIR       中继的数据目录用宿主机上的 DIR（绑定挂载，跑完保留），缺省是一次性的卷；
+                         升级与回滚演练用：同一个目录先后交给两个镜像
+  --relay-password-file F  中继账号口令文件：有就读，没有就生成（0600）；配 --relay-data 复用账号
+  --relay-port N         中继端口（缺省随机）
   --keep                 跑完不清理（调试用，之后手动 docker compose -p <项目> down -v）`;
 
 function parseArgs(argv) {
@@ -81,7 +86,15 @@ function parseArgs(argv) {
     }
     if (["--skip-build", "--keep"].includes(arg)) options.flags.add(arg);
     else if (
-      ["--mode", "--relay-image", "--server-image", "--output"].includes(arg)
+      [
+        "--mode",
+        "--relay-image",
+        "--server-image",
+        "--output",
+        "--relay-data",
+        "--relay-password-file",
+        "--relay-port",
+      ].includes(arg)
     ) {
       const value = argv[(index += 1)];
       if (value === undefined || value.startsWith("--")) {
@@ -155,7 +168,7 @@ const output = resolve(root, options.values.get("--output") ?? ".data/e2e");
 const relayImage = options.values.get("--relay-image") ?? "armadra-relay:e2e";
 const relayDockerfile =
   process.env.E2E_RELAY_DOCKERFILE ?? "apps/relay/Dockerfile";
-const relayCli = (process.env.E2E_RELAY_CLI ?? "node /app/out/cli.js")
+const relayCli = (process.env.E2E_RELAY_CLI ?? "armadra-relay")
   .split(" ")
   .filter(Boolean);
 const serverImage =
@@ -163,22 +176,33 @@ const serverImage =
 const keep = options.flags.has("--keep");
 const report = new Report();
 
-const relayPort = await new Promise((done, failed) => {
-  const probe = createServer();
-  probe.once("error", failed);
-  probe.listen(0, "127.0.0.1", () => {
-    const { port } = probe.address();
-    probe.close(() => done(port));
-  });
-});
+const relayPort = options.values.has("--relay-port")
+  ? Number(options.values.get("--relay-port"))
+  : await new Promise((done, failed) => {
+      const probe = createServer();
+      probe.once("error", failed);
+      probe.listen(0, "127.0.0.1", () => {
+        const { port } = probe.address();
+        probe.close(() => done(port));
+      });
+    });
+const relayData = options.values.has("--relay-data")
+  ? resolve(options.values.get("--relay-data"))
+  : undefined;
+if (relayData) mkdirSync(relayData, { recursive: true });
 const issuer = `https://relay:${relayPort}`;
 const secretsDir = mkdtempSync(join(tmpdir(), "armadra-e2e-"));
 chmodSync(secretsDir, 0o755);
-// 容器里是 uid 10002：口令文件要它读得到。随机口令、只活在这一次运行里。
-const relayPassword = secret(
-  randomBytes(18).toString("base64url"),
-  "中继账号口令",
-);
+// 容器里是 uid 10002：口令文件要它读得到。缺省是随机口令、只活在这一次运行里；
+// 给了 --relay-password-file 就沿用那个文件（没有时生成），同一个数据目录换镜像后还能登录。
+const passwordFile = options.values.get("--relay-password-file");
+let passwordText = randomBytes(18).toString("base64url");
+if (passwordFile) {
+  if (existsSync(passwordFile))
+    passwordText = readFileSync(passwordFile, "utf8").trim();
+  else writeFileSync(passwordFile, passwordText, { mode: 0o600 });
+}
+const relayPassword = secret(passwordText, "中继账号口令");
 writeFileSync(join(secretsDir, "relay_password"), relayPassword, {
   mode: 0o644,
 });
@@ -188,6 +212,7 @@ const composeEnv = {
   E2E_SERVER_IMAGE: serverImage,
   E2E_RELAY_PORT: String(relayPort),
   E2E_SECRETS_DIR: secretsDir,
+  ...(relayData ? { E2E_RELAY_DATA: relayData } : {}),
 };
 const compose = (args, extra = {}) =>
   exec("docker", ["compose", "-p", project, "-f", composeFile, ...args], {

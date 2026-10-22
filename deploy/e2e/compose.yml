@@ -4,6 +4,8 @@
 #   E2E_RELAY_IMAGE / E2E_SERVER_IMAGE  脚本本地构建的两个镜像
 #   E2E_RELAY_PORT                      中继对外端口（容器内外同号，issuer 是 https://relay:<端口>）
 #   E2E_SECRETS_DIR                     脚本生成的临时目录，放中继账号口令文件
+#   E2E_RELAY_DATA                      可选：中继数据目录换成宿主机目录（--relay-data，升级与回滚演练）
+#   E2E_RELAY_DATABASE_URL              可选：数据目录是 PostgreSQL 存储（postgres.json）时的连接串
 #
 # 服务器壳不发布端口：客户端只能经中继到达它。中继只发布到 127.0.0.1，给宿主机上的
 # Node 客户端用（客户端把 relay 解析到 127.0.0.1）。
@@ -20,12 +22,13 @@ services:
       RELAY_LISTEN: 0.0.0.0:${E2E_RELAY_PORT:?}
       RELAY_PERSONAL_ACCOUNT: e2e
       RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/relay_password
+      RELAY_DATABASE_URL: ${E2E_RELAY_DATABASE_URL:-}
     secrets:
       - relay_password
     ports:
       - "127.0.0.1:${E2E_RELAY_PORT:?}:${E2E_RELAY_PORT:?}"
     volumes:
-      - relay-data:/data
+      - ${E2E_RELAY_DATA:-relay-data}:/data
 
   armadra-server:
     image: ${E2E_SERVER_IMAGE:?}

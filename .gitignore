@@ -35,3 +35,6 @@ go/bench/bin/
 go/bench/results/
 go/bench/logs/
 go/bench/work/
+
+# Go 中继的本地构建（pnpm relay:personal、Armadra 探针）
+go/bin/
