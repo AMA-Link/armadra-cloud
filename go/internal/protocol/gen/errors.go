@@ -68,6 +68,8 @@ const (
 	ErrPlanFeatureUnavailable   ErrorCode = "plan_feature_unavailable"
 	ErrDeviceUntrusted          ErrorCode = "device_untrusted"
 	ErrLinkFrozen               ErrorCode = "link_frozen"
+	ErrRegistrationsPaused      ErrorCode = "registrations_paused"
+	ErrOperatorMfaRequired      ErrorCode = "operator_mfa_required"
 	ErrRelayTokenInvalid        ErrorCode = "relay_token_invalid"
 	ErrRelaySourceMismatch      ErrorCode = "relay_source_mismatch"
 	ErrLimitReached             ErrorCode = "limit_reached"
@@ -151,6 +153,8 @@ var ErrorCodes = []ErrorCode{
 	ErrPlanFeatureUnavailable,
 	ErrDeviceUntrusted,
 	ErrLinkFrozen,
+	ErrRegistrationsPaused,
+	ErrOperatorMfaRequired,
 	ErrRelayTokenInvalid,
 	ErrRelaySourceMismatch,
 	ErrLimitReached,
@@ -234,6 +238,8 @@ var errorStatus = map[ErrorCode]int{
 	ErrPlanFeatureUnavailable:   403,
 	ErrDeviceUntrusted:          403,
 	ErrLinkFrozen:               403,
+	ErrRegistrationsPaused:      503,
+	ErrOperatorMfaRequired:      403,
 	ErrRelayTokenInvalid:        401,
 	ErrRelaySourceMismatch:      403,
 	ErrLimitReached:             429,
