@@ -261,3 +261,5 @@ func splitSequence(t *testing.T, data []byte) [][]byte {
 }
 
 func fixtureBytes(t *testing.T, name string) []byte { return testutil.Fixture(t, name) }
+
+func fixtureBytesTB(t testing.TB, name string) []byte { return testutil.Fixture(t, name) }
