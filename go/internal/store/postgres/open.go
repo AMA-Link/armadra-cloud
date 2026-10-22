@@ -53,6 +53,9 @@ type Options struct {
 	KeyRefreshGap time.Duration
 	// Now 缺省 time.Now；账本的 applied_at_ms 用它。
 	Now func() int64
+	// NoMigrate 为真时只对账不迁移（armadra-cloud serve）：账本落后答 store.KindBehind，
+	// 比程序新、对不上、损坏同样拒绝；也不建 schema。
+	NoMigrate bool
 	// MasterKey 是主密钥（32 字节）：给了就把新写的签名私钥用 aes256gcm-v1 包裹，并能读已包裹的；
 	// 没给则写 none，读到包裹过的拒绝（SaaS 实现方案 §2.2）。
 	MasterKey []byte
@@ -71,6 +74,8 @@ type DB struct {
 	keysMu  sync.Mutex
 	keys    map[string]*keyCache
 	wrapper *store.Wrapper
+	// migrated 是 Open 时新跑的迁移数。
+	migrated int
 }
 
 var (
@@ -165,19 +170,24 @@ func Open(ctx context.Context, options Options) (*DB, error) {
 		pool.Close()
 		return nil, unreachable(err)
 	}
-	if options.Schema != "" {
+	if options.Schema != "" && !options.NoMigrate {
 		// 显式给了 schema 时先建它（空 schema，不动已有的任何东西）；之后的迁移照样对账。
 		if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", options.Schema)); err != nil {
 			pool.Close()
 			return nil, unreachable(err)
 		}
 	}
-	if _, err := db.migrate(ctx, migrations, now); err != nil {
+	applied, err := db.migrate(ctx, migrations, now, !options.NoMigrate)
+	if err != nil {
 		pool.Close()
 		return nil, err
 	}
+	db.migrated = applied
 	return db, nil
 }
+
+// Migrated 是 Open 时新跑的迁移条数（已是最新答 0）。
+func (d *DB) Migrated() int { return d.migrated }
 
 // Close 关连接池。
 func (d *DB) Close() error {

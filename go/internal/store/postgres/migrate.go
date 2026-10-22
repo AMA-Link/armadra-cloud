@@ -20,7 +20,9 @@ const migrationLock = 0x41524d44
 //
 // 拒绝（store.Error），绝不自动清库或重建：当前 schema 没有账本却已有表、账本与程序带的迁移
 // 对不上（名字或 SHA-384 不同、编号不连续）、账本比程序多。
-func (d *DB) migrate(ctx context.Context, migrations []store.Migration, now func() int64) (int, error) {
+//
+// apply 为假时只对账不动库（serve 用）：账本落后（含空库）答 KindBehind，别的问题与上面相同。
+func (d *DB) migrate(ctx context.Context, migrations []store.Migration, now func() int64, apply bool) (int, error) {
 	count := 0
 	err := d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(migrationLock)); err != nil {
@@ -48,6 +50,9 @@ func (d *DB) migrate(ctx context.Context, migrations []store.Migration, now func
 			}
 			if tables > 0 {
 				return store.Errorf(store.KindUnknown, "数据库没有迁移账本却已有表，拒绝启动：schema %s", *schema)
+			}
+			if !apply {
+				return store.Errorf(store.KindBehind, "数据库版本落后，先运行 armadra-cloud migrate")
 			}
 			if _, err := tx.Exec(ctx, ledgerDDL); err != nil {
 				return err
@@ -79,6 +84,12 @@ func (d *DB) migrate(ctx context.Context, migrations []store.Migration, now func
 				return store.LedgerToStoreError(problem, "")
 			}
 			return err
+		}
+		if !apply {
+			if len(pending) > 0 {
+				return store.Errorf(store.KindBehind, "数据库版本落后，先运行 armadra-cloud migrate")
+			}
+			return nil
 		}
 		for _, migration := range pending {
 			// 没有参数时 pgx 走简单协议，一个文件里可以有多条语句。

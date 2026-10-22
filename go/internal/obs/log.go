@@ -92,6 +92,12 @@ func Reasons(v string) Field     { return str("reasons", v) }
 func Failures(v int) Field       { return num("failures", int64(v)) }
 func Dropped(v int) Field        { return num("dropped", int64(v)) }
 
+// armadra-cloud 的进程与请求字段：版本、请求 id、数量，同样不含请求内容与凭据。
+func Version(v string) Field   { return str("version", v) }
+func RequestID(v string) Field { return str("requestId", v) }
+func Count(v int) Field        { return num("count", int64(v)) }
+func Origin(v string) Field    { return str("origin", v) }
+
 // Code 记关闭码或错误码；只认整数与字符串，别的类型丢弃（同 TS 丢非标量）。
 func Code(v any) Field {
 	switch c := v.(type) {
@@ -133,6 +139,8 @@ type Logger struct {
 	level Level
 	now   func() time.Time
 	buf   []byte
+	// name 是日志的 name 字段；缺省 relay。
+	name string
 }
 
 // NewLogger 创建写到 w 的日志，低于 level 的丢弃。
@@ -143,6 +151,13 @@ func NewLogger(w io.Writer, level Level) *Logger {
 // NewLoggerWithClock 同 NewLogger，时钟可注入（测试用）。
 func NewLoggerWithClock(w io.Writer, level Level, now func() time.Time) *Logger {
 	return &Logger{w: w, level: level, now: now}
+}
+
+// NewNamedLogger 同 NewLogger，日志的 name 字段取 name（armadra-cloud 用 cloud）。
+func NewNamedLogger(w io.Writer, level Level, name string) *Logger {
+	l := NewLoggerWithClock(w, level, time.Now)
+	l.name = name
+	return l
 }
 
 // Nop 返回什么都不写的日志。
@@ -171,7 +186,13 @@ func (l *Logger) emit(level Level, msg string, fields []Field) {
 	b = l.now().UTC().AppendFormat(b, "2006-01-02T15:04:05.000Z")
 	b = append(b, `","level":"`...)
 	b = append(b, level.String()...)
-	b = append(b, `","name":"relay","msg":`...)
+	name := l.name
+	if name == "" {
+		name = "relay"
+	}
+	b = append(b, `","name":`...)
+	b = appendJSONString(b, name)
+	b = append(b, `,"msg":`...)
 	b = appendJSONString(b, msg)
 	for _, f := range fields {
 		switch f.kind {
