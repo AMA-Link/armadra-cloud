@@ -174,26 +174,32 @@ func writeJSON(w http.ResponseWriter, status int, body any, extra map[string]str
 
 // errorBody 是线上错误形状 { code, message, requestId, details? }。
 type errorBody struct {
-	Code      gen.ErrorCode `json:"code"`
-	Message   string        `json:"message"`
-	RequestID string        `json:"requestId"`
-	Details   *errorDetails `json:"details,omitempty"`
+	Code      gen.ErrorCode  `json:"code"`
+	Message   string         `json:"message"`
+	RequestID string         `json:"requestId"`
+	Details   map[string]any `json:"details,omitempty"`
 }
 
-type errorDetails struct {
-	RetryAfterMs int64 `json:"retryAfterMs"`
-}
-
-// WriteError 按错误码写错误答复；retryAfter 非零时带 details.retryAfterMs 与 Retry-After 头。
-func WriteError(w http.ResponseWriter, code gen.ErrorCode, requestID string, retryAfter time.Duration) {
+// WriteError 按错误码写错误答复；details 非空时原样带出，retryAfter 非零时再加
+// details.retryAfterMs（覆盖同名键）与 Retry-After 头。
+func WriteError(w http.ResponseWriter, code gen.ErrorCode, requestID string, retryAfter time.Duration, details map[string]any) {
 	status, ok := code.HTTPStatus()
 	if !ok {
 		status = http.StatusInternalServerError
 	}
 	body := errorBody{Code: code, Message: core.MessageOf(code), RequestID: requestID}
 	extra := map[string]string{}
+	if len(details) > 0 {
+		body.Details = make(map[string]any, len(details)+1)
+		for key, value := range details {
+			body.Details[key] = value
+		}
+	}
 	if retryAfter > 0 {
-		body.Details = &errorDetails{RetryAfterMs: retryAfter.Milliseconds()}
+		if body.Details == nil {
+			body.Details = map[string]any{}
+		}
+		body.Details["retryAfterMs"] = retryAfter.Milliseconds()
 		extra["Retry-After"] = strconv.FormatInt(max(1, int64((retryAfter+time.Second-1)/time.Second)), 10)
 	}
 	writeJSON(w, status, body, extra, requestID)
@@ -202,13 +208,13 @@ func WriteError(w http.ResponseWriter, code gen.ErrorCode, requestID string, ret
 func (a *API) fail(w http.ResponseWriter, err error, requestID string) {
 	var failure *core.Error
 	if errors.As(err, &failure) {
-		WriteError(w, failure.Code, requestID, failure.RetryAfter)
+		WriteError(w, failure.Code, requestID, failure.RetryAfter, failure.Details)
 		return
 	}
 	if a.opts.OnError != nil {
 		a.opts.OnError(err)
 	}
-	WriteError(w, gen.ErrInternal, requestID, 0)
+	WriteError(w, gen.ErrInternal, requestID, 0, nil)
 }
 
 func readBody(r *http.Request) (map[string]any, error) {
@@ -256,7 +262,7 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if match != nil && a.opts.Mode == ModeCloud {
 			code = gen.ErrNotImplemented
 		}
-		WriteError(w, code, requestID, 0)
+		WriteError(w, code, requestID, 0, nil)
 		return
 	}
 	var raw map[string]any

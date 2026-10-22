@@ -215,6 +215,16 @@ func TestErrorMessagesAreFixedEnglishPhrases(t *testing.T) {
 	eq(t, core.FailAfter("rate_limited", -5).RetryAfter.Milliseconds(), int64(0), "负数当 0")
 }
 
+func TestFailWithCopiesDetails(t *testing.T) {
+	details := map[string]any{"setting": "memberHosts"}
+	err := core.FailWith("forbidden", details)
+	details["setting"] = "changed"
+	eq(t, err.Details["setting"], any("memberHosts"), "详情是复制的")
+	eq(t, string(err.Code), "forbidden", "码")
+	eq(t, core.Fail("forbidden").Details == nil, true, "Fail 不带详情")
+	eq(t, core.FailWith("forbidden", nil).Details == nil, true, "空详情不分配")
+}
+
 // 退订的订阅者不再留在集合里：反复订阅 / 退订之后扇出仍只调当前的订阅者。
 func TestEventBusUnsubscribeRemovesSubscribers(t *testing.T) {
 	bus := core.NewEventBus()
