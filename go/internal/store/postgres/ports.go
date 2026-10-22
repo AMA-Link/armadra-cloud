@@ -78,6 +78,16 @@ func deref[R any](scan func(scanner) (*R, error)) func(scanner) (R, error) {
 	}
 }
 
+// lockFor 是读行时的锁子句：在事务里读（读-改-写要用的）一律 FOR UPDATE，并发的读-改-写按行排队，
+// 不丢更新（读已提交下不加锁会让两个事务读到同一份旧行、各写各的）。在连接池上读不加。
+// 独立模式的写已经被 tenants 行锁串行化，多这一道行锁无害。
+func lockFor(q querier) string {
+	if _, inTx := q.(pgx.Tx); inTx {
+		return " FOR UPDATE"
+	}
+	return ""
+}
+
 // txWriter 跑一个租户的写：独立模式是 DB.write（自己开事务、锁租户行、改了就加修订号），
 // 绑定模式（TxPorts）是直接在调用方的事务里跑 fn。
 type txWriter func(ctx context.Context, tenantID string, fn func(tx pgx.Tx) (bool, error)) error
@@ -126,7 +136,7 @@ func portsOf(p ports) *store.Ports {
 type accounts struct{ ports }
 
 func (a accounts) selectOne(ctx context.Context, q querier, where string, args ...any) (*store.AccountRecord, error) {
-	return one(toAccount(q.QueryRow(ctx, "SELECT "+accountColumns+" FROM accounts WHERE "+where, args...)))
+	return one(toAccount(q.QueryRow(ctx, "SELECT "+accountColumns+" FROM accounts WHERE "+where+lockFor(q), args...)))
 }
 
 func (a accounts) FindByName(ctx context.Context, tenantID, name string) (*store.AccountRecord, error) {
@@ -176,7 +186,7 @@ type devices struct{ ports }
 
 func (v devices) selectOne(ctx context.Context, q querier, tenantID, deviceID string) (*store.DeviceRecord, error) {
 	return one(toDevice(q.QueryRow(ctx,
-		"SELECT "+deviceColumns+" FROM devices WHERE tenant_id = $1 AND device_id = $2", tenantID, deviceID)))
+		"SELECT "+deviceColumns+" FROM devices WHERE tenant_id = $1 AND device_id = $2"+lockFor(q), tenantID, deviceID)))
 }
 
 func (v devices) Get(ctx context.Context, tenantID, deviceID string) (*store.DeviceRecord, error) {
@@ -199,7 +209,7 @@ func (v devices) Insert(ctx context.Context, tenantID string, device store.Devic
 			query += " AND subject = $3"
 			args = append(args, device.Subject)
 		}
-		candidates, err := list(ctx, tx, deref(toDevice), query, args...)
+		candidates, err := list(ctx, tx, deref(toDevice), query+lockFor(tx), args...)
 		if err != nil {
 			return false, err
 		}
@@ -250,7 +260,7 @@ type sources struct{ ports }
 
 func (s sources) selectOne(ctx context.Context, q querier, tenantID, sourceID string) (*store.SourceRecord, error) {
 	return one(toSource(q.QueryRow(ctx,
-		"SELECT "+sourceColumns+" FROM sources WHERE tenant_id = $1 AND source_id = $2", tenantID, sourceID)))
+		"SELECT "+sourceColumns+" FROM sources WHERE tenant_id = $1 AND source_id = $2"+lockFor(q), tenantID, sourceID)))
 }
 
 func (s sources) Get(ctx context.Context, tenantID, sourceID string) (*store.SourceRecord, error) {
@@ -320,7 +330,7 @@ func (r registrations) Consume(ctx context.Context, tenantID, tokenHash string, 
 	err = r.write(ctx, tenantID, func(tx pgx.Tx) (bool, error) {
 		// 逐条定时安全地比较（与内存参照一样不按哈希直接查）。
 		rows, err := list(ctx, tx, toRegistration,
-			"SELECT "+registrationColumns+" FROM registration_tokens WHERE tenant_id = $1 AND expires_at_ms > $2 ORDER BY seq",
+			"SELECT "+registrationColumns+" FROM registration_tokens WHERE tenant_id = $1 AND expires_at_ms > $2 ORDER BY seq"+lockFor(tx),
 			tenantID, nowMs)
 		if err != nil {
 			return false, err
@@ -329,9 +339,14 @@ func (r registrations) Consume(ctx context.Context, tenantID, tokenHash string, 
 			if !store.SameHex(row.TokenHash, tokenHash) {
 				continue
 			}
-			if _, err := tx.Exec(ctx,
-				"DELETE FROM registration_tokens WHERE tenant_id = $1 AND token_hash = $2", tenantID, row.TokenHash); err != nil {
+			tag, err := tx.Exec(ctx,
+				"DELETE FROM registration_tokens WHERE tenant_id = $1 AND token_hash = $2", tenantID, row.TokenHash)
+			if err != nil {
 				return false, err
+			}
+			// 令牌已被别人消耗（并发）：当作已用，不再认。
+			if tag.RowsAffected() != 1 {
+				continue
 			}
 			accountID, ok = row.AccountID, true
 			return true, nil
@@ -350,7 +365,7 @@ type links struct{ ports }
 
 func (l links) selectOne(ctx context.Context, q querier, tenantID, linkID string) (*store.LinkRecord, error) {
 	return one(toLink(q.QueryRow(ctx,
-		"SELECT "+linkColumns+" FROM links WHERE tenant_id = $1 AND link_id = $2", tenantID, linkID)))
+		"SELECT "+linkColumns+" FROM links WHERE tenant_id = $1 AND link_id = $2"+lockFor(q), tenantID, linkID)))
 }
 
 func (l links) Get(ctx context.Context, tenantID, linkID string) (*store.LinkRecord, error) {

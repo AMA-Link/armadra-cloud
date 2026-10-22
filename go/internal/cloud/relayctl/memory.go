@@ -18,6 +18,7 @@ type Memory struct {
 	issued   map[string]Issued
 	revoked  map[string]int64
 	commands []Command
+	problems []string
 	routes   map[string]string
 	nodes    map[string]Node
 	quotas   map[string]Quota
@@ -208,6 +209,13 @@ func (m *Memory) Commands() []Command {
 	return append([]Command(nil), m.commands...)
 }
 
+// Problems 是没有发出的命令的原因（例如 kick 缺 sourceId）。
+func (m *Memory) Problems() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.problems...)
+}
+
 // RevokedTokens 是撤销表里未到期的令牌，按 jti 排序。
 func (m *Memory) RevokedTokens() []Revoked {
 	m.mu.Lock()
@@ -255,7 +263,15 @@ func (p relayPort) Route(ctx context.Context, sourceID string) (string, bool, er
 
 func (p relayPort) CloseTunnel(sourceID string) { _ = p.m.CloseTunnel(context.Background(), sourceID) }
 
+// Disconnect 踢客户端连接。节点命令必须带 sourceId（设计 §2.4，节点会丢弃不带的）：
+// 没有 SourceID 的过滤不发，记一条问题（Problems）。
 func (p relayPort) Disconnect(filter core.ConnectionFilter) {
+	if filter.SourceID == "" {
+		p.m.mu.Lock()
+		p.m.problems = append(p.m.problems, "kick 缺 sourceId，没有发出")
+		p.m.mu.Unlock()
+		return
+	}
 	_ = p.m.Kick(context.Background(), KickFilter{SourceID: filter.SourceID, SubjectPrefix: filter.SubjectPrefix}, "disconnect")
 }
 

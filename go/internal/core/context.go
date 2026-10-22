@@ -104,6 +104,15 @@ type Context struct {
 	Revocations RevocationSink
 }
 
+// Bound 返回绑定到 SaaS 事务的副本：端口换成 TxPorts，撤销钩子换成事务感知的（sink）。
+// 绑定事务里 core 的撤销函数（RevokeDevice、RevokeLink、SetPasswordNames 等）一改完库就调钩子，
+// 此时事务还没提交；sink 必须把投递挂到 tx.AfterCommit，回滚时不投递（设计 §4.2、§4.11）。
+func (c *Context) Bound(ports *store.Ports, sink RevocationSink) *Context {
+	bound := *c
+	bound.Ports, bound.Revocations = ports, sink
+	return &bound
+}
+
 func (c *Context) deviceRevoked(ctx context.Context, subject, deviceID string) {
 	if c.Revocations != nil {
 		c.Revocations.DeviceRevoked(ctx, subject, deviceID)

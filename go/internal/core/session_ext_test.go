@@ -194,3 +194,37 @@ func TestRelayForTeamAddsTeamClaim(t *testing.T) {
 	_, has := claimsOf(t, plain.TunnelToken)["team"]
 	eq(t, has, false, "personal 隧道令牌不带 team")
 }
+
+// 运营范围的设备寿命收到 1 小时：不给取 1 小时，给得更长也收，给得更短保留。
+func TestNewDeviceOperatorLifetimeIsCapped(t *testing.T) {
+	d := core.DeviceInput{Platform: "browser", Name: "n"}
+	for _, c := range []struct {
+		name string
+		ttl  time.Duration
+		want time.Duration
+	}{
+		{"不给", 0, time.Hour}, {"更长", 30 * 24 * time.Hour, time.Hour}, {"更短", 10 * time.Minute, 10 * time.Minute},
+	} {
+		record, _ := core.NewDevice("s", d, core.TransportCookie, core.SessionScopeOperator, 1000, c.ttl)
+		eq(t, record.ExpiresAtMs, int64(1000)+c.want.Milliseconds(), "运营会话寿命："+c.name)
+	}
+	record, _ := core.NewDevice("s", d, core.TransportCookie, core.SessionScopeSession, 1000, 0)
+	eq(t, record.ExpiresAtMs, int64(1000)+core.RefreshTTL.Milliseconds(), "普通会话缺省寿命不变")
+}
+
+// 未知名字与存在的账号一样：连续失败达阈值后答 account_locked，锁着时也做口令派生。
+func TestUnknownAccountsLockLikeRealOnes(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	e.addAccount("alice", "acct:alice")
+	accounts := core.NewAccounts(e.h.Context)
+	attempt := func(name string) error {
+		_, err := accounts.Login(e.ctx, core.LoginInput{Account: name, Password: "wrong-password-123", Device: core.DeviceInput{Platform: "desktop", Name: "t"}}, "198.51.100.1")
+		return err
+	}
+	for i := 0; i < 5; i++ {
+		eq(t, code(attempt("alice")), "credentials_invalid", "已注册的失败")
+		eq(t, code(attempt("nobody")), "credentials_invalid", "未注册的失败")
+	}
+	eq(t, code(attempt("alice")), "account_locked", "已注册的第 6 次")
+	eq(t, code(attempt("nobody")), "account_locked", "未注册的第 6 次")
+}

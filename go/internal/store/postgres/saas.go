@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"slices"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -97,8 +99,13 @@ type saasTx struct {
 	locked lockState
 }
 
-// lockState 记本事务已拿过哪类锁，用来强制统一的加锁顺序（团队 → 账号 → 其余）。
-type lockState struct{ account bool }
+// lockState 记本事务已拿过哪类锁、同类里最后锁的 id，用来强制统一的加锁顺序：
+// 团队 → 账号 → 其余；同类多行按 id 升序（批量用 LockTeams / LockAccounts，它们自己排序）。
+type lockState struct {
+	account     bool
+	lastAccount string
+	lastTeam    string
+}
 
 var _ saas.Tx = (*saasTx)(nil)
 
@@ -127,8 +134,25 @@ type accountRepo struct {
 }
 
 func (r accountRepo) LockAccount(ctx context.Context, tenantID, accountID string) (bool, error) {
-	r.locked.account = true
-	return lockRow(ctx, r.q, "SELECT 1 FROM accounts WHERE tenant_id = $1 AND account_id = $2 FOR UPDATE", tenantID, accountID)
+	if accountID < r.locked.lastAccount {
+		return false, saas.ErrLockOrder
+	}
+	found, err := lockRow(ctx, r.q, "SELECT 1 FROM accounts WHERE tenant_id = $1 AND account_id = $2 FOR UPDATE", tenantID, accountID)
+	if err != nil {
+		// 没锁上就不记：不能让失败的尝试改变后面的顺序判断。
+		return false, err
+	}
+	r.locked.account, r.locked.lastAccount = true, accountID
+	return found, nil
+}
+
+func (r accountRepo) LockAccounts(ctx context.Context, tenantID string, accountIDs ...string) error {
+	for _, id := range sortedUnique(accountIDs) {
+		if _, err := r.LockAccount(ctx, tenantID, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type teamRepo struct {
@@ -137,10 +161,31 @@ type teamRepo struct {
 }
 
 func (r teamRepo) LockTeam(ctx context.Context, tenantID, teamID string) (bool, error) {
-	if r.locked.account {
+	if r.locked.account || teamID < r.locked.lastTeam {
 		return false, saas.ErrLockOrder
 	}
-	return lockRow(ctx, r.q, "SELECT 1 FROM teams WHERE tenant_id = $1 AND team_id = $2 FOR UPDATE", tenantID, teamID)
+	found, err := lockRow(ctx, r.q, "SELECT 1 FROM teams WHERE tenant_id = $1 AND team_id = $2 FOR UPDATE", tenantID, teamID)
+	if err != nil {
+		return false, err
+	}
+	r.locked.lastTeam = teamID
+	return found, nil
+}
+
+func (r teamRepo) LockTeams(ctx context.Context, tenantID string, teamIDs ...string) error {
+	for _, id := range sortedUnique(teamIDs) {
+		if _, err := r.LockTeam(ctx, tenantID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sortedUnique 是升序去重的副本：批量加锁的固定顺序。
+func sortedUnique(ids []string) []string {
+	out := append([]string(nil), ids...)
+	sort.Strings(out)
+	return slices.Compact(out)
 }
 
 func lockRow(ctx context.Context, q querier, query string, args ...any) (bool, error) {
