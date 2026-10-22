@@ -69,7 +69,7 @@ services:
       redis:
         condition: service_healthy
 
-  # 镜像是 Go 实现；saas serve 随 SaaS 中继节点（#59 的 G5）提供，在那之前这个容器以退出码 64 结束。
+  # 镜像是 Go 实现；saas serve 是只答 /health、/ready 的占位，SaaS 中继节点随 #59 的 G5 接替。
   relay:
     profiles: ["stack"]
     build:

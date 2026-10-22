@@ -25,7 +25,7 @@
 | `ARMADRA_CLOUD_MIGRATIONS_DIR` |      | 镜像里是 `/app/migrations`                 |
 | `ARMADRA_CLOUD_LOG_LEVEL`      |      | `debug` / `info`（缺省）/ `warn` / `error` |
 
-中继（`armadra-relay saas serve`；0.10.0 起镜像是 Go 实现，`saas serve` 随 SaaS 中继节点提供，在那之前 SaaS 形态用 0.9.x 镜像）：
+中继（`armadra-relay saas serve`；现在是只答 `/health`、`/ready` 的占位，Node 版与 Go 版行为一致，SaaS 中继节点随 #59 的 G5 接替）：
 
 | 变量                          | 必填 | 说明                             |
 | ----------------------------- | ---- | -------------------------------- |
@@ -117,7 +117,7 @@
 | 页面     | `WEB_IMAGE` 构建参数把 `/app/web` 拷进来                                       |
 | 库       | 同一份迁移与账本（SQLite `relay_migrations`、PostgreSQL `cloud_migrations`）   |
 
-变了的只有：容器里的命令行是 `armadra-relay`（不再是 `node /app/out/cli.js`）；Go 版不写 `state.json`；`--node-id` 同时作用于隧道层；`saas serve` 要等 SaaS 中继节点。
+变了的只有：容器里的命令行是 `armadra-relay`（不再是 `node /app/out/cli.js`）；Go 版不写 `state.json`；`--node-id` 同时作用于隧道层。`saas serve` 仍是与 Node 版一致的占位（同样的变量、`/health` / `/ready` 与退出码），SaaS 形态的部署照常换镜像。
 
 升级：备份（`personal backup` 或 `pg_dump`）→ 数据目录是 `state.json` 的先停服并 `run --rm relay personal migrate --data-dir /data --to sqlite` → 换成 0.10.0 镜像起服 → `exec relay armadra-relay personal status` 与 `doctor` 核对。回滚：停服，镜像换回上一版（如 `0.9.3`）再起，Go 版写过的库 Node 版照常读写。步骤与注意事项见[运维手册](../docs/runbooks/personal-storage.md#切换到-go-版中继0100与回滚)。
 

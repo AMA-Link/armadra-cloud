@@ -88,7 +88,7 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 
 回滚：停服，把 `ARMADRA_RELAY_IMAGE` 换回上一版（如 `ghcr.io/ama-link/armadra-relay:0.9.3`）再起；Go 版写过的 `relay.db` 与 PostgreSQL 库，Node 版照常读写（两版之间没有新迁移，0.9.3 → 0.10.0 就是这样；有新迁移时旧程序拒绝启动，按上一节从备份恢复）。第 2 步迁过的目录回滚后仍是 SQLite；要回到状态文件见上面「回退到状态文件」。
 
-容器里执行子命令的写法变了：`node /app/out/cli.js personal …` 改成 `armadra-relay personal …`。Go 版另有两处差别：`--node-id` 同时作用于隧道层（Node 版隧道层用 `--host`）；`saas serve` 随 SaaS 中继节点（#59 的 G5）提供，在那之前 Go 镜像的缺省命令以退出码 64 结束，SaaS 形态的部署先留在 0.9.x 镜像。
+容器里执行子命令的写法变了：`node /app/out/cli.js personal …` 改成 `armadra-relay personal …`。Go 版另有一处差别：`--node-id` 同时作用于隧道层（Node 版隧道层用 `--host`）。缺省命令 `saas serve` 与 Node 版一样只是答 `/health`、`/ready` 的占位，SaaS 中继节点随 #59 的 G5 接替。
 
 ## 体检
 
