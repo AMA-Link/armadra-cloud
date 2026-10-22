@@ -92,12 +92,12 @@ func New(ctx context.Context, o Options) (*Plane, error) {
 	owns := false
 	if client == nil {
 		if o.URL == "" {
-			return nil, errors.New("Redis 控制面缺 Client 或 URL")
+			return nil, errors.New("控制面缺 Redis 的 Client 或 URL")
 		}
 		parsed, err := goredis.ParseURL(o.URL)
 		if err != nil {
 			// 解析错误可能带连接串片段：不转述。
-			return nil, errors.New("Redis 连接串不合格式")
+			return nil, errors.New("连接串不合格式（Redis）")
 		}
 		client, owns = goredis.NewClient(parsed), true
 	}
@@ -127,7 +127,7 @@ func New(ctx context.Context, o Options) (*Plane, error) {
 		return nil, err
 	case <-ctx.Done():
 		_ = p.Close()
-		return nil, errors.New("Redis 控制面启动超时或被取消")
+		return nil, errors.New("控制面启动超时或被取消（Redis）")
 	}
 }
 
@@ -148,7 +148,7 @@ func (p *Plane) subscribeLoop(ctx context.Context, minWait, maxWait time.Duratio
 		if !p.isReady() {
 			// 第一次就失败：启动失败，交给 New 报告。
 			select {
-			case p.readyErr <- fmt.Errorf("Redis 订阅失败：%w", sanitize(err)):
+			case p.readyErr <- fmt.Errorf("订阅失败（Redis）：%w", sanitize(err)):
 			default:
 			}
 			return

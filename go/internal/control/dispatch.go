@@ -17,7 +17,8 @@ type Dispatcher struct {
 	shards     []chan func()
 	wg         sync.WaitGroup
 	closeOnce  sync.Once
-	closed     atomic.Bool
+	mu         sync.RWMutex // 读锁护住「查关没关 + 非阻塞投递」，写锁只在 Close 里
+	closed     bool
 	overflowed atomic.Int64
 }
 
@@ -57,25 +58,21 @@ func run(fn func()) {
 
 // Go 投递一个任务；永不阻塞。key 相同的任务按投递顺序执行。关闭之后直接在新协程里执行。
 func (d *Dispatcher) Go(key string, fn func()) {
-	if d.closed.Load() {
-		go run(fn)
-		return
-	}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
 	ch := d.shards[int(h.Sum32())%len(d.shards)]
-	defer func() {
-		// 与 Close 竞争时 ch 可能已关：退回新协程。
-		if recover() != nil {
-			go run(fn)
+	d.mu.RLock()
+	if !d.closed {
+		select {
+		case ch <- fn:
+			d.mu.RUnlock()
+			return
+		default:
+			d.overflowed.Add(1)
 		}
-	}()
-	select {
-	case ch <- fn:
-	default:
-		d.overflowed.Add(1)
-		go run(fn)
 	}
+	d.mu.RUnlock()
+	go run(fn)
 }
 
 // Overflowed 返回因队列满而另起协程执行的任务数。
@@ -83,7 +80,9 @@ func (d *Dispatcher) Overflowed() int64 { return d.overflowed.Load() }
 
 // Flush 等到调用时已在队列里的任务都执行完，或 timeout 到；答是否排空。
 func (d *Dispatcher) Flush(timeout time.Duration) bool {
-	if d.closed.Load() {
+	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
 		return true
 	}
 	var wg sync.WaitGroup
@@ -96,6 +95,7 @@ func (d *Dispatcher) Flush(timeout time.Duration) bool {
 			wg.Done() // 队列满：不等（溢出的任务本来就不保证顺序）
 		}
 	}
+	d.mu.RUnlock()
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	select {
@@ -109,10 +109,12 @@ func (d *Dispatcher) Flush(timeout time.Duration) bool {
 // Close 停止接收并等队列里的任务做完。重复调用无害。
 func (d *Dispatcher) Close() {
 	d.closeOnce.Do(func() {
-		d.closed.Store(true)
+		d.mu.Lock()
+		d.closed = true
 		for _, ch := range d.shards {
 			close(ch)
 		}
+		d.mu.Unlock()
 		d.wg.Wait()
 	})
 }
