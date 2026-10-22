@@ -46,6 +46,9 @@ type Options struct {
 	Migrations []store.Migration
 	// OnError 报告后台失败（签名钥未命中重读失败）；错误只带类别，不带连接串。
 	OnError func(operation string, err error)
+	// OnCommit 在本进程的写事务提交之后调，带这次提交的租户修订号：装配方据此认出「自己的写」，
+	// 而不是从修订号 +1 去猜（中间夹了别的节点的写就猜错了）。
+	OnCommit func(tenantID string, revision int64)
 	// KeyRefreshGap 是验签查不到 kid 时重读签名钥的最短间隔；缺省 5 秒。
 	KeyRefreshGap time.Duration
 	// Now 缺省 time.Now；账本的 applied_at_ms 用它。
@@ -60,6 +63,7 @@ type DB struct {
 	schema     string
 	refreshGap time.Duration
 	onError    func(string, error)
+	onCommit   func(string, int64)
 
 	keysMu sync.Mutex
 	keys   map[string]*keyCache
@@ -143,7 +147,7 @@ func Open(ctx context.Context, options Options) (*DB, error) {
 	if gap <= 0 {
 		gap = refreshOnMissGap
 	}
-	db := &DB{pool: pool, schema: options.Schema, refreshGap: gap, onError: sanitizedReport(options.OnError), keys: map[string]*keyCache{}}
+	db := &DB{pool: pool, schema: options.Schema, refreshGap: gap, onError: sanitizedReport(options.OnError), onCommit: options.OnCommit, keys: map[string]*keyCache{}}
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
@@ -195,9 +199,11 @@ func (d *DB) tx(ctx context.Context, opts pgx.TxOptions, fn func(tx pgx.Tx) erro
 	return nil
 }
 
-// write 是一个租户的写事务：锁租户行后跑 fn；fn 答 changed 为真时修订加一。
+// write 是一个租户的写事务：锁租户行后跑 fn；fn 答 changed 为真时修订加一，提交后把新修订号报给 OnCommit。
 func (d *DB) write(ctx context.Context, tenantID string, fn func(tx pgx.Tx) (changed bool, err error)) error {
-	return d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	var committed int64
+	err := d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		committed = 0
 		if _, err := tx.Exec(ctx, "SELECT 1 FROM tenants WHERE tenant_id = $1 FOR UPDATE", tenantID); err != nil {
 			return err
 		}
@@ -206,16 +212,20 @@ func (d *DB) write(ctx context.Context, tenantID string, fn func(tx pgx.Tx) (cha
 			return err
 		}
 		if changed {
-			return bumpRevision(ctx, tx, tenantID)
+			committed, err = bumpRevision(ctx, tx, tenantID)
 		}
-		return nil
+		return err
 	})
+	if err == nil && committed != 0 && d.onCommit != nil {
+		d.onCommit(tenantID, committed)
+	}
+	return err
 }
 
-// bumpRevision：租户的修订加一（每个改了东西的写事务一次）。
-func bumpRevision(ctx context.Context, q querier, tenantID string) error {
-	_, err := q.Exec(ctx, "UPDATE tenants SET revision = revision + 1 WHERE tenant_id = $1", tenantID)
-	return err
+// bumpRevision：租户的修订加一（每个改了东西的写事务一次），答新修订号。
+func bumpRevision(ctx context.Context, q querier, tenantID string) (revision int64, err error) {
+	err = q.QueryRow(ctx, "UPDATE tenants SET revision = revision + 1 WHERE tenant_id = $1 RETURNING revision", tenantID).Scan(&revision)
+	return revision, err
 }
 
 // sanitizedReport 把报告里的错误换成不带连接串的类别。

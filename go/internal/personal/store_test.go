@@ -460,3 +460,26 @@ func TestWithStore(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRevTrackerOwnVersusExternal(t *testing.T) {
+	tr := newRevTracker()
+	tr.reset(5)
+	tr.commit("t", 6)
+	tr.commit("t", 7)
+	if tr.advance(7) {
+		t.Fatal("6、7 都是自己提交的，不算外部改动")
+	}
+	// 自己提交了 8，但 9 是别的节点写的：不能因为「正好 +1」就当成都是自己的。
+	tr.commit("t", 8)
+	if !tr.advance(9) {
+		t.Fatal("9 不是自己提交的，应察觉外部改动")
+	}
+	if tr.advance(9) {
+		t.Fatal("没有新修订就不该再报")
+	}
+	// 夹在中间：别人先写了 10，自己写了 11。
+	tr.commit("t", 11)
+	if !tr.advance(11) {
+		t.Fatal("10 是别人的")
+	}
+}

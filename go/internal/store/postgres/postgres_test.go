@@ -297,3 +297,33 @@ func TestMissRefreshFailureIsReportedAndRateLimited(t *testing.T) {
 		}
 	}
 }
+
+// 写事务提交后 OnCommit 报来的就是提交的那个修订号；没改东西的写不报。
+func TestOnCommitReportsCommittedRevision(t *testing.T) {
+	ctx := context.Background()
+	url, schema := pgtest.Schema(t)
+	var got []int64
+	db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, OnCommit: func(_ string, revision int64) { got = append(got, revision) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.CreateTenant(ctx, "default", store.Tenant{TenantSettings: storetest.Settings()}); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := store.GenerateSigningKey("k1", storetest.Now)
+	if err := db.AddSigningKey(ctx, "default", first); err != nil {
+		t.Fatal(err)
+	}
+	start, _, _ := db.Revision(ctx, "default")
+	if _, err := db.RotateKey(ctx, "default", storetest.Now+1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateTenant(ctx, "default", func(*store.Tenant) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	end, _, _ := db.Revision(ctx, "default")
+	if len(got) == 0 || got[len(got)-1] != end || end <= start {
+		t.Fatalf("提交报告 %v，库里 %d→%d", got, start, end)
+	}
+}

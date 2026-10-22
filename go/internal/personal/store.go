@@ -144,7 +144,7 @@ func CreateStore(ctx context.Context, dataDir string, kind StoreKind, snap store
 
 // PostgresStoreExists 库里已经有个人中转的租户了吗（serve 自动初始化前问）；连不上照样拒绝。
 func PostgresStoreExists(ctx context.Context, db DatabaseOptions) (bool, error) {
-	pg, err := connectPostgres(ctx, db)
+	pg, err := connectPostgres(ctx, db, newRevTracker())
 	if err != nil {
 		return false, err
 	}
@@ -186,10 +186,8 @@ type dbStore struct {
 	poll func(ctx context.Context) (changed bool, err error)
 	// refreshKeys 重读签名钥缓存（PostgreSQL）；nil = 不缓存。
 	refreshKeys func(ctx context.Context) error
-	// ownWrite 在自己写过之后调（PostgreSQL 记下接上的修订号，免得把自己的写当成别人的）。
-	ownWrite  func(ctx context.Context)
-	closeOnce sync.Once
-	closeErr  error
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 // PostgresPool 是存储为 PostgreSQL 时的连接池（--control postgres 共用）；其余答 nil。
@@ -231,9 +229,6 @@ func (s *dbStore) reload(ctx context.Context) error {
 }
 
 func (s *dbStore) afterWrite(ctx context.Context) error {
-	if s.ownWrite != nil {
-		s.ownWrite(ctx)
-	}
 	return s.reload(ctx)
 }
 
@@ -272,9 +267,6 @@ func (s *dbStore) RecordSourcesSeen(ctx context.Context, batch map[string]Source
 		if err != nil {
 			return s.wrapErr(err)
 		}
-	}
-	if s.ownWrite != nil && len(batch) > 0 {
-		s.ownWrite(ctx)
 	}
 	return nil
 }

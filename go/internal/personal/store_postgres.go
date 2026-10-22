@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sync/atomic"
+	"sync"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
@@ -12,9 +12,53 @@ import (
 
 const postgresPoolMax = 5
 
-func connectPostgres(ctx context.Context, db DatabaseOptions) (*postgres.DB, error) {
+// revTracker 认「自己的写」：写事务提交时报来新的修订号（OnCommit），轮询时逐个对账——
+// 从上次见到的修订号到现在的每一号都是自己提交的才算没有外部改动；不从「+1」去猜。
+type revTracker struct {
+	mu    sync.Mutex
+	known int64
+	own   map[int64]struct{}
+}
+
+func newRevTracker() *revTracker { return &revTracker{own: map[int64]struct{}{}} }
+
+// commit 记下一次自己提交的修订号。
+func (t *revTracker) commit(_ string, revision int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if revision > t.known {
+		t.own[revision] = struct{}{}
+	}
+}
+
+// reset 定下起点（开库时读到的修订号）。
+func (t *revTracker) reset(revision int64) {
+	t.mu.Lock()
+	t.known = revision
+	t.mu.Unlock()
+}
+
+// advance 推进到 now，答 (known, now] 里有没有不是自己提交的修订。
+func (t *revTracker) advance(now int64) (external bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if now <= t.known {
+		return false
+	}
+	for r := t.known + 1; r <= now; r++ {
+		if _, ok := t.own[r]; ok {
+			delete(t.own, r)
+		} else {
+			external = true
+		}
+	}
+	t.known = now
+	return external
+}
+
+func connectPostgres(ctx context.Context, db DatabaseOptions, tracker *revTracker) (*postgres.DB, error) {
 	pg, err := postgres.Open(ctx, postgres.Options{
-		URL: db.URL, Schema: db.Schema, MaxConns: postgresPoolMax, ApplicationName: "armadra-relay-personal", OnError: db.OnError,
+		URL: db.URL, Schema: db.Schema, MaxConns: postgresPoolMax, ApplicationName: "armadra-relay-personal", OnError: db.OnError, OnCommit: tracker.commit,
 	})
 	if err != nil {
 		return nil, mapStoreError(StorePostgres, err)
@@ -60,34 +104,26 @@ func checkTenants(ctx context.Context, pg *postgres.DB) (bool, error) {
 	return true, nil
 }
 
-func wrapPostgres(ctx context.Context, dataDir string, pg *postgres.DB, schema string) (Store, error) {
+func wrapPostgres(ctx context.Context, dataDir string, pg *postgres.DB, schema string, tracker *revTracker) (Store, error) {
 	known, _, err := pg.Revision(ctx, store.DefaultTenant)
 	if err != nil {
 		return nil, mapStoreError(StorePostgres, err)
 	}
-	var revision atomic.Int64
-	revision.Store(known)
+	tracker.reset(known)
 	if schema == "" {
 		schema = "public"
 	}
 	s := &dbStore{kind: StorePostgres, dataDir: dataDir, path: "postgres:" + schema, b: pg}
 	s.refreshKeys = func(ctx context.Context) error { return pg.RefreshKeys(ctx, store.DefaultTenant) }
-	s.ownWrite = func(ctx context.Context) {
-		// 自己的写：修订号正好接上就记下（中间夹了别人的写就留给 Watch 察觉）。
-		if now, ok, err := pg.Revision(ctx, store.DefaultTenant); err == nil && ok && now == revision.Load()+1 {
-			revision.Store(now)
-		}
-	}
 	s.poll = func(ctx context.Context) (bool, error) {
 		now, ok, err := pg.Revision(ctx, store.DefaultTenant)
 		if err != nil {
 			return false, err
 		}
-		if !ok || now == revision.Load() {
+		if !ok {
 			return false, nil
 		}
-		revision.Store(now)
-		return true, nil
+		return tracker.advance(now), nil
 	}
 	if _, err := newDBStore(ctx, s); err != nil {
 		return nil, err
@@ -97,7 +133,8 @@ func wrapPostgres(ctx context.Context, dataDir string, pg *postgres.DB, schema s
 
 // openPostgres 打开库并核对它是一个个人中转；顺手留下标记。
 func openPostgres(ctx context.Context, dataDir string, db DatabaseOptions) (Store, error) {
-	pg, err := connectPostgres(ctx, db)
+	tracker := newRevTracker()
+	pg, err := connectPostgres(ctx, db, tracker)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +152,7 @@ func openPostgres(ctx context.Context, dataDir string, db DatabaseOptions) (Stor
 	if err := verify(ctx, StorePostgres, pg); err != nil {
 		return fail(err)
 	}
-	st, err := wrapPostgres(ctx, dataDir, pg, db.Schema)
+	st, err := wrapPostgres(ctx, dataDir, pg, db.Schema, tracker)
 	if err != nil {
 		return fail(err)
 	}
@@ -128,7 +165,8 @@ func openPostgres(ctx context.Context, dataDir string, db DatabaseOptions) (Stor
 
 // createPostgres 在一个事务里写入整份快照；库里已有个人中转就拒绝。
 func createPostgres(ctx context.Context, dataDir string, snap store.TenantSnapshot, db DatabaseOptions) (Store, error) {
-	pg, err := connectPostgres(ctx, db)
+	tracker := newRevTracker()
+	pg, err := connectPostgres(ctx, db, tracker)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +184,7 @@ func createPostgres(ctx context.Context, dataDir string, snap store.TenantSnapsh
 	if err := pg.ImportTenant(ctx, store.DefaultTenant, snap); err != nil {
 		return fail(mapStoreError(StorePostgres, err))
 	}
-	st, err := wrapPostgres(ctx, dataDir, pg, db.Schema)
+	st, err := wrapPostgres(ctx, dataDir, pg, db.Schema, tracker)
 	if err != nil {
 		return fail(err)
 	}
