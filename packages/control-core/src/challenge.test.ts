@@ -443,6 +443,39 @@ describe("登录与接受链接的次序", () => {
     ).toBe("forbidden");
   });
 
+  it("personal 的 auth.refresh：缺 refreshToken 答 session_revoked，scope operator 答 forbidden；auth.logout 同 scope 答 forbidden", async () => {
+    const { h } = await harness();
+    const { handlers } = createPersonalProcedures(h.context, {
+      stream: {} as never,
+      webApp: () => null,
+    });
+    const call = (input: Record<string, unknown>) => ({
+      input,
+      ip: "ip",
+      authorization: undefined,
+      caller: () =>
+        Promise.resolve({
+          subject: "u-1",
+          deviceId: "0".repeat(32),
+          role: "owner" as const,
+          linkId: null,
+        }),
+    });
+    expect(await codeOf(() => handlers["auth.refresh"](call({})))).toBe(
+      "session_revoked",
+    );
+    expect(
+      await codeOf(() =>
+        handlers["auth.refresh"](
+          call({ refreshToken: "x", scope: "operator" }),
+        ),
+      ),
+    ).toBe("forbidden");
+    expect(
+      await codeOf(() => handlers["auth.logout"](call({ scope: "operator" }))),
+    ).toBe("forbidden");
+  });
+
   it("改口令只在 scope 含 auth.changePassword 时要挑战；action 是 armadra-password，失败不计数", async () => {
     const NEXT = "saffron-glacier-meadow-77";
     const owner = async (h: Awaited<ReturnType<typeof harness>>["h"]) => {

@@ -56,7 +56,33 @@ func TestDecodeInputDropsUnlistedFields(t *testing.T) {
 	if !reflect.DeepEqual(out, map[string]any{"refreshToken": "abc"}) {
 		t.Fatalf("未列出的字段应被丢掉：%+v", out)
 	}
-	if _, err := decodeInput(gen.RouteInputs["auth.refresh"], map[string]any{}); err == nil {
+	if _, err := decodeInput(gen.RouteInputs["auth.refresh"], map[string]any{}); err != nil {
+		t.Fatalf("refreshToken 可省：%v", err)
+	}
+	if _, err := decodeInput(gen.RouteInputs["auth.login"], map[string]any{}); err == nil {
 		t.Fatal("缺必填字段应被拒绝")
+	}
+}
+
+func TestQuerySpaceUsesBracketForm(t *testing.T) {
+	input := gen.RouteInputs["sources.list"]
+	query, err := url.ParseQuery("space[kind]=team&space[teamId]=t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeInput(input, queryObject(query, input))
+	if err != nil {
+		t.Fatalf("括号形式的 space 应被接受：%v", err)
+	}
+	want := map[string]any{"space": map[string]any{"kind": "team", "teamId": "t1"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("得到 %+v，应为 %+v", got, want)
+	}
+	// 点号与 JSON 串不是约定的写法。
+	for _, raw := range []string{"space.kind=team&space.teamId=t1", "space=%7B%22kind%22%3A%22team%22%7D"} {
+		q, _ := url.ParseQuery(raw)
+		if out, err := decodeInput(input, queryObject(q, input)); err == nil && out["space"] != nil {
+			t.Fatalf("%s 不应被当成 space：%+v", raw, out)
+		}
 	}
 }

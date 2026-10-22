@@ -1066,11 +1066,11 @@
                 "properties": {
                   "refreshToken": {
                     "type": "string"
+                  },
+                  "scope": {
+                    "const": "operator"
                   }
-                },
-                "required": [
-                  "refreshToken"
-                ]
+                }
               }
             }
           }
@@ -1176,6 +1176,35 @@
                       "enum": [
                         "session_expired",
                         "session_revoked"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "forbidden"
                       ]
                     },
                     "message": {
@@ -1345,7 +1374,12 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "const": "operator"
+                  }
+                }
               }
             }
           }
@@ -1357,6 +1391,35 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "forbidden"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
                 }
               }
             }
