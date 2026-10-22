@@ -15,6 +15,8 @@ export const TOKEN_TYPES = {
   relay: "armadra-relay",
   tunnel: "armadra-tunnel",
   source: "armadra-source",
+  /** 1.4 补充：运营方发给中继节点的令牌（cloud-api §17、§30）。 */
+  node: "armadra-node",
 } as const;
 
 export type TokenType = (typeof TOKEN_TYPES)[keyof typeof TOKEN_TYPES];
@@ -24,6 +26,8 @@ export const AUDIENCES = {
   access: "cloud",
   relay: "relay",
   tunnel: "relay-tunnel",
+  /** 节点令牌的受众（`relay-node` scope，cloud-api §17）。 */
+  relayNode: "relay-node",
 } as const;
 
 /** 断言、令牌的 `ver`：协议 major。 */
@@ -218,6 +222,17 @@ export const tunnelTokenClaimsSchema = z.object({
   team: z.string().min(1).optional(),
 });
 
+/**
+ * 节点令牌（1.4 补充，cloud-api §30）：运营方给每个中继节点发一枚，节点调 `relay.*`
+ * （`Authorization: Bearer`，scope `relay-node`）时出示。`sub` 是节点名（`relayNodeIdSchema`）。
+ */
+export const nodeTokenClaimsSchema = z.object({
+  ...registered,
+  sub: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+  aud: z.literal(AUDIENCES.relayNode),
+  ver: z.literal(CLAIMS_VERSION),
+});
+
 /** core → 控制面 / personal 中继：`Authorization: Source <jws>`，头 `kid = sourceId`，60 秒。 */
 export const sourceJwsClaimsSchema = z.object({
   ...registered,
@@ -231,4 +246,5 @@ export type AccessClaims = z.infer<typeof accessClaimsSchema>;
 export type AssertionClaims = z.infer<typeof assertionClaimsSchema>;
 export type RelayTokenClaims = z.infer<typeof relayTokenClaimsSchema>;
 export type TunnelTokenClaims = z.infer<typeof tunnelTokenClaimsSchema>;
+export type NodeTokenClaims = z.infer<typeof nodeTokenClaimsSchema>;
 export type SourceJwsClaims = z.infer<typeof sourceJwsClaimsSchema>;

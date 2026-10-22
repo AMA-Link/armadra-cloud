@@ -29,3 +29,27 @@ export type WireError = {
 export const errorCodeSchema = z.enum(
   ERROR_CODES as [ErrorCode, ...ErrorCode[]],
 );
+
+/**
+ * 配额种类（cloud-api §21）：`limit_reached` 的 `details.quota` 与 `billing.usage` /
+ * `teams.usage` 的 `metric` 共用这一张表。`teams` 是个人账号能建的团队数，`hosts` / `members` /
+ * `guests` 是团队内的数量，`concurrent` 是同时连接数，`traffic` 是本月中继流量（字节）。
+ */
+export const QUOTAS = [
+  "teams",
+  "hosts",
+  "members",
+  "guests",
+  "concurrent",
+  "traffic",
+] as const;
+export type Quota = (typeof QUOTAS)[number];
+export const quotaSchema = z.enum(QUOTAS);
+
+/** `limit_reached` 的 `details`：哪个配额、当前用量与上限。 */
+export const limitReachedDetailsSchema = z.object({
+  quota: quotaSchema,
+  used: z.number().nonnegative(),
+  limit: z.number().nonnegative(),
+});
+export type LimitReachedDetails = z.infer<typeof limitReachedDetailsSchema>;

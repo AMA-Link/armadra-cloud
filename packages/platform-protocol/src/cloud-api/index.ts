@@ -72,6 +72,8 @@ export const CONTRACT_SECTIONS: Record<string, string> = {
   admin: "§28",
   status: "§28",
   trust: "§31",
+  "sources.trustRequest": "§31",
+  "sources.trustResolve": "§31",
   "auth.deviceGet": "§29",
   "auth.deviceDeny": "§29",
   "me.notificationPrefs": "§29",

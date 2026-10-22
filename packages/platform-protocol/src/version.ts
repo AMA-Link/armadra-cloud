@@ -39,3 +39,11 @@ export function protocolHeaderValue(
 ): string {
   return `${version.major}.${version.minor}`;
 }
+
+/**
+ * 控制面只向登记的 `coreVersion` 不低于它的源签带 `team` 的断言（cloud-api §30）。两项都是
+ * 「第一个采用协议 1.4 的 Armadra 版本」，发版时填定（现在是占位）。
+ */
+export const MIN_CORE_VERSION_TEAM_ASSERTION = "0.10.0";
+/** 同上，对只带 `role` / `scp`、不带 `team` 的断言（团队主机上的 guest 授予）。 */
+export const MIN_CORE_VERSION_ROLE_ONLY_ASSERTION = "0.10.0";

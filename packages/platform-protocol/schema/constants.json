@@ -17,18 +17,24 @@
     "relay": "armadra-relay.",
     "ticket": "armadra-ticket."
   },
+  "minCoreVersion": {
+    "teamAssertion": "0.10.0",
+    "roleOnlyAssertion": "0.10.0"
+  },
   "tokens": {
     "types": {
       "access": "armadra-access",
       "assertion": "armadra-assertion",
       "relay": "armadra-relay",
       "tunnel": "armadra-tunnel",
-      "source": "armadra-source"
+      "source": "armadra-source",
+      "node": "armadra-node"
     },
     "audiences": {
       "access": "cloud",
       "relay": "relay",
-      "tunnel": "relay-tunnel"
+      "tunnel": "relay-tunnel",
+      "relayNode": "relay-node"
     },
     "claimsVersion": 1,
     "scope": {

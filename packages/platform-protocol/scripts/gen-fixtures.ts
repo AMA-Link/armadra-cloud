@@ -370,6 +370,15 @@ const tokens: Record<string, string> = {
     ver: 1,
     team: "team_01JAAAAAAAAAAAAAAAAAAAAAAA",
   }),
+  /** 协议 1.4 补充：运营方发给中继节点的令牌。 */
+  "node-token": jwt(header(TOKEN_TYPES.node), {
+    iss: ISSUER,
+    sub: "cf",
+    aud: "relay-node",
+    ...times(RELAY_TOKEN.ttlMs),
+    jti: "jti-node-0001",
+    ver: 1,
+  }),
   "source-jws": jwt(
     { alg: "EdDSA", kid: SOURCE_ID, typ: TOKEN_TYPES.source },
     {
