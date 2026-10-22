@@ -327,7 +327,7 @@ func (p *Plane) Tokens() control.TokenStore {
 func (p *Plane) Command(c control.NodeCommand) {
 	p.EmitCommand(c)
 	payload := cluster.EncodeCommand(p.Origin, c)
-	p.Background("publish "+p.chans.command, func() error {
+	p.Queue("publish "+p.chans.command, func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return p.client.Publish(ctx, p.chans.command, payload).Err()
@@ -363,7 +363,7 @@ func (p *Plane) Close() error {
 		}
 		p.psMu.Unlock()
 		<-p.loopDone
-		p.Settle()
+		p.Shutdown()
 		if p.ownsCli {
 			p.closeErr = p.client.Close()
 		}

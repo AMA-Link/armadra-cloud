@@ -333,7 +333,7 @@ func (p *Plane) Tokens() control.TokenStore {
 func (p *Plane) Command(c control.NodeCommand) {
 	p.EmitCommand(c)
 	payload := cluster.EncodeCommand(p.Origin, c)
-	p.Background("notify "+p.chans.command, func() error {
+	p.Queue("notify "+p.chans.command, func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, err := p.pool.Exec(ctx, "SELECT pg_notify($1, $2)", p.chans.command, string(payload))
@@ -361,7 +361,7 @@ func (p *Plane) Close() error {
 	p.once.Do(func() {
 		p.stop()
 		<-p.loopDone
-		p.Settle()
+		p.Shutdown()
 		if p.ownsPool {
 			p.pool.Close()
 		}

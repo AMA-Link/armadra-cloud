@@ -43,6 +43,7 @@ type Base struct {
 	revoked map[string]int64 // jti → 到期毫秒
 
 	tasks sync.WaitGroup
+	out   *control.Dispatcher
 }
 
 // NewBase 建共用部分。
@@ -67,6 +68,7 @@ func NewBase(o Options) *Base {
 		Local: control.NewMemory(control.MemoryOptions{
 			Issuer: o.Issuer, Mode: o.Mode, JWKS: o.JWKS, Now: o.Now, Limits: o.Limits,
 		}),
+		out:     control.NewDispatcher(1, 0),
 		Origin:  hex.EncodeToString(origin[:]),
 		rules:   rules,
 		revoked: map[string]int64{},
@@ -120,6 +122,16 @@ func (b *Base) Background(operation string, fn func() error) {
 	}()
 }
 
+// Queue 把一次对外广播排进本节点唯一的出站队列：按调用顺序一条条发，不并发。
+// （节点命令这类「先 closeTunnel 后 kick」的先后顺序要在对端保持。）Settle 会等它。
+func (b *Base) Queue(operation string, fn func() error) {
+	b.tasks.Add(1)
+	b.out.Go("out", func() {
+		defer b.tasks.Done()
+		b.Report(operation, fn())
+	})
+}
+
 // Run 同步执行并让 Settle 看得见（用于调用方等着结果、但关闭时也要等它收尾的写）。
 func (b *Base) Run(fn func()) {
 	b.tasks.Add(1)
@@ -129,6 +141,12 @@ func (b *Base) Run(fn func()) {
 
 // Settle 等已发出的后台任务做完（测试与关闭前用）。
 func (b *Base) Settle() { b.tasks.Wait() }
+
+// Shutdown 等后台任务做完并停掉出站队列的协程。
+func (b *Base) Shutdown() {
+	b.tasks.Wait()
+	b.out.Close()
+}
 
 // ------------------------------------------------------------ 撤销
 
