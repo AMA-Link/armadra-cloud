@@ -503,34 +503,31 @@ func TestHostInvitationsDieWithAccessChanges(t *testing.T) {
 	r.expect(r.do("POST", invitePath(idX, "resend"), nil, owner.bearer()), 400, "bad_request")
 }
 
-// 合并不放大：已有 driver@w1 再接受 viewer 整台的邀请，结果是 viewer 整台，不是 driver 整台；
-// 这比已有授予窄（w1 上 driver 降成 viewer），所以他已签的令牌被撤、连接被踢。
+// 合并不放大也不静默降级：已有 driver@w1 再接受 viewer 整台的邀请，合成会降低 w1 上已有的 driver，答 409，授予原样不动；
+// 管理者用 grants.update 明确改成 viewer 整台之后，邀请可以接受（结果仍是 viewer 整台，不是 driver 整台）；
+// 反过来 viewer 整台再接受 driver@w1 的邀请，整台来路只有 viewer，结果仍是 viewer 整台。
 func TestHostInvitationMergeNeverEscalates(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, friend := r.verified(), r.verified()
 	friendEmail := r.queryString("SELECT email FROM accounts WHERE account_id = $1", friend.accountID)
 	h := r.addHost(owner, nil, "0.11.0")
-	r.mustGrant(owner, h.id, guestOf(friend.accountID), "driver", map[string]any{"workspaceIds": []string{"w1"}})
-	signed := r.assertion(friend, h.id)
-	r.expect(signed, 200, "")
+	grantID := r.mustGrant(owner, h.id, guestOf(friend.accountID), "driver", map[string]any{"workspaceIds": []string{"w1"}})
 	id, token := r.mustInviteHost(owner, h.id, friendEmail, "viewer", nil)
-	r.expect(r.acceptInvite(friend, id, token), 200, "")
-	rows := r.grantRows(h.id)
-	if len(rows) != 1 || rows[0][2] != "viewer" || rows[0][4] != "" {
-		t.Fatalf("driver@w1 + viewer 整台应是 viewer 整台：%v", rows)
+	r.expect(r.acceptInvite(friend, id, token), 409, "conflict")
+	if rows := r.grantRows(h.id); len(rows) != 1 || rows[0][2] != "driver" || rows[0][4] != "w1" {
+		t.Fatalf("409 之后授予应原样不动：%v", rows)
 	}
-	if !r.bothRevoked(signed) {
-		t.Fatal("合并收窄了已有授予，已签的令牌应被撤")
+	if r.queryString("SELECT state FROM invitations WHERE invitation_id = $1", id) != "pending" {
+		t.Fatal("409 之后邀请仍待处理")
 	}
-	found := false
-	for _, k := range r.kicks() {
-		found = found || k == h.id+"|"+friend.accountID+"|invitation_merged"
+	r.expect(r.do("PATCH", "/v1/grants/"+grantID, map[string]any{"role": "viewer", "workspaceIds": []string{}}, owner.bearer()), 200, "")
+	r.expect(r.acceptInvite(friend, id, token), 410, "invitation_revoked") // 收窄授予会作废旧邀请
+	idV, tokenV := r.mustInviteHost(owner, h.id, friendEmail, "viewer", nil)
+	r.expect(r.acceptInvite(friend, idV, tokenV), 200, "")
+	if rows := r.grantRows(h.id); len(rows) != 1 || rows[0][2] != "viewer" || rows[0][4] != "" {
+		t.Fatalf("viewer 整台：%v", rows)
 	}
-	if !found {
-		t.Fatalf("应踢掉连接：%v", r.kicks())
-	}
-	// 反过来：viewer 整台再接受 driver@w1 的邀请：整台来路只有 viewer，结果仍是 viewer 整台。
 	id2, token2 := r.mustInviteHost(owner, h.id, friendEmail, "driver", map[string]any{"workspaceIds": []string{"w1"}})
 	r.expect(r.acceptInvite(friend, id2, token2), 200, "")
 	if rows := r.grantRows(h.id); len(rows) != 1 || rows[0][2] != "viewer" || rows[0][4] != "" {
@@ -559,4 +556,37 @@ func TestHostInvitationNewGrantNarrowsExistingAccess(t *testing.T) {
 	if res.json["role"] != "viewer" || len(res.json["workspaceIds"].([]any)) != 0 {
 		t.Fatalf("有效权限应是 viewer 整台：%s", res.body)
 	}
+}
+
+// 改邮箱（确认）同事务作废发给旧邮箱的待处理邀请（团队与主机）；新邮箱上的邀请不受影响，旧令牌也接受不了。
+func TestEmailChangeRevokesInvitationsToOldAddress(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner := r.verified()
+	team := r.seedTeam("hi-e", map[string]string{owner.accountID: "owner"})
+	h := r.addHost(owner, teamSpace(team), "0.11.0")
+	oldEmail := r.email()
+	user := r.verifiedAs(oldEmail, nil)
+	idHost, tokenHost := r.mustInviteHost(owner, h.id, oldEmail, "viewer", map[string]any{"workspaceIds": []string{"w"}})
+	res := r.invite(owner, team, oldEmail, "member")
+	r.expect(res, 200, "")
+	idTeam := res.json["invitationId"].(string)
+	tokenTeam := r.waitInvite(oldEmail, idTeam)
+	newEmail := r.email()
+	r.expect(r.do("POST", "/v1/me/email", map[string]any{"newEmail": newEmail, "password": password}, user.bearer()), 200, "")
+	var confirm string
+	for _, m := range r.waitMails(newEmail, 1) {
+		if f := linkPattern.FindString(m.Text); strings.Contains(f, "#") {
+			confirm = f[strings.Index(f, "#")+1:]
+		}
+	}
+	r.expect(r.do("POST", "/v1/auth/email/verify", map[string]any{"token": confirm}, nil), 200, "")
+	for _, id := range []string{idHost, idTeam} {
+		if got := r.queryString("SELECT state FROM invitations WHERE invitation_id = $1", id); got != "revoked" {
+			t.Fatalf("发给旧邮箱的邀请 %s 应作废：%s", id, got)
+		}
+	}
+	relogged := r.relogin(user, newEmail)
+	r.expect(r.acceptInvite(relogged, idHost, tokenHost), 403, "invitation_email_mismatch")
+	_ = tokenTeam
 }

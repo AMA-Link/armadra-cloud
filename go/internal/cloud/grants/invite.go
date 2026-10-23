@@ -30,7 +30,7 @@ type InviteGrant struct {
 // ApplyInvitation 在事务里把主机邀请落成云端授予（origin = invitation）。调用方已按「团队 → 主机」的顺序加过锁，
 // 并核过主体合法性。已有同主体的有效授予就和邀请合成一条（不建第二条）：范围取并集（任一整台即整台），角色取「使范围内每一处
 // 都被角色 ≥ 它的来路覆盖」的最高角色（不放大——driver@w1 加 viewer 整台是 viewer 整台，不是 driver 整台），到期取对结果有贡献的
-// 来路里最早的非空到期（与 Compose 同规则，composeSources）。
+// 来路里最早的非空到期（与 Compose 同规则，composeSources）；合成会降低他已有的角色时答 409 conflict（不静默降级）。
 // 已经到期却还没被 grant.expire 撤销的授予当作不存在（先以 system 撤销，再建新的）。
 // 答最终的授予与是否新建。合成（含新增一条受限的授予）可能让账号的有效权限变窄，调用方要在前后各取一份有效权限，
 // `Narrowed` 时在提交后撤销已签的令牌（grants.RevokeAccess）。
@@ -73,6 +73,11 @@ func ApplyInvitation(ctx context.Context, tx saas.Tx, tenantID string, nowMs int
 	old := Source{Role: current.Role, WorkspaceIDs: sortedUnique(current.WorkspaceIDs), ExpiresAtMs: current.ExpiresAtMs}
 	add := Source{Role: in.Role, WorkspaceIDs: sortedUnique(in.WorkspaceIDs), ExpiresAtMs: in.ExpiresAtMs}
 	merged := composeSources([]Source{old, add})
+	if roleRank[merged.Role] < roleRank[current.Role] {
+		// 更宽但角色更低的邀请会降低他在某些工作空间上已有的角色（driver@w1 + viewer 整台）：不静默降级，
+		// 也不放大，答 409 让管理者用 grants.update 明确处理。
+		return saas.Grant{}, false, core.Fail(gen.ErrConflict)
+	}
 	ws := merged.WorkspaceIDs
 	if merged.Whole {
 		ws = []string{}

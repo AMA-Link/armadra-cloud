@@ -142,11 +142,12 @@ func (r trustRepo) Insert(ctx context.Context, tenantID string, t saas.TrustRequ
 	return err
 }
 
-func (r trustRepo) Reopen(ctx context.Context, tenantID, requestID, newRequestID string, nowMs, expiresAtMs int64) (bool, error) {
+func (r trustRepo) Reopen(ctx context.Context, tenantID, requestID, newRequestID, teamID, deviceName, platform string, nowMs, expiresAtMs int64) (bool, error) {
 	tag, err := r.q.Exec(ctx,
 		`UPDATE trust_requests SET request_id = $1, state = 'pending', requested_at_ms = $2, expires_at_ms = $3,
-		   resolved_at_ms = NULL, resolved_by = NULL
-		 WHERE tenant_id = $4 AND request_id = $5 AND state = 'rejected'`, newRequestID, nowMs, expiresAtMs, tenantID, requestID)
+		   resolved_at_ms = NULL, resolved_by = NULL, team_id = NULLIF($4, ''), device_name = $5, platform = $6
+		 WHERE tenant_id = $7 AND request_id = $8 AND state = 'rejected'`,
+		newRequestID, nowMs, expiresAtMs, teamID, deviceName, platform, tenantID, requestID)
 	return tag.RowsAffected() == 1, err
 }
 

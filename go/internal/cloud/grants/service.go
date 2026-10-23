@@ -10,6 +10,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
@@ -75,6 +76,8 @@ type Options struct {
 	Log                  *obs.Logger
 	// Hook 给测试在断言签发的两个交错点停住（"signed"：令牌已签、索引未登记；"indexed"：索引已登记、复核之前）。生产不设。
 	Hook func(stage string)
+	// Events 在提交之后发 grantChanged；nil = 不发。
+	Events *events.Publisher
 }
 
 // Service 是授予与断言服务。
@@ -88,6 +91,7 @@ type Service struct {
 	verified bool
 	log      *obs.Logger
 	hook     func(stage string)
+	events   *events.Publisher
 }
 
 // New 建授予服务。
@@ -98,7 +102,7 @@ func New(options Options) *Service {
 	}
 	return &Service{
 		c: options.Core, store: options.Store, limits: options.Limits, relay: options.Relay, policy: options.Policy,
-		sources: core.NewSources(options.Core), verified: options.RequireEmailVerified, log: log, hook: options.Hook,
+		sources: core.NewSources(options.Core), verified: options.RequireEmailVerified, log: log, hook: options.Hook, events: options.Events,
 	}
 }
 
@@ -305,13 +309,18 @@ func (s *Service) snapshot(ctx context.Context, r saas.Reader, sourceID string, 
 
 // snapshotAt 是一批账号在 atMs 那一刻对主机的有效权限（到期作业用到期前一毫秒的快照作「之前」）。
 func (s *Service) snapshotAt(ctx context.Context, r saas.Reader, sourceID string, accounts []string, atMs int64) (map[string]Effective, error) {
+	return s.effectiveMany(ctx, r, sourceID, accounts, atMs)
+}
+
+// effectiveMany 一次读出一批账号对同一台主机的事实再逐个合成（AccessBases，固定几条查询，不随账号数增长）。
+func (s *Service) effectiveMany(ctx context.Context, r saas.Reader, sourceID string, accounts []string, atMs int64) (map[string]Effective, error) {
+	bases, err := r.AccessBases(ctx, s.tenant(), accounts, sourceID)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]Effective, len(accounts))
 	for _, id := range accounts {
-		eff, _, err := s.effectiveAt(ctx, r, id, sourceID, atMs)
-		if err != nil {
-			return nil, err
-		}
-		out[id] = eff
+		out[id] = Compose(bases[id], id, atMs)
 	}
 	return out, nil
 }
@@ -376,8 +385,12 @@ func (s *Service) revokeInvites(ctx context.Context, tx saas.Tx, sourceID string
 		if person == nil {
 			continue
 		}
-		if _, err := tx.Invitations().RevokeHostByEmail(ctx, s.tenant(), person.Email, "", sourceID, actor, s.nowMs()); err != nil {
+		revoked, err := tx.Invitations().RevokeHostByEmail(ctx, s.tenant(), person.Email, "", sourceID, actor, s.nowMs())
+		if err != nil {
 			return err
+		}
+		for _, inv := range revoked {
+			s.events.InvitationChanged(tx, inv, saas.InvitationRevoked)
 		}
 	}
 	return nil
@@ -579,6 +592,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		if err := tx.Grants().Insert(ctx, s.tenant(), grant); err != nil {
 			return err
 		}
+		s.events.GrantChanged(tx, grant)
 		if err := s.scheduleExpiry(ctx, tx, grant.GrantID, grant.ExpiresAtMs, nowMs); err != nil {
 			return err
 		}
@@ -789,6 +803,7 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		s.revokeAccess(tx, g.SourceID, narrowed, "grant_changed")
+		s.events.GrantChanged(tx, g)
 		if err := s.record(ctx, tx, call.IP, saas.ActorAccount, account.AccountID, h.TeamID, g.SourceID, ActionUpdate, "grant", g.GrantID); err != nil {
 			return err
 		}
@@ -842,6 +857,7 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_revoked")
+		s.events.GrantChanged(tx, g)
 		return s.record(ctx, tx, call.IP, saas.ActorAccount, account.AccountID, h.TeamID, g.SourceID, ActionRevoke, "grant", g.GrantID)
 	})
 	if err != nil {
@@ -895,10 +911,8 @@ func (s *Service) expire(ctx context.Context, job saas.Job) error {
 		if err != nil {
 			return err
 		}
-		if err := s.revokeInvites(ctx, tx, g.SourceID, personal(*g), saas.GrantRevokedBySystem); err != nil {
-			return err
-		}
 		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_expired")
+		s.events.GrantChanged(tx, *g)
 		return s.record(ctx, tx, "", saas.ActorSystem, "", g.TeamID, g.SourceID, ActionExpire, "grant", g.GrantID)
 	})
 }

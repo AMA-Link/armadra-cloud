@@ -120,6 +120,7 @@ func (s *Service) createHost(ctx context.Context, call *api.Call, account *saas.
 		if err := s.enqueueHostMail(ctx, tx, h, inv, account, invitee); err != nil {
 			return err
 		}
+		s.events.InvitationChanged(tx, inv, saas.InvitationPending)
 		out = view(inv, nowMs)
 		return s.recordFor(ctx, tx, call, account.AccountID, h.TeamID, h.SourceID, ActionCreate, inv.InvitationID)
 	})
@@ -334,6 +335,7 @@ func (s *Service) acceptHost(ctx context.Context, tx saas.Tx, call *api.Call, ac
 	if err := tx.Invitations().Decide(ctx, s.tenant(), inv.InvitationID, saas.InvitationAccepted, account.AccountID, nowMs); err != nil {
 		return "", "", err
 	}
+	s.events.InvitationChanged(tx, *inv, saas.InvitationAccepted)
 	if err := s.recordFor(ctx, tx, call, account.AccountID, h.TeamID, h.SourceID, ActionAccept, inv.InvitationID); err != nil {
 		return "", "", err
 	}

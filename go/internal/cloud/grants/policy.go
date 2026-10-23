@@ -282,7 +282,16 @@ func (p *Policy) Watch(ctx context.Context, caller core.Caller) (core.Watcher, e
 	if caller.AccountID == "" {
 		return p.personal.Watch(ctx, caller)
 	}
-	w := &watcher{account: caller.AccountID, visible: map[string]struct{}{}}
+	visible, err := p.visibleSet(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	return &watcher{account: caller.AccountID, visible: visible, policy: p, caller: caller}, nil
+}
+
+// visibleSet 取调用者此刻能看到的全部主机（逐页）。
+func (p *Policy) visibleSet(ctx context.Context, caller core.Caller) (map[string]struct{}, error) {
+	visible := map[string]struct{}{}
 	seen := map[string]bool{}
 	for cursor := ""; ; {
 		page, next, err := p.Visible(ctx, caller, core.SourceFilter{Cursor: cursor})
@@ -290,10 +299,10 @@ func (p *Policy) Watch(ctx context.Context, caller core.Caller) (core.Watcher, e
 			return nil, err
 		}
 		for _, entry := range page {
-			w.visible[entry.Source.SourceID] = struct{}{}
+			visible[entry.Source.SourceID] = struct{}{}
 		}
 		if next == "" {
-			return w, nil
+			return visible, nil
 		}
 		if seen[next] || next == cursor {
 			return nil, core.Fail(gen.ErrInternal)
@@ -307,6 +316,8 @@ func (p *Policy) Watch(ctx context.Context, caller core.Caller) (core.Watcher, e
 // Close 之后仍可能被调用，那时 Sees 答 false、Refresh 什么也不做。
 type watcher struct {
 	account string
+	policy  *Policy
+	caller  core.Caller
 
 	mu      sync.RWMutex
 	closed  bool
@@ -359,6 +370,21 @@ func (w *watcher) apply(e AccessChanged) {
 		return
 	}
 	delete(w.visible, e.SourceID)
+}
+
+// Resync 实现 core.Resyncer：团队成员变动之后整份重算（它能看到的主机一次变了很多）。在调用方的协程里做 I/O，
+// 算完一次性换掉可见集合；连接已关闭则什么也不做。
+func (w *watcher) Resync(ctx context.Context) error {
+	fresh, err := w.policy.visibleSet(ctx, w.caller)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.closed {
+		w.visible = fresh
+	}
+	return nil
 }
 
 func (w *watcher) Close() {
