@@ -21,8 +21,8 @@ import (
 // ------------------------------------------------------------ 持有节点：/x/v1
 
 // internodeCheckEvery 是已建立的 /x/v1 连接多久复查一次对端的节点令牌有没有被撤销（查的是撤销表的内存副本）；
-// 到 exp 时另有定时器直接断开。变量只为测试能缩短。
-var internodeCheckEvery = 5 * time.Second
+// 到 exp 时另有定时器直接断开。缺省值；测试经 Config.InternodeCheckEvery 缩短（不改包级变量，免得与别的节点的读并发）。
+const defaultInternodeCheckEvery = 5 * time.Second
 
 // internodeIdle 是 /x/v1 连接多久没收到任何帧就当断了（对端每个心跳周期发一次 PING）。
 func internodeIdle(cfg tunnel.Config) time.Duration {
@@ -39,19 +39,24 @@ var internodeUpgrader = websocket.Upgrader{
 
 // internodeServer 收别的节点转来的通道。
 type internodeServer struct {
-	auth    *auth.Context
-	local   func(sourceID string) *tunnel.Tunnel
-	cfg     tunnel.Config
-	log     *obs.Logger
-	metrics *internodeMetrics
+	auth  *auth.Context
+	local func(sourceID string) *tunnel.Tunnel
+	cfg   tunnel.Config
+	// checkEvery 是撤销复查间隔，创建后不再改。
+	checkEvery time.Duration
+	log        *obs.Logger
+	metrics    *internodeMetrics
 
 	mu       sync.Mutex
 	conns    map[*internodeConn]struct{}
 	stopping bool
 }
 
-func newInternodeServer(a *auth.Context, local func(string) *tunnel.Tunnel, log *obs.Logger, m *internodeMetrics) *internodeServer {
-	return &internodeServer{auth: a, local: local, cfg: linkConfig(), log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
+func newInternodeServer(a *auth.Context, local func(string) *tunnel.Tunnel, log *obs.Logger, m *internodeMetrics, checkEvery time.Duration) *internodeServer {
+	if checkEvery <= 0 {
+		checkEvery = defaultInternodeCheckEvery
+	}
+	return &internodeServer{auth: a, local: local, cfg: linkConfig(), checkEvery: checkEvery, log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
 }
 
 // streams 是各入向连接上的流数。
@@ -250,7 +255,7 @@ func (c *internodeConn) watch() {
 	}
 	expire := time.NewTimer(time.Until(c.exp))
 	defer expire.Stop()
-	check := time.NewTicker(internodeCheckEvery)
+	check := time.NewTicker(c.s.checkEvery)
 	defer check.Stop()
 	for {
 		select {
@@ -367,26 +372,30 @@ func (c *internodeConn) receive(msg []byte) bool {
 	case protocol.FrameEnd:
 		c.mu.Lock()
 		fs := c.streams[f.StreamID]
+		var s *tunnel.Stream
 		if fs != nil {
 			fs.peerEnded = true
+			s = fs.s
 			c.releaseLocked(fs)
 		}
 		c.mu.Unlock()
-		if fs != nil && fs.s != nil {
-			fs.s.End()
+		if s != nil {
+			s.End()
 		}
 	case protocol.FrameRst:
 		c.mu.Lock()
 		fs := c.streams[f.StreamID]
 		dropped := 0
+		var s *tunnel.Stream
 		if fs != nil {
 			dropped = fs.dropLocked()
+			s = fs.s
 			delete(c.streams, f.StreamID)
 		}
 		c.mu.Unlock()
-		if fs != nil && fs.s != nil {
-			fs.s.Consumed(dropped)
-			fs.s.Abort()
+		if s != nil {
+			s.Consumed(dropped)
+			s.Abort()
 		}
 	case protocol.FrameWindow:
 		c.window(f.StreamID, int(f.Credit))

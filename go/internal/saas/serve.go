@@ -186,7 +186,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 	if err != nil {
 		return err
 	}
-	in = newInternodeServer(plane.Auth, local, log, metrics)
+	in = newInternodeServer(plane.Auth, local, log, metrics, cfg.InternodeCheckEvery)
 	// 全部指标：个人中转原有的在前（逐字节不变），再接准入闸与节点间转发的。
 	render := func() string { return plane.Metrics.Render() + g.render() + metrics.render() }
 	var planeDown sync.Once

@@ -312,11 +312,16 @@ func (s *Service) acceptHost(ctx context.Context, tx saas.Tx, call *api.Call, ac
 	} else if account.EmailVerifiedAtMs == nil {
 		return "", "", core.Fail(gen.ErrEmailUnverified) // 个人空间的访客授予要求已验证邮箱（与 grants.create 一致）
 	}
-	if _, _, err := grants.ApplyInvitation(ctx, tx, s.tenant(), nowMs, grants.InviteGrant{
+	_, _, narrowed, err := grants.ApplyInvitation(ctx, tx, s.tenant(), nowMs, grants.InviteGrant{
 		SourceID: h.SourceID, TeamID: h.TeamID, SubjectKind: subject, AccountID: account.AccountID, Role: inv.HostRole,
 		WorkspaceIDs: inv.WorkspaceIDs, ExpiresAtMs: inv.GrantExpiresAtMs, GrantedBy: inv.InvitedBy, InvitationID: inv.InvitationID,
-	}); err != nil {
+	})
+	if err != nil {
 		return "", "", err
+	}
+	if narrowed && s.relay != nil {
+		// 合成结果比已有授予窄（角色降、范围缩或到期提前）：撤掉他在这台主机上已签的令牌，重连时按新权限重签。
+		grants.RevokeAccess(tx, s.relay, s.log, h.SourceID, []string{account.AccountID}, "invitation_merged")
 	}
 	if err := tx.Invitations().Decide(ctx, s.tenant(), inv.InvitationID, saas.InvitationAccepted, account.AccountID, nowMs); err != nil {
 		return "", "", err

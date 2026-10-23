@@ -178,23 +178,24 @@ func TestHostInvitationMergesIntoExistingGrant(t *testing.T) {
 	id, token := r.mustInviteHost(owner, h.id, friendEmail, "editor", map[string]any{"workspaceIds": []string{"w2"}})
 	r.expect(r.acceptInvite(friend, id, token), 200, "")
 	rows := r.grantRows(h.id)
-	// 邀请不带到期 = 不过期，比原来的晚；角色取高；范围并集；仍是原来那条。
-	if len(rows) != 1 || !reflect.DeepEqual(rows[0], []string{"guest", friend.accountID, "editor", "grant", "w1,w2", "", ""}) {
+	// 角色按「范围内每一处都被角色 ≥ 它的来路覆盖」取（w1 只有 viewer，所以是 viewer，不放大成 editor）；范围并集；
+	// 到期取有贡献的来路里最早的（两条都贡献，原来的 soon）；仍是原来那条。
+	if len(rows) != 1 || !reflect.DeepEqual(rows[0], []string{"guest", friend.accountID, "viewer", "grant", "w1,w2", strconv.FormatInt(soon, 10), ""}) {
 		t.Fatalf("合并后：%v", rows)
 	}
 	if r.queryString("SELECT grant_id FROM source_grants WHERE source_id = $1 AND revoked_at_ms IS NULL", h.id) != grantID {
 		t.Fatal("应更新原来那条授予")
 	}
-	if n := r.queryInt("SELECT count(*)::int FROM jobs WHERE kind = 'grant.expire' AND dedupe_key = $1 AND done_at_ms IS NULL", grantID); n != 0 {
-		t.Fatal("到期清掉后应撤掉到期作业")
-	}
 
-	// 再来一份整台、较低角色的邀请：范围放宽成整台，角色不降。
+	// 再来一份整台 viewer 的邀请：范围放宽成整台，角色 viewer；只有整台来路贡献到期（邀请不过期），到期清掉并撤掉作业。
 	id2, token2 := r.mustInviteHost(owner, h.id, friendEmail, "viewer", nil)
 	r.expect(r.acceptInvite(friend, id2, token2), 200, "")
 	rows = r.grantRows(h.id)
-	if len(rows) != 1 || rows[0][2] != "editor" || rows[0][4] != "" {
+	if len(rows) != 1 || rows[0][2] != "viewer" || rows[0][4] != "" || rows[0][5] != "" {
 		t.Fatalf("整台并入后：%v", rows)
+	}
+	if n := r.queryInt("SELECT count(*)::int FROM jobs WHERE kind = 'grant.expire' AND dedupe_key = $1 AND done_at_ms IS NULL", grantID); n != 0 {
+		t.Fatal("到期清掉后应撤掉到期作业")
 	}
 
 	// 授予到期了（作业还没跑）：当作不存在，旧的以 system 撤销，建新的。
@@ -500,4 +501,39 @@ func TestHostInvitationsDieWithAccessChanges(t *testing.T) {
 	r.clock.Advance(2 * time.Hour)
 	owner = r.relogin(owner, emailOf(owner))
 	r.expect(r.do("POST", invitePath(idX, "resend"), nil, owner.bearer()), 400, "bad_request")
+}
+
+// 合并不放大：已有 driver@w1 再接受 viewer 整台的邀请，结果是 viewer 整台，不是 driver 整台；
+// 这比已有授予窄（w1 上 driver 降成 viewer），所以他已签的令牌被撤、连接被踢。
+func TestHostInvitationMergeNeverEscalates(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner, friend := r.verified(), r.verified()
+	friendEmail := r.queryString("SELECT email FROM accounts WHERE account_id = $1", friend.accountID)
+	h := r.addHost(owner, nil, "0.11.0")
+	r.mustGrant(owner, h.id, guestOf(friend.accountID), "driver", map[string]any{"workspaceIds": []string{"w1"}})
+	signed := r.assertion(friend, h.id)
+	r.expect(signed, 200, "")
+	id, token := r.mustInviteHost(owner, h.id, friendEmail, "viewer", nil)
+	r.expect(r.acceptInvite(friend, id, token), 200, "")
+	rows := r.grantRows(h.id)
+	if len(rows) != 1 || rows[0][2] != "viewer" || rows[0][4] != "" {
+		t.Fatalf("driver@w1 + viewer 整台应是 viewer 整台：%v", rows)
+	}
+	if !r.bothRevoked(signed) {
+		t.Fatal("合并收窄了已有授予，已签的令牌应被撤")
+	}
+	found := false
+	for _, k := range r.kicks() {
+		found = found || k == h.id+"|"+friend.accountID+"|invitation_merged"
+	}
+	if !found {
+		t.Fatalf("应踢掉连接：%v", r.kicks())
+	}
+	// 反过来：viewer 整台再接受 driver@w1 的邀请：整台来路只有 viewer，结果仍是 viewer 整台。
+	id2, token2 := r.mustInviteHost(owner, h.id, friendEmail, "driver", map[string]any{"workspaceIds": []string{"w1"}})
+	r.expect(r.acceptInvite(friend, id2, token2), 200, "")
+	if rows := r.grantRows(h.id); len(rows) != 1 || rows[0][2] != "viewer" || rows[0][4] != "" {
+		t.Fatalf("viewer 整台 + driver@w1 仍是 viewer 整台：%v", rows)
+	}
 }

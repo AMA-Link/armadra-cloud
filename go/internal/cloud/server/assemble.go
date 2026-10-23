@@ -120,7 +120,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		handlers[name] = handler
 	}
 	inviteService := invitations.New(invitations.Options{
-		Core: coreCtx, Store: saasStore, Limits: limits, Mail: mailer, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+		Core: coreCtx, Store: saasStore, Limits: limits, Mail: mailer, Relay: durable, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
 	})
 	inviteService.Register(runner)
 	for name, handler := range inviteService.Handlers() {
