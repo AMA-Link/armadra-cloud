@@ -61,7 +61,17 @@ export const PLATFORM_NAME_MAX = 128;
 export const platformChallengeSchema = z.object({
   provider: challengeProviderSchema,
   siteKey: z.string().min(1).max(256),
-  scope: z.array(challengeScopeSchema).min(1),
+  /**
+   * 客户端解析时忽略不认识的 scope 项（服务端以后可能加新项，cloud-api §16）：先过滤未知项再按枚举校验；
+   * 服务端配置侧仍用严格枚举（`challengeScopeSchema`）。
+   */
+  scope: z.preprocess(
+    (value) =>
+      Array.isArray(value)
+        ? value.filter((item) => challengeScopeSchema.safeParse(item).success)
+        : value,
+    z.array(challengeScopeSchema).min(1),
+  ),
 });
 
 export const platformInfoSchema = z.object({
