@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/identity"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
@@ -38,6 +39,14 @@ func mustRandom(n int) []byte {
 
 // RandomToken 是 n 字节随机数的 base64url（无填充）。
 func RandomToken(n int) string { return base64.RawURLEncoding.EncodeToString(mustRandom(n)) }
+
+// NewUUID 是 UUIDv4 小写文本（团队、邀请等业务 id）。
+func NewUUID() string {
+	b := mustRandom(16)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
 
 // RandomHex 是 n 字节随机数的小写 hex。
 func RandomHex(n int) string { return hex.EncodeToString(mustRandom(n)) }

@@ -63,13 +63,16 @@ type InvitationRepo interface {
 	ExpireStale(ctx context.Context, scope TeamScope, email string, nowMs int64) error
 	// Insert 插一条团队邀请；同团队同邮箱已有 pending 答 ErrConflict。
 	Insert(ctx context.Context, scope TeamScope, invitation Invitation) error
+	// HasPending 报告同团队同邮箱是否已有待处理（没过期）的邀请。
+	HasPending(ctx context.Context, scope TeamScope, email string, nowMs int64) (bool, error)
 	// List 是团队发出的邀请，按创建时间倒序。
 	List(ctx context.Context, scope TeamScope) ([]Invitation, error)
 	// PendingSeats 数待处理（没过期）的团队邀请：非 guest 与 guest（它们也占额度）。
 	PendingSeats(ctx context.Context, scope TeamScope, nowMs int64) (Seats, error)
 	// Decide 置终态（accepted、declined、revoked）并记决定者与时刻。
 	Decide(ctx context.Context, tenantID, invitationID, state, decidedBy string, nowMs int64) error
-	// Reissue 重发：换新的有效期、清令牌哈希（新令牌由发信作业生成）、重发次数加一。
+	// Reissue 重发：邀请回到 pending（已过期的也可以重发）、换新的有效期、清令牌哈希
+	// （新令牌由发信作业生成）、重发次数加一；已有另一条 pending 占着唯一索引时答 ErrConflict。
 	Reissue(ctx context.Context, tenantID, invitationID string, expiresAtMs int64) error
 	// SetToken 记发信作业生成的令牌哈希与发出时刻（旧令牌随之作废）。
 	SetToken(ctx context.Context, tenantID, invitationID, tokenHash string, nowMs int64) error

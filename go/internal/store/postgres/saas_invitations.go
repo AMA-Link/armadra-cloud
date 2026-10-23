@@ -71,6 +71,14 @@ func (r invitationRepo) Insert(ctx context.Context, scope saas.TeamScope, i saas
 	return err
 }
 
+func (r invitationRepo) HasPending(ctx context.Context, scope saas.TeamScope, email string, nowMs int64) (bool, error) {
+	var exists bool
+	err := r.q.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM invitations WHERE tenant_id = $1 AND team_id = $2 AND kind = 'team' AND email = lower($3)
+		   AND state = 'pending' AND expires_at_ms > $4)`, scope.TenantID(), scope.TeamID(), email, nowMs).Scan(&exists)
+	return exists, err
+}
+
 func (r invitationRepo) List(ctx context.Context, scope saas.TeamScope) ([]saas.Invitation, error) {
 	return list(ctx, r.q, scanInvitation,
 		"SELECT "+invitationColumns+" FROM invitations WHERE tenant_id = $1 AND team_id = $2 AND kind = 'team' ORDER BY created_at_ms DESC, invitation_id",
@@ -95,8 +103,8 @@ func (r invitationRepo) Decide(ctx context.Context, tenantID, invitationID, stat
 
 func (r invitationRepo) Reissue(ctx context.Context, tenantID, invitationID string, expiresAtMs int64) error {
 	_, err := r.q.Exec(ctx,
-		`UPDATE invitations SET expires_at_ms = $1, token_hash = NULL, sent_at_ms = NULL, resend_count = resend_count + 1
-		 WHERE tenant_id = $2 AND invitation_id = $3`, expiresAtMs, tenantID, invitationID)
+		`UPDATE invitations SET state = 'pending', decided_at_ms = NULL, expires_at_ms = $1, token_hash = NULL, sent_at_ms = NULL,
+		   resend_count = resend_count + 1 WHERE tenant_id = $2 AND invitation_id = $3`, expiresAtMs, tenantID, invitationID)
 	return err
 }
 

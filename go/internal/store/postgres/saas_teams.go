@@ -79,6 +79,16 @@ func (r reader) Entitlement(ctx context.Context, tenantID, spaceKind, spaceID st
 	return &e, err
 }
 
+func (r reader) TeamSummary(ctx context.Context, tenantID, teamID string) (*saas.TeamSummary, error) {
+	var t saas.TeamSummary
+	err := r.q.QueryRow(ctx, "SELECT name, deleted_at_ms IS NOT NULL FROM teams WHERE tenant_id = $1 AND team_id = $2",
+		tenantID, teamID).Scan(&t.Name, &t.Deleted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &t, err
+}
+
 func (r reader) DueTeams(ctx context.Context, tenantID string, nowMs int64, limit int) ([]string, error) {
 	return list(ctx, r.q, func(s scanner) (string, error) {
 		var id string

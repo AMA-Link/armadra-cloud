@@ -2,9 +2,7 @@ package teams
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -16,17 +14,6 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas/teamscope"
 )
-
-// newTeamID 是 UUIDv4 小写。
-func newTeamID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("teams: 系统随机源不可用：" + err.Error())
-	}
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
 
 // cleanName 去掉首尾空白；空名字不合格。
 func cleanName(name string) (string, error) {
@@ -64,7 +51,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 	}
 	nowMs := s.nowMs()
 	team := saas.Team{
-		TeamID: newTeamID(), Slug: in.Slug, Name: name, Settings: settings, CreatedBy: account.AccountID, CreatedAtMs: nowMs, UpdatedAtMs: nowMs,
+		TeamID: core.NewUUID(), Slug: in.Slug, Name: name, Settings: settings, CreatedBy: account.AccountID, CreatedAtMs: nowMs, UpdatedAtMs: nowMs,
 	}
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
 		// 个人账号能建的团队数：锁账号行后计数，两个同时建团队的请求不会一起越过上限。
