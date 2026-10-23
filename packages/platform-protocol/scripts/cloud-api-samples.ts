@@ -746,6 +746,21 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       expiresAtMs: teamInvitation.expiresAtMs,
     },
   },
+  "invitations.preview": {
+    input: {
+      invitationId: teamInvitation.invitationId,
+      token: "test-invite-token",
+    },
+    output: {
+      kind: "team",
+      state: "pending",
+      teamName: "Dev Team",
+      teamRole: "member",
+      inviterName: "Dev",
+      emailHint: "a***@armadra.test",
+      expiresAtMs: teamInvitation.expiresAtMs,
+    },
+  },
   "invitations.accept": {
     input: {
       invitationId: teamInvitation.invitationId,

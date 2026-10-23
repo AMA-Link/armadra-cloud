@@ -101,6 +101,7 @@ var Routes = []Route{
 	{Procedure: "invitations.revoke", Method: "DELETE", Path: "/v1/invitations/{invitationId}"},
 	{Procedure: "invitations.get", Method: "GET", Path: "/v1/invitations/{invitationId}"},
 	{Procedure: "invitations.resend", Method: "POST", Path: "/v1/invitations/{invitationId}/resend"},
+	{Procedure: "invitations.preview", Method: "POST", Path: "/v1/invitations/{invitationId}/preview"},
 	{Procedure: "invitations.accept", Method: "POST", Path: "/v1/invitations/{invitationId}/accept"},
 	{Procedure: "invitations.decline", Method: "POST", Path: "/v1/invitations/{invitationId}/decline"},
 	{Procedure: "groups.list", Method: "GET", Path: "/v1/teams/{teamId}/groups"},

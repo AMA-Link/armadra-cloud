@@ -1548,6 +1548,19 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"invitationId"},
 	},
+	"invitations.preview": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "invitationId", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "token", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+			}},
+		},
+		Required: []string{"invitationId", "token"},
+	},
 	"invitations.accept": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
-import { base, SINCE_0_10 } from "../meta.ts";
+import { base, SINCE_0_10, SINCE_0_10_1 } from "../meta.ts";
 import { empty, sourceIdSchema } from "../schemas.ts";
 import {
   createInvitationInputSchema,
@@ -82,9 +82,19 @@ export const invitations = {
     )
     .input(z.object({ invitationId: z.string() }))
     .output(invitationSchema),
+  /**
+   * 已弃用，保留兼容：`?token=` 会进代理与访问日志，客户端改用 `preview`（令牌放请求体）。
+   */
   get: base
     .route({ method: "GET", path: "/v1/invitations/{invitationId}" })
     .meta({ scope: ["anonymous"], since: SINCE_0_10 })
+    .errors({ ...invitationErrors, ...errors.pick("rate_limited") })
+    .input(z.object({ invitationId: z.string(), token: z.string().min(1) }))
+    .output(invitationPreviewSchema),
+  /** 同 `get`，令牌放请求体、不进 URL（0.10.1）。 */
+  preview: base
+    .route({ method: "POST", path: "/v1/invitations/{invitationId}/preview" })
+    .meta({ scope: ["anonymous"], since: SINCE_0_10_1 })
     .errors({ ...invitationErrors, ...errors.pick("rate_limited") })
     .input(z.object({ invitationId: z.string(), token: z.string().min(1) }))
     .output(invitationPreviewSchema),
