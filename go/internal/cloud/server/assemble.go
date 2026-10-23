@@ -14,6 +14,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/accounts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/invitations"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
@@ -58,7 +59,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		TenantID: TenantID, Ports: db.SaaSPorts(), Signer: core.NewSigner(db.Keys(TenantID), now),
 		Limits: limits, Relay: relay.Relay(), Revocations: relay.Revocations(),
 		PasswordPolicy: core.DefaultPasswordPolicy, Now: now, Events: core.NewEventBus(),
-		RelayOrigin: relayOrigin, RelayBaseURL: relayOrigin,
+		RelayOrigin: relayOrigin, RelayBaseURL: relayOrigin, TunnelNodes: hosts.TunnelNodes(relay),
 	}
 	if cfg.Turnstile != nil {
 		gate, err := challengeGate(cfg, logger, now, deps.Challenge)
@@ -111,6 +112,12 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	})
 	inviteService.Register(runner)
 	for name, handler := range inviteService.Handlers() {
+		handlers[name] = handler
+	}
+	hostService := hosts.New(hosts.Options{
+		Core: coreCtx, Store: saasStore, Limits: limits, Relay: relay, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+	})
+	for name, handler := range hostService.Handlers() {
 		handlers[name] = handler
 	}
 	webApp := ""

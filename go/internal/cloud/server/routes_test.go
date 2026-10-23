@@ -7,9 +7,9 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 )
 
-// 启用的过程集合 = 设计 §1.1 到本批（S4）为止的累计；其余照旧 501 not_implemented。
+// 启用的过程集合 = 设计 §1.1 到本批（S5a）为止的累计；其余照旧 501 not_implemented。
 // 往后每批把自己实现的过程加进这张表，漏加或多开都会在这里失败。
-var enabledThroughS4 = map[string]bool{
+var enabledThroughS5a = map[string]bool{
 	"platform.info": true, "platform.jwks": true,
 	"auth.register": true, "auth.login": true, "auth.refresh": true, "auth.logout": true,
 	"auth.changePassword": true, "auth.stepUp": true,
@@ -23,6 +23,8 @@ var enabledThroughS4 = map[string]bool{
 	"teams.memberRemove": true, "teams.leave": true, "teams.settings": true, "teams.settingsUpdate": true, "teams.usage": true,
 	"invitations.create": true, "invitations.list": true, "invitations.revoke": true, "invitations.resend": true,
 	"invitations.get": true, "invitations.preview": true, "invitations.accept": true, "invitations.decline": true,
+	"sources.registrationToken": true, "sources.register": true, "sources.heartbeatHint": true, "sources.list": true,
+	"sources.get": true, "sources.update": true, "sources.revoke": true, "me.sources": true,
 }
 
 func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
@@ -45,7 +47,7 @@ func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 		}
 		res := r.do(method, path, body, nil)
 		is501 := res.status == 501 && res.json["code"] == "not_implemented"
-		if enabledThroughS4[route.Procedure] {
+		if enabledThroughS5a[route.Procedure] {
 			seen++
 			if is501 {
 				t.Errorf("%s 应已启用", route.Procedure)
@@ -54,7 +56,7 @@ func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 			t.Errorf("%s 还没实现，应答 501 not_implemented：%d %s", route.Procedure, res.status, res.body)
 		}
 	}
-	if seen != len(enabledThroughS4) {
-		t.Fatalf("启用表里有契约里没有的过程：%d / %d", seen, len(enabledThroughS4))
+	if seen != len(enabledThroughS5a) {
+		t.Fatalf("启用表里有契约里没有的过程：%d / %d", seen, len(enabledThroughS5a))
 	}
 }

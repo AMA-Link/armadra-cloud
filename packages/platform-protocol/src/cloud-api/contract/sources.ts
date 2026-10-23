@@ -97,6 +97,9 @@ export const sources = {
         "source_taken",
         "protocol_unsupported",
         "rate_limited",
+        // 1.4 补充：团队主机登记时的权威检查（空间的主机配额、团队停用）。
+        "limit_reached",
+        "team_suspended",
       ),
     )
     .input(
@@ -125,7 +128,8 @@ export const sources = {
   heartbeatHint: base
     .route({ method: "GET", path: "/v1/sources/me/relay" })
     .meta({ scope: ["source"], since: SINCE_0_1 })
-    .errors(errors.pick("source_revoked", "unauthenticated"))
+    // 1.4 补充：SaaS 的节点表为空时答 `unavailable`（不兜底到共用地址）。
+    .errors(errors.pick("source_revoked", "unauthenticated", "unavailable"))
     .input(empty)
     .output(
       z.object({
