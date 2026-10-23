@@ -47,8 +47,9 @@ const (
 // workspacePattern 是 scp 里 ws:<id> 的 id（协议包 scopeEntrySchema）。
 var workspacePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 
-// cleanWorkspaces 校验并去重排序：每项符合 scopeEntrySchema，至多 64 项。
-func cleanWorkspaces(ids []string) ([]string, error) {
+// CleanWorkspaces 校验并去重排序：每项符合 scopeEntrySchema，至多 64 项；不合格 400 bad_request。
+// 主机邀请的 workspaceIds 也走它，两处的校验保持一致。
+func CleanWorkspaces(ids []string) ([]string, error) {
 	out := sortedUnique(ids)
 	if len(out) > MaxScopeEntries {
 		return nil, core.Fail(gen.ErrBadRequest)
@@ -212,9 +213,9 @@ func (s *Service) record(ctx context.Context, tx saas.Tx, ip, actorKind, actorID
 
 // ---- 管理权 ----
 
-// find 读调用者看得到的一台未撤销的主机；看不到（不存在、别人的、别的团队的）答 not_found。
-func (s *Service) find(ctx context.Context, r saas.Reader, viewerID, sourceID string) (saas.Host, error) {
-	rows, err := s.policy.Hosts(ctx, r, saas.HostFilter{ViewerID: viewerID, SourceID: sourceID, Limit: 1})
+// FindHost 读 viewer 看得到的一台未撤销的主机；看不到（不存在、别人的、别的团队的）答 not_found。
+func FindHost(ctx context.Context, r saas.Reader, tenantID string, nowMs int64, viewerID, sourceID string) (saas.Host, error) {
+	rows, err := r.ListHosts(ctx, tenantID, saas.HostFilter{ViewerID: viewerID, SourceID: sourceID, NowMs: nowMs, Limit: 1})
 	if err != nil {
 		return saas.Host{}, err
 	}
@@ -224,37 +225,50 @@ func (s *Service) find(ctx context.Context, r saas.Reader, viewerID, sourceID st
 	return rows[0], nil
 }
 
-// denyManage 是看得到却管不了时的错误：团队主机答 team_role_insufficient，个人空间答 source_access_denied。
-func denyManage(h saas.Host) error {
+// DenyManage 是看得到却管不了时的错误：团队主机答 team_role_insufficient，个人空间答 source_access_denied。
+func DenyManage(h saas.Host) error {
 	if h.TeamID != "" {
 		return core.Fail(gen.ErrTeamRoleInsufficient)
 	}
 	return core.Fail(gen.ErrSourceAccessDenied)
 }
 
-// manage 在事务里核管理权：团队主机先锁团队行（团队 → 账号 → 其余的顺序）并核成员，再锁主机、重读，
-// 看不到答 not_found，看得到但管不了答 denyManage。
-func (s *Service) manage(ctx context.Context, tx saas.Tx, accountID, sourceID string) (saas.Host, error) {
-	first, err := s.find(ctx, tx, accountID, sourceID)
+// ManageHost 在事务里核管理权（主机所有者，或团队主机的团队 owner / admin）：团队主机先锁团队行（团队 → 账号 → 其余的
+// 顺序）并核成员，再锁主机、重读，看不到答 not_found，看得到但管不了答 DenyManage。授予、主机邀请与分享链接共用它。
+func ManageHost(ctx context.Context, tx saas.Tx, tenantID string, nowMs int64, accountID, sourceID string) (saas.Host, error) {
+	first, err := FindHost(ctx, tx, tenantID, nowMs, accountID, sourceID)
 	if err != nil {
 		return saas.Host{}, err
 	}
 	if first.TeamID != "" {
-		if _, err := teams.Lock(ctx, tx, s.tenant(), accountID, first.TeamID, teams.MinStaff); err != nil {
+		if _, err := teams.Lock(ctx, tx, tenantID, accountID, first.TeamID, teams.MinStaff); err != nil {
 			return saas.Host{}, err
 		}
 	}
-	if err := tx.Hosts().LockSource(ctx, s.tenant(), sourceID); err != nil {
+	if err := tx.Hosts().LockSource(ctx, tenantID, sourceID); err != nil {
 		return saas.Host{}, err
 	}
-	h, err := s.find(ctx, tx, accountID, sourceID)
+	h, err := FindHost(ctx, tx, tenantID, nowMs, accountID, sourceID)
 	if err != nil {
 		return saas.Host{}, err
 	}
 	if !h.CanManage(accountID) {
-		return saas.Host{}, denyManage(h)
+		return saas.Host{}, DenyManage(h)
 	}
 	return h, nil
+}
+
+// find 读调用者看得到的一台未撤销的主机；看不到答 not_found。
+func (s *Service) find(ctx context.Context, r saas.Reader, viewerID, sourceID string) (saas.Host, error) {
+	return FindHost(ctx, r, s.tenant(), s.nowMs(), viewerID, sourceID)
+}
+
+// denyManage 是看得到却管不了时的错误：团队主机答 team_role_insufficient，个人空间答 source_access_denied。
+func denyManage(h saas.Host) error { return DenyManage(h) }
+
+// manage 在事务里核管理权，见 ManageHost。
+func (s *Service) manage(ctx context.Context, tx saas.Tx, accountID, sourceID string) (saas.Host, error) {
+	return ManageHost(ctx, tx, s.tenant(), s.nowMs(), accountID, sourceID)
 }
 
 // manageRead 是 manage 的只读版（列表与有效权限，不写库不加锁）。
@@ -492,7 +506,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 	if in.ExpiresAtMs != nil && *in.ExpiresAtMs <= nowMs {
 		return nil, core.Fail(gen.ErrBadRequest)
 	}
-	workspaces, err := cleanWorkspaces(in.WorkspaceIDs)
+	workspaces, err := CleanWorkspaces(in.WorkspaceIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +621,11 @@ type expirePayload struct {
 
 // scheduleExpiry 把到期作业排到授予到期的那一刻（先撤掉旧的，改到期时间时用）；没有到期就只撤旧的。
 func (s *Service) scheduleExpiry(ctx context.Context, tx saas.Tx, grantID string, expiresAtMs *int64, nowMs int64) error {
-	if err := tx.Jobs().Cancel(ctx, s.tenant(), JobExpire, grantID); err != nil {
+	return scheduleExpiry(ctx, tx, s.tenant(), grantID, expiresAtMs, nowMs)
+}
+
+func scheduleExpiry(ctx context.Context, tx saas.Tx, tenantID, grantID string, expiresAtMs *int64, nowMs int64) error {
+	if err := tx.Jobs().Cancel(ctx, tenantID, JobExpire, grantID); err != nil {
 		return err
 	}
 	if expiresAtMs == nil {
@@ -617,7 +635,7 @@ func (s *Service) scheduleExpiry(ctx context.Context, tx saas.Tx, grantID string
 	if err != nil {
 		return err
 	}
-	_, _, err = tx.Jobs().Enqueue(ctx, s.tenant(), saas.NewJob{Kind: JobExpire, Payload: payload, RunAtMs: *expiresAtMs, DedupeKey: grantID}, nowMs)
+	_, _, err = tx.Jobs().Enqueue(ctx, tenantID, saas.NewJob{Kind: JobExpire, Payload: payload, RunAtMs: *expiresAtMs, DedupeKey: grantID}, nowMs)
 	return err
 }
 
@@ -669,7 +687,7 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 		return nil, core.Fail(gen.ErrBadRequest)
 	}
 	if hasWorkspaces {
-		ws, err := cleanWorkspaces(in.WorkspaceIDs)
+		ws, err := CleanWorkspaces(in.WorkspaceIDs)
 		if err != nil {
 			return nil, err
 		}

@@ -68,8 +68,10 @@ type Params struct {
 	NewEmail    string `json:"newEmail,omitempty"`
 	DeviceName  string `json:"deviceName,omitempty"`
 	Platform    string `json:"platform,omitempty"`
-	// TeamName、InviterName、Role 是团队邀请的：团队名、邀请人显示名与被邀请的角色码。
+	// TeamName、InviterName、Role 是团队邀请的：团队名、邀请人显示名与被邀请的角色码；主机邀请用 HostName
+	// 与主机角色码（Role）。
 	TeamName    string `json:"teamName,omitempty"`
+	HostName    string `json:"hostName,omitempty"`
 	InviterName string `json:"inviterName,omitempty"`
 	Role        string `json:"role,omitempty"`
 	// Decoy：找回口令对没注册的邮箱插的占位行，与真发件走同样的库写入，作业里直接丢弃（防枚举，不留地址）。
@@ -84,7 +86,7 @@ type Mail struct {
 	To     string
 	// AccountID：带令牌的模板必填（令牌属于哪个账号）。
 	AccountID string
-	// InvitationID：团队邀请必填（发信时生成令牌、写进这条邀请）。
+	// InvitationID：团队邀请与主机邀请必填（发信时生成令牌、写进这条邀请）。
 	InvitationID string
 	Params       Params
 }
@@ -146,8 +148,8 @@ func (s *Service) Enqueue(ctx context.Context, tx saas.Tx, mail Mail) error {
 	if _, token := tokenKinds[mail.Template]; token && mail.AccountID == "" && !mail.Params.Decoy {
 		return errors.New("带令牌的模板必须给账号")
 	}
-	if mail.Template == TeamInvitation && mail.InvitationID == "" {
-		return errors.New("团队邀请邮件必须给邀请 id")
+	if (mail.Template == TeamInvitation || mail.Template == HostInvitation) && mail.InvitationID == "" {
+		return errors.New("邀请邮件必须给邀请 id")
 	}
 	if mail.Params.Decoy {
 		mail.To = "" // 占位行不存被试探的地址
@@ -294,10 +296,10 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 	data := Data{
 		DisplayName: SanitizeLabel(params.DisplayName, labelMax), NewEmail: params.NewEmail,
 		DeviceName: SanitizeLabel(params.DeviceName, labelMax), Platform: SanitizeLabel(params.Platform, labelMax),
-		TeamName: SanitizeLabel(params.TeamName, labelMax), InviterName: SanitizeLabel(params.InviterName, labelMax),
+		TeamName: SanitizeLabel(params.TeamName, labelMax), HostName: SanitizeLabel(params.HostName, labelMax), InviterName: SanitizeLabel(params.InviterName, labelMax),
 		RoleLabel: RoleLabel(email.Locale, params.Role),
 	}
-	if email.Template == TeamInvitation {
+	if email.Template == TeamInvitation || email.Template == HostInvitation {
 		link, ok, err := s.inviteLink(ctx, tx, payload.InvitationID, email.To)
 		if err != nil {
 			return err

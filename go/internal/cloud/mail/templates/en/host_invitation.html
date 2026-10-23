@@ -1,0 +1,10 @@
+<p>Hello,</p>
+<p>
+  {{if .InviterName}}{{.InviterName}} invited you{{else}}You are invited{{end}}
+  to access the host "{{.HostName}}" as {{.RoleLabel}}. Open the link below to
+  review and accept. It expires in 7 days.
+</p>
+<p><a href="{{.Link}}">View invitation</a></p>
+<p>
+  If you do not know the inviter or do not plan to accept, ignore this email.
+</p>
