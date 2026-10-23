@@ -144,6 +144,7 @@
 | `relay:conc:team:<teamId>`                      | 节点                   | 节点         | G5（N4）：`edge.concurrent.team` 的跨节点计数，有序集合，成员 `<节点>:<随机>`、分数是到期毫秒（Go 设计 §3.6）；控制面不读不写                                                                                                                                                  |
 | `cloud:issued:acct:<accountId>`                 | 控制面                 | 控制面       | 有序集合，成员 `<accountId>\|<sourceId>\|<deviceId>\|<jti>`，分数 = `exp` 毫秒；写前 `ZREMRANGEBYSCORE -inf <now>`，`PEXPIRE 3600000`（能力设计 §11.7）；PostgreSQL 里有同一份（§7.2）                                                                                         |
 | `cloud:issued:src:<sourceId>`                   | 控制面                 | 控制面       | 同上；隧道令牌也记在这里（`accountId = -`）                                                                                                                                                                                                                                    |
+| `cloud:issued:jti:<jti>` | 控制面 | 控制面 | S8 新增：`SET … PXAT exp`，值是上面的成员串；只知道 jti 的撤销（签发方复核）按它找回条目（§7.4） |
 | `cloud:events`                                  | 控制面各实例           | 控制面各实例 | 领域事件 `{origin, event, audience}`，见 §7.1                                                                                                                                                                                                                                  |
 | `cloud:ticket:<sha256>`                         | 控制面                 | 控制面       | me-stream 票（30 秒、`GETDEL` 一次性），值 `{accountId, deviceId}`                                                                                                                                                                                                             |
 | `cloud:mfa:<sha256>`                            | 控制面                 | 控制面       | 运营登录的 MFA 挑战（5 分钟），值 `{accountId, attempts}`；`auth.mfaVerify` 每次失败 `HINCRBY`，到 5 次删键                                                                                                                                                                    |
@@ -878,7 +879,7 @@ type Watcher interface {
 - **同一 `sourceId` 的登记**：`LockSource`（事务级咨询锁）串行化；已登记未撤销的源只允许同一账号在同一空间用同一把钥重登记，其余 `409 source_taken`；撤销后任何持有同一把钥的账号都可以登记到自己的空间（空间行重置标签与设置）。
 - **签发索引的顺序（§4.8 同）**：任何会被撤销流程撤到的令牌，一律「签令牌 → 登记签发索引 → 再读库复核」，复核看到已撤销就对该令牌（或该源）`RevokeWhere` 并答 `source_revoked`。撤销在库提交之后才撤索引里的令牌，所以与并发的签发交错也不会漏；`heartbeatHint` 已按此做，S5b 给断言与中继令牌建索引时照做。
 - **撤销后换钥**：撤销后同一个 `sourceId` 也只许同一把钥重登记，换钥一律 `409 source_taken`（SaaS 侧在 `registerIn` 判，不改个人中转共用的 `BuildSourceRecord`）。
-- **S8 之前不部署**：生产装配现在用内存 `relayctl`、节点表为空，`heartbeatHint` 恒答 `503`；S8 换成 Redis 实现之前不能部署。
+- **S8 之前不部署**（S8 已解除）：S8 起生产装配用包装 `control/redis.Plane` 的 Redis 实现，`heartbeatHint` 读 `relay:nodes`（§7.3）；内存实现只在测试里用（`Deps.Relay`）。
 - **主机设置只存写过的项**：缺省走 `defaultRole` ← 团队 `defaultHostRole` ← 主机自己写过的项；`trustedOrigins` 只收 `http(s)://主机[:端口]`，去重、至多 16 个。
 
 **`defaultRole` / `defaultHostRole` 在 M1 的语义**：只是控制台与客户端分享弹层里「角色」的**预选值**（主机设置优先，没设时取团队的 `defaultHostRole`）；`grants.create` 与 `invitations.create` 的 `role` 是必填，服务端不替调用方填角色，也不据它改已有授予。
@@ -924,7 +925,7 @@ type Watcher interface {
 - **团队主机的所有者要仍是 owner / admin / member**：降为 billing / guest 就既看不到、管不了，也拿不到断言（与 §4.8「降为 billing 或 guest」撤令牌一致，否则撤了立刻又能重签）。
 - **来路枚举**：契约 `sourceSummary.via` 只有 `owner | link | team | org`，个人空间里被授予的访客按 `link` 答，团队主机上的非所有者按 `team`。
 - **断言的 `scp`**：授予可以限在多个工作空间，`GrantExtra` 加 `Scp`（非 nil 时取代链接范围换出的 `scp`）；整台主机不带 `scp`。
-- **签发索引落盘（`relayctl.Durable`）**：包住内层（内存 / S8 的 Redis）：`IndexIssued` 先 `INSERT cloud_issued_tokens` 再进内层；`RevokeWhere` 以 PostgreSQL 为准选出未到期的令牌、写 `relay_revoked_tokens`、从索引删，再让内层撤并踢人（内层可能有 PostgreSQL 已删的条目——签发方与撤销交错时——所以两边都撤）；core 的撤销钩子（登出、撤设备、改口令、撤链接与源）同样先落盘；PostgreSQL 命中的令牌补登记进内层后按 `Filter{JTI}` 逐个撤（内层索引缺了也撤到），设备撤销的踢人用两边命中的并集、按 (源, subject, 设备) 去重发 `Kick`（`Control.Revoke` 答命中的条目）。索引过滤带 `tenant_id`，前缀里的 LIKE 通配符按字面。重放（启动与 Redis 重连时把撤销表与索引写回 Redis）仍随 S8。
+- **签发索引落盘（`relayctl.Durable`）**：包住内层（内存 / S8 的 Redis）：`IndexIssued` 先 `INSERT cloud_issued_tokens` 再进内层；`RevokeWhere` 以 PostgreSQL 为准选出未到期的令牌、写 `relay_revoked_tokens`、从索引删，再让内层撤并踢人（内层可能有 PostgreSQL 已删的条目——签发方与撤销交错时——所以两边都撤）；core 的撤销钩子（登出、撤设备、改口令、撤链接与源）同样先落盘；PostgreSQL 命中的令牌补登记进内层后按 `Filter{JTI}` 逐个撤（内层索引缺了也撤到），设备撤销的踢人用两边命中的并集、按 (源, subject, 设备) 去重发 `Kick`（`Control.Revoke` 答命中的条目）。索引过滤带 `tenant_id`，前缀里的 LIKE 通配符按字面。重放（启动与 Redis 订阅重新就绪时把撤销表与索引写回 Redis）S8 已做（§7.4）。
 - **`Filter.JTI`**：签发方复核发现自己签的令牌不该有效时，只撤自己签的那一枚。
 - **`Sources.List` 的游标防护**：策略重复给同一个游标（或绕回已取过的）答 `internal`，不再死循环。
 - **`Watcher`**：`Sees` / `Refresh` / `Close` 可并发调用，`Close` 之后 `Sees` 答 false、`Refresh` 什么都不做；`AccessChanged` 事件（S8 把 `grantChanged` / `memberChanged` 转成它）更新可见集合，`SourceRevoked` 移除；`AccessChanged` 是 `core.InternalEvent`，`MeStream.offer` 只交给 `Watcher.Refresh`、不进客户端队列，空 `AccountID` 只允许移除（`Visible = false`），放宽必须点名账号。
@@ -1212,6 +1213,21 @@ type Tx interface {
 
 - `Nodes()` 读 `relay:nodes`，去掉 `draining` 的节点；表为空时 `heartbeatHint` 答 `503 unavailable`（不兜底到共用地址）。
 - 排序按 sourceId 做 rendezvous 哈希（`sha256(sourceId + "\0" + node)` 取前 8 字节为 64 位整数，加权：`-ln(u) / weight`），答前三个，`weight` 递减为 3、2、1（Go 设计 §3.6）；`nodes[].url` 是各节点自己的隧道地址。同一函数放 `internal/control`，G5 节点侧共用。
+
+### 7.4 S8 实施注记（relayctl 的 Redis 实现，PR 第一部分）
+
+- **`relayctl.Redis`**：持有一个 `control/redis.Plane`（前缀 `relay:`，`cluster.Options.Origin = cloud/<实例 id>`，S8 为此加了 `Origin` 选项），路由读取（`Plane.Routes().Get`）、撤销（`Plane.Tokens().Revoke`）、命令、在线事件订阅都经它；线上格式一律取 `cluster` 包。为了让写入返回错误，`Plane` 加了 `CommandContext`（同步版 `Command`，可同时发 `relay:node:<id>`）、`PublishQuota`、`PublishIncident`。
+- **命令**：总是经 `relay:ctl` 广播；`kick` / `closeTunnel` 对路由表里已知的持有节点再额外发 `relay:node:<id>`，`drain` 发到被排空的节点；`kick` 缺 `sourceId` 直接拒绝（不发）。
+- **签发索引**：`cloud:issued:acct:<账号>`、`cloud:issued:src:<主机>` 两个有序集合如 §2.4（写前 `ZREMRANGEBYSCORE -inf <now>`，`PEXPIRE 3600000`）；**新增** `cloud:issued:jti:<jti>`（`SET … PXAT exp`，值是成员串）：签发方复核只知道 jti 时按它找回条目（`Filter{JTI}`）。选法：给了 `Subject` 走账号集合，否则给了 `SourceID` 走主机集合，否则只给 `JTI` 走 jti 键；只给设备或只给 subject 前缀而没有主机时 Redis 里选不出来，那种撤销以 PostgreSQL 为准（`Durable` 把 PostgreSQL 命中的逐枚交给 Redis 撤）。隧道令牌（`accountId = -`）只进主机集合。
+- **撤销写失败**：`revokeToken` 重试 3 次（100 / 200 毫秒退避），仍失败记错误日志并调 `RevokeFailed`，装配方把它排成 `relay.revoke` 作业（按 jti 去重，`Redis.ReplayRevoke` 再走一遍 `Tokens().Revoke`，失败由作业运行器退避重试；PostgreSQL 里已有这条撤销）。命中的条目照常返回，调用方据此踢人，错误合并返回。
+- **重放（`relayctl.Sync`）**：`Plane` 的就绪回调（`OnSubscribed`，每次订阅重新就绪都调）与 `serve` 启动（监听之前，显式一次）各跑 `Sync.Run`：未到期的 `relay_revoked_tokens` 全部 `SET … PXAT … NX`（pipeline 每批 500，已有的不动）、`cloud_issued_tokens`（`WHERE tenant_id = $1 AND exp_ms > now`）重建 `cloud:issued:*`、按 `quota.Plans` + 各团队 `entitlements.overrides` 把全部 `relay:quota:team:*` 重写（存储端口加 `TeamEntitlements`；不限写成 `MaxInt32`，节点的解码器不收负数）。`Sync.Ready` 在重放进行中答 `ErrSyncing`，装配进 `/ready` 的探针 `relay`。第一次就绪时 `Sync` 还没建好（它依赖 `Plane`），回调直接放行，由 `serve` 的显式一次接上；就绪回调失败则这次订阅作废、退避重连再来（`Plane` 既有行为）。
+- **`ClearTeamQuota`**：只 `DEL` 键；在线节点保留旧值到下次订阅就绪时全量重读（团队清除后没有流量）。
+- **`relay:presence`**：装配订阅 `Plane.Presence()`，在内存累计主机的最近在线与核心版本，每 5 分钟（与设备最近使用同一个定时器）和关闭时批量落 `sources.last_seen_at_ms` / `core_version`，只往后推；多实例各记各的、落盘取较大值。
+- **节点表**：`Nodes()` 读 `relay:nodes`（`HGETALL`，坏记录跳过、`draining` 去掉）；`heartbeatHint` 的 rendezvous 沿用 S5a 已有的 `control.RankNodes`，节点表为空仍答 `503`。
+- **`nodes token`**：`--node <节点名> --days <1–365，缺省 30>`，令牌打印到 stdout 一行，jti 与到期打印到 stderr；头 `typ = armadra-node`，声明 `{iss, sub, aud = relay-node, iat, exp, jti = n.<节点名>.<24 位 hex>, ver}`。上限 365 天是 **新增约束**（`nodes revoke` 不知道令牌何时到期，撤销记录按 366 天保留，到期自然消失）。`nodes revoke --jti <jti>`：只认节点令牌的 jti 形状（不拿它撤别的令牌）；先 `INSERT relay_revoked_tokens … ON CONFLICT DO NOTHING`，再 `SET relay:revoked:<jti>` 并广播（重试 3 次）；PostgreSQL 写成功而 Redis 失败时报错退出 1（撤销已落盘，控制面启动与重新连上 Redis 时重放）。
+- **逐账号查询批量化**：存储端口加 `AccessBases(accountIDs, sourceID)`（固定四条查询，答案与逐个 `AccessBasis` 逐字段一致，有等价测试），访问清单按 200 个候选一批、收窄快照一次取齐。
+- **登录失败计数的 Redis 故障**：失败关闭，见 §4.3。
+- **测试装配**：`server.Deps.Relay` 注入内存实现（S1b–S7 的断言继续用它）；`rigOptions.redisRelay` 用真正的 Redis 实现，键前缀随机（`relay-test:<随机>:`、`cloud-test:<随机>:`），结束时只删这两个前缀，不碰别的键；「Redis 清空」测试同样只清自己的前缀。
 
 ## §8 测试
 
