@@ -240,7 +240,12 @@ func TestGrantsTeamManageAndSubjects(t *testing.T) {
 	r.expect(r.createGrant(owner, hOwn.id, guestOf(outsider.accountID), "viewer", nil), 404, "not_found")
 	r.expect(r.createGrant(owner, hOwn.id, memberOf(owner.accountID), "viewer", nil), 400, "bad_request") // 所有者本来就有
 	r.expect(r.createGrant(owner, hOwn.id, memberOf(other.accountID), "viewer", nil), 409, "conflict")
-	gGuest := r.mustGrant(owner, hOwn.id, guestOf(guest.accountID), "viewer", nil)
+	r.expect(r.createGrant(owner, hOwn.id, guestOf(guest.accountID), "viewer", nil), 400, "bad_request") // 团队 guest 要给具体的工作空间
+	r.expect(r.createGrant(owner, hOwn.id, guestOf(guest.accountID), "viewer", map[string]any{"workspaceIds": []string{"bad id!"}}), 400, "bad_request")
+	r.expect(r.createGrant(owner, hOwn.id, memberOf(other.accountID), "viewer", map[string]any{"workspaceIds": []string{strings.Repeat("a", 129)}}), 400, "bad_request")
+	gGuest := r.mustGrant(owner, hOwn.id, guestOf(guest.accountID), "viewer", map[string]any{"workspaceIds": []string{"w:1.a-b_c"}})
+	r.expect(r.do("PATCH", "/v1/grants/"+gGuest, map[string]any{"workspaceIds": []string{}}, owner.bearer()), 400, "bad_request") // 不能改成整台
+	r.expect(r.do("PATCH", "/v1/grants/"+gGuest, map[string]any{"workspaceIds": []string{"no/slash"}}, owner.bearer()), 400, "bad_request")
 	// 团队关掉 allowGuests、或主机设置关掉：新增 guest 授予 403，已有的不动（Q8）。
 	r.exec("UPDATE teams SET settings = jsonb_set(settings, '{allowGuests}', 'false') WHERE team_id = $1", t1)
 	r.expect(r.createGrant(owner, hMem.id, guestOf(guest.accountID), "viewer", nil), 403, "guests_disabled")
@@ -586,25 +591,33 @@ func TestTeamGrantRevokeRevokesEveryMembersTokens(t *testing.T) {
 	r.expect(r.assertion(m1, h.id), 403, "source_access_denied")
 }
 
-// 到期：grant.expire 在到期那一刻写撤销（revoked_by = system）、撤令牌、踢人、审计。
+// 到期：令牌寿命不超过授予的到期，grant.expire 在到期那一刻写撤销（revoked_by = system）、对权限真正收窄的账号踢人、审计。
+// 另有来路而权限没变的人不受牵连。
 func TestGrantExpiryJobRevokesAndKicks(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, rigOptions{})
-	owner, friend, other := r.verified(), r.verified(), r.verified()
-	team := r.seedTeam("ex", map[string]string{owner.accountID: "owner", other.accountID: "member"})
+	owner, friend, narrowed, kept := r.verified(), r.verified(), r.verified(), r.verified()
+	team := r.seedTeam("ex", map[string]string{owner.accountID: "owner", narrowed.accountID: "member", kept.accountID: "member"})
 	hP := r.addHost(owner, nil, "0.11.0")
 	hT := r.addHost(owner, teamSpace(team), "0.10.0")
-	exp := r.clock.Ms() + 200_000 // 断言只有 5 分钟寿命，到期要早于它
+	exp := r.clock.Ms() + 200_000
 	gP := r.mustGrant(owner, hP.id, guestOf(friend.accountID), "editor", map[string]any{"expiresAtMs": exp})
 	gT := r.mustGrant(owner, hT.id, teamOf(team), "viewer", map[string]any{"expiresAtMs": exp})
-	gKeep := r.mustGrant(owner, hP.id, guestOf(other.accountID), "viewer", map[string]any{"expiresAtMs": exp + 3_600_000})
+	// kept 另有一条不过期的 member 授予（同角色同范围）：团队授予到期后他的权限没变。
+	gKeep := r.mustGrant(owner, hT.id, memberOf(kept.accountID), "viewer", nil)
+	gLater := r.mustGrant(owner, hP.id, guestOf(narrowed.accountID), "viewer", map[string]any{"expiresAtMs": exp + 3_600_000})
 
 	friendTok := r.assertion(friend, hP.id)
 	r.expect(friendTok, 200, "")
-	otherTok := r.assertion(other, hT.id)
-	r.expect(otherTok, 200, "")
-	keepTok := r.assertion(other, hP.id)
-	r.expect(keepTok, 200, "")
+	// 令牌寿命不超过授予的到期（断言 5 分钟、中继令牌 1 小时的缺省都被截短）。
+	if got := int64(friendTok.json["assertionExpiresAtMs"].(float64)); got > exp {
+		t.Fatalf("断言寿命超过授予的到期：%d > %d", got, exp)
+	}
+	if got := int64(friendTok.json["relayTokenExpiresAtMs"].(float64)); got > exp {
+		t.Fatalf("中继令牌寿命超过授予的到期：%d > %d", got, exp)
+	}
+	r.expect(r.assertion(narrowed, hT.id), 200, "")
+	r.expect(r.assertion(kept, hT.id), 200, "")
 
 	r.clock.Advance(201 * time.Second)
 	eventuallyDB(t, "到期的授予被撤销", func() bool {
@@ -617,24 +630,55 @@ func TestGrantExpiryJobRevokesAndKicks(t *testing.T) {
 			t.Fatalf("到期撤销记录：%v %q", at, by)
 		}
 	}
-	if at, _ := r.grantRow(gKeep); at != nil {
-		t.Fatal("没到期的不动")
-	}
-	eventuallyDB(t, "到期后令牌应撤", func() bool { return r.bothRevoked(friendTok) && r.bothRevoked(otherTok) })
-	if !r.neitherRevoked(keepTok) {
-		t.Fatal("没到期的授予的令牌不该撤")
+	for _, id := range []string{gKeep, gLater} {
+		if at, _ := r.grantRow(id); at != nil {
+			t.Fatal("没到期的不动")
+		}
 	}
 	eventuallyDB(t, "按人踢", func() bool {
 		kicks := r.kicks()
-		return contains(kicks, hP.id+"|"+friend.accountID+"|grant_expired") && contains(kicks, hT.id+"|"+other.accountID+"|grant_expired")
+		return contains(kicks, hP.id+"|"+friend.accountID+"|grant_expired") && contains(kicks, hT.id+"|"+narrowed.accountID+"|grant_expired")
 	})
+	for _, k := range r.kicks() {
+		if strings.Contains(k, kept.accountID) {
+			t.Fatalf("另有来路、权限没变的人不该被踢：%s", k)
+		}
+	}
 	if n := r.queryInt("SELECT count(*)::int FROM audit_log WHERE action = 'grant.expire' AND actor_kind = 'system' AND target_id = ANY($1)", []string{gP, gT}); n != 2 {
 		t.Fatalf("到期审计：%d", n)
 	}
 	r.expect(r.assertion(friend, hP.id), 403, "source_access_denied")
-	// 访问权没了，团队授予到期的成员看不到主机授予带来的访问，但仍能看到自己的 member 主机以外的什么也没有。
-	if got := ids(r.do("GET", "/v1/sources", nil, other.bearer())); !reflect.DeepEqual(got, []string{hP.id}) {
+	r.expect(r.assertion(kept, hT.id), 200, "")
+	if got := ids(r.do("GET", "/v1/sources", nil, narrowed.bearer())); !reflect.DeepEqual(got, []string{hP.id}) {
 		t.Fatalf("到期后的目录：%v", got)
+	}
+}
+
+// 授予不足 1 秒到期时签不出令牌；有到期的授予签出的令牌寿命不超过它。
+func TestAssertionLifetimeCappedByGrantExpiry(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner, friend := r.verified(), r.verified()
+	h := r.addHost(owner, nil, "0.11.0")
+	r.mustGrant(owner, h.id, guestOf(friend.accountID), "viewer", map[string]any{"expiresAtMs": r.clock.Ms() + 30_000})
+	res := r.assertion(friend, h.id)
+	r.expect(res, 200, "")
+	a, rt := claimsOf(t, res)
+	limit := (r.clock.Ms() + 30_000) / 1000
+	if int64(a["exp"].(float64)) > limit || int64(rt["exp"].(float64)) > limit {
+		t.Fatalf("令牌 exp 超过授予的到期：%v %v > %d", a["exp"], rt["exp"], limit)
+	}
+	r.clock.Advance(29_500 * time.Millisecond) // 剩 0.5 秒
+	r.expect(r.assertion(friend, h.id), 403, "source_access_denied")
+	// 没有到期（所有者）仍是缺省寿命：断言 5 分钟、中继令牌 1 小时。
+	res = r.assertion(owner, h.id)
+	r.expect(res, 200, "")
+	now := r.clock.Ms()
+	if got := int64(res.json["assertionExpiresAtMs"].(float64)); got < now+290_000 || got > now+300_000 {
+		t.Fatalf("缺省断言寿命：%d", got-now)
+	}
+	if got := int64(res.json["relayTokenExpiresAtMs"].(float64)); got < now+3_590_000 || got > now+3_600_000 {
+		t.Fatalf("缺省中继令牌寿命：%d", got-now)
 	}
 }
 
@@ -843,7 +887,7 @@ func TestAssertionStormVersusGrantChurn(t *testing.T) {
 // ---- 可见性与有效权限一致 ----
 
 // 目录里看得到 ⟺ 有有效权限，或是团队 owner / admin（管得了）：把目录 SQL 与 Compose 逐个主体对照。
-func TestDirectoryVisibilityMatchesEffectivePermissions(t *testing.T) {
+func TestDirectoryVisibilityOverHTTPMatchesCompose(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, rigOptions{})
 	roles := []string{"owner", "admin", "member", "billing", "guest"}
@@ -925,7 +969,7 @@ func TestAccessListAndRevokeByAccount(t *testing.T) {
 	h := r.addHost(owner, teamSpace(team), "0.10.0")
 	gTeam := r.mustGrant(owner, h.id, teamOf(team), "viewer", nil)
 	gMember := r.mustGrant(owner, h.id, memberOf(member.accountID), "operator", map[string]any{"workspaceIds": []string{"w1"}})
-	r.mustGrant(owner, h.id, guestOf(guest.accountID), "editor", nil)
+	r.mustGrant(owner, h.id, guestOf(guest.accountID), "editor", map[string]any{"workspaceIds": []string{"w1"}})
 
 	res := r.do("GET", "/v1/sources/"+h.id+"/access", nil, owner.bearer())
 	r.expect(res, 200, "")
@@ -1023,5 +1067,61 @@ func TestIssuedGCJobDeletesExpiredRows(t *testing.T) {
 	}
 	if r.queryInt("SELECT count(*)::int FROM cloud_issued_tokens WHERE tenant_id = 'other'") != 1 {
 		t.Fatal("别的租户的行不该删")
+	}
+}
+
+// 签发中途登出 / 撤设备：复核发现设备不再有效，撤掉自己签的令牌并答 401。
+func TestAssertionInterleavedWithLogout(t *testing.T) {
+	for _, stage := range []string{"signed", "indexed"} {
+		t.Run(stage, func(t *testing.T) {
+			t.Parallel()
+			g := newGate(stage)
+			r := newRig(t, rigOptions{grantsHook: g.hook})
+			owner := r.verified()
+			h := r.addHost(owner, nil, "0.11.0")
+			result := make(chan response, 1)
+			go func() { result <- r.assertion(owner, h.id) }()
+			<-g.reached
+			r.expect(r.do("POST", "/v1/auth/logout", nil, owner.bearer()), 200, "")
+			close(g.resume)
+			r.expect(<-result, 401, "unauthenticated")
+			jtis := r.revokedJTIs()
+			if len(jtis) != 2 {
+				t.Fatalf("签出的两枚令牌都该撤：%v", jtis)
+			}
+			for _, jti := range jtis {
+				if !r.run.Relay.IsRevoked(jti) {
+					t.Fatalf("内存撤销表漏了 %s", jti)
+				}
+			}
+			if n := r.issuedCount(owner.accountID, h.id); n != 0 {
+				t.Fatalf("索引里还有 %d 枚", n)
+			}
+		})
+	}
+}
+
+// 签发中途团队被停用：撤掉自己签的令牌并答 team_suspended。
+func TestAssertionInterleavedWithTeamSuspension(t *testing.T) {
+	t.Parallel()
+	g := newGate("signed")
+	r := newRig(t, rigOptions{grantsHook: g.hook})
+	owner := r.verified()
+	team := r.seedTeam("susp", map[string]string{owner.accountID: "owner"})
+	h := r.addHost(owner, teamSpace(team), "0.10.0")
+	result := make(chan response, 1)
+	go func() { result <- r.assertion(owner, h.id) }()
+	<-g.reached
+	r.exec("UPDATE teams SET status = 'suspended' WHERE team_id = $1", team)
+	close(g.resume)
+	r.expect(<-result, 403, "team_suspended")
+	jtis := r.revokedJTIs()
+	if len(jtis) != 2 {
+		t.Fatalf("签出的两枚令牌都该撤：%v", jtis)
+	}
+	for _, jti := range jtis {
+		if !r.run.Relay.IsRevoked(jti) {
+			t.Fatalf("内存撤销表漏了 %s", jti)
+		}
 	}
 }
