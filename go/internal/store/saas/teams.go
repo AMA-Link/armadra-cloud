@@ -96,6 +96,8 @@ type TeamReader interface {
 	OwnedTeamCount(ctx context.Context, tenantID, accountID string) (int, error)
 	// Entitlement 读空间的计划；没有行答 nil（即 Free）。
 	Entitlement(ctx context.Context, tenantID, spaceKind, spaceID string) (*Entitlement, error)
+	// TeamStaffIDs 是团队 owner 与 admin 的账号 id，升序（事件受众：邀请、授予变动要通知管理者）。
+	TeamStaffIDs(ctx context.Context, tenantID, teamID string) ([]string, error)
 	// TeamEntitlements 是租户全部团队的计划与 overrides（含恢复期内的），按 team_id 升序：serve 启动与
 	// Redis 订阅重新就绪时全量重写 relay:quota:team:*（设计 §7.2）。
 	TeamEntitlements(ctx context.Context, tenantID string) ([]TeamEntitlement, error)
