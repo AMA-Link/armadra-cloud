@@ -15,9 +15,12 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/server"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -80,6 +83,12 @@ type rigOptions struct {
 	mail mail.Sender
 	// grantsHook 在断言签发的交错点停住。
 	grantsHook func(stage string)
+	// redisRelay 用真正的 Redis 实现代替内存实现（缺省内存实现，断言发出的命令）；键前缀随机，测试结束删掉。
+	redisRelay bool
+	// redisHook 挂在 Redis 客户端上（注入故障）。
+	redisHook goredis.Hook
+	// flushEvery 缩短设备最近使用与主机最近在线的落盘间隔。
+	flushEvery time.Duration
 	// incidentEvery 缩短事故开关按库同步的间隔。
 	incidentEvery time.Duration
 }
@@ -97,6 +106,9 @@ type rig struct {
 	oapi   *schema.OpenAPI
 	// mail 是缺省的内存发信方；换了发信方时为 nil。
 	mail *mail.MemorySender
+	// deps 是启动本实例用的依赖（第二个实例复用同一份）；redisRelay 时 relayPrefix / issuedPrefix 是随机前缀。
+	deps                      server.Deps
+	relayPrefix, issuedPrefix string
 	// stubbed：测试挂了假的 admin.* 处理器，它们的答复不按契约验形状。
 	stubbed bool
 }
@@ -163,11 +175,21 @@ func newRig(t *testing.T, options rigOptions) *rig {
 		memory = &mail.MemorySender{}
 		sender = memory
 	}
-	run, err := server.Serve(ctx, cfg, server.Deps{
+	deps := server.Deps{
 		Log: obs.NewNamedLogger(logs, obs.LevelDebug, "cloud"), Now: clk.Now, Version: "test",
 		Challenge: options.verifier, ExtraHandlers: options.extra, Mail: sender, GrantsHook: options.grantsHook,
 		IncidentEvery: options.incidentEvery,
-	})
+	}
+	if options.redisRelay {
+		deps.RelayPrefix, deps.IssuedPrefix = randomPrefixes(t)
+	} else {
+		deps.Relay = relayctl.NewMemory(clk.Now)
+	}
+	deps.RedisHook = options.redisHook
+	if options.flushEvery > 0 {
+		deps.FlushEvery = options.flushEvery
+	}
+	run, err := server.Serve(ctx, cfg, deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +200,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	}
 	oapi := schema.Load(t, filepath.Join(testutil.ProtocolDir(t), "schema", "cloud-openapi.json"))
 	return &rig{
-		t: t, run: run, clock: clk, log: logs, cfg: cfg, url: run.URL, router: router, oapi: oapi, mail: memory, stubbed: options.extra != nil,
+		t: t, run: run, clock: clk, deps: deps, relayPrefix: deps.RelayPrefix, issuedPrefix: deps.IssuedPrefix, log: logs, cfg: cfg, url: run.URL, router: router, oapi: oapi, mail: memory, stubbed: options.extra != nil,
 		// 每个测试一个随机的客户端 IP（经受信代理头），限流桶在 Redis 里互不干扰。
 		ip: fmt.Sprintf("10.%d.%d.%d", rand.IntN(256), rand.IntN(256), rand.IntN(256)),
 	}
@@ -387,5 +409,32 @@ func (r *rig) execTx(statements ...[2]any) {
 	}
 	if err := tx.Commit(ctx); err != nil {
 		r.t.Fatal(err)
+	}
+}
+
+// randomPrefixes 给一个测试一组随机的 Redis 键前缀（节点用 relay-test:xxxx:，签发索引用 cloud-test:xxxx:），
+// 结束时只删这两个前缀下的键，不碰别的，更不清库。
+func randomPrefixes(t *testing.T) (relay, issued string) {
+	t.Helper()
+	id := fmt.Sprintf("%012x", rand.Uint64N(1<<48))
+	relay, issued = "relay-test:"+id+":", "cloud-test:"+id+":"
+	t.Cleanup(func() { wipePrefixes(t, relay, issued) })
+	return relay, issued
+}
+
+func wipePrefixes(t *testing.T, prefixes ...string) {
+	t.Helper()
+	opts, err := goredis.ParseURL(redisURL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := goredis.NewClient(opts)
+	defer client.Close()
+	ctx := context.Background()
+	for _, prefix := range prefixes {
+		iter := client.Scan(ctx, 0, prefix+"*", 200).Iterator()
+		for iter.Next(ctx) {
+			client.Del(ctx, iter.Val())
+		}
 	}
 }

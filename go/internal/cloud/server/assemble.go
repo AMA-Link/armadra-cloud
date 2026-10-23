@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
 	"net/url"
 	"os"
@@ -41,21 +43,57 @@ type assembly struct {
 	core    *core.Context
 	auth    *core.Authenticator
 	relay   *relayctl.Memory
-	// lockouts 是未注册邮箱的 Redis 失败计数（回落次数进指标）。
+	// lockouts 是未注册邮箱的 Redis 失败计数（因 Redis 不可用而拒绝的次数进指标）。
 	lockouts *httpx.UnknownLockouts
 	// admin 是运营后台（serve 启动后按库同步事故开关）。
 	admin *admin.Service
 	// jobs 是作业运行器（serve 在监听前启动、关闭时停止领取）。
 	jobs *jobs.Runner
+	// control 是对节点的约定（落盘包装之后的）；sync 是 Redis 实现的重放（内存实现时为 nil）。
+	control relayctl.Control
+	sync    *relayctl.Sync
+	// presence 累计主机上下线的最近在线，serve 周期性落盘。
+	presence *presenceRecorder
+	// closers 在关闭时按后进先出执行（Plane 的订阅等）。
+	closers []func()
+}
+
+// newInstanceID 是控制面实例的随机标识，广播外壳的 origin 取 cloud/<实例 id>。
+func newInstanceID() string {
+	var raw [6]byte
+	_, _ = rand.Read(raw[:])
+	return hex.EncodeToString(raw[:])
 }
 
 // assemble 把存储、Redis、控制核服务、闸与各批的过程接成一个 http.Handler：/health、/ready，
 // 其余交给 /v1 与 /.well-known 的 API（还没实现的过程答 501 not_implemented）。
-func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.UniversalClient, logger *obs.Logger, now func() time.Time, deps Deps) (*assembly, error) {
-	relay := relayctl.NewMemory(now)
+func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisClient goredis.UniversalClient, logger *obs.Logger, now func() time.Time, deps Deps) (built *assembly, err error) {
 	saasStore := db.SaaS()
-	// 签发索引与撤销落盘到 PostgreSQL（设计 §7.2）；内存实现只是快路径，S8 换成 Redis。
-	durable := relayctl.NewDurable(relay, saasStore, TenantID, now, logger)
+	out := &assembly{}
+	defer func() {
+		if err != nil {
+			out.close()
+		}
+	}()
+	// 对节点的约定：缺省包装 control/redis.Plane；测试可注入内存实现来断言发出的命令。
+	var inner relayctl.Control
+	var redisControl *relayctl.Redis
+	if deps.Relay != nil {
+		inner, out.relay = deps.Relay, deps.Relay
+	} else {
+		var syncer *relayctl.Sync
+		redisControl, syncer, err = newRedisControl(ctx, cfg, saasStore, redisClient, logger, now, deps, out)
+		if err != nil {
+			return nil, err
+		}
+		inner, out.sync = redisControl, syncer
+	}
+	// 签发索引与撤销落盘到 PostgreSQL（设计 §7.2）；Redis（或内存）只是快路径。
+	durable := relayctl.NewDurable(inner, saasStore, TenantID, now, logger)
+	if redisControl != nil {
+		durable.EnableRetryJobs()
+	}
+	out.control = durable
 	limiter := deps.Limiter
 	if limiter == nil {
 		limiter = controlredis.NewLimiter(redisClient, httpx.LimitPrefix, httpx.Rules, func(err error) {
@@ -70,6 +108,11 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		Limits: limits, Relay: durable.Relay(), Revocations: durable.Revocations(),
 		PasswordPolicy: core.DefaultPasswordPolicy, Now: now, Events: core.NewEventBus(),
 		RelayOrigin: relayOrigin, RelayBaseURL: relayOrigin, TunnelNodes: hosts.TunnelNodes(durable),
+	}
+	if redisControl != nil {
+		// 主机上下线（relay:presence）：记 last_seen / core_version，周期性落盘。
+		out.presence = newPresenceRecorder(coreCtx.Ports, logger)
+		out.closers = append(out.closers, redisControl.Plane().Presence().Subscribe(out.presence.Observe))
 	}
 	policy := grants.NewPolicy(grants.PolicyOptions{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger})
 	coreCtx.Policy = policy
@@ -87,7 +130,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	}
 
 	lockouts := httpx.NewUnknownLockouts(redisClient, func(err error) {
-		logger.Warn("登录失败计数回落到进程内计数，已注册与未注册邮箱的锁定可能不一致", obs.Operation("lockout"), obs.Error(err))
+		logger.Warn("登录失败计数的 Redis 不可用，登录一律答 503（失败关闭）", obs.Operation("lockout"), obs.Error(err))
 	})
 	sender, err := mailSender(cfg, logger, now, deps)
 	if err != nil {
@@ -103,11 +146,15 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		Store: saasStore, TenantID: TenantID, Workers: cfg.JobWorkers, Now: now, Log: logger,
 	})
 	mailer.Register(runner)
+	if redisControl != nil {
+		relayctl.RegisterJobs(runner, redisControl)
+	}
 
 	handlers := map[string]api.Handler{}
 	for name, handler := range accounts.New(accounts.Options{
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer,
-		Unknown: lockouts, AppOrigin: cfg.AppOrigin, MFA: &admin.RedisChallenges{Client: redisClient}, Wrapper: db.Wrapper(),
+		Unknown: lockouts, LoginGuard: lockouts.Guard, AppOrigin: cfg.AppOrigin,
+		MFA: &admin.RedisChallenges{Client: redisClient}, Wrapper: db.Wrapper(),
 	}).Handlers() {
 		handlers[name] = handler
 	}
@@ -198,7 +245,19 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		}
 		api.WriteError(w, gen.ErrNotFound, "", 0, nil)
 	})
-	return &assembly{handler: mux, core: coreCtx, auth: auth, relay: relay, lockouts: lockouts, jobs: runner, admin: adminService}, nil
+	if out.sync != nil {
+		probes["relay"] = out.sync.Ready
+	}
+	out.handler, out.core, out.auth, out.lockouts, out.jobs, out.admin = mux, coreCtx, auth, lockouts, runner, adminService
+	return out, nil
+}
+
+// close 按后进先出收尾。
+func (a *assembly) close() {
+	for i := len(a.closers) - 1; i >= 0; i-- {
+		a.closers[i]()
+	}
+	a.closers = nil
 }
 
 // challengeGate 按配置建人机挑战（Turnstile）；校验的主机名只认控制台自己的。
@@ -237,4 +296,11 @@ func mailSender(cfg *config.Config, logger *obs.Logger, now func() time.Time, de
 	}
 	logger.Warn("没有配置 SMTP，邮件留在发件箱里重试，不会发出")
 	return mail.Disabled(), nil
+}
+
+// flushPresence 落盘累计的主机最近在线。
+func (a *assembly) flushPresence(ctx context.Context) {
+	if a.presence != nil {
+		a.presence.Flush(ctx)
+	}
 }

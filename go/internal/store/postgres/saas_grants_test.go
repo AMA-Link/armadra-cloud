@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
@@ -284,5 +285,50 @@ func TestIssuedRepo(t *testing.T) {
 	// GC：本租户的 j3 与 j6，撤销表的 4 行；别的租户的 j7 不删。
 	if gc != 6 || e.count("SELECT count(*)::int FROM cloud_issued_tokens") != 1 {
 		t.Fatalf("清理：%d", gc)
+	}
+}
+
+// AccessBases（批量）与逐个 AccessBasis 的答案逐字段一致：个人与团队主机、成员 / 非成员 / 停用 / 不存在的账号、
+// member / guest / team 授予、已撤销的授予、重复的账号 id、没有的主机。
+func TestAccessBasesEqualsPerAccountAccessBasis(t *testing.T) {
+	e := openSaaS(t)
+	for _, id := range []string{"owner", "u1", "u2", "u3", "u4"} {
+		e.account(id)
+	}
+	e.team("t1", "owner")
+	e.members("t1", map[string]string{"u1": "member", "u2": "admin", "u4": "guest"})
+	e.seedHost("h1", "t1", "owner", 10)
+	e.seedHost("p1", "", "owner", 10)
+	e.grant("gm", "h1", "t1", saas.GrantSubjectMember, "u1", "editor", []string{"w2", "w1"}, nil)
+	e.grant("gt", "h1", "t1", saas.GrantSubjectTeam, "t1", "viewer", nil, ptr(100))
+	e.grant("gg", "h1", "t1", saas.GrantSubjectGuest, "u4", "viewer", nil, nil)
+	e.grant("gx", "h1", "t1", saas.GrantSubjectMember, "owner", "viewer", nil, nil)
+	e.grant("gr", "h1", "t1", saas.GrantSubjectMember, "u2", "driver", nil, nil)
+	e.must("UPDATE source_grants SET revoked_at_ms = 5 WHERE grant_id = 'gr'")
+	e.grant("gp", "p1", "", saas.GrantSubjectGuest, "u3", "viewer", nil, nil)
+	e.must("UPDATE accounts SET status = 'disabled' WHERE account_id = 'u2'")
+	r := e.db.SaaS().Read()
+
+	accounts := []string{"owner", "u1", "u2", "u3", "u4", "nobody", "u1"}
+	for _, source := range []string{"h1", "p1", "ghost"} {
+		batch, err := r.AccessBases(e.ctx, saasTenant, accounts, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch) != 6 {
+			t.Fatalf("%s：重复的账号去重后 6 个：%d", source, len(batch))
+		}
+		for _, id := range accounts {
+			single, err := r.AccessBasis(e.ctx, saasTenant, id, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(batch[id], single) {
+				t.Errorf("%s / %s：批量 %+v，逐个 %+v", source, id, batch[id], single)
+			}
+		}
+	}
+	if got, err := r.AccessBases(e.ctx, saasTenant, nil, "h1"); err != nil || len(got) != 0 {
+		t.Fatalf("空批：%v %v", got, err)
 	}
 }

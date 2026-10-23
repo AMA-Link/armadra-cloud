@@ -21,6 +21,9 @@ type accessRow struct {
 	ExpiresAtMs  *int64   `json:"expiresAtMs,omitempty"`
 }
 
+// accessBatch 是访问清单一次合成的账号数。
+const accessBatch = 200
+
 // accessList 是 sources.accessList：谁能访问这台主机——所有者与每个有有效权限的账号（团队授予展开到成员），
 // 合成后的角色、范围与到期；grantId 取贡献最高角色的那条授予。管理权。
 func (s *Service) accessList(ctx context.Context, call *api.Call) (any, error) {
@@ -39,14 +42,19 @@ func (s *Service) accessList(ctx context.Context, call *api.Call) (any, error) {
 		return nil, err
 	}
 	rows := []accessRow{}
-	for _, id := range candidates {
+	// 候选账号按批合成有效权限（一批固定几条查询），够了 maxAccessRows 行就停。
+	var effective map[string]Effective
+	for i, id := range candidates {
 		if len(rows) >= maxAccessRows {
 			break
 		}
-		eff, _, err := s.effectiveOf(ctx, r, id, sourceID)
-		if err != nil {
-			return nil, err
+		if i%accessBatch == 0 {
+			effective, err = s.effectiveMany(ctx, r, sourceID, candidates[i:min(i+accessBatch, len(candidates))], s.nowMs())
+			if err != nil {
+				return nil, err
+			}
 		}
+		eff := effective[id]
 		if eff.None() {
 			continue
 		}

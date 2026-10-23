@@ -14,10 +14,17 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/AMA-Link/armadra-cloud/go/internal/auth"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/cli"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/server"
+	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
+	controlredis "github.com/AMA-Link/armadra-cloud/go/internal/control/redis"
+	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/pgtest"
+	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
 )
 
 const masterKey = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
@@ -85,11 +92,6 @@ func TestUsageAndSimpleCommands(t *testing.T) {
 	}
 	if code, _, errOut := run(t, config.MapEnv{}, "keys"); code != 64 || !strings.Contains(errOut, "未知命令") {
 		t.Fatalf("keys 缺子命令：%d %q", code, errOut)
-	}
-	for _, args := range [][]string{{"nodes", "token"}, {"nodes", "revoke"}} {
-		if code, _, errOut := run(t, config.MapEnv{}, args...); code != 64 || !strings.Contains(errOut, "这个命令还没有提供") {
-			t.Fatalf("%v：%d %q", args, code, errOut)
-		}
 	}
 	for _, args := range [][]string{{"serve", "--x"}, {"migrate", "extra"}, {"health", "x"}, {"keys", "rotate", "x"}} {
 		if code, _, _ := run(t, config.MapEnv{}, args...); code != 64 {
@@ -291,5 +293,125 @@ func TestKeysRotateWhileServing(t *testing.T) {
 	}
 	if keys[0].RetiredAtMs == nil {
 		t.Fatal("旧钥应定在 1 小时后退役")
+	}
+}
+
+func jwksFetcher(t *testing.T, base string) func(ctx context.Context) ([]byte, error) {
+	t.Helper()
+	return func(ctx context.Context) ([]byte, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/.well-known/jwks.json", nil)
+		if err != nil {
+			return nil, err
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = res.Body.Close() }()
+		return io.ReadAll(res.Body)
+	}
+}
+
+// nodes token 签出的节点令牌能按 JWKS 验过（typ、aud、iss、sub、jti 形状）；nodes revoke 走普通撤销：
+// PostgreSQL 的撤销表有行、Redis 的撤销键与广播让持有节点判为已撤销、验证随之失败。
+func TestNodesTokenAndRevoke(t *testing.T) {
+	env := testEnv(t)
+	if code, _, errOut := run(t, env, "migrate"); code != 0 {
+		t.Fatal(errOut)
+	}
+	if code, _, errOut := run(t, env, "nodes", "token", "--node", "a"); code != 1 || !strings.Contains(errOut, "还没有存储租户") {
+		t.Fatalf("没引导过：%d %q", code, errOut)
+	}
+	running, _ := start(t, env)
+
+	for _, args := range [][]string{
+		{"nodes", "token"}, {"nodes", "token", "--node", "Bad_Name"}, {"nodes", "token", "--node", "a", "--days", "0"},
+		{"nodes", "token", "--node", "a", "--days", "366"}, {"nodes", "token", "--node", "a", "extra"}, {"nodes", "token", "--bogus"},
+		{"nodes", "revoke"}, {"nodes", "revoke", "--jti", "r.device.token"}, {"nodes", "revoke", "--jti", "n.a.xyz"},
+	} {
+		if code, _, errOut := run(t, env, args...); code != 64 || errOut == "" {
+			t.Fatalf("%v 应是用法错误：%d %q", args, code, errOut)
+		}
+	}
+	code, out, errOut := run(t, env, "nodes", "token", "--node", "node-a", "--days", "2")
+	token := strings.TrimSpace(out)
+	if code != 0 || strings.Count(token, ".") != 2 || !strings.Contains(errOut, "节点 node-a 的令牌 jti：n.node-a.") {
+		t.Fatalf("nodes token：%d %q %q", code, out, errOut)
+	}
+	// 一个持有节点：用这份 JWKS 与 Redis 前缀验节点令牌。
+	prefix := "relay-test:" + strconv.FormatInt(time.Now().UnixNano(), 36) + ":"
+	t.Cleanup(func() { wipePrefix(t, prefix) })
+	ctx := context.Background()
+	plane, err := controlredis.New(ctx, controlredis.Options{
+		Options: cluster.Options{Issuer: "http://127.0.0.1:8100", NodeID: "holder", Mode: "saas", JWKS: jwksFetcher(t, running.URL)},
+		URL:     redisURL(t), Prefix: prefix,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = plane.Close() })
+	verifier := auth.NewContext(plane, nil)
+	res := auth.VerifyNodeToken(ctx, verifier, token)
+	jti := res.Claims.Jti
+	if !res.OK || res.Claims.Sub != "node-a" || !strings.HasPrefix(jti, "n.node-a.") || res.Claims.Aud != gen.TokenAudienceRelayNode || !strings.Contains(errOut, jti) {
+		t.Fatalf("节点令牌验证：%+v", res)
+	}
+	if left := res.Claims.Exp - res.Claims.Iat; left != 2*24*3600 {
+		t.Fatalf("寿命 2 天：%d 秒", left)
+	}
+
+	other := env
+	code, out, errOut = runWith(t, other, cli.Options{Version: "9.9.9", RelayPrefix: prefix}, "nodes", "revoke", "--jti", jti)
+	if code != 0 || !strings.Contains(out, jti) {
+		t.Fatalf("nodes revoke：%d %q %q", code, out, errOut)
+	}
+	// 再撤一次是空操作。
+	if code, _, errOut = runWith(t, other, cli.Options{Version: "9.9.9", RelayPrefix: prefix}, "nodes", "revoke", "--jti", jti); code != 0 {
+		t.Fatalf("重复撤销：%d %q", code, errOut)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if revoked, _ := plane.Tokens().IsRevoked(ctx, jti); revoked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("撤销没有到达持有节点")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if res := auth.VerifyNodeToken(ctx, verifier, token); res.OK {
+		t.Fatal("撤销之后验证应失败")
+	}
+	db, err := postgres.Open(ctx, postgres.Options{URL: env["ARMADRA_CLOUD_DATABASE_URL"], NoMigrate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var n int
+	if err := db.Pool().QueryRow(ctx, "SELECT count(*)::int FROM relay_revoked_tokens WHERE jti = $1 AND exp_ms > $2", jti, time.Now().Add(300*24*time.Hour).UnixMilli()).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("PostgreSQL 撤销表：%d %v", n, err)
+	}
+}
+
+func runWith(t *testing.T, env config.MapEnv, options cli.Options, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = cli.Run(args, env, &out, &errOut, options)
+	return code, out.String(), errOut.String()
+}
+
+// wipePrefix 只删这个前缀下的键。
+func wipePrefix(t *testing.T, prefix string) {
+	t.Helper()
+	opts, err := goredis.ParseURL(redisURL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := goredis.NewClient(opts)
+	defer func() { _ = client.Close() }()
+	ctx := context.Background()
+	iter := client.Scan(ctx, 0, prefix+"*", 200).Iterator()
+	for iter.Next(ctx) {
+		client.Del(ctx, iter.Val())
 	}
 }

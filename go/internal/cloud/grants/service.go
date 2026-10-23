@@ -291,13 +291,18 @@ func (s *Service) snapshot(ctx context.Context, r saas.Reader, sourceID string, 
 
 // snapshotAt 是一批账号在 atMs 那一刻对主机的有效权限（到期作业用到期前一毫秒的快照作「之前」）。
 func (s *Service) snapshotAt(ctx context.Context, r saas.Reader, sourceID string, accounts []string, atMs int64) (map[string]Effective, error) {
+	return s.effectiveMany(ctx, r, sourceID, accounts, atMs)
+}
+
+// effectiveMany 一次读出一批账号对同一台主机的事实再逐个合成（AccessBases，固定几条查询，不随账号数增长）。
+func (s *Service) effectiveMany(ctx context.Context, r saas.Reader, sourceID string, accounts []string, atMs int64) (map[string]Effective, error) {
+	bases, err := r.AccessBases(ctx, s.tenant(), accounts, sourceID)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]Effective, len(accounts))
 	for _, id := range accounts {
-		eff, _, err := s.effectiveAt(ctx, r, id, sourceID, atMs)
-		if err != nil {
-			return nil, err
-		}
-		out[id] = eff
+		out[id] = Compose(bases[id], id, atMs)
 	}
 	return out, nil
 }

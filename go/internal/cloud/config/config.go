@@ -498,6 +498,21 @@ func LoadKeys(env Env) (databaseURL string, masterKey []byte, err error) {
 	return databaseURL, masterKey, nil
 }
 
+// LoadRedis 读 DATABASE_URL 与 REDIS_URL（nodes revoke 用）。
+func LoadRedis(env Env) (databaseURL, redisURL string, err error) {
+	r := reader{env}
+	if databaseURL, err = LoadDatabaseURL(env); err != nil {
+		return "", "", err
+	}
+	if redisURL = r.get("REDIS_URL"); redisURL == "" {
+		return "", "", errorf("%sREDIS_URL 必填", Prefix)
+	}
+	if u, err := url.Parse(redisURL); err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Host == "" {
+		return "", "", errorf("%sREDIS_URL 不合法，要 redis:// 或 rediss:// 地址", Prefix)
+	}
+	return databaseURL, redisURL, nil
+}
+
 // ListenPort 读 LISTEN 的端口（health 用）；读不出来取缺省 8100。
 func ListenPort(env Env) int {
 	text := reader{env}.get("LISTEN")

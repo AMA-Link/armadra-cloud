@@ -62,6 +62,15 @@ type Deps struct {
 	Mail mail.Sender
 	// GrantsHook 让测试在断言签发的交错点（"signed"、"indexed"）停住，验证与并发撤销交错也不漏撤；生产不设。
 	GrantsHook func(stage string)
+	// RedisHook 挂在 Redis 客户端上（测试注入故障：让命令失败）；生产不设。
+	RedisHook goredis.Hook
+	// FlushEvery 缩短设备最近使用与主机最近在线的落盘间隔（缺省 5 分钟；测试用）。
+	FlushEvery time.Duration
+	// Relay 用内存实现代替 Redis 实现（测试断言发出的撤销与节点命令）；生产不设。
+	Relay *relayctl.Memory
+	// RelayPrefix 与 IssuedPrefix 换掉 Redis 的键前缀（缺省 relay: 与 cloud:issued:）；测试用随机前缀隔离，生产不设。
+	RelayPrefix  string
+	IssuedPrefix string
 	// IncidentEvery 缩短事故开关按库同步给节点的间隔（测试用，缺省 5 秒）。
 	IncidentEvery time.Duration
 	// ExtraHandlers 给测试挂额外的过程处理器（例如用 admin.* 检查凭据闸）；生产装配不设。
@@ -76,8 +85,10 @@ type Running struct {
 	Redis   goredis.UniversalClient
 	Handler http.Handler
 	// Core 与 Relay 给装配后的检查与测试用。
-	Core  *core.Context
-	Relay *relayctl.Memory
+	Core *core.Context
+	// Relay 是注入的内存实现（Deps.Relay）；缺省的 Redis 实现下为 nil。Control 是落盘包装之后的约定，两种实现都有。
+	Relay   *relayctl.Memory
+	Control relayctl.Control
 
 	closeOnce sync.Once
 	closeFn   func()
@@ -159,14 +170,22 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	if err != nil {
 		return fail(err)
 	}
+	if hooker, ok := redisClient.(interface{ AddHook(goredis.Hook) }); ok && deps.RedisHook != nil {
+		hooker.AddHook(deps.RedisHook)
+	}
 	undo.push(func() { _ = redisClient.Close() })
 
-	// 5. 撤销与签发索引的重放：随 relayctl 的 Redis 实现在 S8 加入。
-
-	// 6. 装配、路由与监听。
-	assembly, err := assemble(cfg, db, redisClient, logger, now, deps)
+	// 5. 装配：对节点的约定（Plane）、核心、路由。
+	assembly, err := assemble(ctx, cfg, db, redisClient, logger, now, deps)
 	if err != nil {
 		return fail(err)
+	}
+	undo.push(assembly.close)
+	// 6. 撤销、签发索引与团队额度的重放（设计 §7.2）：完成之前不开监听，所以不会对外答就绪。
+	if assembly.sync != nil {
+		if err := assembly.sync.Run(ctx); err != nil {
+			return fail(fmt.Errorf("重放撤销与签发索引失败：%w", err))
+		}
 	}
 	handler := assembly.handler
 	// 作业在监听之前启动、在 HTTP 停收请求之后停（undo 后进先出）：等当前作业最多 jobsGrace。
@@ -203,7 +222,10 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 			return fail(fmt.Errorf("指标监听失败：%s", cfg.MetricsListen))
 		}
 		render := func() string {
-			return "# HELP armadra_cloud_up 控制面在跑。\n# TYPE armadra_cloud_up gauge\narmadra_cloud_up 1\n"
+			return "# HELP armadra_cloud_up 控制面在跑。\n# TYPE armadra_cloud_up gauge\narmadra_cloud_up 1\n" +
+				"# HELP armadra_cloud_lockout_unavailable_total 因 Redis 不可用而拒绝登录的次数（失败关闭）。\n" +
+				"# TYPE armadra_cloud_lockout_unavailable_total counter\n" +
+				fmt.Sprintf("armadra_cloud_lockout_unavailable_total %d\n", assembly.lockouts.Unavailable())
 		}
 		metricsServer = &http.Server{
 			Handler: obs.MetricsHandler(render, cfg.MetricsToken), ReadHeaderTimeout: httpHeaderWait,
@@ -242,7 +264,11 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	flushDone := make(chan struct{})
 	go func() {
 		defer close(flushDone)
-		ticker := time.NewTicker(core.LastSeenFlushEach)
+		flushEvery := deps.FlushEvery
+		if flushEvery <= 0 {
+			flushEvery = core.LastSeenFlushEach
+		}
+		ticker := time.NewTicker(flushEvery)
 		defer ticker.Stop()
 		for {
 			select {
@@ -252,6 +278,7 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 				if err := assembly.auth.Flush(flushCtx); err != nil {
 					logger.Warn("最近使用时间落盘失败", obs.Error(err))
 				}
+				assembly.flushPresence(flushCtx)
 			}
 		}
 	}()
@@ -263,9 +290,10 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 		if err := assembly.auth.Flush(ctx); err != nil {
 			logger.Warn("最近使用时间落盘失败", obs.Error(err))
 		}
+		assembly.flushPresence(ctx)
 	})
 
-	running := &Running{URL: url, DB: db, Redis: redisClient, Handler: handler, Core: assembly.core, Relay: assembly.relay}
+	running := &Running{URL: url, DB: db, Redis: redisClient, Handler: handler, Core: assembly.core, Relay: assembly.relay, Control: assembly.control}
 	running.closeFn = func() {
 		logger.Info("控制面正在关闭")
 		undo.unwind()
