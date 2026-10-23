@@ -1,0 +1,234 @@
+# armadra-cloud 的 SaaS 单机 M1 部署（SaaS 实施设计 §2.3）：控制面 + 两个中继节点 + PostgreSQL + Redis（AOF）。
+#
+#   cp .env.example .env     # 填域名、版本与口令；再按 README.md 生成 secrets/ 下的文件
+#   docker compose up -d     # 顺序：postgres -> migrate -> cloud -> relay-a / relay-b
+#   docker compose --profile proxy up -d                          # 另起参考反向代理（nginx，TLS 在它终止）
+#   docker compose -f compose.yml -f compose.mailpit.yml up -d    # 开发 / 端到端：邮件进 mailpit，不外发
+#
+# 生产环境应把 postgres / redis 换成托管服务（连接串、sslmode=verify-full 写在 .env）；这里的 postgres 容器用
+# 首次启动时生成的自签证书（sslmode=require），只为让控制面的“连非回环地址必须加密”规则在单机上成立。
+# 升级顺序：先升中继节点（逐个 docker compose up -d relay-a，GOAWAY rebalance 排空），再升控制面；回滚是换回上一个版本号。
+# 每个节点有自己的隧道地址 wss://<节点>.edge.<域>/t/v1（写进节点表，不在一个共用的 edge. 后面轮询）。
+name: armadra-saas
+
+x-cloud-image: &cloud-image ghcr.io/ama-link/armadra-cloud:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+x-relay-image: &relay-image ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+
+x-cloud-env: &cloud-env
+  ARMADRA_CLOUD_ISSUER: https://app.${DOMAIN:?set DOMAIN}
+  ARMADRA_CLOUD_APP_ORIGIN: https://app.${DOMAIN}
+  ARMADRA_CLOUD_LISTEN: 0.0.0.0:8100
+  ARMADRA_CLOUD_DATABASE_URL: ${CLOUD_DATABASE_URL:-postgres://armadra:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/armadra_cloud?sslmode=require}
+  ARMADRA_CLOUD_REDIS_URL: redis://redis:6379
+  ARMADRA_CLOUD_MASTER_KEY_FILE: /run/secrets/master_key
+  ARMADRA_CLOUD_RELAY_DOMAIN: ${DOMAIN}
+
+x-relay-env: &relay-env
+  RELAY_LISTEN: 0.0.0.0:8443
+  RELAY_DOMAIN: ${DOMAIN}
+  RELAY_CLOUD_ISSUER: https://app.${DOMAIN}
+  # 节点在内部网络直接取 JWKS（issuer 仍是 https://app.<域>，令牌的 iss 与它逐字相等）。
+  RELAY_JWKS_URL: http://cloud:8100/.well-known/jwks.json
+  RELAY_REDIS_URL: redis://redis:6379
+  RELAY_DATABASE_URL: postgres://armadra_relay_traffic:${RELAY_TRAFFIC_PASSWORD:?set RELAY_TRAFFIC_PASSWORD}@postgres:5432/armadra_cloud?sslmode=require
+  RELAY_TRUSTED_PROXY: ${TRUSTED_PROXY:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+  RELAY_DRAIN_GRACE_MS: "30000"
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    command:
+      [
+        "postgres",
+        "-c",
+        "ssl=on",
+        "-c",
+        "ssl_cert_file=/tls/server.crt",
+        "-c",
+        "ssl_key_file=/tls/server.key",
+      ]
+    environment:
+      POSTGRES_USER: armadra
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
+      POSTGRES_DB: armadra_cloud
+    volumes:
+      - pg:/var/lib/postgresql/data
+      - pg-tls:/tls:ro
+    depends_on:
+      pg-tls:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "armadra", "-d", "armadra_cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # 首次启动生成自签证书（已有则跳过），属主 postgres（uid 70）、0600。
+  pg-tls:
+    image: alpine/openssl:3.5.4
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ ! -s /tls/server.key ]; then
+          openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=postgres" \
+            -keyout /tls/server.key -out /tls/server.crt
+        fi
+        chown 70:70 /tls/server.key /tls/server.crt
+        chmod 600 /tls/server.key
+        chmod 644 /tls/server.crt
+    volumes:
+      - pg-tls:/tls
+    restart: "no"
+
+  redis:
+    image: redis:8.8.3-alpine
+    # AOF 每秒落盘；noeviction：满了写入报错而不是悄悄丢撤销记录。Redis 要 7.4 以上（HPEXPIRE）。
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+        "--maxmemory",
+        "128mb",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # 迁移只在这里跑一次（serve 不自动迁移，账本落后会拒绝启动）。
+  migrate:
+    image: *cloud-image
+    command: ["migrate"]
+    environment: *cloud-env
+    secrets: [master_key]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # 节点用的流量角色（SaaS 实施设计 §2.3、§10 Q4）：relay_traffic_buckets 的 SELECT / INSERT / UPDATE 与
+  # cloud_migrations 的 SELECT，别的表没有任何权限。迁移之后才有这两张表，所以放在 migrate 后面；可重复执行。
+  db-roles:
+    image: postgres:17.11-alpine
+    entrypoint: ["sh", "/db-roles.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: armadra
+      PGDATABASE: armadra_cloud
+      PGSSLMODE: require
+      PGPASSWORD: "${POSTGRES_PASSWORD}"
+      RELAY_TRAFFIC_PASSWORD: "${RELAY_TRAFFIC_PASSWORD:?set RELAY_TRAFFIC_PASSWORD}"
+    volumes:
+      - ./db-roles.sh:/db-roles.sh:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  cloud:
+    image: *cloud-image
+    command: ["serve"]
+    environment:
+      <<: *cloud-env
+      ARMADRA_CLOUD_NAME: ${PLATFORM_NAME:-}
+      ARMADRA_CLOUD_REQUIRE_EMAIL_VERIFIED: "1"
+      ARMADRA_CLOUD_TRUSTED_PROXY: ${TRUSTED_PROXY:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      ARMADRA_CLOUD_SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST}
+      ARMADRA_CLOUD_SMTP_PORT: ${SMTP_PORT:-587}
+      ARMADRA_CLOUD_SMTP_USERNAME: ${SMTP_USERNAME:-}
+      ARMADRA_CLOUD_SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      ARMADRA_CLOUD_SMTP_FROM: ${SMTP_FROM:?set SMTP_FROM}
+      ARMADRA_CLOUD_SMTP_TLS: ${SMTP_TLS:-starttls}
+      ARMADRA_CLOUD_LOG_LEVEL: ${LOG_LEVEL:-info}
+    secrets: [master_key, smtp_password]
+    ports:
+      - "127.0.0.1:${CLOUD_PORT:-8100}:8100"
+    stop_grace_period: 45s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  relay-a: &relay
+    image: *relay-image
+    command: ["saas", "serve"]
+    environment:
+      <<: *relay-env
+      RELAY_NODE_ID: a
+      RELAY_TUNNEL_URL: wss://a.edge.${DOMAIN}/t/v1
+      RELAY_NODE_TOKEN_FILE: /run/secrets/node_token_a
+    secrets: [node_token_a]
+    ports:
+      - "127.0.0.1:${RELAY_A_PORT:-8441}:8443"
+    stop_grace_period: 40s
+    depends_on:
+      cloud:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-roles:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  relay-b:
+    <<: *relay
+    environment:
+      <<: *relay-env
+      RELAY_NODE_ID: b
+      RELAY_TUNNEL_URL: wss://b.edge.${DOMAIN}/t/v1
+      RELAY_NODE_TOKEN_FILE: /run/secrets/node_token_b
+    secrets: [node_token_b]
+    ports:
+      - "127.0.0.1:${RELAY_B_PORT:-8442}:8443"
+
+  # 参考反向代理：终止 TLS，WebSocket 设置与限流见 nginx.conf.template；访问日志用 $uri，不记 query 串。
+  proxy:
+    profiles: ["proxy"]
+    image: nginx:1.29.3-alpine
+    environment:
+      DOMAIN: ${DOMAIN}
+      NGINX_ENVSUBST_FILTER: ^DOMAIN$$
+    volumes:
+      - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${TLS_DIR:-./tls}:/etc/nginx/tls:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      cloud:
+        condition: service_healthy
+      relay-a:
+        condition: service_healthy
+      relay-b:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  # 32 字节 hex；包裹签名私钥与 TOTP 种子，另存一份（丢了签名钥无法解开）。
+  master_key:
+    file: ./secrets/master_key
+  smtp_password:
+    file: ./secrets/smtp_password
+  # armadra-cloud nodes token --node a / b 签出的节点令牌（节点间转发时出示）。
+  node_token_a:
+    file: ./secrets/node_token_a
+  node_token_b:
+    file: ./secrets/node_token_b
+
+volumes:
+  pg: {}
+  pg-tls: {}
+  redis: {}

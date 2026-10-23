@@ -1,0 +1,22 @@
+# 开发 / 端到端的叠加文件：邮件不外发，进 mailpit。
+#   docker compose -f compose.yml -f compose.mailpit.yml up -d
+# mailpit 与控制面共用网络命名空间：控制面的 SMTP_TLS=none 只许回环地址，所以用 127.0.0.1:1025 发信。
+# 网页在 http://127.0.0.1:${MAILPIT_UI_PORT:-8025}（只绑回环），取信接口 /api/v1/messages。
+# 这个文件不要用在生产。
+services:
+  mailpit:
+    image: axllent/mailpit:v1.31.4
+    network_mode: "service:cloud"
+    depends_on:
+      - cloud
+    restart: unless-stopped
+
+  cloud:
+    environment:
+      ARMADRA_CLOUD_SMTP_HOST: 127.0.0.1
+      ARMADRA_CLOUD_SMTP_PORT: "1025"
+      ARMADRA_CLOUD_SMTP_USERNAME: ""
+      ARMADRA_CLOUD_SMTP_TLS: none
+      ARMADRA_CLOUD_SMTP_FROM: ${SMTP_FROM:-armadra@localhost}
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
