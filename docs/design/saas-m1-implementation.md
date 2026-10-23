@@ -991,6 +991,17 @@ type Watcher interface {
 | 事故开关                       | `platform_settings` 键 `incident = {assertionsPaused, registrationsPaused, rejectNewConnections}`；写库后经 `relayctl` 写 `relay:incident` 并广播；控制面各实例每 5 秒读一次库（不依赖 Redis 保活）                                                                                                                  |
 | 只读                           | 看不到任何内容与令牌；租户搜索按邮箱 / 显示名 / slug 前缀与包含（`ILIKE`，最多 50 行）                                                                                                                                                                                                                               |
 
+**S7 实现注记（第二部分：运营后台）**：
+
+- **命令行**：`operators add --email <地址>` 给账号加 `operator` 范围（幂等，邮箱不分大小写）；`operators totp --email <地址> [--reset]` 生成 20 字节种子，用主密钥包裹（附加数据绑定「用途、租户、账号」）后落 `account_credentials`，终端只打印一次 `otpauth://` 地址；账号还不是运营账号、已登记过（没带 `--reset`）、没有这个账号都是退出码 1，缺参数 64。两条命令各写一条系统审计（`operator.add`、`operator.totp`），种子不进日志。
+- **登录**：`auth.login { scope: "operator" }` 口令验过之后才看范围（口令错仍是 `credentials_invalid`，不借此枚举运营账号）：非运营 `403 forbidden`、没有 TOTP `403 operator_mfa_required`，否则把挑战（账号、设备入参、过期时刻）存进 Redis `cloud:mfa:<sha256(id)>` 的哈希，答 `{ mfa: { challengeId, methods: ["totp"] } }`，不建会话。
+- **`auth.mfaVerify`**：挑战不存在 / 过期（5 分钟，按控制面时钟判，Redis 的 TTL 只清理）/ 账号被停用或摘掉运营范围 → `410 mfa_expired`；按账号限流 `mfa.acct`（10 分钟 10 次，跨挑战累计，超限 `429`，连对的码也不认）；验证码 `401 mfa_invalid`（每个挑战错满 5 次即删）；TOTP 校验当前步和前后各 1 步，**命中的时间步必须大于账号已用过的最后一步**才接受（`last_step` 的原子 `UPDATE … WHERE last_step IS NULL OR last_step < $step`），所以同一个码、更早的码都不能再用，并发提交同一个码只会成功一次；通过后取走挑战（一次性），再建运营设备（传输按本次请求：带控制台 `Origin` 且不带 `Authorization` 走 Cookie，否则 Bearer；绝对寿命 1 小时，刷新不延长）并写本人安全日志 `security.operatorLogin`。运营账号的普通会话也可以用 `totpCode` 做 `auth.stepUp`（同样防重放）。
+- **准入的第二道门**：HTTP 闸保证 `admin.*` 只有运营会话进得来；处理器再重读账号——账号被停用 `401`、摘掉运营范围 `403 forbidden`，会话没到期也立刻失效。
+- **列表**：账号 / 团队 / 租户搜索按 `created_at_ms, id` 倒序的游标分页，一页最多 50 行（`limit` 超过按 50）；搜索词是邮箱 / 显示名 / 团队名 / slug 的 `ILIKE` 包含（`% _ \` 转义成字面量）。账号详情多 `seats`（个人空间恒为 1）、本 UTC 月 e2e 字节与最近 5 条运营动作（`audit_log` 里 `actor_kind = operator` 且对象相符的行，走 `audit_log_target` 索引），团队详情的席位是非 guest 成员数；理由只在审计表的 `reason` 列，不进事件形状。
+- **停用账号**：锁账号行 → 状态与原因 → 撤销全部设备 → 提交后经撤销钩子撤已签令牌并按签发索引逐主机 `kick {sourceId, subject}`（§4.8）→ 审计 `account.disable`（`team_id` 空）；恢复只改状态（`account.enable`）。不许停用自己。**停用团队**：锁团队行 → 状态与原因 → 提交后撤销每台主机的全部已签令牌并 `kick {sourceId}`，不关隧道 → 审计 `team.suspend`（`team_id` = 对象团队，团队的 owner / admin 在 `audit.list` 里看得到，看不到理由）；恢复 `team.resume`。
+- **节点**：`relayctl.Control` 加 `AllNodes`（含排空中的节点；`Nodes` 仍只答没排空的，给隧道地址选择用）。节点表里的节点都算在线（字段 60 秒过期），`lastSeenAtMs` 取读表的此刻。`relayNodeDrain` 的 `drain = true` 发 `drain` 命令并写审计 `relay.drain`；节点一旦排空只能重启回来，控制面没有取消命令，`drain = false` 是空操作、答复如实报节点此刻的状态（契约给这个过程的错误码只有 `not_found` / `forbidden`，不另答 `conflict`）。
+- **事故开关**：协议补一项 `rejectNewConnections`（见 CHANGELOG 与契约 §28，只加不改）。`incidentSet` 在 `platform_settings` 行锁下读-改-写，只改给出的项，提交后写 `relay:incident` 并广播（`relayctl.SetIncident`）。`pauseAssertions` 与 `pauseRegistrations` 本来就每次读库（`sources.assertion` 答 `503 unavailable`，`auth.register` 答 `503 registrations_paused`，`platform.info.registrationsOpen` 为 false）。各控制面实例另有 `admin.Service.Start`：启动时与之后每 5 秒读库，开关或时刻变了立刻写给节点，没变也每分钟重写一遍（Redis 里的键丢了能自愈），不依赖 Redis 保活。
+
 ### 4.10 配额（`cloud/quota`）
 
 M1 的额度表写在代码里（`quota.Plans`，数值取能力设计 §3.10 初稿；改数只改代码），`entitlements.overrides` 可逐项放宽。
