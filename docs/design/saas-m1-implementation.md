@@ -1010,6 +1010,13 @@ M1 的额度表写在代码里（`quota.Plans`，数值取能力设计 §3.10 �
 - `teams.usage`、`billing.usage` 用同一组统计函数；`billing.usage` 的 `granularity = day` 按 UTC 天汇总当前计费周期（M1 周期 = 自然月）。
 - 分组、访问申请等「计划不含」的功能答 `403 plan_feature_unavailable`。
 
+**S7 实现注记（第一部分：审计、用量与保留期）**：
+
+- **审计读取**：`audit.list` 的包 `cloud/audit` 不 import `cloud/teams`（teams 已经 import 它来写日志），团队范围由装配方注入一个 `Authorizer`（`teams.Require` + `MinAdmin`）；`TeamScope` 的唯一构造点不变。游标是 `(at_ms, event_id)` 倒序的不透明编码，坏游标 `400 bad_request`；`actor` 精确匹配 `actor_id`，`action` 按前缀（`% _ \` 转义）。`me.securityLog` 只读本人 `account_id` 且 `action LIKE 'security.%'`、`team_id IS NULL` 的行。
+- **保留期**（`audit.retention`，每天一次，时间槽 `audit.retention:YYYY-MM-DD`）：按最短保留期（Free 7 天）找出有旧行的团队（按团队 id 升序翻页），再按各团队**此刻**的计划算界线（`quota.AuditRetention`：free 7 / pro 30 / team 90 / enterprise 365 天，未知计划按 free），一个团队一个团队地分批（5000 行）`DELETE … WHERE team_id = $2`；账号安全日志固定 90 天；整月都早于「现在往前 13 个月」的分区 `DROP`（`DB.DropAuditPartitionsBefore`，同样先 `pg_advisory_xact_lock` 再 `SET LOCAL lock_timeout = '5s'`）。运营动作（没有团队的非 `security.` 行）只随整月分区 DROP。`audit.partitions` 每天补建当月与后两个月。
+- **`traffic.retention`**：删早于 `TRAFFIC_RETENTION_DAYS` 的流量桶（走 `(tenant_id, bucket_start_ms, …)` 主键前缀，`ctid` 分批）。
+- **用量**：`teams.usage` 与 `billing.usage` 共用 `teams.TeamUsage`；个人空间用量是个人主机数（`CountPersonal`）、名下团队数、个人空间主机的 e2e 流量（`source_spaces.team_id IS NULL` 且 `relay_traffic_buckets.team_id = ''`）。`granularity = day` 的 `series` 补零到本周期每一天（UTC 零点）。`billing.plan` 的 `periodEndsAtMs` 是本 UTC 月底，`seats` 个人为 1、团队为非 guest 成员数；团队空间要 owner 或 billing（`teams.MinBilling`），个人空间永远是调用者自己的。
+
 ### 4.11 存储端口（`internal/store/saas`）
 
 ```go
