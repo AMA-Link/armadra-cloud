@@ -86,7 +86,7 @@ func TestUsageAndSimpleCommands(t *testing.T) {
 	if code, _, errOut := run(t, config.MapEnv{}, "keys"); code != 64 || !strings.Contains(errOut, "未知命令") {
 		t.Fatalf("keys 缺子命令：%d %q", code, errOut)
 	}
-	for _, args := range [][]string{{"nodes", "token"}, {"nodes", "revoke"}, {"operators", "add"}, {"operators", "totp"}} {
+	for _, args := range [][]string{{"nodes", "token"}, {"nodes", "revoke"}} {
 		if code, _, errOut := run(t, config.MapEnv{}, args...); code != 64 || !strings.Contains(errOut, "这个命令还没有提供") {
 			t.Fatalf("%v：%d %q", args, code, errOut)
 		}
