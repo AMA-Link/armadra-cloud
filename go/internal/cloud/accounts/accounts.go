@@ -11,6 +11,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/admin"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
@@ -31,8 +32,15 @@ type Options struct {
 	Limits *httpx.Limits
 	// Mail 把事务邮件插进发件箱（验证邮箱、找回口令、新设备提醒等）。
 	Mail *mail.Service
+	// Events 发领域事件；nil = 不发。
+	Events *events.Publisher
 	// Unknown 存未注册邮箱的失败计数与锁定（多实例共享的 Redis 版）；nil = 进程内计数。
 	Unknown core.UnknownStore
+	// Stream 发 me-stream 的票（me.streamTicket，票存在 Redis，任一实例都能兑换）；nil = 不实现这个过程（答 501）。
+	Stream *core.MeStream
+	// LoginGuard 在 auth.login 里探活共享的失败计数存储（Redis）：不可用答 503，对已注册与未注册的邮箱一视同仁
+	// （失败关闭，设计 §4.3）。nil = 不探活（测试与单进程）。
+	LoginGuard func(ctx context.Context) error
 	// AppOrigin 是控制台来源，设备码的 verificationUrl 以它开头。
 	AppOrigin string
 	// MFA 存运营登录的两步验证挑战（cloud:mfa:*）；Wrapper 解开 TOTP 种子。两者缺一，scope: "operator" 的登录答 500。
@@ -51,8 +59,12 @@ type Service struct {
 	gate   *httpx.Gate
 	limits *httpx.Limits
 	mail   *mail.Service
+	events *events.Publisher
 	// unknown 给未注册的邮箱同样计失败、同样锁定：锁定不暴露邮箱有没有注册。
 	unknown core.UnknownAccounts
+	stream  *core.MeStream
+	// guard 见 Options.LoginGuard。
+	guard func(ctx context.Context) error
 
 	mfa     admin.ChallengeStore
 	wrapper *store.Wrapper
@@ -64,7 +76,7 @@ type Service struct {
 // New 建账号服务。
 func New(options Options) *Service {
 	s := &Service{
-		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits, mail: options.Mail,
+		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits, mail: options.Mail, events: options.Events,
 		appOrigin: strings.TrimRight(options.AppOrigin, "/"), onDeviceDecision: options.OnDeviceDecision,
 		mfa: options.MFA, wrapper: options.Wrapper,
 	}
@@ -72,6 +84,11 @@ func New(options Options) *Service {
 		s.onDeviceDecision = s.auditDeviceDecision
 	}
 	s.unknown.Store = options.Unknown
+	s.stream = options.Stream
+	s.guard = options.LoginGuard
+	if s.guard == nil {
+		s.guard = func(context.Context) error { return nil }
+	}
 	return s
 }
 
@@ -181,6 +198,9 @@ func (s *Service) Handlers() map[string]api.Handler {
 		"me.devices":      s.meDevices,
 		"me.deviceRevoke": s.meDeviceRevoke,
 		"me.spaces":       s.meSpaces,
+	}
+	if s.stream != nil {
+		handlers["me.streamTicket"] = s.meStreamTicket
 	}
 	for name, handler := range handlers {
 		handlers[name] = wrap(handler)

@@ -326,25 +326,35 @@ func (a *Authenticator) AuthenticateToken(ctx context.Context, token string, tra
 	if device == nil || device.Subject != claims.Sub || !IsLiveDevice(*device, nowMs) || TransportOf(*device) != transport {
 		return Caller{}, Fail(gen.ErrUnauthenticated)
 	}
-	account, err := a.c.Ports.Accounts.Get(ctx, a.c.TenantID, claims.Sub)
+	caller, err := CallerFor(ctx, a.c, *device)
+	if err != nil {
+		return Caller{}, err
+	}
+	a.Touch(device.DeviceID)
+	return caller, nil
+}
+
+// CallerFor 由一台有效设备造调用方：subject 是账号就是账号本人（owner），否则必须是访客 guest:<linkId>:…（guest）。
+// 认证访问令牌与兑换 me-stream 的票（票里只有 sub 与设备 id）共用它。设备是否仍有效由调用方先判。
+func CallerFor(ctx context.Context, c *Context, device store.DeviceRecord) (Caller, error) {
+	account, err := c.Ports.Accounts.Get(ctx, c.TenantID, device.Subject)
 	if err != nil {
 		return Caller{}, err
 	}
 	caller := Caller{
-		Subject: claims.Sub, DeviceID: device.DeviceID, Role: RoleOwner, AccountID: claims.Sub,
-		Transport: TransportOf(*device), Scope: ScopeOf(*device),
+		Subject: device.Subject, DeviceID: device.DeviceID, Role: RoleOwner, AccountID: device.Subject,
+		Transport: TransportOf(device), Scope: ScopeOf(device),
 	}
 	if device.ElevatedUntilMs != nil {
 		caller.ElevatedUntilMs = *device.ElevatedUntilMs
 	}
 	if account == nil {
-		linkID, ok := GuestLinkID(claims.Sub)
+		linkID, ok := GuestLinkID(device.Subject)
 		if !ok {
 			return Caller{}, Fail(gen.ErrUnauthenticated)
 		}
 		caller.Role, caller.LinkID, caller.AccountID = RoleGuest, linkID, ""
 	}
-	a.Touch(device.DeviceID)
 	return caller, nil
 }
 

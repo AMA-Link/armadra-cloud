@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 )
 
 // /v1/me/stream（契约 §6，协议包 §5.7）的控制面一侧：票据与事件扇出。WebSocket 本身由装配方
@@ -28,14 +30,24 @@ type ticketEntry struct {
 	expiresAtMs int64
 }
 
+// TicketStore 是票据的外部存放处（SaaS：Redis，任一实例发的票可以在任一实例兑换）。键是票的哈希，
+// 值只有 sub 与设备 id；Take 一次性（GETDEL）。缺省没有：票在进程内存里（personal）。
+type TicketStore interface {
+	Put(ctx context.Context, key, subject, deviceID string, ttl time.Duration) error
+	// Take 取走并删除；不在或已过期 ok 为 false。
+	Take(ctx context.Context, key string) (subject, deviceID string, ok bool, err error)
+}
+
 // MeStream 是 me-stream 的控制面一侧。
 type MeStream struct {
-	c *Context
+	c        *Context
+	external TicketStore
 
 	mu          sync.Mutex
 	tickets     map[string]ticketEntry
 	attached    map[*attachment]struct{}
 	offPresence func()
+	resyncing   map[string]*resyncState
 }
 
 // NewMeStream 建 me-stream 核。
@@ -49,6 +61,22 @@ func (m *MeStream) sweep(nowMs int64) {
 			delete(m.tickets, key)
 		}
 	}
+}
+
+// UseTicketStore 把票据存到外部存放处（SaaS）；nil 恢复进程内存。
+func (m *MeStream) UseTicketStore(store TicketStore) { m.external = store }
+
+// IssueTicket 是 Ticket 的可出错版（外部存放处可能失败）。
+func (m *MeStream) IssueTicket(ctx context.Context, caller Caller) (Ticket, error) {
+	if m.external == nil {
+		return m.Ticket(caller), nil
+	}
+	ticket := RandomToken(32)
+	expiresAtMs := m.c.NowMs() + WSTicketTTL.Milliseconds()
+	if err := m.external.Put(ctx, SecretHash(SecretTicket, ticket), caller.Subject, caller.DeviceID, WSTicketTTL); err != nil {
+		return Ticket{}, err
+	}
+	return Ticket{Ticket: ticket, ExpiresAtMs: expiresAtMs}, nil
 }
 
 // Ticket 给调用方发一张 30 秒、一次性的票。
@@ -72,6 +100,9 @@ func (m *MeStream) Redeem(ctx context.Context, ticket string) (Caller, bool, err
 	if ticket != "" {
 		key = SecretHash(SecretTicket, ticket)
 	}
+	if m.external != nil {
+		return m.redeemStored(ctx, key)
+	}
 	m.mu.Lock()
 	entry, found := m.tickets[key]
 	delete(m.tickets, key)
@@ -84,6 +115,29 @@ func (m *MeStream) Redeem(ctx context.Context, ticket string) (Caller, bool, err
 		return Caller{}, false, err
 	}
 	return entry.caller, true, nil
+}
+
+// redeemStored 兑换外部存放处的票：由 sub 与设备 id 重建调用方，设备失效答 ok=false。
+func (m *MeStream) redeemStored(ctx context.Context, key string) (Caller, bool, error) {
+	if key == "" {
+		return Caller{}, false, nil
+	}
+	subject, deviceID, ok, err := m.external.Take(ctx, key)
+	if err != nil || !ok {
+		return Caller{}, false, err
+	}
+	device, err := m.c.Ports.Devices.Get(ctx, m.c.TenantID, deviceID)
+	if err != nil || device == nil || device.Subject != subject || !IsLiveDevice(*device, m.c.NowMs()) {
+		return Caller{}, false, err
+	}
+	caller, err := CallerFor(ctx, m.c, *device)
+	if err != nil {
+		if code, isCode := CodeOf(err); isCode && code == gen.ErrUnauthenticated {
+			return Caller{}, false, nil
+		}
+		return Caller{}, false, err
+	}
+	return caller, true, nil
 }
 
 // StillValid：设备仍有效（未登出、未撤销、未过期）。
@@ -106,8 +160,13 @@ type queuedEvent struct {
 // attachment 是一个连接：自己的有界队列和一条协程，发事件的一方只往队列里放，永不阻塞，
 // 先后顺序不变。访客能看到的源在 Attach 时解析一次（撤销由 accessRevoked 事件与装配方的复核负责）。
 type attachment struct {
-	caller     Caller
-	watcher    Watcher
+	caller  Caller
+	watcher Watcher
+	// ready 在 Watch 完成之前为假：这段时间到的事件先存进 pending，Watch 完成后按序补投
+	// （先登记、先订阅，再算可见集合，不让这个窗口里的授予变动漏掉）。
+	mu         sync.Mutex
+	ready      bool
+	pending    []queuedEvent
 	queue      chan queuedEvent
 	done       chan struct{}
 	send       func(Event)
@@ -121,17 +180,34 @@ type InternalEvent interface {
 	InternalOnly()
 }
 
-// offer 按可见性过滤后放进队列；不做任何 I/O。
+// offer 按可见性过滤后放进队列；不做任何 I/O。可见性在 Refresh 之前判：主机撤销这类事件会让 Refresh 把主机从可见集合里
+// 删掉，但撤销之前看得到它的连接仍要收到这条事件。
 func (a *attachment) offer(event Event, audience *Audience) {
+	a.mu.Lock()
+	if !a.ready {
+		if len(a.pending) < attachQueue {
+			a.pending = append(a.pending, queuedEvent{event, audience})
+		} else if a.onOverflow != nil {
+			a.onOverflow()
+		}
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+	a.deliver(event, audience)
+}
+
+func (a *attachment) deliver(event Event, audience *Audience) {
+	sees := a.watcher.Sees(event.EventSource())
 	a.watcher.Refresh(event)
 	if _, internal := event.(InternalEvent); internal {
 		return
 	}
 	if audience != nil {
-		if a.caller.LinkID != audience.LinkID {
+		if !audience.Includes(a.caller) {
 			return
 		}
-	} else if !a.watcher.Sees(event.EventSource()) {
+	} else if !sees {
 		return
 	}
 	select {
@@ -164,43 +240,73 @@ func (a *attachment) run() {
 //
 // 访客的链接查不到（库出错）时返回错误，由装配方关掉连接让客户端重连；链接不存在或已撤销不算错（看不到任何源）。
 func (m *MeStream) Attach(caller Caller, send func(Event), onOverflow func()) (detach func(), err error) {
+	detach, _, err = m.AttachResyncable(caller, send, onOverflow)
+	return detach, err
+}
+
+// AttachResyncable 同 Attach，另答一个重算函数：整份重算这个连接的事件可见性（Watcher 实现了 Resyncer 才有效果；
+// 装配方的 30 秒心跳用它兜住漏掉的授予 / 成员事件，过期窗口不超过一个心跳）。
+//
+// 次序：先登记、先订阅事件总线，再解析可见集合，窗口里到的事件先存着、解析完按序补投。
+func (m *MeStream) AttachResyncable(caller Caller, send func(Event), onOverflow func()) (detach func(), resync func(context.Context) error, err error) {
 	a := &attachment{
 		caller: caller, queue: make(chan queuedEvent, attachQueue), done: make(chan struct{}),
 		send: send, onOverflow: onOverflow,
 	}
+	offBus := m.c.Subscribe(a.offer)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	watcher, watchErr := m.c.access().Watch(ctx, caller)
 	cancel()
 	if watchErr != nil {
-		return nil, watchErr
+		offBus()
+		return nil, nil, watchErr
 	}
 	a.watcher = watcher
 	go a.run()
-	offBus := m.c.Subscribe(a.offer)
 	m.mu.Lock()
 	m.attached[a] = struct{}{}
 	if len(m.attached) == 1 && m.c.Presence != nil {
 		m.offPresence = m.c.Presence.Subscribe(m.onPresence)
 	}
 	m.mu.Unlock()
+	// 补投 Watch 期间到的事件；补投期间新到的继续排在后面。
+	for {
+		a.mu.Lock()
+		if len(a.pending) == 0 {
+			a.ready = true
+			a.mu.Unlock()
+			break
+		}
+		batch := a.pending
+		a.pending = nil
+		a.mu.Unlock()
+		for _, item := range batch {
+			a.deliver(item.event, item.audience)
+		}
+	}
 	var once sync.Once
 	return func() {
-		once.Do(func() {
-			offBus()
-			m.mu.Lock()
-			delete(m.attached, a)
-			var stop func()
-			if len(m.attached) == 0 {
-				stop, m.offPresence = m.offPresence, nil
+			once.Do(func() {
+				offBus()
+				m.mu.Lock()
+				delete(m.attached, a)
+				var stop func()
+				if len(m.attached) == 0 {
+					stop, m.offPresence = m.offPresence, nil
+				}
+				m.mu.Unlock()
+				if stop != nil {
+					stop()
+				}
+				close(a.done)
+				a.watcher.Close()
+			})
+		}, func(ctx context.Context) error {
+			if r, ok := a.watcher.(Resyncer); ok {
+				return r.Resync(ctx)
 			}
-			m.mu.Unlock()
-			if stop != nil {
-				stop()
-			}
-			close(a.done)
-			a.watcher.Close()
-		})
-	}, nil
+			return nil
+		}, nil
 }
 
 // onPresence：一个在线事件查一次源（与 issuer），再分发给各连接。
@@ -233,6 +339,89 @@ func (m *MeStream) onPresence(presence PresenceEvent) {
 	for _, a := range targets {
 		a.offer(event, nil)
 	}
+}
+
+// Resyncer 是可选接口：Watcher 实现它就能在成员 / 角色变了之后整份重算可见集合（I/O，由 MeStream.Resync 在专门的
+// 协程里调，不在 Refresh 里）。
+type Resyncer interface {
+	Resync(ctx context.Context) error
+}
+
+// Resync 让账号在本实例上的全部连接整份重算事件可见性（团队成员变动：它能看到的主机一次变了很多）。
+// 实现了 Resyncer 的 Watcher 才会重算；答重算失败的次数。同一账号的重算合并：已有一轮在跑时，新的请求只标记「还要再来一轮」
+// 并等那条协程做完（连续多次成员变动只多算一轮）。
+func (m *MeStream) Resync(ctx context.Context, accountID string) (failed int) {
+	m.mu.Lock()
+	if m.resyncing == nil {
+		m.resyncing = map[string]*resyncState{}
+	}
+	if st, running := m.resyncing[accountID]; running {
+		st.dirty = true
+		done := st.done
+		m.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+		return 0
+	}
+	st := &resyncState{done: make(chan struct{})}
+	m.resyncing[accountID] = st
+	m.mu.Unlock()
+	for {
+		for _, a := range m.attachmentsOf(accountID) {
+			if r, ok := a.watcher.(Resyncer); ok {
+				if r.Resync(ctx) != nil {
+					failed++
+				}
+			}
+		}
+		m.mu.Lock()
+		if st.dirty && ctx.Err() == nil {
+			st.dirty = false
+			m.mu.Unlock()
+			continue
+		}
+		delete(m.resyncing, accountID)
+		m.mu.Unlock()
+		close(st.done)
+		return failed
+	}
+}
+
+type resyncState struct {
+	dirty bool
+	done  chan struct{}
+}
+
+// Accounts 是本实例上有连接的账号（去重）。
+func (m *MeStream) Accounts() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := map[string]struct{}{}
+	var out []string
+	for a := range m.attached {
+		if a.caller.AccountID == "" {
+			continue
+		}
+		if _, dup := seen[a.caller.AccountID]; !dup {
+			seen[a.caller.AccountID] = struct{}{}
+			out = append(out, a.caller.AccountID)
+		}
+	}
+	return out
+}
+
+func (m *MeStream) attachmentsOf(accountID string) []*attachment {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*attachment
+	for a := range m.attached {
+		if a.caller.AccountID == accountID {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // Clear 清掉所有票据（关闭时）。

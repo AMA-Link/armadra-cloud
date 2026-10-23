@@ -12,6 +12,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
@@ -51,6 +52,8 @@ type Options struct {
 	// RequireEmailVerified 为真时未验证邮箱的账号不能邀请或接受（设计 §4.3）。
 	RequireEmailVerified bool
 	Log                  *obs.Logger
+	// Events 在提交之后发 invitationChanged 与（接受时）memberChanged；nil = 不发。
+	Events *events.Publisher
 }
 
 // Service 是邀请服务。
@@ -62,6 +65,7 @@ type Service struct {
 	relay    relayctl.Control
 	verified bool
 	log      *obs.Logger
+	events   *events.Publisher
 }
 
 // New 建邀请服务。
@@ -72,7 +76,7 @@ func New(options Options) *Service {
 	}
 	return &Service{
 		c: options.Core, store: options.Store, limits: options.Limits, mail: options.Mail, relay: options.Relay,
-		verified: options.RequireEmailVerified, log: log,
+		verified: options.RequireEmailVerified, log: log, events: options.Events,
 	}
 }
 
@@ -115,6 +119,9 @@ func (s *Service) Register(runner *jobs.Runner) {
 func (s *Service) expire(ctx context.Context, _ saas.Job) error {
 	return s.store.Tx(ctx, func(tx saas.Tx) error {
 		expired, err := tx.Invitations().ExpireDue(ctx, s.tenant(), s.nowMs())
+		for _, inv := range expired {
+			s.events.InvitationChanged(tx, inv, saas.InvitationExpired)
+		}
 		if err == nil && len(expired) > 0 {
 			s.log.Info("已把到期的邀请落库为过期", obs.Operation(JobExpire), obs.Count(len(expired)))
 		}
@@ -292,6 +299,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		if err := s.enqueueMail(ctx, tx, access.Team, inv, account, invitee); err != nil {
 			return err
 		}
+		s.events.InvitationChanged(tx, inv, saas.InvitationPending)
 		out = view(inv, nowMs)
 		return s.record(ctx, tx, call, account.AccountID, in.TeamID, ActionCreate, inv.InvitationID)
 	})
@@ -482,6 +490,7 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 		if err := tx.Invitations().Decide(ctx, s.tenant(), id, saas.InvitationRevoked, account.AccountID, s.nowMs()); err != nil {
 			return err
 		}
+		s.events.InvitationChanged(tx, *m.inv, saas.InvitationRevoked)
 		return s.recordFor(ctx, tx, call, account.AccountID, m.teamID(), m.inv.SourceID, ActionRevoke, id)
 	})
 	if err != nil {
@@ -541,6 +550,7 @@ func (s *Service) resend(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		inv.State, inv.ExpiresAtMs, inv.DecidedAtMs = saas.InvitationPending, nowMs+TTL.Milliseconds(), nil
+		s.events.InvitationChanged(tx, *inv, saas.InvitationPending)
 		out = view(*inv, nowMs)
 		return s.recordFor(ctx, tx, call, account.AccountID, m.teamID(), inv.SourceID, ActionResend, id)
 	})
@@ -702,6 +712,8 @@ func (s *Service) accept(ctx context.Context, call *api.Call) (any, error) {
 		if teamID, err = teams.Join(ctx, tx, s.tenant(), nowMs, id, account); err != nil {
 			return err
 		}
+		s.events.MemberChanged(tx, teamID, account.AccountID, events.MemberAdded)
+		s.events.InvitationChanged(tx, *inv, saas.InvitationAccepted)
 		return s.record(ctx, tx, call, account.AccountID, teamID, ActionAccept, id)
 	})
 	if err != nil {
@@ -757,6 +769,7 @@ func (s *Service) decline(ctx context.Context, call *api.Call) (any, error) {
 		if err := tx.Invitations().Decide(ctx, s.tenant(), id, saas.InvitationDeclined, account.AccountID, nowMs); err != nil {
 			return err
 		}
+		s.events.InvitationChanged(tx, *inv, saas.InvitationDeclined)
 		return s.recordFor(ctx, tx, call, account.AccountID, inv.TeamID, inv.SourceID, ActionDecline, id)
 	})
 	if err != nil {

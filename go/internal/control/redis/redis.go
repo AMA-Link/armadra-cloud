@@ -442,6 +442,52 @@ func (p *Plane) Command(c control.NodeCommand) {
 	})
 }
 
+// CommandContext 是 Command 的同步版，给控制面（SaaS）用：本节点立即收到，经 <前缀>ctl 广播，
+// node 非空时再发到 <前缀>node:<node>（持有节点，G5）；两处发布都做，返回第一个错误，调用方据此重试或记录。
+// 同一条命令可能到持有节点两次，命令都是幂等的。
+func (p *Plane) CommandContext(ctx context.Context, c control.NodeCommand, node string) error {
+	p.EmitCommand(c)
+	payload := cluster.EncodeCommand(p.Origin, c)
+	var errs []error
+	p.Run(func() {
+		if err := p.client.Publish(ctx, p.chans.command, payload).Err(); err != nil {
+			errs = append(errs, err)
+		}
+		if node != "" {
+			if err := p.client.Publish(ctx, p.prefix+"node:"+node, payload).Err(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	})
+	if len(errs) == 0 {
+		return nil
+	}
+	p.Report("publish command", errs[0])
+	return sanitize(errs[0])
+}
+
+// PublishQuota 广播团队额度（kind: quota）；键 <前缀>quota:team:<teamId> 由调用方先写。
+func (p *Plane) PublishQuota(ctx context.Context, q control.TeamQuota) error {
+	var err error
+	p.Run(func() { err = p.client.Publish(ctx, p.chans.command, cluster.EncodeQuota(p.Origin, q)).Err() })
+	return p.wrapPublish("publish quota", err)
+}
+
+// PublishIncident 广播事故开关（kind: incident）；键 <前缀>incident 由调用方先写。
+func (p *Plane) PublishIncident(ctx context.Context, in control.Incident) error {
+	var err error
+	p.Run(func() { err = p.client.Publish(ctx, p.chans.command, cluster.EncodeIncident(p.Origin, in)).Err() })
+	return p.wrapPublish("publish incident", err)
+}
+
+func (p *Plane) wrapPublish(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	p.Report(operation, err)
+	return sanitize(err)
+}
+
 func (p *Plane) remoteHit(ctx context.Context, id string, window time.Duration) (int64, time.Duration, error) {
 	return runHit(ctx, p.hitScript, p.client, p.limitKey(id), window)
 }

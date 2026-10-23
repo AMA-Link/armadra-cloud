@@ -51,6 +51,11 @@ func (r issuedRepo) Revoke(ctx context.Context, tenantID string, f saas.IssuedFi
 // likePrefix 把前缀里的 LIKE 通配符转义（配合 account_id LIKE $5 || '%'）。
 func likePrefix(prefix string) string { return likeEscaper.Replace(prefix) }
 
+func (r issuedRepo) RevokeToken(ctx context.Context, jti string, expMs int64) error {
+	_, err := r.q.Exec(ctx, "INSERT INTO relay_revoked_tokens (jti, exp_ms) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING", jti, expMs)
+	return err
+}
+
 func (r issuedRepo) Active(ctx context.Context, tenantID string, nowMs int64) ([]saas.IssuedToken, error) {
 	return list(ctx, r.q, scanIssued,
 		`SELECT jti, account_id, source_id, device_id, exp_ms FROM cloud_issued_tokens

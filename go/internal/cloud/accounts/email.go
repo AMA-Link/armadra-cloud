@@ -118,8 +118,17 @@ func (s *Service) emailVerify(ctx context.Context, call *api.Call) (any, error) 
 			return audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityEmailVerified)
 		default:
 			// 改邮箱：新地址再查唯一（被占用答 409 email_taken，事务回滚、令牌留着）。
+			oldEmail := account.Email
 			if err := tx.Accounts().ChangeEmail(ctx, s.tenant(), account.AccountID, record.Email, nowMs); err != nil {
 				return err
+			}
+			// 发给旧邮箱的待处理邀请（团队与主机）同事务作废：旧地址不再是他的，邀请接受时核的是账号当前邮箱。
+			revoked, err := tx.Invitations().RevokeByEmail(ctx, s.tenant(), oldEmail, account.AccountID, nowMs)
+			if err != nil {
+				return err
+			}
+			for _, inv := range revoked {
+				s.events.InvitationChanged(tx, inv, saas.InvitationRevoked)
 			}
 			// 同账号同目的的其余令牌一并作废；发往旧地址的验证令牌也不再有意义；
 			// 寄往旧地址的找回口令链接同样作废（旧地址不再是账号的邮箱）。
