@@ -24,6 +24,8 @@ type Durable struct {
 	tenant string
 	now    Clock
 	log    *obs.Logger
+	// jobs 为真时撤销与踢人有 PostgreSQL 里的兜底作业（Redis 实现用；内存实现不需要）。
+	jobs bool
 }
 
 var _ Control = (*Durable)(nil)
@@ -38,6 +40,15 @@ func NewDurable(inner Control, store saas.Store, tenantID string, now Clock, log
 		d.now = defaultClock
 	}
 	return d
+}
+
+// EnableRetryJobs 打开兜底作业：每枚落盘撤销的令牌在同一个事务里排一个 relay.revoke 作业（按 jti 去重），内层写成功后取消，
+// 失败（Redis 部分故障：OOM、READONLY、连接池超时而订阅仍健康）则由作业运行器退避重试；踢人命令发布失败排 relay.kick。
+func (d *Durable) EnableRetryJobs() *Durable { d.jobs = true; return d }
+
+// jtiRevoker 是内层可选的「只凭 jti 与到期撤销」能力（Redis 实现有）：补登记索引失败时也能撤到。
+type jtiRevoker interface {
+	revokeToken(ctx context.Context, jti string, expMs int64) error
 }
 
 func (d *Durable) nowMs() int64 { return d.now().UnixMilli() }
@@ -68,7 +79,15 @@ func (d *Durable) persist(ctx context.Context, filter Filter, keepDeviceID strin
 	err := d.store.Tx(ctx, func(tx saas.Tx) error {
 		var err error
 		hit, err = tx.Issued().Revoke(ctx, d.tenant, issued, d.nowMs())
-		return err
+		if err != nil || !d.jobs {
+			return err
+		}
+		for _, token := range hit {
+			if err := enqueueRevoke(ctx, tx, d.tenant, token.JTI, token.ExpMs, d.nowMs()); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	out := make([]Issued, 0, len(hit))
 	for _, token := range hit {
@@ -97,17 +116,32 @@ func (d *Durable) Revoke(ctx context.Context, filter Filter, keepDeviceID string
 	if storeErr != nil {
 		errs = append(errs, storeErr)
 	}
+	var done []string
+	direct, canDirect := d.Control.(jtiRevoker)
 	for _, entry := range stored {
-		// 内层索引可能缺这枚：先补登记再按 jti 撤，内层才有它的到期时间可记进撤销表。
+		if canDirect {
+			// 只凭 jti 与到期直接撤：补登记索引失败也不会跳过撤销。
+			if err := direct.revokeToken(ctx, entry.JTI, entry.ExpMs); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			done = append(done, entry.JTI)
+			continue
+		}
+		// 内层索引可能缺这枚：先补登记再按 jti 撤，内层才有它的到期时间可记进撤销表。补登记失败记下，仍尝试撤。
 		if err := d.Control.IndexIssued(ctx, entry); err != nil {
 			errs = append(errs, err)
-			continue
 		}
 		live, err := d.Control.Revoke(ctx, Filter{JTI: entry.JTI}, "")
 		if err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		done = append(done, entry.JTI)
 		add(live)
+	}
+	if d.jobs {
+		cancelRevokeJobs(ctx, d.store, d.tenant, done)
 	}
 	live, err := d.Control.Revoke(ctx, filter, keepDeviceID)
 	add(live)
@@ -146,8 +180,14 @@ func (s durableSink) revoke(filter Filter, keepDeviceID, reason string, kick boo
 			continue
 		}
 		seen[k] = true
-		if err := s.d.Control.Kick(ctx, KickFilter{SourceID: k.source, Subject: k.subject, DeviceID: k.device}, reason); err != nil {
+		filter := KickFilter{SourceID: k.source, Subject: k.subject, DeviceID: k.device}
+		if err := s.d.Control.Kick(ctx, filter, reason); err != nil {
 			s.d.log.Warn("踢人失败", obs.Operation("relayctl.kick"), obs.SourceID(k.source), obs.Error(err))
+			if s.d.jobs {
+				if jerr := enqueueKick(ctx, s.d.store, s.d.tenant, filter, reason, s.d.nowMs()); jerr != nil {
+					s.d.log.Error("踢人兜底作业入库失败", obs.Operation("relayctl.kick"), obs.SourceID(k.source), obs.Error(jerr))
+				}
+			}
 		}
 	}
 }

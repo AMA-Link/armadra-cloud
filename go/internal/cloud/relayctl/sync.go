@@ -54,7 +54,7 @@ func (s *Sync) Run(ctx context.Context) error {
 	var (
 		revoked []Revoked
 		issued  []Issued
-		quotas  = TeamQuotas{}
+		quotas  TeamQuotas
 	)
 	err := s.Store.Tx(ctx, func(tx saas.Tx) error {
 		revoked, issued = nil, nil
@@ -72,13 +72,6 @@ func (s *Sync) Run(ctx context.Context) error {
 		for _, row := range active {
 			issued = append(issued, Issued{Subject: row.AccountID, SourceID: row.SourceID, DeviceID: row.DeviceID, JTI: row.JTI, ExpMs: row.ExpMs})
 		}
-		teams, err := tx.TeamEntitlements(ctx, s.Tenant)
-		if err != nil {
-			return err
-		}
-		for _, team := range teams {
-			quotas[team.TeamID] = Quota{Concurrent: quota.ForTeam(team.Plan, team.Overrides).Concurrent}
-		}
 		return nil
 	})
 	if err != nil {
@@ -87,12 +80,52 @@ func (s *Sync) Run(ctx context.Context) error {
 	if err := s.Redis.Restore(ctx, revoked, issued); err != nil {
 		return err
 	}
-	if err := s.Redis.WriteQuotas(ctx, quotas); err != nil {
-		return err
+	// 额度：写完再读 PostgreSQL 核对，不一致就再写（额度变更是提交之后才写 Redis 的，重放读 PostgreSQL 与写 Redis 之间
+	// 如果有人改了额度，重放会写回旧值；核对到的差异在下一轮修正，最多三轮）。
+	for attempt := 0; attempt < 3; attempt++ {
+		fresh, err := s.readQuotas(ctx)
+		if err != nil {
+			return err
+		}
+		if attempt > 0 && sameQuotas(fresh, quotas) {
+			break
+		}
+		if err := s.Redis.WriteQuotas(ctx, fresh); err != nil {
+			return err
+		}
+		quotas = fresh
 	}
 	if s.Log != nil {
 		s.Log.Info("已把撤销、签发索引与团队额度重放进 Redis",
 			obs.Operation("relayctl.sync"), obs.Count(len(revoked)+len(issued)+len(quotas)))
 	}
 	return nil
+}
+
+// readQuotas 按 PostgreSQL 里各团队的计划与 overrides 算出并发额度。
+func (s *Sync) readQuotas(ctx context.Context) (TeamQuotas, error) {
+	out := TeamQuotas{}
+	err := s.Store.Tx(ctx, func(tx saas.Tx) error {
+		teams, err := tx.TeamEntitlements(ctx, s.Tenant)
+		if err != nil {
+			return err
+		}
+		for _, team := range teams {
+			out[team.TeamID] = Quota{Concurrent: quota.ForTeam(team.Plan, team.Overrides).Concurrent}
+		}
+		return nil
+	})
+	return out, err
+}
+
+func sameQuotas(a, b TeamQuotas) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id, q := range a {
+		if other, ok := b[id]; !ok || other != q {
+			return false
+		}
+	}
+	return true
 }

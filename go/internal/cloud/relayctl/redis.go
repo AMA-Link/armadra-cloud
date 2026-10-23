@@ -367,7 +367,7 @@ func (r *Redis) Restore(ctx context.Context, revoked []Revoked, issued []Issued)
 	nowMs := r.nowMs()
 	for start := 0; start < len(revoked); start += batchSize {
 		batch := revoked[start:min(start+batchSize, len(revoked))]
-		_, err := r.client.Pipelined(ctx, func(pipe goredis.Pipeliner) error {
+		cmds, err := r.client.Pipelined(ctx, func(pipe goredis.Pipeliner) error {
 			for _, token := range batch {
 				if token.ExpMs > nowMs {
 					pipe.Do(ctx, "SET", r.plane.Prefix()+"revoked:"+token.JTI, "1", "PXAT", token.ExpMs, "NX")
@@ -375,8 +375,13 @@ func (r *Redis) Restore(ctx context.Context, revoked []Revoked, issued []Issued)
 			}
 			return nil
 		})
-		// NX 命中已有的键时 go-redis 报 Nil：正常。
-		if err != nil && !errors.Is(err, goredis.Nil) {
+		// 逐条看结果：NX 命中已有的键报 Nil（正常）；Pipelined 只返回第一个错误，会盖住后面真正的失败。
+		for _, cmd := range cmds {
+			if cerr := cmd.Err(); cerr != nil && !errors.Is(cerr, goredis.Nil) {
+				return sanitize(cerr)
+			}
+		}
+		if err != nil && !errors.Is(err, goredis.Nil) && len(cmds) == 0 {
 			return sanitize(err)
 		}
 		// 本实例的内存副本也并进来（节点自己靠订阅就绪时的 SCAN 与定时重读，不用广播）。
@@ -414,14 +419,34 @@ func (r *Redis) WriteQuotas(ctx context.Context, quotas TeamQuotas) error {
 	sort.Strings(ids)
 	for start := 0; start < len(ids); start += batchSize {
 		batch := ids[start:min(start+batchSize, len(ids))]
-		_, err := r.client.Pipelined(ctx, func(pipe goredis.Pipeliner) error {
-			for _, id := range batch {
-				pipe.Set(ctx, r.quotaKey(id), cluster.EncodeQuotaValue(wireQuota(id, quotas[id])), 0)
+		keys := make([]string, len(batch))
+		for i, id := range batch {
+			keys[i] = r.quotaKey(id)
+		}
+		// 先读旧值：键丢了或值变了的团队补发 kind: quota 广播，在线节点不必等到下次订阅就绪才更新。
+		olds, err := r.client.MGet(ctx, keys...).Result()
+		if err != nil {
+			return sanitize(err)
+		}
+		var changed []control.TeamQuota
+		_, err = r.client.Pipelined(ctx, func(pipe goredis.Pipeliner) error {
+			for i, id := range batch {
+				wire := wireQuota(id, quotas[id])
+				value := cluster.EncodeQuotaValue(wire)
+				if old, ok := olds[i].(string); !ok || old != string(value) {
+					changed = append(changed, wire)
+				}
+				pipe.Set(ctx, keys[i], value, 0)
 			}
 			return nil
 		})
 		if err != nil {
 			return sanitize(err)
+		}
+		for _, wire := range changed {
+			if err := r.plane.PublishQuota(ctx, wire); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
