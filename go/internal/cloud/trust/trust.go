@@ -201,6 +201,20 @@ func (s *Service) request(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return err
 		}
+		// 冷却检查在最前：同 (源, 设备) 最近一次被拒绝还在冷却期内，不管重报的是新条目 id 还是旧条目 id，
+		// 都答 rejected 和那条最近被拒的 requestId（旧条目 id 冷却早过、新条目 id 刚被拒时同样如此）。
+		last, err := tx.Trust().LastRejected(ctx, s.tenant(), source.SourceID, in.DeviceID)
+		if err != nil {
+			return err
+		}
+		cooling := last != nil && last.ResolvedAtMs != nil && nowMs-*last.ResolvedAtMs < Cooldown.Milliseconds()
+		if existing != nil && (existing.AccountID != in.AccountID || existing.DeviceID != in.DeviceID) {
+			return core.Fail(gen.ErrConflict) // 主机在复用条目 id
+		}
+		if cooling && (existing == nil || existing.State == saas.TrustRejected) {
+			out = requestOut{RequestID: last.RequestID, Status: saas.TrustRejected}
+			return nil
+		}
 		reopen := ""
 		if existing != nil {
 			var reopenable bool
@@ -209,11 +223,6 @@ func (s *Service) request(ctx context.Context, call *api.Call) (any, error) {
 				return err
 			}
 			reopen = existing.RequestID // 冷却已过的 rejected：同一个条目 id 重新开成 pending
-		} else if last, err := tx.Trust().LastRejected(ctx, s.tenant(), source.SourceID, in.DeviceID); err != nil {
-			return err
-		} else if last != nil && last.ResolvedAtMs != nil && nowMs-*last.ResolvedAtMs < Cooldown.Milliseconds() {
-			out = requestOut{RequestID: last.RequestID, Status: saas.TrustRejected}
-			return nil
 		}
 		if err := tx.Trust().ExpireStale(ctx, s.tenant(), source.SourceID, in.DeviceID, nowMs); err != nil {
 			return err
@@ -223,7 +232,7 @@ func (s *Service) request(ctx context.Context, call *api.Call) (any, error) {
 		}
 		requestID := core.NewUUID()
 		if reopen != "" {
-			ok, err := tx.Trust().Reopen(ctx, s.tenant(), reopen, requestID, nowMs, in.ExpiresAtMs)
+			ok, err := tx.Trust().Reopen(ctx, s.tenant(), reopen, requestID, space.TeamID, device.Name, device.Platform, nowMs, in.ExpiresAtMs)
 			if err == nil && !ok {
 				err = core.Fail(gen.ErrConflict)
 			}

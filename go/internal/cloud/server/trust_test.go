@@ -414,3 +414,35 @@ func TestTrustListFiltersBeforeLimit(t *testing.T) {
 		t.Fatalf("主机所有者看到的是截断到 500 的全部：%d", got)
 	}
 }
+
+// 冷却检查在最前：p1 的冷却早已结束、p2 刚被拒时，重报旧的 p1 仍答 rejected 和最近被拒（p2）的 requestId；
+// 冷却结束后重开 p1 时设备名、平台与团队按此刻的值刷新。
+func TestTrustCooldownAppliesToOldPendingIDs(t *testing.T) {
+	t.Parallel()
+	x := newTrustRig(t)
+	r := x.r
+	ownerEmail := r.queryString("SELECT email FROM accounts WHERE account_id = $1", x.owner.accountID)
+	id1 := x.must(x.host, x.member, "p1")
+	r.expect(x.reject(x.owner, id1), 200, "")
+	r.clock.Advance(Cooldown + time.Second)
+	owner := r.relogin(x.owner, ownerEmail)
+	id2 := x.must(x.host, x.member, "p2")
+	r.expect(x.reject(owner, id2), 200, "")
+
+	res := x.report(x.host, x.member, "p1", time.Hour)
+	r.expect(res, 200, "")
+	if res.json["status"] != "rejected" || res.json["requestId"] != id2 {
+		t.Fatalf("旧条目 id 也受冷却约束，应答最近被拒的 %s：%s", id2, res.body)
+	}
+	// 冷却结束：p1 重开成 pending，设备名刷新。
+	r.clock.Advance(Cooldown + time.Second)
+	r.exec("UPDATE devices SET name = '新设备名' WHERE device_id = $1", x.member.deviceID)
+	res = x.report(x.host, x.member, "p1", time.Hour)
+	r.expect(res, 200, "")
+	if res.json["status"] != "pending" || res.json["requestId"] == id1 || res.json["requestId"] == id2 {
+		t.Fatalf("冷却结束后 p1 重开成 pending：%s", res.body)
+	}
+	if got := r.queryString("SELECT device_name FROM trust_requests WHERE request_id = $1", res.json["requestId"]); got != "新设备名" {
+		t.Fatalf("重开时设备名应刷新：%s", got)
+	}
+}

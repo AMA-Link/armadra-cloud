@@ -84,8 +84,8 @@ type TrustRepo interface {
 	Supersede(ctx context.Context, tenantID, sourceID, deviceID string, nowMs int64) ([]string, error)
 	// Insert 插一条 pending；同 (源, 条目 id) 或同 (源, 设备) 已有 pending 答 ErrConflict。
 	Insert(ctx context.Context, tenantID string, request TrustRequest) error
-	// Reopen 把冷却已过的 rejected 请求重新开成 pending（新的 requestId、新的请求与过期时间），条目 id 不变。
-	Reopen(ctx context.Context, tenantID, requestID, newRequestID string, nowMs, expiresAtMs int64) (bool, error)
+	// Reopen 把冷却已过的 rejected 请求重新开成 pending（新的 requestId、新的请求与过期时间），条目 id 不变；团队、设备名与平台按此刻的值刷新（设备可能改过名、主机可能换了团队）。
+	Reopen(ctx context.Context, tenantID, requestID, newRequestID, teamID, deviceName, platform string, nowMs, expiresAtMs int64) (bool, error)
 	// Resolve 把 pending 改成终态；不是 pending 答 false。
 	Resolve(ctx context.Context, tenantID, requestID, state, resolvedBy string, nowMs int64) (bool, error)
 	// ExpireDue 把到期的 pending 落库成 expired，答它们（通知要用）。
