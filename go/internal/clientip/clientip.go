@@ -180,3 +180,17 @@ func NewClientIP(cfg *TrustedProxyConfig) (ClientIP, error) {
 		return peer
 	}, nil
 }
+
+// RateKey 是按客户端 IP 限流时用的键：IPv4 原样，IPv6 截到所在的 /64（写成 "前缀/64"）。
+// 不是 IP 的文本原样返回。只给限流键用，别处（挑战的 remoteip、日志）仍用完整地址。
+func RateKey(ip string) string {
+	normalized, ok := NormalizeIP(ip)
+	if !ok {
+		return ip
+	}
+	addr, err := netip.ParseAddr(normalized)
+	if err != nil || addr.Is4() || addr.Is4In6() {
+		return normalized
+	}
+	return netip.PrefixFrom(addr, 64).Masked().String()
+}

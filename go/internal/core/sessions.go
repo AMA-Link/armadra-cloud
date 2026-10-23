@@ -92,6 +92,9 @@ type Caller struct {
 	ElevatedUntilMs int64
 }
 
+// Elevated 报告会话此刻是否处于 auth.stepUp 提权的有效期内。
+func (c Caller) Elevated(nowMs int64) bool { return c.ElevatedUntilMs > nowMs }
+
 // IsLiveDevice：设备未撤销且未过期。
 func IsLiveDevice(device store.DeviceRecord, nowMs int64) bool {
 	return store.IsLiveDevice(device, nowMs)

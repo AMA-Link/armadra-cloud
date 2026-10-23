@@ -255,3 +255,40 @@ func TestLockOrderTeamBeforeAccount(t *testing.T) {
 		}
 	}
 }
+
+// SaaSPorts：每次写自己的事务，不锁 tenants 行、不加租户修订号；读-改-写靠行锁。
+func TestSaaSPortsDoNotTouchTenantsRow(t *testing.T) {
+	e := openSaaS(t)
+	ctx := e.ctx
+	holder, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, "SELECT 1 FROM tenants WHERE tenant_id = $1 FOR SHARE", saasTenant); err != nil {
+		t.Fatal(err)
+	}
+	var before int64
+	_ = e.pool.QueryRow(ctx, "SELECT revision FROM tenants WHERE tenant_id = $1", saasTenant).Scan(&before)
+	ports := e.db.SaaSPorts()
+	done := make(chan error, 1)
+	go func() {
+		done <- ports.Devices.Insert(ctx, saasTenant, store.DeviceRecord{DeviceID: "d1", Subject: "a1", Platform: "web", Name: "n", RefreshHash: "h", Rotation: 1, CreatedAtMs: 1, ExpiresAtMs: 99}, 1)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SaaSPorts 被 tenants 行锁挡住了")
+	}
+	if err := ports.Devices.Update(ctx, saasTenant, "d1", func(d *store.DeviceRecord) error { d.Rotation = 2; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var after int64
+	_ = e.pool.QueryRow(ctx, "SELECT revision FROM tenants WHERE tenant_id = $1", saasTenant).Scan(&after)
+	if after != before {
+		t.Fatalf("不加租户修订号：%d → %d", before, after)
+	}
+}

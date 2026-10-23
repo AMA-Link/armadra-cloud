@@ -20,8 +20,10 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
+	"github.com/AMA-Link/armadra-cloud/go/internal/control"
+	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
-	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
 )
 
@@ -49,6 +51,12 @@ type Deps struct {
 	Version string
 	// KeyWatchEvery 缩短察觉签名钥变化的间隔（测试用）。
 	KeyWatchEvery time.Duration
+	// Challenge 换掉人机挑战的提供方（缺省调 Turnstile 的 siteverify）。
+	Challenge core.ChallengeVerifier
+	// Limiter 换掉限流器（缺省 Redis 的 cloud:limit: 桶）。
+	Limiter control.Limiter
+	// ExtraHandlers 给测试挂额外的过程处理器（例如用 admin.* 检查凭据闸）；生产装配不设。
+	ExtraHandlers map[string]api.Handler
 }
 
 // Running 是在跑的控制面。
@@ -58,6 +66,9 @@ type Running struct {
 	DB      *postgres.DB
 	Redis   goredis.UniversalClient
 	Handler http.Handler
+	// Core 与 Relay 给装配后的检查与测试用。
+	Core  *core.Context
+	Relay *relayctl.Memory
 
 	closeOnce sync.Once
 	closeFn   func()
@@ -143,11 +154,12 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 
 	// 5. 撤销与签发索引的重放：随 relayctl 的 Redis 实现在 S8 加入。
 
-	// 6. 路由与监听。
-	handler, err := newHandler(cfg, db, redisClient, deps.Version)
+	// 6. 装配、路由与监听。
+	assembly, err := assemble(cfg, db, redisClient, logger, now, deps)
 	if err != nil {
 		return fail(err)
 	}
+	handler := assembly.handler
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fail(fmt.Errorf("监听失败：%s", cfg.Listen))
@@ -194,15 +206,52 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	if every <= 0 {
 		every = keyWatchEvery
 	}
+	baseline, _, err := db.Revision(ctx, TenantID)
+	if err != nil {
+		stopWatch()
+		return fail(err)
+	}
+	if err := db.RefreshKeys(ctx, TenantID); err != nil {
+		stopWatch()
+		return fail(err)
+	}
 	go func() {
 		defer close(watchDone)
-		watchKeys(watchCtx, db, logger, every)
+		watchKeys(watchCtx, db, logger, every, baseline)
 	}()
 	undo.push(func() { stopWatch(); <-watchDone })
 
 	url := "http://" + hostPort(listener.Addr())
 	logger.Info("控制面已就绪", obs.Mode("saas"), obs.Listen(listener.Addr().String()), obs.URL(url), obs.Version(deps.Version))
-	running := &Running{URL: url, DB: db, Redis: redisClient, Handler: handler}
+	// 设备「最近使用」每 5 分钟批量落盘，关闭时再落一次。
+	flushCtx, stopFlush := context.WithCancel(context.Background())
+	flushDone := make(chan struct{})
+	go func() {
+		defer close(flushDone)
+		ticker := time.NewTicker(core.LastSeenFlushEach)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-flushCtx.Done():
+				return
+			case <-ticker.C:
+				if err := assembly.auth.Flush(flushCtx); err != nil {
+					logger.Warn("最近使用时间落盘失败", obs.Error(err))
+				}
+			}
+		}
+	}()
+	undo.push(func() {
+		stopFlush()
+		<-flushDone
+		ctx, cancel := context.WithTimeout(context.Background(), requestGrace)
+		defer cancel()
+		if err := assembly.auth.Flush(ctx); err != nil {
+			logger.Warn("最近使用时间落盘失败", obs.Error(err))
+		}
+	})
+
+	running := &Running{URL: url, DB: db, Redis: redisClient, Handler: handler, Core: assembly.core, Relay: assembly.relay}
 	running.closeFn = func() {
 		logger.Info("控制面正在关闭")
 		undo.unwind()
@@ -223,11 +272,10 @@ func hostPort(addr net.Addr) string {
 }
 
 // watchKeys 每隔一段时间读一次租户修订号，变了就让签名钥缓存重读。
-func watchKeys(ctx context.Context, db *postgres.DB, logger *obs.Logger, every time.Duration) {
-	var last int64
-	if revision, ok, err := db.Revision(ctx, TenantID); err == nil && ok {
-		last = revision
-	}
+// 基线（baseline）由调用方在开始监视之前同步取好并先刷新一次缓存：基线之后的轮换一定被察觉；
+// 不能在后台协程里才取基线，那样协程启动前发生的轮换会被当成基线而永远不重读。
+func watchKeys(ctx context.Context, db *postgres.DB, logger *obs.Logger, every time.Duration, baseline int64) {
+	last := baseline
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
@@ -240,35 +288,11 @@ func watchKeys(ctx context.Context, db *postgres.DB, logger *obs.Logger, every t
 		if err != nil || !ok || revision == last {
 			continue
 		}
-		last = revision
+		// 重读成功才记下新基线；失败下一轮再试。
 		if err := db.RefreshKeys(ctx, TenantID); err != nil {
 			logger.Warn("签名钥缓存重读失败", obs.Error(err))
+			continue
 		}
+		last = revision
 	}
-}
-
-// newHandler 是对外的路由：/health、/ready，其余交给 /v1 与 /.well-known 的 API（还没实现的过程答 501）。
-func newHandler(cfg *config.Config, db *postgres.DB, redisClient goredis.UniversalClient, version string) (http.Handler, error) {
-	apiServer, err := api.New(api.Options{
-		Mode: api.ModeCloud, Handlers: map[string]api.Handler{},
-		Exclude: []string{"platform.health"},
-	})
-	if err != nil {
-		return nil, err
-	}
-	probes := map[string]obs.Probe{
-		"postgres": func(ctx context.Context) error { return db.SaaS().Read().Ping(ctx) },
-		"redis":    func(ctx context.Context) error { return redisClient.Ping(ctx).Err() },
-	}
-	mux := http.NewServeMux()
-	mux.Handle("/ready", obs.ReadyHandler(probes))
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { serveHealth(w, r, version) })
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if apiServer.Claims(r.URL.Path) {
-			apiServer.ServeHTTP(w, r)
-			return
-		}
-		api.WriteError(w, gen.ErrNotFound, "", 0, nil)
-	})
-	return mux, nil
 }
