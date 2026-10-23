@@ -23,6 +23,15 @@ type (
 	TeamScope = teamscope.Scope
 )
 
+// 团队角色的取值（teamscope.Role 的常量）：不能 import teamscope 的包用它们比较角色。
+const (
+	RoleOwner   = teamscope.Owner
+	RoleAdmin   = teamscope.Admin
+	RoleMember  = teamscope.Member
+	RoleBilling = teamscope.Billing
+	RoleGuest   = teamscope.Guest
+)
+
 // Store 是 SaaS 的存储端口。
 type Store interface {
 	// Tx 在一个读已提交事务里执行 fn；fn 返回错误即回滚。提交后按序执行 tx.AfterCommit 登记的回调
