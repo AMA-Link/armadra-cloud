@@ -56,6 +56,9 @@ func (m *Memory) purge() {
 }
 
 func matches(entry Issued, filter Filter) bool {
+	if filter.JTI != "" && entry.JTI != filter.JTI {
+		return false
+	}
 	if filter.Subject != "" && entry.Subject != filter.Subject {
 		return false
 	}

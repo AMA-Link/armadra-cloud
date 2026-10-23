@@ -30,6 +30,8 @@ type Issued struct {
 
 // Filter 选出要撤销的已签令牌：给了的字段都要对上（取交集）；全空不选任何令牌。
 type Filter struct {
+	// JTI 选一枚令牌（签发方复核发现自己签出的令牌已不该有效时，只撤自己签的那一枚）。
+	JTI           string
 	Subject       string
 	SubjectPrefix string
 	SourceID      string
@@ -37,7 +39,7 @@ type Filter struct {
 }
 
 func (f Filter) empty() bool {
-	return f.Subject == "" && f.SubjectPrefix == "" && f.SourceID == "" && f.DeviceID == ""
+	return f.JTI == "" && f.Subject == "" && f.SubjectPrefix == "" && f.SourceID == "" && f.DeviceID == ""
 }
 
 // KickFilter 选出要踢掉的客户端连接，字段含义同 core.ConnectionFilter，另有按设备。
@@ -132,3 +134,5 @@ type Control interface {
 
 // Clock 是时钟；缺省 time.Now。
 type Clock func() time.Time
+
+func defaultClock() time.Time { return time.Now() }
