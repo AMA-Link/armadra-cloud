@@ -86,12 +86,12 @@ func (r auditRepo) ListSecurity(ctx context.Context, tenantID, accountID string,
 
 type retentionRepo struct{ q querier }
 
-func (r retentionRepo) TeamsWithAuditBefore(ctx context.Context, tenantID string, beforeMs int64, limit int) ([]string, error) {
+func (r retentionRepo) TeamsWithAuditBefore(ctx context.Context, tenantID string, beforeMs int64, afterTeamID string, limit int) ([]string, error) {
 	return list(ctx, r.q, func(s scanner) (string, error) {
 		var id string
 		return id, s.Scan(&id)
-	}, `SELECT DISTINCT team_id FROM audit_log WHERE tenant_id = $1 AND team_id IS NOT NULL AND at_ms < $2
-	    ORDER BY team_id LIMIT $3`, tenantID, beforeMs, limit)
+	}, `SELECT DISTINCT team_id FROM audit_log WHERE tenant_id = $1 AND team_id IS NOT NULL AND at_ms < $2 AND team_id > $3
+	    ORDER BY team_id LIMIT $4`, tenantID, beforeMs, afterTeamID, limit)
 }
 
 func (r retentionRepo) PruneTeamAudit(ctx context.Context, tenantID, teamID string, beforeMs int64, limit int) (int, error) {

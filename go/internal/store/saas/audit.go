@@ -53,8 +53,9 @@ type AuditQuery struct {
 // RetentionRepo 是保留期与分区之外的清理（设计 §6.1 的 audit.retention、traffic.retention）。
 // 都是系统作业，没有调用者，所以收裸 id；每次最多删 limit 行，调用方循环到 0 为止（不一次锁住大批行）。
 type RetentionRepo interface {
-	// TeamsWithAuditBefore 是在 beforeMs 之前还有审计行的团队 id（升序，最多 limit 个）。
-	TeamsWithAuditBefore(ctx context.Context, tenantID string, beforeMs int64, limit int) ([]string, error)
+	// TeamsWithAuditBefore 是在 beforeMs 之前还有审计行的团队 id（升序，id 大于 afterTeamID，最多 limit 个）；
+	// 调用方用上一批最后一个 id 翻页，一批里清不干净的团队（保留期比 beforeMs 更长）不会让扫描停在原地。
+	TeamsWithAuditBefore(ctx context.Context, tenantID string, beforeMs int64, afterTeamID string, limit int) ([]string, error)
 	// PruneTeamAudit 删这个团队早于 beforeMs 的审计行：只动 team_id 相符的行。
 	PruneTeamAudit(ctx context.Context, tenantID, teamID string, beforeMs int64, limit int) (int, error)
 	// PruneSecurityLog 删早于 beforeMs 的账号安全日志（action 以 security. 开头、没有团队）。

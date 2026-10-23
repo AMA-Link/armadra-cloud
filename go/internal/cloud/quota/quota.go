@@ -5,6 +5,7 @@ package quota
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
@@ -107,3 +108,24 @@ func Check(name string, used, limit int) error {
 	}
 	return core.FailWith(gen.ErrLimitReached, map[string]any{"quota": name, "used": used, "limit": limit})
 }
+
+const day = 24 * time.Hour
+
+// SecurityLogRetention 是账号安全日志的固定保留期（设计 §3.4 0008）。
+const SecurityLogRetention = 90 * day
+
+// auditRetention 是团队审计按计划的保留期（契约 §25：Free 7 天、Pro 30 天、Team 90 天、Enterprise 1 年）。
+var auditRetention = map[string]time.Duration{
+	"free": 7 * day, "pro": 30 * day, "team": 90 * day, "enterprise": 365 * day,
+}
+
+// AuditRetention 是计划下团队审计的保留期；未知计划按 free（与额度一致，只会更严）。
+func AuditRetention(plan string) time.Duration {
+	if d, ok := auditRetention[plan]; ok {
+		return d
+	}
+	return auditRetention["free"]
+}
+
+// ShortestAuditRetention 是各计划里最短的保留期：扫描旧审计行的起点。
+func ShortestAuditRetention() time.Duration { return auditRetention["free"] }

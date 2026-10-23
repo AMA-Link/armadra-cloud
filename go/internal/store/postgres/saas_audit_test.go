@@ -126,9 +126,12 @@ func TestRetentionPrunesOnlyTheNamedScope(t *testing.T) {
 	before := base + 4 // 删 e01–e04（T1 全部）、e05 在 base+4 不删
 	var n int
 	err := s.Tx(e.ctx, func(tx saas.Tx) (err error) {
-		teams, err := tx.Retention().TeamsWithAuditBefore(e.ctx, saasTenant, before+10, 10)
+		teams, err := tx.Retention().TeamsWithAuditBefore(e.ctx, saasTenant, before+10, "", 10)
 		if err != nil || fmt.Sprint(teams) != "[t1 t2]" {
 			t.Fatalf("有旧行的团队：%v %v", teams, err)
+		}
+		if next, err := tx.Retention().TeamsWithAuditBefore(e.ctx, saasTenant, before+10, "t1", 10); err != nil || fmt.Sprint(next) != "[t2]" {
+			t.Fatalf("翻页从 t1 之后开始：%v %v", next, err)
 		}
 		n, err = tx.Retention().PruneTeamAudit(e.ctx, saasTenant, "t1", before, 2)
 		return err
