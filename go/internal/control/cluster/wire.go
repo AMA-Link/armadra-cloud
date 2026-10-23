@@ -44,10 +44,40 @@ type presenceWire struct {
 	AtMs        int64  `json:"atMs"`
 }
 
+// commandWire 是节点命令（SaaS 实施设计 §2.4）。kick / closeTunnel 必须带 sourceId；G5 加的
+// subject、subjectPrefix、deviceId 是 kick 的过滤，老节点忽略（退化为踢该源全部连接）；
+// drain 带 node、不带 sourceId（老节点不认识这个种类，整条忽略）。
 type commandWire struct {
-	Type     string `json:"type"`
-	SourceID string `json:"sourceId"`
-	Reason   string `json:"reason,omitempty"`
+	Type          string `json:"type"`
+	SourceID      string `json:"sourceId,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	Subject       string `json:"subject,omitempty"`
+	SubjectPrefix string `json:"subjectPrefix,omitempty"`
+	DeviceID      string `json:"deviceId,omitempty"`
+	Node          string `json:"node,omitempty"`
+}
+
+// quotaWire 是 kind: quota 的 event，也是键 <前缀>quota:team:<teamId> 的值（值里不带 teamId）。
+type quotaWire struct {
+	TeamID     string `json:"teamId,omitempty"`
+	Concurrent *int   `json:"concurrent"`
+}
+
+// incidentWire 是 kind: incident 的 event，也是键 <前缀>incident 的值。
+type incidentWire struct {
+	RejectNewConnections *bool `json:"rejectNewConnections"`
+	AtMs                 int64 `json:"atMs"`
+}
+
+// nodeWire 是节点表 <前缀>nodes 的字段值（字段名是节点 id）。internodeUrl 是 G5 加的，可以缺。
+type nodeWire struct {
+	URL          string `json:"url"`
+	Weight       int    `json:"weight"`
+	Version      string `json:"version"`
+	Draining     bool   `json:"draining"`
+	Connections  int    `json:"connections"`
+	Tunnels      int    `json:"tunnels"`
+	InternodeURL string `json:"internodeUrl,omitempty"`
 }
 
 // broadcastWire 是广播消息的外壳：Origin 是发送实例，自己发的不再投递一次。
@@ -60,7 +90,7 @@ type broadcastWire struct {
 	ExpMs   *int64          `json:"expMs,omitempty"`
 }
 
-// Message 是解析后的一条广播；Kind 只会是 "presence"、"command"、"revoked"。
+// Message 是解析后的一条广播；Kind 只会是 "presence"、"command"、"revoked"、"quota"、"incident"。
 type Message struct {
 	Origin   string
 	Kind     string
@@ -68,13 +98,17 @@ type Message struct {
 	Command  control.NodeCommand
 	JTI      string
 	ExpMs    int64
+	Quota    control.TeamQuota
+	Incident control.Incident
 }
 
-// 广播种类。
+// 广播种类。quota 与 incident 是 G5（N4）新增的，控制面发、SaaS 节点收；老节点忽略。
 const (
 	KindPresence = "presence"
 	KindCommand  = "command"
 	KindRevoked  = "revoked"
+	KindQuota    = "quota"
+	KindIncident = "incident"
 )
 
 // EncodePresence 编在线事件广播。
@@ -89,9 +123,79 @@ func EncodePresence(origin string, ev control.PresenceEvent) []byte {
 
 // EncodeCommand 编节点命令广播。
 func EncodeCommand(origin string, c control.NodeCommand) []byte {
-	c2, _ := json.Marshal(commandWire{Type: string(c.Type), SourceID: c.SourceID, Reason: c.Reason})
+	c2, _ := json.Marshal(commandWire{
+		Type: string(c.Type), SourceID: c.SourceID, Reason: c.Reason,
+		Subject: c.Subject, SubjectPrefix: c.SubjectPrefix, DeviceID: c.DeviceID, Node: c.Node,
+	})
 	b, _ := json.Marshal(broadcastWire{Origin: origin, Kind: KindCommand, Command: c2})
 	return b
+}
+
+// EncodeQuota 编团队额度广播（kind: quota）。
+func EncodeQuota(origin string, q control.TeamQuota) []byte {
+	concurrent := q.Concurrent
+	ev, _ := json.Marshal(quotaWire{TeamID: q.TeamID, Concurrent: &concurrent})
+	b, _ := json.Marshal(broadcastWire{Origin: origin, Kind: KindQuota, Event: ev})
+	return b
+}
+
+// EncodeIncident 编事故开关广播（kind: incident）。
+func EncodeIncident(origin string, in control.Incident) []byte {
+	b, _ := json.Marshal(broadcastWire{Origin: origin, Kind: KindIncident, Event: EncodeIncidentValue(in)})
+	return b
+}
+
+// EncodeQuotaValue 编键 <前缀>quota:team:<teamId> 的值 {concurrent}。
+func EncodeQuotaValue(q control.TeamQuota) []byte {
+	concurrent := q.Concurrent
+	b, _ := json.Marshal(quotaWire{Concurrent: &concurrent})
+	return b
+}
+
+// DecodeQuotaValue 解键 <前缀>quota:team:<teamId> 的值；teamID 取自键名。
+func DecodeQuotaValue(teamID string, data []byte) (control.TeamQuota, error) {
+	var w quotaWire
+	if err := json.Unmarshal(data, &w); err != nil || w.Concurrent == nil || *w.Concurrent < 0 {
+		return control.TeamQuota{}, errUnknownShape
+	}
+	return control.TeamQuota{TeamID: teamID, Concurrent: *w.Concurrent}, nil
+}
+
+// EncodeIncidentValue 编键 <前缀>incident 的值 {rejectNewConnections, atMs}。
+func EncodeIncidentValue(in control.Incident) []byte {
+	reject := in.RejectNewConnections
+	b, _ := json.Marshal(incidentWire{RejectNewConnections: &reject, AtMs: in.AtMs})
+	return b
+}
+
+// DecodeIncidentValue 解键 <前缀>incident 的值。
+func DecodeIncidentValue(data []byte) (control.Incident, error) {
+	var w incidentWire
+	if err := json.Unmarshal(data, &w); err != nil || w.RejectNewConnections == nil {
+		return control.Incident{}, errUnknownShape
+	}
+	return control.Incident{RejectNewConnections: *w.RejectNewConnections, AtMs: w.AtMs}, nil
+}
+
+// EncodeNode 编节点表的字段值（字段名是 n.ID，不进值）。
+func EncodeNode(n control.NodeInfo) []byte {
+	b, _ := json.Marshal(nodeWire{
+		URL: n.URL, Weight: n.Weight, Version: n.Version, Draining: n.Draining,
+		Connections: n.Connections, Tunnels: n.Tunnels, InternodeURL: n.InternodeURL,
+	})
+	return b
+}
+
+// DecodeNode 解节点表的字段值；id 取自字段名。url 缺了就当坏记录。
+func DecodeNode(id string, data []byte) (control.NodeInfo, error) {
+	var w nodeWire
+	if err := json.Unmarshal(data, &w); err != nil || w.URL == "" {
+		return control.NodeInfo{}, errUnknownShape
+	}
+	return control.NodeInfo{
+		ID: id, URL: w.URL, Weight: w.Weight, Version: w.Version, Draining: w.Draining,
+		Connections: w.Connections, Tunnels: w.Tunnels, InternodeURL: w.InternodeURL,
+	}, nil
 }
 
 // EncodeRevoked 编撤销广播。
@@ -126,15 +230,37 @@ func ParseBroadcast(data []byte) (Message, error) {
 		}
 	case KindCommand:
 		var c commandWire
-		if json.Unmarshal(w.Command, &c) != nil || c.SourceID == "" {
+		if json.Unmarshal(w.Command, &c) != nil {
 			return Message{}, errUnknownShape
 		}
 		switch control.NodeCommandType(c.Type) {
 		case control.CommandCloseTunnel, control.CommandKick:
+			if c.SourceID == "" {
+				return Message{}, errUnknownShape
+			}
+		case control.CommandDrain:
+			if c.Node == "" {
+				return Message{}, errUnknownShape
+			}
 		default:
 			return Message{}, errUnknownShape
 		}
-		m.Command = control.NodeCommand{Type: control.NodeCommandType(c.Type), SourceID: c.SourceID, Reason: c.Reason}
+		m.Command = control.NodeCommand{
+			Type: control.NodeCommandType(c.Type), SourceID: c.SourceID, Reason: c.Reason,
+			Subject: c.Subject, SubjectPrefix: c.SubjectPrefix, DeviceID: c.DeviceID, Node: c.Node,
+		}
+	case KindQuota:
+		var q quotaWire
+		if json.Unmarshal(w.Event, &q) != nil || q.TeamID == "" || q.Concurrent == nil || *q.Concurrent < 0 {
+			return Message{}, errUnknownShape
+		}
+		m.Quota = control.TeamQuota{TeamID: q.TeamID, Concurrent: *q.Concurrent}
+	case KindIncident:
+		in, err := DecodeIncidentValue(w.Event)
+		if err != nil {
+			return Message{}, err
+		}
+		m.Incident = in
 	case KindRevoked:
 		if w.JTI == "" || w.ExpMs == nil {
 			return Message{}, errUnknownShape

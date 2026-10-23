@@ -1,6 +1,6 @@
 // armadra-relay 是中继的命令行：personal（个人中转的全部子命令）、health、version、help，
 // 另有给测试与 bench 用的 dev（数据面 + 内存控制面 + 指定的 JWKS 文件 + 回环明文监听）。
-// saas serve 现在是与 Node 版空壳一致的占位（internal/saas），G5 换成真正的 SaaS 中继节点。
+// saas serve 是 SaaS 中继节点（internal/saas）。
 package main
 
 import (

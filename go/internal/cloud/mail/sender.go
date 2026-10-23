@@ -34,20 +34,25 @@ type Sender interface {
 	Send(ctx context.Context, message Message) error
 }
 
-// ErrNotConfigured 是没配 SMTP 时发信的错误：邮件留在发件箱里按退避重试，配好 SMTP 重启后补发。
+// ErrNotConfigured 是没配 SMTP 时发信的错误。mail.send 在没配 SMTP 时不生成令牌也不发，
+// 把作业延后（不计尝试次数），发件箱的积压有上限（超出丢最旧的）；配好 SMTP 重启后补发。
 var ErrNotConfigured = errors.New("没有配置 SMTP")
 
 type disabledSender struct{}
 
 func (disabledSender) Send(context.Context, Message) error { return ErrNotConfigured }
 
-// Disabled 是没配 SMTP 时的发信方：每次都失败，作业按退避重试。
+// Disabled 是没配 SMTP 时的发信方：每次都失败。
 func Disabled() Sender { return disabledSender{} }
+
+// IsDisabled 报告发信方是不是 Disabled()。
+func IsDisabled(s Sender) bool { _, ok := s.(disabledSender); return ok }
 
 // MemorySender 把邮件记在内存里（测试用）。
 type MemorySender struct {
 	mu       sync.Mutex
 	messages []Message
+	attempts []Message
 	failNext int
 }
 
@@ -57,6 +62,7 @@ var _ Sender = (*MemorySender)(nil)
 func (m *MemorySender) Send(_ context.Context, message Message) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.attempts = append(m.attempts, message)
 	if m.failNext > 0 {
 		m.failNext--
 		return errors.New("memory sender: 按测试要求失败")
@@ -70,6 +76,13 @@ func (m *MemorySender) FailNext(n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.failNext = n
+}
+
+// Attempts 是所有发送尝试（含失败的）的副本。
+func (m *MemorySender) Attempts() []Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]Message(nil), m.attempts...)
 }
 
 // Messages 是已发出的邮件副本。
@@ -175,7 +188,9 @@ func (s *smtpSender) Send(ctx context.Context, message Message) error {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	return client.Quit()
+	// 数据已被服务器接收（DATA 以 250 收尾）：之后 QUIT 出错不能算发信失败，否则重试会重发。
+	_ = client.Quit()
+	return nil
 }
 
 // build 拼 MIME 邮件：multipart/alternative（纯文本 + HTML），正文 quoted-printable，主题按 RFC 2047 编码。

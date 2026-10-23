@@ -317,6 +317,54 @@ func TestHub(t *testing.T) {
 		}
 	})
 
+	t.Run("ClientKick：kick 不碰隧道（SaaS 只踢客户端连接）", func(t *testing.T) {
+		r := newHubRig(t, func(o *tunnel.HubOptions) { o.ClientKick = true })
+		a := newFakeSocket()
+		r.serve(a)
+		a.handshake(t, r.fx)
+		r.env.Control.Command(control.NodeCommand{Type: control.CommandKick, SourceID: r.env.SourceID, Reason: "test"})
+		r.env.Control.Command(control.NodeCommand{Type: control.CommandDrain, Node: r.fx.Challenge.RelayNode})
+		time.Sleep(50 * time.Millisecond)
+		if a.closedWith() != nil || r.hub.Local(r.env.SourceID) == nil {
+			t.Fatalf("隧道应保留：%+v", a.closedWith())
+		}
+		if got := a.take(); len(got) != 0 {
+			t.Fatalf("不应发任何帧：%+v", got)
+		}
+	})
+
+	t.Run("Rebalance：不收新隧道，现有隧道 GOAWAY rebalance，宽限到了以 4492 关闭", func(t *testing.T) {
+		r := newHubRig(t, nil)
+		sock := newFakeSocket()
+		r.serve(sock)
+		sock.handshake(t, r.fx)
+		if r.hub.Local(r.env.SourceID) == nil || len(r.hub.Tunnels()) != 1 {
+			t.Fatal("就绪后本地有这条隧道")
+		}
+		r.hub.Rebalance(time.Second)
+		if r.hub.Accepting() || !r.hub.Draining() {
+			t.Fatal("排空后不再收新隧道")
+		}
+		if r.hub.Local(r.env.SourceID) != nil {
+			t.Fatal("排空中的隧道不再开新流")
+		}
+		eventually(t, "GOAWAY", func() bool { return len(sock.takeKeep()) > 0 })
+		got := sock.takeKeep()
+		if got[0].Type != protocol.FrameGoaway || got[0].Goaway.Reason != "rebalance" || got[0].Goaway.GraceMs != 1000 {
+			t.Fatalf("%+v", got)
+		}
+		// 没有流：GOAWAY 之后立即关。
+		eventually(t, "关闭", func() bool { return sock.closedWith() != nil })
+		if c := sock.closedWith(); c.Code != protocol.CloseTunnelGoaway {
+			t.Fatalf("%+v", c)
+		}
+		rec := httptest.NewRecorder()
+		r.hub.HandleUpgrade(rec, httptest.NewRequest(http.MethodGet, gen.PathTunnel, nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("排空时新隧道答 503：%d", rec.Code)
+		}
+	})
+
 	t.Run("ready 之后收到文本：关 4400 text_after_ready", func(t *testing.T) {
 		r := newHubRig(t, nil)
 		sock := newFakeSocket()

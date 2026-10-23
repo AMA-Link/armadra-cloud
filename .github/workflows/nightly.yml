@@ -139,6 +139,39 @@ jobs:
           path: e2e-out/result.json
           if-no-files-found: ignore
 
+  # SaaS 中继节点（Go 设计 §5 的 SaaS 行）：三个节点 + 一次性 Redis 容器对假 core——节点间转发、
+  # 撤销跨节点、持有节点下线再平衡。只依赖本仓。
+  e2e-saas:
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
+    name: e2e-saas
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm libs:build
+      - name: pnpm e2e --mode saas
+        run: pnpm e2e --mode saas --output e2e-out
+      - name: 结果
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-saas
+          path: e2e-out/result.json
+          if-no-files-found: ignore
+
   # 真 Armadra core 对本地 workerd 的 Workers 中继（平台计划 V4）：Armadra 主仓的
   # tools/probes/personal-roundtrip.mjs --workerd，走登记、隧道、浏览器开画布、终端、
   # 分享链接（含只读范围）、媒体票 Range、撤销。要 Armadra 主仓的只读检出

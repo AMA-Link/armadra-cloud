@@ -1,4 +1,4 @@
-Hi {{.DisplayName}},
+Hello,
 
 You are changing your account email to this address. Open the link below to confirm. It expires in 24 hours:
 {{.Link}}
