@@ -2,6 +2,7 @@ package relayctl
 
 import (
 	"context"
+	"errors"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -91,23 +92,29 @@ func (d *Durable) Revoke(ctx context.Context, filter Filter, keepDeviceID string
 		}
 	}
 	add(stored)
+	// 任何一步出错都记下继续：剩余令牌与最后的按过滤撤销照常跑（多撤不漏撤），最后合并返回错误。
+	var errs []error
+	if storeErr != nil {
+		errs = append(errs, storeErr)
+	}
 	for _, entry := range stored {
 		// 内层索引可能缺这枚：先补登记再按 jti 撤，内层才有它的到期时间可记进撤销表。
 		if err := d.Control.IndexIssued(ctx, entry); err != nil {
-			return hits, err
+			errs = append(errs, err)
+			continue
 		}
 		live, err := d.Control.Revoke(ctx, Filter{JTI: entry.JTI}, "")
 		if err != nil {
-			return hits, err
+			errs = append(errs, err)
 		}
 		add(live)
 	}
 	live, err := d.Control.Revoke(ctx, filter, keepDeviceID)
 	add(live)
-	if storeErr != nil {
-		return hits, storeErr
+	if err != nil {
+		errs = append(errs, err)
 	}
-	return hits, err
+	return hits, errors.Join(errs...)
 }
 
 // RevokeWhere 实现 Control。
