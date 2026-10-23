@@ -876,6 +876,9 @@ type Watcher interface {
 - **注册令牌按账号计**：核心的 `Registrations.Add` 的上限（20）按整个租户计，SaaS 不能用；`HostRepo.AddRegistration` 按账号计，并只清这个账号过期的令牌。`team_id` 带在令牌上，`PeekRegistration` 先不加锁地读出空间，再按「团队 → 账号 → 源」加锁后才 `ConsumeRegistration`（先删令牌再等团队锁会和清除作业互等）。
 - **登记事务回滚不消耗令牌**：核心的个人中转「先消耗，拒绝也不能再用」；SaaS 按设计 §4.5 的单事务，失败整个回滚，令牌留到自己过期。
 - **同一 `sourceId` 的登记**：`LockSource`（事务级咨询锁）串行化；已登记未撤销的源只允许同一账号在同一空间用同一把钥重登记，其余 `409 source_taken`；撤销后任何持有同一把钥的账号都可以登记到自己的空间（空间行重置标签与设置）。
+- **签发索引的顺序（§4.8 同）**：任何会被撤销流程撤到的令牌，一律「签令牌 → 登记签发索引 → 再读库复核」，复核看到已撤销就对该令牌（或该源）`RevokeWhere` 并答 `source_revoked`。撤销在库提交之后才撤索引里的令牌，所以与并发的签发交错也不会漏；`heartbeatHint` 已按此做，S5b 给断言与中继令牌建索引时照做。
+- **撤销后换钥**：撤销后同一个 `sourceId` 也只许同一把钥重登记，换钥一律 `409 source_taken`（SaaS 侧在 `registerIn` 判，不改个人中转共用的 `BuildSourceRecord`）。
+- **S8 之前不部署**：生产装配现在用内存 `relayctl`、节点表为空，`heartbeatHint` 恒答 `503`；S8 换成 Redis 实现之前不能部署。
 - **主机设置只存写过的项**：缺省走 `defaultRole` ← 团队 `defaultHostRole` ← 主机自己写过的项；`trustedOrigins` 只收 `http(s)://主机[:端口]`，去重、至多 16 个。
 
 **`defaultRole` / `defaultHostRole` 在 M1 的语义**：只是控制台与客户端分享弹层里「角色」的**预选值**（主机设置优先，没设时取团队的 `defaultHostRole`）；`grants.create` 与 `invitations.create` 的 `role` 是必填，服务端不替调用方填角色，也不据它改已有授予。
@@ -949,6 +952,7 @@ type Watcher interface {
 | 链接撤销                                                             | 链接与访客设备（core）          | src 集合里 `subject` 以 `guest:<linkId>:` 开头的                     | `kick {sourceId, subjectPrefix}`                                  | `accessRevoked`（core 现有）    |
 
 - 在 G5（N2）之前，带 `subject` / `deviceId` / `subjectPrefix` 的 `kick` 在节点上退化为踢该源全部连接；按人精确踢的验收（S5b、S7）依赖 N2。
+- 签发与撤销的竞态：签发方一律「签令牌 → 登记签发索引 → 再读库复核，已撤销则自己撤并答错误」（见 §4.5 的 S5a 注记）。
 - 时序：库事务提交 → 撤销令牌（先 PostgreSQL 后 Redis，§7.2）→ 发节点命令 → 发事件。Redis 失败时重试 3 次后插 `relay.revoke` 作业兜底（重放幂等），并记错误日志；重连时的全量重放也会补上。
 
 ### 4.9 运营后台（`cloud/admin`，S7）

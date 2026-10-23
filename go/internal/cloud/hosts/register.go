@@ -213,6 +213,10 @@ func (s *Service) registerIn(ctx context.Context, tx saas.Tx, ip, hash string, i
 	if err != nil {
 		return "", err
 	}
+	// 撤销后也只认同一把钥：换钥登记同一个 sourceId 答 source_taken。
+	if existing != nil && existing.PublicJWK.X != input.PublicKey.X {
+		return "", core.Fail(gen.ErrSourceTaken)
+	}
 	if existing != nil && existing.RevokedAtMs == nil {
 		space, err := tx.SpaceOf(ctx, s.tenant(), input.SourceID)
 		if err != nil {
@@ -277,6 +281,18 @@ func (s *Service) heartbeatHint(ctx context.Context, call *api.Call) (any, error
 		Subject: relayctl.NoAccount, SourceID: source.SourceID, JTI: info.TunnelJTI, ExpMs: info.ExpiresAtMs,
 	}); err != nil {
 		return nil, err
+	}
+	// 签令牌 → 登记签发索引 → 再读源复核：撤销提交之后才会撤索引里的令牌，所以复核看到未撤销，
+	// 说明之后的撤销一定会撤到这枚；看到已撤销就自己撤（与并发的 revoke 交错也不漏）。
+	fresh, err := s.c.Ports.Sources.Get(ctx, s.tenant(), source.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	if fresh == nil || fresh.RevokedAtMs != nil {
+		if _, err := s.relay.RevokeWhere(ctx, relayctl.Filter{SourceID: source.SourceID}); err != nil {
+			return nil, err
+		}
+		return nil, core.Fail(gen.ErrSourceRevoked)
 	}
 	return info, nil
 }

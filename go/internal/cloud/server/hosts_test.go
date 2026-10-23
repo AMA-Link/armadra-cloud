@@ -747,3 +747,58 @@ func TestHostsRegistrationTokenCapPerAccount(t *testing.T) {
 	r.exec("UPDATE registration_tokens SET expires_at_ms = 1 WHERE token_hash = 'h1'")
 	r.expect(r.hostToken(a, nil), 200, "")
 }
+
+// revoke 与 heartbeatHint 交错：被撤的主机拿到的每一枚隧道令牌都必须在撤销表里（其余答 410）。
+func TestHostsRevokeRacesHeartbeatHint(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	a := r.verified()
+	r.run.Relay.SetNode(relayctl.Node{ID: "a", URL: "wss://a.edge.example.com/t/v1", Weight: 1})
+	for round := 0; round < 8; round++ {
+		h := r.addHost(a, nil, "0.10.0")
+		var mu sync.Mutex
+		var jtis []string
+		var wg sync.WaitGroup
+		for i := 0; i < 6; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				res := r.do("GET", "/v1/sources/me/relay", nil, r.sourceAuth(h))
+				switch res.status {
+				case 200:
+					mu.Lock()
+					jtis = append(jtis, payloadOf(t, res.json["tunnelToken"].(string))["jti"].(string))
+					mu.Unlock()
+				case 410:
+				default:
+					t.Errorf("意外的答复：%d %s", res.status, res.body)
+				}
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.expect(r.do("DELETE", sourcePath(h.id), nil, a.bearer()), 200, "")
+		}()
+		wg.Wait()
+		for _, jti := range jtis {
+			if !r.run.Relay.IsRevoked(jti) {
+				t.Fatalf("第 %d 轮：撤销后仍有未撤的隧道令牌 %s", round, jti)
+			}
+		}
+	}
+}
+
+// 撤销之后只认同一把钥：换钥登记同一个 sourceId 答 source_taken，同钥可以重登记。
+func TestHostsRevokedSourceRejectsOtherKey(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	a, b := r.verified(), r.verified()
+	h := r.addHost(a, nil, "0.10.0")
+	r.expect(r.do("DELETE", sourcePath(h.id), nil, a.bearer()), 200, "")
+	other := h
+	other.pub, other.priv, _ = ed25519.GenerateKey(rand.Reader)
+	r.expect(r.registerHost(r.tokenOf(b, nil), other, "0.10.0"), 409, "source_taken")
+	r.expect(r.registerHost(r.tokenOf(a, nil), other, "0.10.0"), 409, "source_taken")
+	r.expect(r.registerHost(r.tokenOf(b, nil), h, "0.10.0"), 200, "")
+}
