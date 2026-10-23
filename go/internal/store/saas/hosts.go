@@ -2,7 +2,9 @@ package saas
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 )
@@ -26,16 +28,55 @@ type Host struct {
 	TeamDefaultRole string
 }
 
+// CanManage 报告 viewerID 能否管理这台主机（设计 §4.6）：主机所有者，或团队主机的团队 owner / admin。
+// 团队主机的所有者要仍是 owner / admin / member（降为 billing / guest 就失去管理权）；ViewerRole 是查询者
+// 的团队角色，所以只对 ListHosts 以 viewerID 查出来的行有意义。
+func (h Host) CanManage(viewerID string) bool {
+	if h.TeamID == "" {
+		return h.OwnerAccountID == viewerID
+	}
+	if h.ViewerRole == RoleOwner || h.ViewerRole == RoleAdmin {
+		return true
+	}
+	return h.OwnerAccountID == viewerID && h.ViewerRole == RoleMember
+}
+
 // HostCursor 是目录分页的游标：(registered_at_ms, source_id) 之后。
 type HostCursor struct {
 	RegisteredAtMs int64
 	SourceID       string
 }
 
+// ErrBadCursor 表示游标不是 Encode 出来的。
+var ErrBadCursor = errors.New("游标不合格式")
+
+type hostCursorJSON struct {
+	R int64  `json:"r"`
+	S string `json:"s"`
+}
+
+// Encode 是游标的线上编码（对客户端不透明）。
+func (c HostCursor) Encode() string {
+	data, _ := json.Marshal(hostCursorJSON{R: c.RegisteredAtMs, S: c.SourceID})
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+// DecodeHostCursor 解游标；不合格式答 ErrBadCursor。
+func DecodeHostCursor(text string) (*HostCursor, error) {
+	data, err := base64.RawURLEncoding.DecodeString(text)
+	var c hostCursorJSON
+	if err != nil || json.Unmarshal(data, &c) != nil || c.S == "" {
+		return nil, ErrBadCursor
+	}
+	return &HostCursor{RegisteredAtMs: c.R, SourceID: c.S}, nil
+}
+
 // HostFilter 是目录查询：只返回 ViewerID 此刻能看到的主机（可见性在查询里，不在调用方）。
 type HostFilter struct {
 	// ViewerID 是查询者的账号 id。
 	ViewerID string
+	// NowMs 是判授予到期的时钟（毫秒）。
+	NowMs int64
 	// SourceID 非空时只取这一台。
 	SourceID string
 	// SpaceKind 取 SpacePersonal / SpaceTeam；空 = 全部可达的空间。SpaceTeam 要给 TeamID。

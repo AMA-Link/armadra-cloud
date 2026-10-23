@@ -49,6 +49,7 @@ type Reader interface {
 	TeamReader
 	InvitationReader
 	HostReader
+	GrantReader
 	// Ping 探活：连接池里能取到连接并执行一条语句。
 	Ping(ctx context.Context) error
 	// Account 按账号 id 读完整的账号行；没有答 nil。
@@ -119,10 +120,8 @@ type AccountRepo interface {
 
 // 其余仓储先立名字，方法随各批加入。
 type (
-	GrantRepo    interface{}
 	TrustRepo    interface{}
 	SettingsRepo interface{}
-	IssuedRepo   interface{}
 )
 
 // AuditRepo 是审计与安全日志（只追加）。
