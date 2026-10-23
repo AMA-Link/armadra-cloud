@@ -31,6 +31,7 @@ type Options struct {
 	AppOrigin string
 	// OnDeviceDecision 在批准 / 拒绝设备码的事务里调用，S2 接审计后在这里写安全日志
 	// security.deviceApprove（设计 §4.3）；nil = 不写。返回错误会回滚这次决定。
+	// 外部副作用（发邮件、推事件、Redis）一律经 tx.AfterCommit，不能在钩子里直接做：事务可能回滚或重试。
 	OnDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
 }
 

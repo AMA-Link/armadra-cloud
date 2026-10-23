@@ -13,7 +13,6 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
-	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
 
@@ -131,11 +130,10 @@ func (s *Service) deviceStart(ctx context.Context, call *api.Call) (any, error) 
 
 // pollOutcome 是 devicePoll 在事务里算出的结果。
 type pollOutcome struct {
-	status  string
-	wait    time.Duration
-	account *saas.Account
-	device  store.DeviceRecord
-	refresh string
+	status string
+	wait   time.Duration
+	// session 在提交之前就签好（签发不依赖库）；事务回滚或重试时丢弃。
+	session core.Session
 }
 
 // devicePoll 是 auth.devicePoll。状态机（行锁下）：
@@ -148,6 +146,10 @@ type pollOutcome struct {
 //
 // 兑换时账号若已停用，改成 denied 并答 denied，不发会话。设备永远是 bearer / session：
 // 轮询方是原生 App 或 CLI，不是控制台页面，所以不看 Origin。
+//
+// 加锁顺序（团队 → 账号 → 其余）：先不加锁读出 account_id，approved 时先 LockAccount，再 FOR UPDATE 读设备码行
+// 并复核状态（不加锁读到的只是线索，一切以加锁后的为准）。批准 / 拒绝只锁设备码行，不拿账号锁，所以不会反序。
+// 每个 IP 另有轮询桶（device.poll.ip），在开事务之前判。
 func (s *Service) devicePoll(ctx context.Context, call *api.Call) (any, error) {
 	var in struct {
 		DeviceCode string `json:"deviceCode"`
@@ -155,11 +157,26 @@ func (s *Service) devicePoll(ctx context.Context, call *api.Call) (any, error) {
 	if err := call.Bind(&in); err != nil {
 		return nil, err
 	}
+	if err := s.limits.Check(ctx, httpx.LimitDevicePoll, call.IP); err != nil {
+		return nil, err
+	}
 	hash := deviceCodeHash(in.DeviceCode)
 	var out pollOutcome
 	err := s.store.Tx(ctx, func(tx saas.Tx) error {
 		out = pollOutcome{status: "expired"}
 		repo := tx.DeviceCodes()
+		hint, err := repo.Find(ctx, s.tenant(), hash)
+		if err != nil {
+			return err
+		}
+		if hint == nil {
+			return nil
+		}
+		if hint.Status == saas.DeviceCodeApproved && hint.AccountID != nil {
+			if _, err := tx.Accounts().LockAccount(ctx, s.tenant(), *hint.AccountID); err != nil {
+				return err
+			}
+		}
 		row, err := repo.Get(ctx, s.tenant(), hash)
 		if err != nil {
 			return err
@@ -188,9 +205,10 @@ func (s *Service) devicePoll(ctx context.Context, call *api.Call) (any, error) {
 			if row.AccountID == nil {
 				return core.Fail(gen.ErrInternal)
 			}
-			// 加锁顺序：团队 → 账号 → 其余。这里只有账号和后面的设备行。
-			if _, err := tx.Accounts().LockAccount(ctx, s.tenant(), *row.AccountID); err != nil {
-				return err
+			if hint.AccountID == nil || *hint.AccountID != *row.AccountID {
+				// 不加锁读到的账号与加锁后的不一致（不该发生，批准只写一次）：这次不兑换，下次轮询按新状态来。
+				out.status = "pending"
+				break
 			}
 			account, err := tx.Account(ctx, s.tenant(), *row.AccountID)
 			if err != nil {
@@ -206,8 +224,14 @@ func (s *Service) devicePoll(ctx context.Context, call *api.Call) (any, error) {
 			if err := tx.Ports().Devices.Insert(ctx, s.tenant(), device, nowMs); err != nil {
 				return err
 			}
+			// 令牌在提交之前签：签发不依赖库，提交失败整个 out 被丢弃，没有悬空的令牌。
+			session, err := core.SessionNamed(ctx, s.c, device, refresh, account.DisplayName)
+			if err != nil {
+				return err
+			}
+			session.Account = accountInfo(account)
 			row.Status = saas.DeviceCodeConsumed
-			out.status, out.account, out.device, out.refresh = "approved", account, device, refresh
+			out.status, out.session = "approved", session
 		}
 		return repo.Update(ctx, s.tenant(), *row)
 	})
@@ -218,12 +242,7 @@ func (s *Service) devicePoll(ctx context.Context, call *api.Call) (any, error) {
 	case "slow":
 		return nil, core.FailAfter(gen.ErrRateLimited, out.wait)
 	case "approved":
-		session, err := core.SessionFor(ctx, s.c, out.device, out.refresh)
-		if err != nil {
-			return nil, err
-		}
-		session.Account = accountInfo(out.account)
-		return map[string]any{"status": "approved", "session": session}, nil
+		return map[string]any{"status": "approved", "session": out.session}, nil
 	default:
 		return map[string]any{"status": out.status}, nil
 	}
@@ -265,10 +284,11 @@ func (s *Service) deviceGet(ctx context.Context, call *api.Call) (any, error) {
 	if err := call.Bind(&in); err != nil {
 		return nil, err
 	}
-	if _, err := s.owner(ctx, caller); err != nil {
+	account, err := s.owner(ctx, caller)
+	if err != nil {
 		return nil, err
 	}
-	if err := s.limits.Check(ctx, httpx.LimitDeviceGet, call.IP); err != nil {
+	if err := s.guessGate(ctx, call, account.AccountID); err != nil {
 		return nil, err
 	}
 	var row *saas.DeviceCode
@@ -277,7 +297,7 @@ func (s *Service) deviceGet(ctx context.Context, call *api.Call) (any, error) {
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, s.countGuess(ctx, account.AccountID, err)
 	}
 	return map[string]any{"platform": row.Platform, "name": row.Name, "requestedAtMs": row.CreatedAtMs, "expiresAtMs": row.ExpiresAtMs}, nil
 }
@@ -321,7 +341,12 @@ func (s *Service) decide(ctx context.Context, call *api.Call, caller core.Caller
 	if err != nil {
 		return nil, err
 	}
-	if err := s.limits.Check(ctx, httpx.LimitDeviceGet, call.IP); err != nil {
+	// 批准要么是 Cookie 会话（页面里的人点的，Origin 与 CSRF 已核），要么是提权窗口内的 Bearer 会话：
+	// 一个被盗的 Bearer 令牌不能静默地把别的设备登进来。拒绝不需要。用 mfa_required（设计 Q7 的「未提权」码）。
+	if approve && caller.Transport != core.TransportCookie && !caller.Elevated(s.nowMs()) {
+		return nil, core.Fail(gen.ErrMfaRequired)
+	}
+	if err := s.guessGate(ctx, call, account.AccountID); err != nil {
 		return nil, err
 	}
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
@@ -343,7 +368,26 @@ func (s *Service) decide(ctx context.Context, call *api.Call, caller core.Caller
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, s.countGuess(ctx, account.AccountID, err)
 	}
 	return map[string]any{}, nil
+}
+
+// guessGate 是猜用户码的两道闸：账号桶（只统计 not_found 的失败，同一账号换 IP 也逃不掉）已满直接 429；
+// IP 桶每次都计（deviceGet、批准、拒绝共用）。
+func (s *Service) guessGate(ctx context.Context, call *api.Call, accountID string) error {
+	if err := s.limits.Blocked(ctx, httpx.LimitDeviceGuess, accountID); err != nil {
+		return err
+	}
+	return s.limits.Check(ctx, httpx.LimitDeviceGet, call.IP)
+}
+
+// countGuess 在查无此码（not_found）时给账号桶记一次失败；过期（410）与成功不计。原样返回 err。
+func (s *Service) countGuess(ctx context.Context, accountID string, err error) error {
+	if code, ok := core.CodeOf(err); ok && code == gen.ErrNotFound {
+		if recordErr := s.limits.Record(ctx, httpx.LimitDeviceGuess, accountID); recordErr != nil {
+			return recordErr
+		}
+	}
+	return err
 }
