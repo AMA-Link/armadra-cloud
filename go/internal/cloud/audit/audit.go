@@ -22,6 +22,8 @@ const (
 	SecurityEmailVerified    = "security.emailVerified"
 	SecurityEmailChangeAsked = "security.emailChangeRequested"
 	SecurityEmailChanged     = "security.emailChanged"
+	SecurityDeviceApprove    = "security.deviceApprove"
+	SecurityDeviceDeny       = "security.deviceDeny"
 	deviceNameMax            = 128
 )
 

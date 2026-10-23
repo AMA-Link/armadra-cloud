@@ -255,3 +255,22 @@ func TestSMTPIgnoresQuitFailureAfterDataAccepted(t *testing.T) {
 		t.Fatalf("QUIT 失败不该让已被接收的邮件算失败：%v", err)
 	}
 }
+
+func TestGreetingWithoutNameIsGeneric(t *testing.T) {
+	templates, _ := LoadTemplates()
+	for _, locale := range Locales {
+		for _, name := range []string{EmailChanged, PasswordChanged, NewDevice} {
+			_, text, html, err := templates.Render(locale, name, Data{NewEmail: "n@example.test", DeviceName: "笔记本", Platform: "desktop"})
+			if err != nil || strings.Contains(text, "，你好") && strings.HasPrefix(text, "，") || strings.Contains(text+html, "Hi ,") {
+				t.Fatalf("%s/%s 没有名字时用通用问候：%q %v", locale, name, text, err)
+			}
+			want := "你好。"
+			if locale == LocaleEN {
+				want = "Hello,"
+			}
+			if !strings.HasPrefix(text, want) {
+				t.Errorf("%s/%s 应以 %q 开头：%q", locale, name, want, text)
+			}
+		}
+	}
+}

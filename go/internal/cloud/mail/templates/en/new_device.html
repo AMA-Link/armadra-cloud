@@ -1,4 +1,4 @@
-<p>Hi {{.DisplayName}},</p>
+<p>{{if .DisplayName}}Hi {{.DisplayName}},{{else}}Hello,{{end}}</p>
 <p>
   Your account was just signed in on a new device: {{.DeviceName}}
   ({{.Platform}}). If this was not you, change your password and sign that

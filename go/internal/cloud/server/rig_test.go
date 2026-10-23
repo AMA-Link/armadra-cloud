@@ -17,6 +17,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/server"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -75,6 +76,8 @@ type rigOptions struct {
 	verifier  core.ChallengeVerifier
 	extra     map[string]api.Handler
 	env       map[string]string
+	// mail 换掉发信方（缺省内存发信方 rig.mail）。
+	mail mail.Sender
 }
 
 // rig 是一套真实的控制面：PostgreSQL（随机 schema）+ Redis + 完整路由，经 HTTP 访问。
@@ -88,6 +91,8 @@ type rig struct {
 	ip     string
 	router *api.Router
 	oapi   *schema.OpenAPI
+	// mail 是缺省的内存发信方；换了发信方时为 nil。
+	mail *mail.MemorySender
 }
 
 func redisURL(t *testing.T) string {
@@ -146,9 +151,15 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	}
 	clk := &clock{at: time.Now().Truncate(time.Second)}
 	logs := &syncBuffer{}
+	var memory *mail.MemorySender
+	sender := options.mail
+	if sender == nil && cfg.SMTP == nil {
+		memory = &mail.MemorySender{}
+		sender = memory
+	}
 	run, err := server.Serve(ctx, cfg, server.Deps{
 		Log: obs.NewNamedLogger(logs, obs.LevelDebug, "cloud"), Now: clk.Now, Version: "test",
-		Challenge: options.verifier, ExtraHandlers: options.extra,
+		Challenge: options.verifier, ExtraHandlers: options.extra, Mail: sender,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +171,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	}
 	oapi := schema.Load(t, filepath.Join(testutil.ProtocolDir(t), "schema", "cloud-openapi.json"))
 	return &rig{
-		t: t, run: run, clock: clk, log: logs, cfg: cfg, url: run.URL, router: router, oapi: oapi,
+		t: t, run: run, clock: clk, log: logs, cfg: cfg, url: run.URL, router: router, oapi: oapi, mail: memory,
 		// 每个测试一个随机的客户端 IP（经受信代理头），限流桶在 Redis 里互不干扰。
 		ip: fmt.Sprintf("10.%d.%d.%d", rand.IntN(256), rand.IntN(256), rand.IntN(256)),
 	}

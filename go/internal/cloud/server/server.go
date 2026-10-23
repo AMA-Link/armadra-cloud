@@ -20,6 +20,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
@@ -33,7 +34,9 @@ const TenantID = "cloud"
 // 关闭与超时。
 const (
 	// requestGrace 是关闭时等在途请求的上限。
-	requestGrace    = 10 * time.Second
+	requestGrace = 10 * time.Second
+	// jobsGrace 是关闭时等当前作业的上限（设计 §2.1）。
+	jobsGrace       = 30 * time.Second
 	httpIdleTimeout = 75 * time.Second
 	httpHeaderWait  = 20 * time.Second
 	httpReadTimeout = 2 * time.Minute
@@ -55,6 +58,8 @@ type Deps struct {
 	Challenge core.ChallengeVerifier
 	// Limiter 换掉限流器（缺省 Redis 的 cloud:limit: 桶）。
 	Limiter control.Limiter
+	// Mail 换掉发信方（缺省按配置用 SMTP）；测试注入内存发信方。
+	Mail mail.Sender
 	// ExtraHandlers 给测试挂额外的过程处理器（例如用 admin.* 检查凭据闸）；生产装配不设。
 	ExtraHandlers map[string]api.Handler
 }
@@ -160,6 +165,9 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 		return fail(err)
 	}
 	handler := assembly.handler
+	// 作业在监听之前启动、在 HTTP 停收请求之后停（undo 后进先出）：等当前作业最多 jobsGrace。
+	assembly.jobs.Start()
+	undo.push(func() { assembly.jobs.Stop(jobsGrace) })
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fail(fmt.Errorf("监听失败：%s", cfg.Listen))

@@ -419,3 +419,24 @@ func TestWithoutSMTPJobsAreDeferredBacklogIsCappedAndNoTokenIsMinted(t *testing.
 		t.Fatal("被丢掉的邮件连同作业一起删")
 	}
 }
+
+// 排队期间账号邮箱换了：寄往旧地址的找回口令邮件丢掉，不发。
+func TestResetMailToAnAddressNoLongerTheAccountsIsDropped(t *testing.T) {
+	e := open(t)
+	e.runner.Stop(5 * time.Second)
+	e.account("a1", "ann@example.test")
+	e.enqueue(mail.Mail{Template: mail.PasswordReset, Locale: mail.LocaleEN, To: "ann@example.test", AccountID: "a1"})
+	if _, err := e.db.Pool().Exec(e.ctx, "UPDATE accounts SET email = 'moved@example.test' WHERE account_id = 'a1'"); err != nil {
+		t.Fatal(err)
+	}
+	runner := jobs.New(jobs.Options{Store: e.store, TenantID: tenant, Workers: 1, Now: e.clock.Now, Poll: 20 * time.Millisecond})
+	e.mail.Register(runner)
+	runner.Start()
+	t.Cleanup(func() { runner.Stop(5 * time.Second) })
+	e.eventually("处理完", func() bool {
+		return e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NOT NULL") == 1
+	})
+	if len(e.sender.Messages()) != 0 || e.count("SELECT count(*) FROM email_tokens") != 0 {
+		t.Fatal("不发信也不生成令牌")
+	}
+}

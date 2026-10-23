@@ -62,16 +62,22 @@ export const platformChallengeSchema = z.object({
   provider: challengeProviderSchema,
   siteKey: z.string().min(1).max(256),
   /**
-   * 客户端解析时忽略不认识的 scope 项（服务端以后可能加新项，cloud-api §16）：先过滤未知项再按枚举校验；
-   * 服务端配置侧仍用严格枚举（`challengeScopeSchema`）。
+   * 要求挑战的 procedure。已知值：auth.login、links.accept、auth.changePassword、auth.register、
+   * auth.passwordResetStart；以后可能再加，客户端解析时忽略不认识的项（cloud-api §16），
+   * 所以这里是字符串数组，解析后只留已知项。服务端配置侧仍用严格枚举（`challengeScopeSchema`）。
    */
-  scope: z.preprocess(
-    (value) =>
-      Array.isArray(value)
-        ? value.filter((item) => challengeScopeSchema.safeParse(item).success)
-        : value,
-    z.array(challengeScopeSchema).min(1),
-  ),
+  scope: z
+    .array(
+      z
+        .string()
+        .describe(
+          "已知值：auth.login、links.accept、auth.changePassword、auth.register、auth.passwordResetStart",
+        ),
+    )
+    .min(1)
+    .overwrite((items) =>
+      items.filter((item) => challengeScopeSchema.safeParse(item).success),
+    ),
 });
 
 export const platformInfoSchema = z.object({
@@ -90,7 +96,18 @@ export const platformInfoSchema = z.object({
   /** 1.4 补充：是否开放注册（运营方事故开关关闭时为 false，注册页据此显示关闭态）；personal 恒为 true；旧服务端不报，缺省 = 开放。 */
   registrationsOpen: z.boolean().optional(),
   /** 要求挑战时才有（0.3.5 起）；旧客户端忽略它，此时服务端答 `challenge_required`。 */
-  challenge: platformChallengeSchema.optional(),
+  challenge: z
+    .preprocess((value) => {
+      // scope 过滤掉不认识的项后为空：当作服务端没有要求挑战，不让整个 platform.info 解析失败。
+      if (typeof value !== "object" || value === null) return value;
+      const { scope } = value as { scope?: unknown };
+      if (!Array.isArray(scope)) return value;
+      const known = scope.filter(
+        (item) => challengeScopeSchema.safeParse(item).success,
+      );
+      return scope.length > 0 && known.length === 0 ? undefined : value;
+    }, platformChallengeSchema.optional())
+    .optional(),
 });
 
 export const platformHealthSchema = z.object({

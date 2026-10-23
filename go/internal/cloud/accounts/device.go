@@ -221,7 +221,7 @@ func (s *Service) devicePoll(ctx context.Context, call *api.Call) (any, error) {
 			device, refresh := core.NewDevice(account.AccountID,
 				core.DeviceInput{Platform: row.Platform, Name: row.Name, PushPublicKey: row.PushPublicKey},
 				core.TransportBearer, core.SessionScopeSession, nowMs, 0)
-			if err := tx.Ports().Devices.Insert(ctx, s.tenant(), device, nowMs); err != nil {
+			if err := s.recordLogin(ctx, tx, account, device, call.IP, nowMs); err != nil {
 				return err
 			}
 			// 令牌在提交之前签：签发不依赖库，提交失败整个 out 被丢弃，没有悬空的令牌。
