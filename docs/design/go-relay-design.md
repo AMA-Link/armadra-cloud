@@ -202,17 +202,23 @@ go/
   - **PostgreSQL**（`relay_routes` 等三张表 + `NOTIFY`）是同一接口的另一实现，给不想引入 Redis 的多节点个人中转用。
 - **节点间转发**（关掉 #51）：
   - 客户端连到节点 A，源的隧道在节点 B。A 按路由表找到 B，经一条常驻的节点间 WebSocket（`/x/v1`，节点令牌鉴权，scope `relay-node`）把这条 e2e 通道转过去。
-  - 节点间连接直接复用隧道帧（OPEN `kind: e2e` / DATA / WINDOW / END / RST），信用照样逐跳计。
+  - 节点间连接直接复用隧道帧（OPEN / DATA / WINDOW / END / RST，A 每个心跳周期 PING、B 答 PONG），信用照样逐跳计。e2e 的 OPEN 规定路径固定、不带头，没处放目标源，所以节点之间的 OPEN 用 `kind: ws`、路径寻址 `/s/<sourceId>/_relay/e2e`（与 personal 的源地址同一种写法，`edge.InternodeOpen` / `ParseInternodeOpen`），B 再以标准的 `kind: e2e` OPEN 转给源，`remoteIp`、`clientOrigin`、`relayNode`（入口节点）照抄。
+  - A 这一侧的节点间连接就是一条 `tunnel.Tunnel`（A 是开流方，`Link()` 是对端节点名），每个对端一条，断了下次用到时重连，连不上 2 秒内不再试（客户端直接 4404）。对端地址取节点表的 `internodeUrl`，同样要是 `wss`（开发时 `RELAY_ALLOW_INSECURE_TUNNEL` 才许 `ws`）。没配节点令牌的节点不转发。
+  - 链路的限制（两端同一份 `linkConfig`）：每条链路最多 4096 条流（跨租户共用，满了答 `limit_reached`）；链路级窗口取「流数上限 × 流窗」= 1 GiB，链路级信用永远不是瓶颈，慢客户端只占满自己那条流的 256 KiB，拖不住同一条链路上的别人。内存上界：每条链路每一端「在途流数 × 256 KiB」（全卡住时 1 GiB，实际受边缘的账号 / 团队并发上限约束）。同一个源被自己的慢客户端占满 8 MiB 隧道窗口是协议本身的限制，与转发无关。
+  - B 丢掉一条转来的流（源 RST、A RST、链路断开）时，把挂着还没发出去的下行字节记作已消费、还给本地隧道，否则源的隧道级窗口会被一点点漏光。
+  - B 记下 A 出示的节点令牌的 `jti` 与 `exp`：到 `exp` 断开；每 5 秒查一次撤销表（内存副本），命中就断开（`nodes revoke` 对已建立的链路也生效）。
+  - 源的 e2e 能力由 B 判：A 不替远端的源声明能力；源没报 e2e 时 B 答 RST `refused`，A 以 4404 `e2e_unsupported` 关客户端，与本地判定同一结果（只是多一次往返，先完成了升级）。
   - B 侧把转来的流当作本地边缘流接进隧道。
   - 所有节点共享路由表；源端按 `heartbeatHint.nodes` 的权重选节点。控制面按 sourceId 做 rendezvous 哈希给节点排序，让客户端与源大概率落在同一节点，转发只兜底。
 - **再平衡**：
   - 节点下线前给本地隧道发 GOAWAY `rebalance`（grace 30 秒）。
   - 源按 hint 重连到别的节点；客户端通道随旧隧道结束，由客户端重连。
 - **节点注册表与命令**（沿用 Armadra `docs/design/platform/relay.md` §5）：
-  - **节点表**：每个节点每 20 秒写一次 Redis 哈希 `relay:nodes`（node → `{url, weight, version, draining, connections, tunnels}`，每个字段 `HPEXPIRE` 60 秒，没续就过期）。`url` 是该节点自己的隧道地址（如 `wss://a.edge.<域>/t/v1`），不是共用入口。控制面的 `heartbeatHint` 从这里取节点列表，去掉 `draining` 的，按 rendezvous 排序（[SaaS M1 实施设计](saas-m1-implementation.md) §2.4、§7.3）。
+  - **节点表**：每个节点每 20 秒写一次 Redis 哈希 `relay:nodes`（node → `{url, weight, version, draining, connections, tunnels, internodeUrl?}`，每个字段 `HPEXPIRE` 60 秒，没续就过期；正常下线时 `HDEL`）。`url` 是该节点自己的隧道地址（如 `wss://a.edge.<域>/t/v1`，`RELAY_TUNNEL_URL`），不是共用入口；`internodeUrl` 是别的节点连它 `/x/v1` 的地址（`RELAY_INTERNODE_URL`，缺省由 `url` 把路径换成 `/x/v1`，可以缺）。控制面的 `heartbeatHint` 从这里取节点列表，去掉 `draining` 的，按 rendezvous 排序（[SaaS M1 实施设计](saas-m1-implementation.md) §2.4、§7.3；排序函数是 `internal/control` 的 `RankNodes`，两边共用）。编解码在 `control/cluster/wire.go`（`EncodeNode` / `DecodeNode`）。
   - **命令频道**：每个节点订阅自己的 `relay:node:<id>`（`closeTunnel`、`kick`），广播仍走 `relay:ctl`。
   - **共享 JWKS**：缓存在 Redis 的 `jwks:<issuer 哈希>` 里，所有节点共用，只有一个节点回源刷新。
-  - **跨节点并发**：用 `SADD` / `SREM` / `SCARD` 计数（每条连接一个成员，带过期），取代现在只在本节点计的做法。
+  - **跨节点并发**：`edge.concurrent.team` 用有序集合 `relay:conc:team:<teamId>` 计数：成员是 `<节点>:<随机>`（每条连接一个），分数是到期毫秒（Redis 的 `TIME` 加 60 秒），一个脚本里先清到期的、再 `ZCARD`、没满才 `ZADD`；节点每 20 秒给自己的成员续期，连接结束 `ZREM`，节点崩溃后成员最多留 60 秒。上限取 `relay:quota:team:<teamId>`，缺键或坏了用节点缺省（最严格的套餐：并发 10、速率 600 次 / 分钟，`RELAY_TEAM_CONCURRENT` / `RELAY_TEAM_CONNECT_PER_MINUTE` 可覆盖）；续期用 `ZADD XX`，只续还在的成员。Redis 出错时团队并发放行，计 `relay_team_concurrency_fail_open_total`，日志 10 秒最多一条。（原写法是 `SADD` / `SREM` / `SCARD`，集合的成员不能单独过期，改成分数即到期的有序集合，语义相同。）`edge.concurrent.acct` 仍只在本节点计。
+  - **kick 与 drain**：`kick` 只踢客户端连接（按 `sourceId`，再按可选的 `subject`、`subjectPrefix`、`deviceId` 收窄），隧道保留；`closeTunnel` 关隧道；`drain {node}` 只由该节点执行：节点表标 `draining`、`/ready` 不就绪、不再收新隧道、隧道 GOAWAY `rebalance`。
   - **Redis 配置**：`maxmemory-policy noeviction`，撤销记录不能被挤掉；`maxmemory` 128 MB；不备份，重启后路由与限流自然重建。
 - **节点间鉴权**（与 #51 对齐）：
   - #51 原来的写法是每次转发带 `X-Armadra-Internode: HMAC(secret, sourceId|ts)`。改为常驻连接 + 节点令牌：

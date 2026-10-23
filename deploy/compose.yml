@@ -31,11 +31,13 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # saas serve 现在是只答 /health、/ready 的占位（Node 版与 Go 版一致），SaaS 中继节点随 #59 的 G5 接替。
+  # SaaS 中继节点（Go 设计 §3.6）：RELAY_DOMAIN、RELAY_TUNNEL_URL（本节点自己的 wss://<node>.edge.<域>/t/v1）
+  # 与可选的 RELAY_NODE_TOKEN_FILE 在 .env 里。下线时先排空（GOAWAY rebalance，30 秒宽限），停止宽限要更长。
   relay:
     image: ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
     command: ["saas", "serve"]
     env_file: .env
+    stop_grace_period: 40s
     environment:
       RELAY_CLOUD_ISSUER: http://cloud:8100
       RELAY_REDIS_URL: redis://redis:6379

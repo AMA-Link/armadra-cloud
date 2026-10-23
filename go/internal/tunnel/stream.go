@@ -51,6 +51,9 @@ type Stream struct {
 // ID 是流号。
 func (s *Stream) ID() uint32 { return s.id }
 
+// Link 是流所在隧道的 Link（节点间连接的对端节点名；源的隧道为空串）。
+func (s *Stream) Link() string { return s.t.link }
+
 // Bytes 返回这条流两个方向已计的载荷字节（只计数，不留内容）。
 func (s *Stream) Bytes() (in, out int64) {
 	s.t.mu.Lock()

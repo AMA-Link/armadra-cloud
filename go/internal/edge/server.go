@@ -44,6 +44,8 @@ type Options struct {
 	Poller *netpoll.Poller
 	// Dispatch 承接 epoll 循环上不能做的控制面调用；不给就自建。
 	Dispatch *control.Dispatcher
+	// Gate 见 PolicyOptions。
+	Gate Gate
 }
 
 // Edge 是客户端边缘的 HTTP 外壳：判定在 Policy，这里管字节进出。
@@ -86,6 +88,7 @@ func New(o Options) (*Edge, error) {
 	e.policy = NewPolicy(PolicyOptions{
 		NodeID: o.NodeID, Addressing: o.Addressing, Auth: o.Auth, Control: o.Control,
 		Lookup: o.Lookup, Metrics: o.Metrics, CORSOrigins: o.CORSOrigins, Traffic: o.Traffic, Dispatch: o.Dispatch,
+		Gate: o.Gate,
 	})
 	go e.wheel.run(o.WSPing, o.WSIdle)
 	return e, nil
@@ -216,33 +219,33 @@ func (e *Edge) ServeUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	key, ok := validHandshake(r)
 	if !ok {
-		e.policy.ReleaseUpgrade(d.Subject)
+		e.policy.Release(d)
 		httperr.Write(w, gen.ErrBadRequest, httperr.Options{CORS: e.policy.ErrorCORS(req, d.Target.SourceID)})
 		return
 	}
 	nc, brw, err := hijack(w)
 	if err != nil {
-		e.policy.ReleaseUpgrade(d.Subject)
+		e.policy.Release(d)
 		return
 	}
 	// 客户端在收到 101 之前不得发帧（RFC 6455 §4.1）；缓冲里有字节就当协议错误。
 	if brw.Reader.Buffered() > 0 {
 		_ = nc.Close()
-		e.policy.ReleaseUpgrade(d.Subject)
+		e.policy.Release(d)
 		return
 	}
 	_ = nc.SetDeadline(time.Time{})
-	ec := &edgeConn{e: e, sourceID: d.Target.SourceID, subject: d.Subject, started: time.Now()}
+	ec := &edgeConn{e: e, sourceID: d.Target.SourceID, subject: d.Subject, release: d.Release, started: time.Now()}
 	ec.lastSeen.Store(time.Now().UnixMilli())
 	// 先登记再接管：接管后任何时刻连接都可能关掉，OnClose 要能把登记摘干净。
 	e.wheel.add(ec)
-	e.policy.Track(ec, d.Target.SourceID, d.Subject)
+	e.policy.TrackDevice(ec, d.Target.SourceID, d.Subject, d.Device)
 	c, err := e.o.Poller.Adopt(nc, ec)
 	if err != nil {
 		e.wheel.remove(ec)
 		e.policy.Untrack(ec)
 		_ = nc.Close()
-		e.policy.ReleaseUpgrade(d.Subject)
+		e.policy.Release(d)
 		return
 	}
 	ec.bind(c)
@@ -251,7 +254,7 @@ func (e *Edge) ServeUpgrade(w http.ResponseWriter, r *http.Request) {
 	if ec.isFinished() {
 		return // 101 都没写出去，连接已经没了：不开流
 	}
-	s, code := e.policy.OpenE2E(d.Tunnel, req, d.RemoteIP, &TrafficIdentity{Subject: d.Subject, DeviceID: d.Device}, ec)
+	s, code := e.policy.OpenE2E(d.Tunnel, req, d.RemoteIP, &TrafficIdentity{Subject: d.Subject, DeviceID: d.Device, Team: d.Team}, ec)
 	if code != "" {
 		closeCode, ok := WSCloseCode(code)
 		if !ok {

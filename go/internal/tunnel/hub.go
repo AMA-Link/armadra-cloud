@@ -40,6 +40,9 @@ type HubOptions struct {
 	// 让它们不占住关闭隧道的协程（可能是 epoll 循环）；同一个源的调用保持先后顺序。
 	// 不给就自建一个，Shutdown 时排空。
 	Dispatch *control.Dispatcher
+	// ClientKick 为真时 kick 命令不碰隧道（SaaS：kick 只踢客户端连接、隧道保留，由装配方接到边缘）；
+	// 为假时沿用 kick → GOAWAY replaced（personal 与多节点个人中转）。
+	ClientKick bool
 }
 
 // Hub 是本节点的隧道表：握手 → Tunnel，每源一条，新的替换旧的；
@@ -54,6 +57,7 @@ type Hub struct {
 	current      map[string]*Tunnel
 	all          map[*Tunnel]struct{}
 	shuttingDown bool
+	draining     bool
 	unsubscribe  func()
 	dispatch     *control.Dispatcher
 	ownDispatch  bool
@@ -90,18 +94,67 @@ func (h *Hub) onCommand(c control.NodeCommand) {
 	if t == nil {
 		return
 	}
-	if c.Type == control.CommandKick {
-		t.Goaway("replaced", DefaultGrace)
-		return
+	switch c.Type {
+	case control.CommandKick:
+		if !h.opts.ClientKick {
+			t.Goaway("replaced", DefaultGrace)
+		}
+	case control.CommandCloseTunnel:
+		t.Close(protocol.CloseTunnelGoaway, "closed_by_control")
 	}
-	t.Close(protocol.CloseTunnelGoaway, "closed_by_control")
 }
 
-// Accepting 还收新隧道（没在关闭）。
+// Accepting 还收新隧道（没在关闭、没在排空）。
 func (h *Hub) Accepting() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return !h.shuttingDown
+	return !h.shuttingDown && !h.draining
+}
+
+// Draining 是否已开始排空（Rebalance 之后）。
+func (h *Hub) Draining() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.draining
+}
+
+// Rebalance 开始排空（SaaS 节点下线或运营 drain，Go 设计 §3.6）：不再收新隧道，所有隧道发
+// GOAWAY rebalance，源按 heartbeatHint 重连到别的节点；旧流自然结束或 grace 到了再关。
+// 不等待；之后照常 Shutdown。重复调用无害。
+func (h *Hub) Rebalance(grace time.Duration) {
+	h.mu.Lock()
+	h.draining = true
+	list := make([]*Tunnel, 0, len(h.all))
+	for t := range h.all {
+		list = append(list, t)
+	}
+	h.mu.Unlock()
+	for _, t := range list {
+		t.Goaway("rebalance", grace)
+	}
+}
+
+// Local 是本节点上这个源的当前隧道（还能开流），不查控制面；没有答 nil。节点间转发的持有节点用：
+// 转来的流只认本节点手里的隧道。
+func (h *Hub) Local(sourceID string) *Tunnel {
+	h.mu.Lock()
+	t := h.current[sourceID]
+	h.mu.Unlock()
+	if t == nil || !t.Accepting() {
+		return nil
+	}
+	return t
+}
+
+// Tunnels 返回本节点全部隧道（含正在排空的）。
+func (h *Hub) Tunnels() []*Tunnel {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	list := make([]*Tunnel, 0, len(h.all))
+	for t := range h.all {
+		list = append(list, t)
+	}
+	return list
 }
 
 // Counts 返回当前隧道数与流数。

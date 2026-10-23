@@ -127,12 +127,17 @@ func (r accountRepo) InsertEmailToken(ctx context.Context, tenantID string, t sa
 	return err
 }
 
-func (r accountRepo) ConsumeEmailToken(ctx context.Context, tenantID, tokenHash string, nowMs int64) (bool, error) {
-	tag, err := r.q.Exec(ctx,
+func (r accountRepo) ConsumeEmailToken(ctx context.Context, tenantID, tokenHash, purpose string, nowMs int64) (*saas.EmailToken, error) {
+	t := saas.EmailToken{TokenHash: tokenHash, Purpose: purpose, ConsumedAtMs: &nowMs}
+	err := r.q.QueryRow(ctx,
 		`UPDATE email_tokens SET consumed_at_ms = $1
-		 WHERE tenant_id = $2 AND token_hash = $3 AND consumed_at_ms IS NULL AND expires_at_ms > $1`,
-		nowMs, tenantID, tokenHash)
-	return err == nil && tag.RowsAffected() == 1, err
+		 WHERE tenant_id = $2 AND token_hash = $3 AND purpose = $4 AND consumed_at_ms IS NULL AND expires_at_ms > $1
+		 RETURNING account_id, email, created_at_ms, expires_at_ms`,
+		nowMs, tenantID, tokenHash, purpose).Scan(&t.AccountID, &t.Email, &t.CreatedAtMs, &t.ExpiresAtMs)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &t, err
 }
 
 func (r accountRepo) InvalidateEmailTokens(ctx context.Context, tenantID, accountID, purpose string, nowMs int64) (int, error) {

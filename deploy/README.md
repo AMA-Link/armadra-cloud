@@ -25,17 +25,32 @@
 | `ARMADRA_CLOUD_MIGRATIONS_DIR` |      | 镜像里是 `/app/migrations`                 |
 | `ARMADRA_CLOUD_LOG_LEVEL`      |      | `debug` / `info`（缺省）/ `warn` / `error` |
 
-中继（`armadra-relay saas serve`；现在是只答 `/health`、`/ready` 的占位，Node 版与 Go 版行为一致，SaaS 中继节点随 #59 的 G5 接替）：
+中继（`armadra-relay saas serve`，SaaS 中继节点，Go 设计 §3.6；TLS 在前面的反向代理终止，明文监听）：
 
-| 变量                          | 必填 | 说明                             |
-| ----------------------------- | ---- | -------------------------------- |
-| `RELAY_LISTEN`                |      | 缺省 `0.0.0.0:8443`              |
-| `RELAY_NODE_ID`               |      | 节点名，缺省取主机名             |
-| `RELAY_DOMAIN`                | 是   | `<sourceId>.src.<域>` 的 `<域>`  |
-| `RELAY_CLOUD_ISSUER`          | 是   | 控制面 issuer（JWKS 从这里拉）   |
-| `RELAY_REDIS_URL`             | 是   | `redis://…`                      |
-| `RELAY_ALLOW_INSECURE_TUNNEL` |      | `1` 允许明文隧道，只用于本地开发 |
-| `RELAY_LOG_LEVEL`             |      | 缺省 `info`                      |
+| 变量                                                      | 必填 | 说明                                                                                                                                                   |
+| --------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RELAY_LISTEN`                                            |      | 缺省 `0.0.0.0:8443`                                                                                                                                    |
+| `RELAY_NODE_ID`                                           |      | 节点名（节点表与命令频道 `relay:node:<id>` 的 id），`^[a-z0-9][a-z0-9-]{0,62}$`；缺省由主机名换出（转小写、其余字符换成 `-`）；与节点令牌的 `sub` 一致 |
+| `RELAY_DOMAIN`                                            | 是   | `<sourceId>.src.<域>` 的 `<域>`                                                                                                                        |
+| `RELAY_CLOUD_ISSUER`                                      | 是   | 控制面 issuer（令牌的 `iss`）                                                                                                                          |
+| `RELAY_JWKS_URL`                                          |      | 缺省 `<issuer>/.well-known/jwks.json`；各节点共用 Redis 里的副本，同一时刻只有一个节点回源                                                             |
+| `RELAY_REDIS_URL`                                         | 是   | 与控制面共用的那一个 Redis（≥ 7.4，节点表用 `HPEXPIRE`）                                                                                               |
+| `RELAY_TUNNEL_URL`                                        | 是   | 本节点自己的隧道地址 `wss://<node>.edge.<域>/t/v1`，写进节点表，源按 `heartbeatHint` 连它                                                              |
+| `RELAY_INTERNODE_URL`                                     |      | 别的节点连本节点 `/x/v1` 的地址，缺省由 `RELAY_TUNNEL_URL` 把路径换成 `/x/v1`                                                                          |
+| `RELAY_NODE_WEIGHT`                                       |      | 节点表里的权重（rendezvous 加权），1–1000，缺省 1                                                                                                      |
+| `RELAY_NODE_TOKEN` / `RELAY_NODE_TOKEN_FILE`              |      | 本节点的节点令牌（`armadra-cloud nodes token`），节点间转发时出示；没有就不向别的节点转发                                                              |
+| `RELAY_DATABASE_URL` / `RELAY_DATABASE_URL_FILE`          |      | 流量统计的 PostgreSQL（`armadra_relay_traffic` 角色）；账本要有 0009，没有就拒绝启动；不配就不记流量                                                   |
+| `RELAY_METRICS_LISTEN`                                    |      | 指标监听（`/metrics`）                                                                                                                                 |
+| `RELAY_METRICS_TOKEN` / `RELAY_METRICS_TOKEN_FILE`        |      | 指标的 Bearer 令牌                                                                                                                                     |
+| `RELAY_TRUSTED_PROXY` / `RELAY_TRUSTED_PROXY_PREFER`      |      | 受信反向代理的 IP / CIDR（逗号分隔）与先读的头（`forwarded-for` 缺省 / `real-ip`），规则同 personal                                                    |
+| `RELAY_TEAM_CONCURRENT` / `RELAY_TEAM_CONNECT_PER_MINUTE` |      | 控制面没写额度（或额度坏了）时的团队并发与建连速率，缺省 10 与 600 / 分钟（最严格的套餐）                                                              |
+| `RELAY_DRAIN_GRACE_MS`                                    |      | 排空（GOAWAY rebalance）的宽限，缺省 30000；容器的停止宽限要比它长（compose 的 `stop_grace_period: 40s`）                                              |
+| `RELAY_ALLOW_INSECURE_TUNNEL`                             |      | `1` 允许 `ws://` 的隧道与 `/x/v1` 地址，只用于本地开发                                                                                                 |
+| `RELAY_LOG_LEVEL`                                         |      | 缺省 `info`                                                                                                                                            |
+
+- Redis 不可达时拒绝启动（退出 1）；`/ready` 报 `redis`、`node`（排空中不就绪）与配了流量库时的 `database`。
+- `SIGTERM` 与控制面的 `drain`：节点表标 `draining`、隧道 GOAWAY `rebalance`、不再收新隧道；`SIGTERM` 等隧道走完（或宽限到）再关。
+- 流量只在入口节点计，带中继令牌的 `team`；节点不清理保留期（控制面的作业清）。
 
 中继（`armadra-relay personal serve`，参数优先，其次环境变量）：
 
@@ -98,7 +113,7 @@
 ## 端点
 
 - `GET /health`：进程存活，200 即活着（镜像的 `HEALTHCHECK` 经 `armadra-relay health` 打它，先 HTTPS 再明文）。
-- `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，saas relay 报 Redis，personal relay 报数据目录，多节点时另报 `database` 或 `redis`），任一不可达答 503。
+- `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，saas relay 报 Redis 与排空状态（配了流量库另报 `database`），personal relay 报数据目录，多节点时另报 `database` 或 `redis`），任一不可达答 503。
 - 控制面的 `/v1/*` 与 `/.well-known/*` 业务路由现在是预留，答 501 `{ code: "not_implemented", message, requestId }`。
 - 个人中转另有 `/v1/*` 子集、`/.well-known/*`、`/ca.crt`、`/app/*` 与 `/j/<linkId>`（[契约](../docs/contracts/cloud-api.md) §10–§11）。
 
@@ -117,7 +132,7 @@
 | 页面     | `WEB_IMAGE` 构建参数把 `/app/web` 拷进来                                       |
 | 库       | 同一份迁移与账本（SQLite `relay_migrations`、PostgreSQL `cloud_migrations`）   |
 
-变了的只有：容器里的命令行是 `armadra-relay`（不再是 `node /app/out/cli.js`）；Go 版不写 `state.json`；`--node-id` 同时作用于隧道层。`saas serve` 仍是与 Node 版一致的占位（同样的变量、`/health` / `/ready` 与退出码），SaaS 形态的部署照常换镜像。
+变了的只有：容器里的命令行是 `armadra-relay`（不再是 `node /app/out/cli.js`）；Go 版不写 `state.json`；`--node-id` 同时作用于隧道层。`saas serve` 在切换版里仍是占位；之后的版本换成真正的 SaaS 中继节点（上面的变量表），新增必填的 `RELAY_TUNNEL_URL`。
 
 升级：备份（`personal backup` 或 `pg_dump`）→ 数据目录是 `state.json` 的先停服并 `run --rm relay personal migrate --data-dir /data --to sqlite` → 换成 0.10.0 镜像起服 → `exec relay armadra-relay personal status` 与 `doctor` 核对。回滚：停服，镜像换回上一版（如 `0.9.3`）再起，Go 版写过的库 Node 版照常读写。步骤与注意事项见[运维手册](../docs/runbooks/personal-storage.md#切换到-go-版中继0100与回滚)。
 

@@ -69,7 +69,7 @@ services:
       redis:
         condition: service_healthy
 
-  # 镜像是 Go 实现；saas serve 是只答 /health、/ready 的占位，SaaS 中继节点随 #59 的 G5 接替。
+  # 镜像是 Go 实现；saas serve 是 SaaS 中继节点（开发用明文隧道，没有节点令牌时不做节点间转发）。
   relay:
     profiles: ["stack"]
     build:
@@ -81,6 +81,7 @@ services:
       RELAY_DOMAIN: src.localhost
       RELAY_CLOUD_ISSUER: http://cloud:8100
       RELAY_REDIS_URL: redis://redis:6379
+      RELAY_TUNNEL_URL: ws://localhost:8111/t/v1
       RELAY_ALLOW_INSECURE_TUNNEL: "1"
     ports:
       - "127.0.0.1:8111:8443"

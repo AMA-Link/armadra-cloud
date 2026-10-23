@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/pgtest"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
@@ -222,29 +224,166 @@ func TestPanicIsAFailureNotACrash(t *testing.T) {
 	runner.Handle("t.panic", func(context.Context, saas.Job) error { panic("boom") })
 	runner.Start()
 	t.Cleanup(func() { runner.Stop(5 * time.Second) })
-	eventually(t, "panic 记成一次失败", func() bool {
+	eventually(t, "panic 记成一次失败，last_error 可辨", func() bool {
 		attempts, _, _, _, last := e.row(id)
-		return attempts == 1 && last != nil
+		return attempts == 1 && last != nil && *last == "panic"
 	})
 }
 
-func TestUnknownKindFails(t *testing.T) {
+func TestOnlyClaimsRegisteredKinds(t *testing.T) {
 	e := open(t)
 	id, _ := e.enqueue(saas.NewJob{Kind: "t.nobody", RunAtMs: e.clock.Now().UnixMilli()})
 	runner := e.runner(20 * time.Millisecond)
+	runner.Handle("t.other", func(context.Context, saas.Job) error { return nil })
 	runner.Start()
 	t.Cleanup(func() { runner.Stop(5 * time.Second) })
-	eventually(t, "没有处理器的作业记失败", func() bool {
-		attempts, _, done, _, last := e.row(id)
-		return attempts == 1 && done == nil && last != nil
+	time.Sleep(400 * time.Millisecond)
+	if attempts, _, done, failed, last := e.row(id); attempts != 0 || done != nil || failed != nil || last != nil {
+		t.Fatalf("没登记处理器的种类不该被领走：%d %v %v %v", attempts, done, failed, last)
+	}
+}
+
+func TestExhaustedJobWithExpiredLeaseIsSweptNotReclaimed(t *testing.T) {
+	e := open(t)
+	now := e.clock.Now().UnixMilli()
+	id, _ := e.enqueue(saas.NewJob{Kind: "t.last", RunAtMs: now})
+	// 最后一次尝试时实例崩了：attempts 已满、租约过期。
+	if _, err := e.db.Pool().Exec(context.Background(),
+		"UPDATE jobs SET attempts = max_attempts, locked_by = 'dead', locked_until_ms = $2 WHERE job_id = $1", id, now-1000); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	runner := e.runner(20 * time.Millisecond)
+	runner.Handle("t.last", func(context.Context, saas.Job) error { calls.Add(1); return nil })
+	runner.Start()
+	t.Cleanup(func() { runner.Stop(5 * time.Second) })
+	eventually(t, "清扫置失败", func() bool {
+		_, _, done, failed, last := e.row(id)
+		return done == nil && failed != nil && last != nil && *last == "lease_expired"
 	})
+	if calls.Load() != 0 {
+		t.Fatal("尝试次数已满的作业不能再被执行")
+	}
+}
+
+func TestHandlerIsCancelledWhenLeaseRunsOutWithoutRenewal(t *testing.T) {
+	e := open(t)
+	// 租约 200 毫秒、每 20 毫秒检查；可控时钟跳过租约到期时刻，下一次检查就该停手。
+	r := jobs.New(jobs.Options{Store: e.store, TenantID: tenant, Workers: 1, Now: e.clock.Now, Poll: 20 * time.Millisecond, Lease: 200 * time.Millisecond, Renew: 20 * time.Millisecond})
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	r.Handle("t.expire", func(ctx context.Context, _ saas.Job) error {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return ctx.Err()
+	})
+	e.enqueue(saas.NewJob{Kind: "t.expire", RunAtMs: e.clock.Now().UnixMilli()})
+	r.Start()
+	t.Cleanup(func() { r.Stop(5 * time.Second) })
+	<-started
+	e.clock.Advance(time.Second)
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("租约到期时刻已过，处理器应被取消")
+	}
+}
+
+func TestShutdownInterruptionReleasesWithoutCountingAttempt(t *testing.T) {
+	e := open(t)
+	started := make(chan struct{}, 1)
+	r := e.runner(20 * time.Millisecond)
+	r.Handle("t.shut", func(ctx context.Context, _ saas.Job) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	id, _ := e.enqueue(saas.NewJob{Kind: "t.shut", RunAtMs: e.clock.Now().UnixMilli()})
+	r.Start()
+	<-started
+	r.Stop(100 * time.Millisecond)
+	attempts, runAt, done, failed, last := e.row(id)
+	if attempts != 0 || done != nil || failed != nil || last != nil || runAt != e.clock.Now().UnixMilli() {
+		t.Fatalf("关闭中被打断：释放租约、不计尝试、不退避：%d %d %v %v %v", attempts, runAt, done, failed, last)
+	}
+	var lockedBy *string
+	_ = e.db.Pool().QueryRow(context.Background(), "SELECT locked_by FROM jobs WHERE job_id = $1", id).Scan(&lockedBy)
+	if lockedBy != nil {
+		t.Fatal("租约应已释放")
+	}
+}
+
+func TestStopGivesUpOnHandlersThatIgnoreCancellation(t *testing.T) {
+	e := open(t)
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	started := make(chan struct{}, 1)
+	r := jobs.New(jobs.Options{Store: e.store, TenantID: tenant, Workers: 1, Now: e.clock.Now, Poll: 20 * time.Millisecond, AbortWait: 200 * time.Millisecond})
+	r.Handle("t.deaf", func(context.Context, saas.Job) error { started <- struct{}{}; <-block; return nil })
+	e.enqueue(saas.NewJob{Kind: "t.deaf", RunAtMs: e.clock.Now().UnixMilli()})
+	r.Start()
+	<-started
+	begin := time.Now()
+	r.Stop(100 * time.Millisecond)
+	if time.Since(begin) > 3*time.Second {
+		t.Fatal("不理会取消的处理器不能拖死关闭")
+	}
+}
+
+func TestPerHandlerTimeout(t *testing.T) {
+	e := open(t)
+	r := e.runner(20 * time.Millisecond)
+	r.Handle("t.slowjob", func(ctx context.Context, _ saas.Job) error { <-ctx.Done(); return ctx.Err() }, jobs.WithTimeout(100*time.Millisecond))
+	id, _ := e.enqueue(saas.NewJob{Kind: "t.slowjob", RunAtMs: e.clock.Now().UnixMilli()})
+	r.Start()
+	t.Cleanup(func() { r.Stop(5 * time.Second) })
+	eventually(t, "超时按失败重排", func() bool {
+		attempts, _, _, _, last := e.row(id)
+		return attempts == 1 && last != nil && *last == "context.deadlineExceededError"
+	})
+}
+
+func TestListenConnectionIsCleanedUpOnStop(t *testing.T) {
+	e := open(t)
+	r := e.runner(time.Hour)
+	r.Handle("t.noop", func(context.Context, saas.Job) error { return nil })
+	r.Start()
+	time.Sleep(300 * time.Millisecond)
+	r.Stop(5 * time.Second)
+	// 池里剩下的每条连接都不再监听。
+	ctx := context.Background()
+	var held []*pgxpool.Conn
+	for range int(e.db.Pool().Stat().TotalConns()) {
+		conn, err := e.db.Pool().Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, conn)
+		var channels []string
+		rows, err := conn.Query(ctx, "SELECT pg_listening_channels()")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var c string
+			_ = rows.Scan(&c)
+			channels = append(channels, c)
+		}
+		rows.Close()
+		if len(channels) != 0 {
+			t.Fatalf("放回池里的连接还在监听：%v", channels)
+		}
+	}
+	for _, c := range held {
+		c.Release()
+	}
 }
 
 func TestCrashedWorkersLeaseExpires(t *testing.T) {
 	e := open(t)
 	id, _ := e.enqueue(saas.NewJob{Kind: "t.crash", RunAtMs: e.clock.Now().UnixMilli()})
 	// 另一个实例领走作业后崩了：租约 60 秒。
-	claimed, err := e.store.Queue().Claim(context.Background(), tenant, "dead", e.clock.Now().UnixMilli(), 60_000, 1)
+	claimed, err := e.store.Queue().Claim(context.Background(), tenant, "dead", []string{"t.crash"}, e.clock.Now().UnixMilli(), 60_000, 1)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("领取：%v %v", claimed, err)
 	}
@@ -398,7 +537,7 @@ func TestStopWaitsForRunningJobThenAbortsAfterTimeout(t *testing.T) {
 		t.Fatal("跑完的作业应记完成")
 	}
 
-	// 超时：打断处理器，作业记一次失败（等租约或退避后别的实例再领）。
+	// 超时：打断处理器，作业释放租约回到队列（别的实例马上可以领，不计尝试）。
 	runner2 := e.runner(20 * time.Millisecond)
 	runner2.Handle("t.stuck", func(ctx context.Context, _ saas.Job) error {
 		started <- struct{}{}
@@ -413,8 +552,8 @@ func TestStopWaitsForRunningJobThenAbortsAfterTimeout(t *testing.T) {
 	if time.Since(begin) > 5*time.Second {
 		t.Fatal("超时后应打断作业并返回")
 	}
-	if attempts, _, done, _, last := e.row(id2); attempts != 1 || done != nil || last == nil {
-		t.Fatalf("被打断的作业记一次失败：%d %v %v", attempts, done, last)
+	if attempts, _, done, _, last := e.row(id2); attempts != 0 || done != nil || last != nil {
+		t.Fatalf("被打断的作业释放租约、不计尝试：%d %v %v", attempts, done, last)
 	}
 }
 
