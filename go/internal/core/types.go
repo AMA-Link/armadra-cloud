@@ -104,6 +104,9 @@ type Grant struct {
 	RelayOrigin           string `json:"relayOrigin"`
 	RelayBaseURL          string `json:"relayBaseUrl"`
 	Online                bool   `json:"online"`
+	// 两个 jti 不上线，SaaS 记进签发索引（撤销时按它过滤）。
+	AssertionJTI  string `json:"-"`
+	RelayTokenJTI string `json:"-"`
 }
 
 // TunnelNode 是隧道节点。

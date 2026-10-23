@@ -137,7 +137,26 @@
       "internalBoundaries": [
         {
           "from": "internal/core",
-          "forbid": ["internal/tunnel", "internal/edge"]
+          "forbid": ["internal/tunnel", "internal/edge", "internal/cloud"]
+        },
+        {
+          "from": "internal/store",
+          "forbid": ["internal/cloud"]
+        },
+        {
+          "from": "internal/control",
+          "forbid": ["internal/cloud"]
+        },
+        {
+          "$comment": "SaaS 控制面不碰数据面与个人中转：客户端 IP 的取法在 internal/clientip，两边共用。",
+          "from": "internal/cloud",
+          "forbid": [
+            "internal/tunnel",
+            "internal/edge",
+            "internal/netpoll",
+            "internal/dataplane",
+            "internal/personal"
+          ]
         }
       ]
     }

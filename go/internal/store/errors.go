@@ -20,6 +20,8 @@ const (
 	KindCorrupt ErrKind = "corrupt"
 	// KindNewer：库是更新的版本写的。
 	KindNewer ErrKind = "newer"
+	// KindBehind：库的迁移落后于程序（需要先运行迁移命令）。
+	KindBehind ErrKind = "behind"
 	// KindUnreachable：连不上（PostgreSQL）。
 	KindUnreachable ErrKind = "unreachable"
 )
