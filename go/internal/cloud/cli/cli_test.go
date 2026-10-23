@@ -198,7 +198,7 @@ func TestServeBootstrapsHealthReadyAndAnswers501(t *testing.T) {
 		t.Fatalf("/ready：%d %v", status, body)
 	}
 	// 还没实现的过程答 501 not_implemented；未知路径 404。
-	for _, path := range []string{"/v1/sources", "/v1/billing/plan", "/v1/teams/x/groups"} {
+	for _, path := range []string{"/v1/source-transfers", "/v1/billing/plan", "/v1/teams/x/groups"} {
 		status, body, _ = getJSON(t, running.URL+path)
 		if status != 501 || body["code"] != "not_implemented" {
 			t.Fatalf("%s 应答 501：%d %v", path, status, body)

@@ -125,6 +125,7 @@ func sortedCopy(in []string) []string {
 
 // 个人空间：登记写源与空间行、审计一行；Free 额度 2 台，令牌端快速失败，登记端权威检查。
 func TestHostsRegisterPersonalAndQuota(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	raw := r.registerBearer(r.email())
 	r.expect(r.hostToken(raw, nil), 403, "email_unverified")
@@ -173,6 +174,7 @@ func TestHostsRegisterPersonalAndQuota(t *testing.T) {
 
 // 令牌与登记的错误：令牌失效、一次性、协议主版本、source_taken、同钥重登记幂等。
 func TestHostsRegisterErrorsAndReRegister(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	a, b := r.verified(), r.verified()
 	h := newTestHost(t)
@@ -212,6 +214,7 @@ func TestHostsRegisterErrorsAndReRegister(t *testing.T) {
 
 // 团队空间：谁能要令牌（角色矩阵）、停用 / 删除、成员登记开关、版本门、配额。
 func TestHostsRegisterTeamRolesAndGates(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	people := map[string]session{}
 	members := map[string]string{}
@@ -273,6 +276,7 @@ func TestHostsRegisterTeamRolesAndGates(t *testing.T) {
 
 // 团队主机配额（Free 3 台）：令牌端快速失败；并发登记恰好 3 个成功；个人空间同理（2 台）。
 func TestHostsRegisterConcurrentRespectsQuota(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	a, b := r.verified(), r.verified()
@@ -327,6 +331,7 @@ func TestHostsRegisterConcurrentRespectsQuota(t *testing.T) {
 
 // 目录：可见性（所有者、团队 admin、成员只看自己的、billing / guest 与外人看不到）与跨团队读不到。
 func TestHostsDirectoryVisibilityAndCrossTeam(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, member, other, billing, guest := r.verified(), r.verified(), r.verified(), r.verified(), r.verified(), r.verified()
 	t1 := r.seedTeam("dir-1", map[string]string{
@@ -407,6 +412,7 @@ func TestHostsDirectoryVisibilityAndCrossTeam(t *testing.T) {
 
 // 目录筛选与游标：status、tag（且）、q（通配符按字面）、翻页不漏不重、坏游标。
 func TestHostsDirectoryFiltersAndCursor(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{env: map[string]string{}})
 	owner := r.verified()
 	team := r.seedTeam("filters", map[string]string{owner.accountID: "owner"})
@@ -494,6 +500,7 @@ func TestHostsDirectoryFiltersAndCursor(t *testing.T) {
 
 // 按在线状态筛选要跨过库里的批次（200 行一批）：450 台里只有最后几台在线，翻页仍然正确。
 func TestHostsOnlineFilterSpansBatches(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	team := r.seedTeam("batches", map[string]string{owner.accountID: "owner"})
@@ -527,6 +534,7 @@ func TestHostsOnlineFilterSpansBatches(t *testing.T) {
 
 // 改名 / 标签 / 设置 / 可信来源：管理权、校验、局部合并、审计。
 func TestHostsUpdate(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, member, other := r.verified(), r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("upd", map[string]string{owner.accountID: "owner", admin.accountID: "admin", member.accountID: "member", other.accountID: "member"})
@@ -600,6 +608,7 @@ func payloadOf(t *testing.T, jws string) map[string]any {
 // 隧道令牌：团队主机带 team、个人空间不带；节点来自节点表（rendezvous 前三、权重 3/2/1，排空的去掉），
 // 表为空答 503；jti 记进签发索引。
 func TestHostsHeartbeatHint(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	team := r.seedTeam("hint", map[string]string{owner.accountID: "owner"})
@@ -649,6 +658,7 @@ func TestHostsHeartbeatHint(t *testing.T) {
 
 // 撤销：置撤销时刻、该源已签令牌（含隧道令牌）进撤销表、关隧道并踢人、审计；之后各处都看不到。
 func TestHostsRevoke(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, member, other := r.verified(), r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("rev", map[string]string{owner.accountID: "owner", admin.accountID: "admin", member.accountID: "member", other.accountID: "member"})
@@ -706,6 +716,7 @@ func TestHostsRevoke(t *testing.T) {
 
 // 个人空间的撤销：所有者本人；别的账号 404。
 func TestHostsRevokePersonal(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	a, b := r.verified(), r.verified()
 	r.run.Relay.SetNode(relayctl.Node{ID: "a", URL: "wss://a.edge.example.com/t/v1", Weight: 1})
@@ -725,6 +736,7 @@ func TestHostsRevokePersonal(t *testing.T) {
 
 // 每个账号同时有效的注册令牌有上限，按账号计、不互相挤占。
 func TestHostsRegistrationTokenCapPerAccount(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	a, b := r.verified(), r.verified()
 	r.exec(`INSERT INTO registration_tokens (tenant_id, token_hash, account_id, expires_at_ms)
