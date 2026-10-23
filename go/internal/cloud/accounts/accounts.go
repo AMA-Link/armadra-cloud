@@ -5,11 +5,14 @@ package accounts
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
@@ -25,12 +28,14 @@ type Options struct {
 	Store  saas.Store
 	Gate   *httpx.Gate
 	Limits *httpx.Limits
+	// Mail 把事务邮件插进发件箱（验证邮箱、找回口令、新设备提醒等）。
+	Mail *mail.Service
 	// Unknown 存未注册邮箱的失败计数与锁定（多实例共享的 Redis 版）；nil = 进程内计数。
 	Unknown core.UnknownStore
 	// AppOrigin 是控制台来源，设备码的 verificationUrl 以它开头。
 	AppOrigin string
-	// OnDeviceDecision 在批准 / 拒绝设备码的事务里调用，S2 接审计后在这里写安全日志
-	// security.deviceApprove（设计 §4.3）；nil = 不写。返回错误会回滚这次决定。
+	// OnDeviceDecision 在批准 / 拒绝设备码的事务里调用；nil = 写安全日志 security.deviceApprove /
+	// security.deviceDeny（设计 §4.3）。返回错误会回滚这次决定。
 	// 外部副作用（发邮件、推事件、Redis）一律经 tx.AfterCommit，不能在钩子里直接做：事务可能回滚或重试。
 	OnDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
 }
@@ -41,6 +46,7 @@ type Service struct {
 	store  saas.Store
 	gate   *httpx.Gate
 	limits *httpx.Limits
+	mail   *mail.Service
 	// unknown 给未注册的邮箱同样计失败、同样锁定：锁定不暴露邮箱有没有注册。
 	unknown core.UnknownAccounts
 
@@ -51,8 +57,11 @@ type Service struct {
 // New 建账号服务。
 func New(options Options) *Service {
 	s := &Service{
-		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits,
+		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits, mail: options.Mail,
 		appOrigin: strings.TrimRight(options.AppOrigin, "/"), onDeviceDecision: options.OnDeviceDecision,
+	}
+	if s.onDeviceDecision == nil {
+		s.onDeviceDecision = s.auditDeviceDecision
 	}
 	s.unknown.Store = options.Unknown
 	return s
@@ -98,6 +107,30 @@ func (s *Service) respond(ctx context.Context, call *api.Call, device store.Devi
 	return sessionResult{Session: session, CSRFToken: s.gate.CSRFToken(device.DeviceID)}, nil
 }
 
+// bound 返回绑定到 SaaS 事务的控制核：端口换成 tx.Ports()，撤销钩子换成经 tx.AfterCommit 投递的版本
+// （设计 §4.2、§4.11）。事务闭包里调 core 的撤销函数（SetPasswordNames、RevokeDevice 等）一律用它，
+// 不用独立端口的 s.c：那会等本事务持有的行锁而挂死，钩子也会赶在提交之前把令牌撤掉。
+func (s *Service) bound(tx saas.Tx) *core.Context {
+	var sink core.RevocationSink
+	if s.c.Revocations != nil {
+		sink = relayctl.Deferred(tx, s.c.Revocations)
+	}
+	return s.c.Bound(tx.Ports(), sink)
+}
+
+// localeOf 按 Accept-Language 的首选语言定账号的界面语言（邮件语言取它）：en 开头用英文，其余用中文。
+func localeOf(r *http.Request) string {
+	if r == nil {
+		return mail.LocaleZH
+	}
+	first, _, _ := strings.Cut(r.Header.Get("Accept-Language"), ",")
+	tag, _, _ := strings.Cut(first, ";")
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(tag)), "en") {
+		return mail.LocaleEN
+	}
+	return mail.LocaleZH
+}
+
 // owner 要求调用方是账号本人（SaaS 的访客会话不是账号）并读出账号行。
 func (s *Service) owner(ctx context.Context, caller core.Caller) (*saas.Account, error) {
 	if err := core.RequireOwner(caller); err != nil {
@@ -127,10 +160,17 @@ func (s *Service) Handlers() map[string]api.Handler {
 		"auth.deviceApprove":  s.deviceApprove,
 		"auth.deviceGet":      s.deviceGet,
 		"auth.deviceDeny":     s.deviceDeny,
-		"me.get":              s.meGet,
-		"me.update":           s.meUpdate,
-		"me.devices":          s.meDevices,
-		"me.deviceRevoke":     s.meDeviceRevoke,
+
+		"auth.emailVerify":         s.emailVerify,
+		"auth.emailVerifyResend":   s.emailVerifyResend,
+		"auth.passwordResetStart":  s.passwordResetStart,
+		"auth.passwordResetFinish": s.passwordResetFinish,
+		"me.emailChange":           s.meEmailChange,
+
+		"me.get":          s.meGet,
+		"me.update":       s.meUpdate,
+		"me.devices":      s.meDevices,
+		"me.deviceRevoke": s.meDeviceRevoke,
 	}
 	for name, handler := range handlers {
 		handlers[name] = wrap(handler)

@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -82,4 +83,30 @@ func TestFailedChallengeDoesNotCountAsLoginFailure(t *testing.T) {
 	if err := r.run.DB.Pool().QueryRow(context.Background(), "SELECT failures FROM accounts WHERE email = $1", email).Scan(&failures); err != nil || failures != 0 {
 		t.Fatalf("失败次数：%d %v", failures, err)
 	}
+}
+
+func TestPasswordResetStartChallenge(t *testing.T) {
+	r := challengeRig(t)
+	email := r.email()
+	r.expect(r.registerWith(email, token("ok-r")), 200, "")
+	start := func(challenge any) response {
+		body := map[string]any{"email": email}
+		if challenge != nil {
+			body["challenge"] = challenge
+		}
+		return r.do("POST", "/v1/auth/password-reset/start", body, nil)
+	}
+	// 缺挑战 / 无效挑战：不入队任何邮件，也不占用按邮箱每小时 3 次的额度（挑战先于邮箱限流；按 IP 的限流照常先计，所以失败只试 4 次）。
+	for range 2 {
+		r.expect(start(nil), 400, "challenge_required")
+		r.expect(start(token("bad")), 400, "challenge_invalid")
+	}
+	var queued int
+	if err := r.run.DB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM outbox_emails WHERE template = 'password_reset'").Scan(&queued); err != nil || queued != 0 {
+		t.Fatalf("挑战失败不入队：%d %v", queued, err)
+	}
+	for i := range 3 {
+		r.expect(start(token(fmt.Sprintf("ok-%d", i))), 200, "")
+	}
+	r.expect(start(token("ok-3")), 429, "rate_limited")
 }

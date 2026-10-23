@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/identity"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
@@ -64,16 +67,27 @@ func (s *Service) register(ctx context.Context, call *api.Call) (any, error) {
 	}
 	nowMs := s.nowMs()
 	accountID := newAccountID()
+	locale := localeOf(call.Request)
 	account := saas.Account{
 		AccountRecord: store.AccountRecord{AccountID: accountID, Name: accountID, Password: hashed, CreatedAtMs: nowMs, UpdatedAtMs: nowMs},
-		Email:         email, DisplayName: displayName, Locale: "zh-CN", Status: saas.AccountActive, Scopes: []string{},
+		Email:         email, DisplayName: displayName, Locale: locale, Status: saas.AccountActive, Scopes: []string{},
 	}
 	device, refresh := core.NewDevice(accountID, in.Device, s.gate.TransportFor(call.Request), core.SessionScopeSession, nowMs, 0)
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
 		if err := tx.Accounts().Create(ctx, s.tenant(), account); err != nil {
 			return err
 		}
-		return tx.Ports().Devices.Insert(ctx, s.tenant(), device, nowMs)
+		if err := tx.Ports().Devices.Insert(ctx, s.tenant(), device, nowMs); err != nil {
+			return err
+		}
+		who := audit.Security{AccountID: accountID, DeviceName: device.Name, IP: call.IP}
+		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityRegister); err != nil {
+			return err
+		}
+		return s.mail.Enqueue(ctx, tx, mail.Mail{
+			Template: mail.VerifyEmail, Locale: locale, To: email, AccountID: accountID,
+			Params: mail.Params{DisplayName: displayName},
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -127,12 +141,54 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 	nowMs := s.nowMs()
 	device, refresh := core.NewDevice(account.AccountID, in.Device, s.gate.TransportFor(call.Request), core.SessionScopeSession, nowMs, 0)
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
-		return tx.Ports().Devices.Insert(ctx, s.tenant(), device, nowMs)
+		// 新设备（同平台同名 30 天内没出现过）要提醒：先看已有的设备，再插新的。
+		known, err := tx.Ports().Devices.ListBySubject(ctx, s.tenant(), account.AccountID)
+		if err != nil {
+			return err
+		}
+		if err := tx.Ports().Devices.Insert(ctx, s.tenant(), device, nowMs); err != nil {
+			return err
+		}
+		who := audit.Security{AccountID: account.AccountID, DeviceName: device.Name, IP: call.IP}
+		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityLogin); err != nil {
+			return err
+		}
+		if !isNewDevice(known, device, nowMs) {
+			return nil
+		}
+		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityNewDevice); err != nil {
+			return err
+		}
+		return s.mail.Enqueue(ctx, tx, mail.Mail{
+			Template: mail.NewDevice, Locale: account.Locale, To: account.Email,
+			Params: mail.Params{DisplayName: account.DisplayName, DeviceName: device.Name, Platform: device.Platform},
+		})
 	})
 	if err != nil {
 		return nil, err
 	}
 	return s.respond(ctx, call, device, refresh, account)
+}
+
+// newDeviceWindow 是「新设备」的回看期：同平台同名的设备 30 天内出现过就不算新。
+const newDeviceWindow = 30 * 24 * time.Hour
+
+// isNewDevice 报告 device 相对账号已有的设备是不是新的（已撤销的行只要还在也算出现过）。
+func isNewDevice(known []store.DeviceRecord, device store.DeviceRecord, nowMs int64) bool {
+	cutoff := nowMs - newDeviceWindow.Milliseconds()
+	for _, row := range known {
+		if row.Platform != device.Platform || row.Name != device.Name {
+			continue
+		}
+		seen := row.CreatedAtMs
+		if row.LastSeenAtMs != nil && *row.LastSeenAtMs > seen {
+			seen = *row.LastSeenAtMs
+		}
+		if seen >= cutoff {
+			return false
+		}
+	}
+	return true
 }
 
 // operatorLogin 是 scope: "operator" 的登录（设计 §4.9）：非运营账号 403 forbidden；
@@ -288,15 +344,39 @@ func (s *Service) changePassword(ctx context.Context, call *api.Call) (any, erro
 		return nil, err
 	}
 	nowMs := s.nowMs()
-	if err := core.SetPasswordNames(ctx, s.c, account.AccountID, policyNames(account.Email, account.DisplayName), in.NewPassword, nowMs, caller.DeviceID); err != nil {
-		return nil, err
-	}
-	device, refresh, found, err := core.RotateRefresh(ctx, s.c, caller.DeviceID, nowMs)
+	var (
+		device  store.DeviceRecord
+		refresh string
+	)
+	err = s.store.Tx(ctx, func(tx saas.Tx) error {
+		// 事务里改口令、撤销其他设备、给当前设备换新刷新令牌；撤销钩子经 AfterCommit 在提交后投递。
+		bound := s.bound(tx)
+		if _, err := tx.Accounts().LockAccount(ctx, s.tenant(), account.AccountID); err != nil {
+			return err
+		}
+		if err := core.SetPasswordNames(ctx, bound, account.AccountID, policyNames(account.Email, account.DisplayName), in.NewPassword, nowMs, caller.DeviceID); err != nil {
+			return err
+		}
+		var found bool
+		var err error
+		device, refresh, found, err = core.RotateRefresh(ctx, bound, caller.DeviceID, nowMs)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return core.Fail(gen.ErrUnauthenticated)
+		}
+		who := audit.Security{AccountID: account.AccountID, DeviceName: device.Name, IP: call.IP}
+		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityPasswordChanged); err != nil {
+			return err
+		}
+		return s.mail.Enqueue(ctx, tx, mail.Mail{
+			Template: mail.PasswordChanged, Locale: account.Locale, To: account.Email,
+			Params: mail.Params{DisplayName: account.DisplayName},
+		})
+	})
 	if err != nil {
 		return nil, err
-	}
-	if !found {
-		return nil, core.Fail(gen.ErrUnauthenticated)
 	}
 	return s.respond(ctx, call, device, refresh, account)
 }
