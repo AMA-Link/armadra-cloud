@@ -33,6 +33,10 @@ var enabledThroughS5b = map[string]bool{
 // enabledS7 是 S7 实现的过程（单独一张表，各批并行时少冲突）。
 var enabledS7 = map[string]bool{
 	"audit.list": true, "me.securityLog": true, "billing.plan": true, "billing.usage": true,
+	"auth.mfaVerify": true,
+	"admin.tenants":  true, "admin.accounts": true, "admin.account": true, "admin.accountStatus": true,
+	"admin.teams": true, "admin.team": true, "admin.teamStatus": true, "admin.relayNodes": true, "admin.relayNodeDrain": true,
+	"admin.incident": true, "admin.incidentSet": true,
 }
 
 func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {

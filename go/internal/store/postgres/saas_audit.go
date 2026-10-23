@@ -86,12 +86,15 @@ func (r auditRepo) ListSecurity(ctx context.Context, tenantID, accountID string,
 
 type retentionRepo struct{ q querier }
 
-func (r retentionRepo) TeamsWithAuditBefore(ctx context.Context, tenantID string, beforeMs int64, afterTeamID string, limit int) ([]string, error) {
-	return list(ctx, r.q, func(s scanner) (string, error) {
-		var id string
-		return id, s.Scan(&id)
-	}, `SELECT DISTINCT team_id FROM audit_log WHERE tenant_id = $1 AND team_id IS NOT NULL AND at_ms < $2 AND team_id > $3
-	    ORDER BY team_id LIMIT $4`, tenantID, beforeMs, afterTeamID, limit)
+func (r retentionRepo) TeamsWithAuditBefore(ctx context.Context, tenantID string, beforeMs int64, afterTeamID string, limit int) ([]saas.RetentionTeam, error) {
+	return list(ctx, r.q, func(s scanner) (saas.RetentionTeam, error) {
+		var t saas.RetentionTeam
+		return t, s.Scan(&t.TeamID, &t.Plan)
+	}, `SELECT t.team_id, COALESCE(e.plan, 'free') FROM teams t
+	    LEFT JOIN entitlements e ON e.tenant_id = t.tenant_id AND e.space_kind = 'team' AND e.space_id = t.team_id
+	    WHERE t.tenant_id = $1 AND t.team_id > $3
+	      AND EXISTS (SELECT 1 FROM audit_log a WHERE a.tenant_id = t.tenant_id AND a.team_id = t.team_id AND a.at_ms < $2)
+	    ORDER BY t.team_id LIMIT $4`, tenantID, beforeMs, afterTeamID, limit)
 }
 
 func (r retentionRepo) PruneTeamAudit(ctx context.Context, tenantID, teamID string, beforeMs int64, limit int) (int, error) {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/admin"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
@@ -39,6 +40,9 @@ type Options struct {
 	LoginGuard func(ctx context.Context) error
 	// AppOrigin 是控制台来源，设备码的 verificationUrl 以它开头。
 	AppOrigin string
+	// MFA 存运营登录的两步验证挑战（cloud:mfa:*）；Wrapper 解开 TOTP 种子。两者缺一，scope: "operator" 的登录答 500。
+	MFA     admin.ChallengeStore
+	Wrapper *store.Wrapper
 	// OnDeviceDecision 在批准 / 拒绝设备码的事务里调用；nil = 写安全日志 security.deviceApprove /
 	// security.deviceDeny（设计 §4.3）。返回错误会回滚这次决定。
 	// 外部副作用（发邮件、推事件、Redis）一律经 tx.AfterCommit，不能在钩子里直接做：事务可能回滚或重试。
@@ -58,6 +62,9 @@ type Service struct {
 	// guard 见 Options.LoginGuard。
 	guard func(ctx context.Context) error
 
+	mfa     admin.ChallengeStore
+	wrapper *store.Wrapper
+
 	appOrigin        string
 	onDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
 }
@@ -67,6 +74,7 @@ func New(options Options) *Service {
 	s := &Service{
 		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits, mail: options.Mail,
 		appOrigin: strings.TrimRight(options.AppOrigin, "/"), onDeviceDecision: options.OnDeviceDecision,
+		mfa: options.MFA, wrapper: options.Wrapper,
 	}
 	if s.onDeviceDecision == nil {
 		s.onDeviceDecision = s.auditDeviceDecision
@@ -165,6 +173,7 @@ func (s *Service) Handlers() map[string]api.Handler {
 		"auth.register":       s.register,
 		"auth.login":          s.login,
 		"auth.refresh":        s.refresh,
+		"auth.mfaVerify":      s.mfaVerify,
 		"auth.logout":         s.logout,
 		"auth.changePassword": s.changePassword,
 		"auth.stepUp":         s.stepUp,

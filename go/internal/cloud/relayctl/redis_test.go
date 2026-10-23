@@ -293,6 +293,11 @@ func TestRedisNodesQuotaAndIncident(t *testing.T) {
 	if err != nil || len(nodes) != 2 || nodes[0].ID != "a" || nodes[1].ID != "b" || nodes[1].URL != "wss://b.test/t/v1" || nodes[1].Connections != 3 {
 		t.Fatalf("节点表：%+v %v", nodes, err)
 	}
+	// AllNodes（运营后台列节点）含排空中的。
+	all, err := rc.AllNodes(ctx)
+	if err != nil || len(all) != 3 || all[2].ID != "c" || !all[2].Draining || all[0].Draining {
+		t.Fatalf("全部节点（含排空）：%+v %v", all, err)
+	}
 
 	if err := rc.SetTeamQuota(ctx, "t1", relayctl.Quota{Concurrent: 7}); err != nil {
 		t.Fatal(err)

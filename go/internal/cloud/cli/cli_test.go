@@ -93,11 +93,6 @@ func TestUsageAndSimpleCommands(t *testing.T) {
 	if code, _, errOut := run(t, config.MapEnv{}, "keys"); code != 64 || !strings.Contains(errOut, "未知命令") {
 		t.Fatalf("keys 缺子命令：%d %q", code, errOut)
 	}
-	for _, args := range [][]string{{"operators", "add"}, {"operators", "totp"}} {
-		if code, _, errOut := run(t, config.MapEnv{}, args...); code != 64 || !strings.Contains(errOut, "这个命令还没有提供") {
-			t.Fatalf("%v：%d %q", args, code, errOut)
-		}
-	}
 	for _, args := range [][]string{{"serve", "--x"}, {"migrate", "extra"}, {"health", "x"}, {"keys", "rotate", "x"}} {
 		if code, _, _ := run(t, config.MapEnv{}, args...); code != 64 {
 			t.Fatalf("%v 不收参数：%d", args, code)
@@ -129,7 +124,7 @@ func TestMigrateThenServeRefusesBehindLedger(t *testing.T) {
 		t.Fatalf("serve 不自动迁移：%d %q", code, errOut)
 	}
 	code, out, errOut := run(t, env, "migrate")
-	if code != 0 || !strings.Contains(out, "本次新增 9 个") {
+	if code != 0 || !strings.Contains(out, "本次新增 10 个") {
 		t.Fatalf("migrate：%d %q %q", code, out, errOut)
 	}
 	// 再迁移一次是空操作。

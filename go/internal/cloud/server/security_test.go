@@ -351,17 +351,19 @@ func TestOperatorLoginScope(t *testing.T) {
 	r.expect(login(normalEmail, password), 403, "forbidden")
 	_, opEmail := r.operator(core.TransportBearer)
 	r.expect(login(opEmail, password), 403, "operator_mfa_required")
-	// 已登记两步验证的运营账号走挑战（auth.mfaVerify，S7）：本批答 501。
+	// 已登记两步验证的运营账号走挑战（auth.mfaVerify）：口令对了答挑战，不建会话（完整流程见 operator_test.go）。
 	var accountID string
 	if err := r.run.DB.Pool().QueryRow(context.Background(), "SELECT account_id FROM accounts WHERE email = $1", opEmail).Scan(&accountID); err != nil {
 		t.Fatal(err)
 	}
 	r.exec(`INSERT INTO account_credentials (tenant_id, credential_id, account_id, kind, secret_wrap, created_at_ms) VALUES ('cloud', 'c1', $1, 'totp', 'x', 1)`, accountID)
-	r.expect(login(opEmail, password), 501, "not_implemented")
+	if res := login(opEmail, password); res.status != 200 || res.json["mfa"] == nil || res.json["session"] != nil {
+		t.Fatalf("运营登录答挑战：%d %s", res.status, res.body)
+	}
 	if got := r.do("GET", "/v1/me", nil, nil); got.status != 401 {
 		t.Fatal(got.status)
 	}
-	r.expect(r.do("POST", "/v1/auth/mfa/verify", map[string]any{"challengeId": "x", "code": "123456"}, nil), 501, "not_implemented")
+	r.expect(r.do("POST", "/v1/auth/mfa/verify", map[string]any{"challengeId": "x", "code": "123456"}, nil), 410, "mfa_expired")
 	// 普通登录不带 scope 的运营账号：拿到普通会话，能看到 operator 范围。
 	res := r.login(opEmail, password, nil)
 	r.expect(res, 200, "")
