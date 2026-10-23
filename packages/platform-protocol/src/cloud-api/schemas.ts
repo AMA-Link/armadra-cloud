@@ -26,15 +26,17 @@ export const empty = z.object({});
 
 /** 挑战的提供方（cloud-api §16，0.3.5 起）。 */
 export const challengeProviderSchema = z.enum(["turnstile"]);
-/** 要挑战的 procedure（`platform.info.challenge.scope`；`auth.changePassword` 0.3.10 起，cloud-api §18）。 */
+/** 要挑战的 procedure（`platform.info.challenge.scope`；`auth.changePassword` 0.3.10 起，cloud-api §18；`auth.register`、`auth.passwordResetStart` 见 §16）。 */
 export const challengeScopeSchema = z.enum([
   "auth.login",
   "links.accept",
   "auth.changePassword",
+  "auth.register",
+  "auth.passwordResetStart",
 ]);
 
 /**
- * 请求里带的挑战令牌（`auth.login` / `links.accept` 的可选 `challenge`，0.3.5 起）：页面或
+ * 请求里带的挑战令牌（`auth.login` / `links.accept` / `auth.register` 等的可选 `challenge`，0.3.5 起）：页面或
  * 手机的挑战组件交回的一次性令牌。服务端在 `platform.info.challenge.scope` 列了这条 procedure
  * 时才要求；缺失答 `challenge_required`，无效 / 过期 / 用过答 `challenge_invalid`。
  */

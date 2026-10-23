@@ -25,6 +25,8 @@ var _ saas.Store = (*saasStore)(nil)
 
 func (s *saasStore) Read() saas.Reader { return reader{q: s.d.pool} }
 
+func (s *saasStore) Queue() saas.JobQueue { return queue{d: s.d} }
+
 func (s *saasStore) Tx(ctx context.Context, fn func(tx saas.Tx) error) error {
 	var err error
 	for attempt := 1; attempt <= txAttempts; attempt++ {
@@ -118,8 +120,8 @@ func (t *saasTx) Invitations() saas.InvitationRepo { return struct{}{} }
 func (t *saasTx) Hosts() saas.HostRepo             { return struct{}{} }
 func (t *saasTx) Grants() saas.GrantRepo           { return struct{}{} }
 func (t *saasTx) Trust() saas.TrustRepo            { return struct{}{} }
-func (t *saasTx) Audit() saas.AuditRepo            { return struct{}{} }
-func (t *saasTx) Jobs() saas.JobRepo               { return struct{}{} }
+func (t *saasTx) Audit() saas.AuditRepo            { return auditRepo{q: t.q} }
+func (t *saasTx) Jobs() saas.JobRepo               { return jobRepo{q: t.q} }
 func (t *saasTx) Settings() saas.SettingsRepo      { return struct{}{} }
 func (t *saasTx) Issued() saas.IssuedRepo          { return struct{}{} }
 

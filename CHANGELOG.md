@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 新增 / Added
+
+- 协议补缺（Refs #60，Closes #84，协议 1.4 发布后的只加不改补充，协议包下一版起（暂记 0.10.1，发版时按实际版本改））：`auth.register` 与 `auth.passwordResetStart` 的入参多可选的 `challenge`，`platform.info.challenge.scope` 可含 `auth.register`（action `armadra-register`）与 `auth.passwordResetStart`（action `armadra-reset`），cloud-api §16 追加说明；`armadra-cloud` 的 `ARMADRA_CLOUD_CHALLENGE_SCOPE` 按范围生效，去掉两条「协议还没有该入口的挑战入参」的启动警告，`auth.register` 在按 IP 限流与事故开关之后、口令策略之前校验挑战。personal 不实现这两个过程，也不接受它们作范围。旧客户端应忽略 `scope` 里不认识的项（输出侧解析过滤未知项）。
+  Protocol gap fix (Refs #60, Closes #84; an additive-only supplement after the 1.4 release, from the next protocol package version (provisionally 0.10.1; adjust at release)): the inputs of `auth.register` and `auth.passwordResetStart` gain an optional `challenge`, and `platform.info.challenge.scope` may include `auth.register` (action `armadra-register`) and `auth.passwordResetStart` (action `armadra-reset`), with a note appended to cloud-api §16; `ARMADRA_CLOUD_CHALLENGE_SCOPE` of `armadra-cloud` now takes effect per entry and the two "protocol has no challenge input yet" startup warnings are gone; `auth.register` checks the challenge after the per-IP limit and the incident switch and before the password policy. Personal does not implement these two procedures and does not accept them in its scope. Clients should ignore unknown `scope` entries (the output side filters unknown entries when parsing).
+
 ## 0.10.0（2026-10-23）
 
 ### 新增 / Added

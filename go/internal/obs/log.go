@@ -98,6 +98,12 @@ func RequestID(v string) Field { return str("requestId", v) }
 func Count(v int) Field        { return num("count", int64(v)) }
 func Origin(v string) Field    { return str("origin", v) }
 
+// 作业与邮件字段：作业 id 与种类、模板名、发件箱 id、尝试次数；不含收件人、主题与正文。
+func JobID(v int64) Field     { return num("jobId", v) }
+func EmailID(v string) Field  { return str("emailId", v) }
+func Template(v string) Field { return str("template", v) }
+func Attempts(v int) Field    { return num("attempts", int64(v)) }
+
 // Code 记关闭码或错误码；只认整数与字符串，别的类型丢弃（同 TS 丢非标量）。
 func Code(v any) Field {
 	switch c := v.(type) {

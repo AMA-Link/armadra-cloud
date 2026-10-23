@@ -26,13 +26,14 @@ func newAccountID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// register 是 auth.register：按 IP 限流 → 事故开关 → 口令策略 → 事务（邮箱唯一、插账号、建设备）。
+// register 是 auth.register：按 IP 限流 → 事故开关 → 挑战 → 口令策略 → 事务（邮箱唯一、插账号、建设备）。
 func (s *Service) register(ctx context.Context, call *api.Call) (any, error) {
 	var in struct {
-		Email       string           `json:"email"`
-		Password    string           `json:"password"`
-		DisplayName string           `json:"displayName"`
-		Device      core.DeviceInput `json:"device"`
+		Email       string               `json:"email"`
+		Password    string               `json:"password"`
+		DisplayName string               `json:"displayName"`
+		Device      core.DeviceInput     `json:"device"`
+		Challenge   *core.ChallengeToken `json:"challenge"`
 	}
 	if err := call.Bind(&in); err != nil {
 		return nil, err
@@ -46,6 +47,9 @@ func (s *Service) register(ctx context.Context, call *api.Call) (any, error) {
 	}
 	if incident.RegistrationsPaused {
 		return nil, core.Fail(gen.ErrRegistrationsPaused)
+	}
+	if err := s.c.Challenge.Check(ctx, core.ScopeRegister, in.Challenge, call.IP); err != nil {
+		return nil, err
 	}
 	email, displayName := normalizeEmail(in.Email), strings.TrimSpace(in.DisplayName)
 	if displayName == "" {

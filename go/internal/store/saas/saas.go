@@ -31,6 +31,8 @@ type Store interface {
 	Tx(ctx context.Context, fn func(tx Tx) error) error
 	// Read 是不开事务的只读查询。
 	Read() Reader
+	// Queue 是作业队列的非事务操作（领取、续租、完成、失败、监听）。
+	Queue() JobQueue
 }
 
 // Reader 是只读查询；Tx 也实现它。
@@ -47,6 +49,8 @@ type Reader interface {
 	HasCredential(ctx context.Context, tenantID, accountID, kind string) (bool, error)
 	// Incident 读事故开关（platform_settings 键 incident）；没写过答全关。
 	Incident(ctx context.Context, tenantID string) (Incident, error)
+	// EmailToken 按令牌哈希读邮件令牌（含已用、已过期的）；没有答 nil。
+	EmailToken(ctx context.Context, tenantID, tokenHash string) (*EmailToken, error)
 }
 
 // Tx 是一个事务里的全部仓储。
@@ -86,6 +90,19 @@ type AccountRepo interface {
 	Create(ctx context.Context, tenantID string, account Account) error
 	// SetDisplayName 改显示名。
 	SetDisplayName(ctx context.Context, tenantID, accountID, displayName string, nowMs int64) error
+	// SetEmailVerified 记邮箱已验证（已验证的保持原时刻）。
+	SetEmailVerified(ctx context.Context, tenantID, accountID string, nowMs int64) error
+	// ChangeEmail 把邮箱换成 newEmail（小写）并记已验证；被别人占用答 ErrEmailTaken。
+	ChangeEmail(ctx context.Context, tenantID, accountID, newEmail string, nowMs int64) error
+	// InsertEmailToken 写一枚邮件令牌（只有哈希）。
+	InsertEmailToken(ctx context.Context, tenantID string, token EmailToken) error
+	// ConsumeEmailToken 一步消耗一枚未用、未过期且目的相符的令牌，答它的记录（账号与地址以此为准）；
+	// 没消耗到（已用、过期、不存在、目的不符）答 nil。
+	ConsumeEmailToken(ctx context.Context, tenantID, tokenHash, purpose string, nowMs int64) (*EmailToken, error)
+	// InvalidateEmailTokens 作废账号某目的下所有未用的令牌（记已用）；答作废了几枚。
+	InvalidateEmailTokens(ctx context.Context, tenantID, accountID, purpose string, nowMs int64) (int, error)
+	// GCEmailTokens 删过期 24 小时以上的令牌（beforeMs = now − 24 小时）。
+	GCEmailTokens(ctx context.Context, tenantID string, beforeMs int64) (int, error)
 }
 
 // TeamRepo 是团队相关的仓储（方法随 S4 加入）。团队范围的方法收 TeamScope，不收裸 teamID。
@@ -103,8 +120,51 @@ type (
 	HostRepo       interface{}
 	GrantRepo      interface{}
 	TrustRepo      interface{}
-	AuditRepo      interface{}
-	JobRepo        interface{}
 	SettingsRepo   interface{}
 	IssuedRepo     interface{}
 )
+
+// AuditRepo 是审计与安全日志（只追加）。
+type AuditRepo interface {
+	// Append 追加一行；event_id 空则由调用方先生成。
+	Append(ctx context.Context, tenantID string, entry AuditEntry) error
+}
+
+// JobRepo 是业务事务里的作业入队与发件箱。
+type JobRepo interface {
+	// Enqueue 入队一个作业（ON CONFLICT DO NOTHING）；同一事务里 pg_notify('cloud_jobs')，随提交送达。
+	// 被 dedupe / slot 挡掉答 inserted = false。
+	Enqueue(ctx context.Context, tenantID string, job NewJob, nowMs int64) (jobID int64, inserted bool, err error)
+	// InsertOutbox 写一行发件箱。
+	InsertOutbox(ctx context.Context, tenantID string, email OutboxEmail) error
+	// Outbox 读发件箱的一行并加行锁（FOR UPDATE）；没有答 nil。
+	Outbox(ctx context.Context, tenantID, emailID string) (*OutboxEmail, error)
+	// MarkOutboxSent 记发出时刻；MarkOutboxFailed 记最终失败；DeleteOutbox 删（无需发送时）。
+	MarkOutboxSent(ctx context.Context, tenantID, emailID string, nowMs int64) error
+	MarkOutboxFailed(ctx context.Context, tenantID, emailID string, nowMs int64) error
+	DeleteOutbox(ctx context.Context, tenantID, emailID string) error
+	// GCOutbox 删发出或失败早于 beforeMs 的行（outbox.gc，30 天）；GCJobs 删完成早于 doneBeforeMs、
+	// 失败早于 failedBeforeMs 的作业（jobs.gc，7 天与 30 天）。
+	GCOutbox(ctx context.Context, tenantID string, beforeMs int64) (int, error)
+	GCJobs(ctx context.Context, tenantID string, doneBeforeMs, failedBeforeMs int64) (int, error)
+}
+
+// JobQueue 是作业队列的非事务操作（设计 §6.1）。
+type JobQueue interface {
+	// Claim 领取最多 limit 个到期、未被租用、尝试次数未满且种类在 kinds 里（本实例登记过处理器）的作业：
+	// 租约到 nowMs+leaseMs，attempts 加一。
+	Claim(ctx context.Context, tenantID, worker string, kinds []string, nowMs, leaseMs int64, limit int) ([]Job, error)
+	// Release 把本实例持有的作业放回队列、不计这次尝试（关闭中被打断）：释放租约，attempts 减一。
+	Release(ctx context.Context, tenantID string, jobID int64, worker string) error
+	// SweepExhausted 把尝试次数已满、租约又过期的作业（最后一次执行时实例崩了）置 failed_at_ms、
+	// last_error = 'lease_expired'；答处理了几个。
+	SweepExhausted(ctx context.Context, tenantID string, nowMs int64) (int, error)
+	// Extend 续租；租约已丢（不是 worker 持有）答 false。
+	Extend(ctx context.Context, tenantID string, jobID int64, worker string, nowMs, leaseMs int64) (bool, error)
+	// Complete 置完成；租约已丢答 false。
+	Complete(ctx context.Context, tenantID string, jobID int64, worker string, nowMs int64) (bool, error)
+	// Fail 记一次失败：未到 max_attempts 按退避重排，到了置 failed_at_ms（dead = true）。lastError 只是类名或错误码。
+	Fail(ctx context.Context, tenantID string, job Job, worker string, nowMs int64, lastError string) (dead bool, err error)
+	// Listen 订阅 cloud_jobs 的 NOTIFY，每次通知（与重连后）调 wake；阻塞到 ctx 结束。
+	Listen(ctx context.Context, wake func())
+}

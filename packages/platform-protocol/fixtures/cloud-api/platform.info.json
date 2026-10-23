@@ -61,6 +61,33 @@
           "auth.login"
         ]
       }
+    },
+    {
+      "mode": "saas",
+      "issuer": "https://cloud.armadra.test",
+      "protocol": {
+        "major": 1,
+        "minor": 4
+      },
+      "capabilities": [
+        "auth.password",
+        "me.stream",
+        "challenge.turnstile"
+      ],
+      "relay": {
+        "addressing": "subdomain"
+      },
+      "webApp": "https://app.armadra.test",
+      "registrationsOpen": true,
+      "challenge": {
+        "provider": "turnstile",
+        "siteKey": "test-site-key",
+        "scope": [
+          "auth.login",
+          "auth.register",
+          "auth.passwordResetStart"
+        ]
+      }
     }
   ]
 }
