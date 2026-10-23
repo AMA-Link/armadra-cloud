@@ -54,7 +54,8 @@ func (s *Service) runPartitions(ctx context.Context, _ saas.Job) error {
 }
 
 // runRetention 是 audit.retention：
-//   - 团队审计按团队当前的计划删超期的行，一个团队一个团队地删，只动 team_id 相符的行；
+//   - 团队审计按团队当前的计划删超期的行，一个团队一个团队地删，只动 team_id 相符的行；已清除的团队（teams 表里已没有）
+//     审计行按设计保留，不按 free 的 7 天删，只随 13 个月的整月分区 DROP；
 //   - 账号安全日志固定 90 天；
 //   - 整月都超过 13 个月的分区直接 DROP。
 //
@@ -86,7 +87,7 @@ func (s *Service) pruneTeams(ctx context.Context, now time.Time) error {
 	scanBefore := now.Add(-quota.ShortestAuditRetention()).UnixMilli()
 	after := ""
 	for {
-		var teams []string
+		var teams []saas.RetentionTeam
 		err := s.store.Tx(ctx, func(tx saas.Tx) (err error) {
 			teams, err = tx.Retention().TeamsWithAuditBefore(ctx, s.tenant(), scanBefore, after, teamBatch)
 			return err
@@ -94,30 +95,22 @@ func (s *Service) pruneTeams(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return err
 		}
-		for _, teamID := range teams {
-			if err := s.pruneTeam(ctx, now, teamID); err != nil {
+		for _, team := range teams {
+			if err := s.pruneTeam(ctx, now, team); err != nil {
 				return err
 			}
 		}
 		if len(teams) < teamBatch {
 			return nil
 		}
-		after = teams[len(teams)-1]
+		after = teams[len(teams)-1].TeamID
 	}
 }
 
-func (s *Service) pruneTeam(ctx context.Context, now time.Time, teamID string) error {
-	plan := saas.FreePlan
-	entitlement, err := s.store.Read().Entitlement(ctx, s.tenant(), saas.SpaceTeam, teamID)
-	if err != nil {
-		return err
-	}
-	if entitlement != nil {
-		plan = entitlement.Plan
-	}
-	before := now.Add(-quota.AuditRetention(plan)).UnixMilli()
+func (s *Service) pruneTeam(ctx context.Context, now time.Time, team saas.RetentionTeam) error {
+	before := now.Add(-quota.AuditRetention(team.Plan)).UnixMilli()
 	return s.loop(ctx, func(tx saas.Tx) (int, error) {
-		return tx.Retention().PruneTeamAudit(ctx, s.tenant(), teamID, before, pruneBatch)
+		return tx.Retention().PruneTeamAudit(ctx, s.tenant(), team.TeamID, before, pruneBatch)
 	})
 }
 

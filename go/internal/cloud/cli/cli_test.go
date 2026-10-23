@@ -122,7 +122,7 @@ func TestMigrateThenServeRefusesBehindLedger(t *testing.T) {
 		t.Fatalf("serve 不自动迁移：%d %q", code, errOut)
 	}
 	code, out, errOut := run(t, env, "migrate")
-	if code != 0 || !strings.Contains(out, "本次新增 9 个") {
+	if code != 0 || !strings.Contains(out, "本次新增 10 个") {
 		t.Fatalf("migrate：%d %q %q", code, out, errOut)
 	}
 	// 再迁移一次是空操作。
