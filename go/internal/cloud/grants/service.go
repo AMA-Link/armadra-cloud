@@ -48,8 +48,9 @@ const (
 // workspacePattern 是 scp 里 ws:<id> 的 id（协议包 scopeEntrySchema）。
 var workspacePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 
-// cleanWorkspaces 校验并去重排序：每项符合 scopeEntrySchema，至多 64 项。
-func cleanWorkspaces(ids []string) ([]string, error) {
+// CleanWorkspaces 校验并去重排序：每项符合 scopeEntrySchema，至多 64 项；不合格 400 bad_request。
+// 主机邀请的 workspaceIds 也走它，两处的校验保持一致。
+func CleanWorkspaces(ids []string) ([]string, error) {
 	out := sortedUnique(ids)
 	if len(out) > MaxScopeEntries {
 		return nil, core.Fail(gen.ErrBadRequest)
@@ -216,9 +217,9 @@ func (s *Service) record(ctx context.Context, tx saas.Tx, ip, actorKind, actorID
 
 // ---- 管理权 ----
 
-// find 读调用者看得到的一台未撤销的主机；看不到（不存在、别人的、别的团队的）答 not_found。
-func (s *Service) find(ctx context.Context, r saas.Reader, viewerID, sourceID string) (saas.Host, error) {
-	rows, err := s.policy.Hosts(ctx, r, saas.HostFilter{ViewerID: viewerID, SourceID: sourceID, Limit: 1})
+// FindHost 读 viewer 看得到的一台未撤销的主机；看不到（不存在、别人的、别的团队的）答 not_found。
+func FindHost(ctx context.Context, r saas.Reader, tenantID string, nowMs int64, viewerID, sourceID string) (saas.Host, error) {
+	rows, err := r.ListHosts(ctx, tenantID, saas.HostFilter{ViewerID: viewerID, SourceID: sourceID, NowMs: nowMs, Limit: 1})
 	if err != nil {
 		return saas.Host{}, err
 	}
@@ -228,37 +229,50 @@ func (s *Service) find(ctx context.Context, r saas.Reader, viewerID, sourceID st
 	return rows[0], nil
 }
 
-// denyManage 是看得到却管不了时的错误：团队主机答 team_role_insufficient，个人空间答 source_access_denied。
-func denyManage(h saas.Host) error {
+// DenyManage 是看得到却管不了时的错误：团队主机答 team_role_insufficient，个人空间答 source_access_denied。
+func DenyManage(h saas.Host) error {
 	if h.TeamID != "" {
 		return core.Fail(gen.ErrTeamRoleInsufficient)
 	}
 	return core.Fail(gen.ErrSourceAccessDenied)
 }
 
-// manage 在事务里核管理权：团队主机先锁团队行（团队 → 账号 → 其余的顺序）并核成员，再锁主机、重读，
-// 看不到答 not_found，看得到但管不了答 denyManage。
-func (s *Service) manage(ctx context.Context, tx saas.Tx, accountID, sourceID string) (saas.Host, error) {
-	first, err := s.find(ctx, tx, accountID, sourceID)
+// ManageHost 在事务里核管理权（主机所有者，或团队主机的团队 owner / admin）：团队主机先锁团队行（团队 → 账号 → 其余的
+// 顺序）并核成员，再锁主机、重读，看不到答 not_found，看得到但管不了答 DenyManage。授予、主机邀请与分享链接共用它。
+func ManageHost(ctx context.Context, tx saas.Tx, tenantID string, nowMs int64, accountID, sourceID string) (saas.Host, error) {
+	first, err := FindHost(ctx, tx, tenantID, nowMs, accountID, sourceID)
 	if err != nil {
 		return saas.Host{}, err
 	}
 	if first.TeamID != "" {
-		if _, err := teams.Lock(ctx, tx, s.tenant(), accountID, first.TeamID, teams.MinStaff); err != nil {
+		if _, err := teams.Lock(ctx, tx, tenantID, accountID, first.TeamID, teams.MinStaff); err != nil {
 			return saas.Host{}, err
 		}
 	}
-	if err := tx.Hosts().LockSource(ctx, s.tenant(), sourceID); err != nil {
+	if err := tx.Hosts().LockSource(ctx, tenantID, sourceID); err != nil {
 		return saas.Host{}, err
 	}
-	h, err := s.find(ctx, tx, accountID, sourceID)
+	h, err := FindHost(ctx, tx, tenantID, nowMs, accountID, sourceID)
 	if err != nil {
 		return saas.Host{}, err
 	}
 	if !h.CanManage(accountID) {
-		return saas.Host{}, denyManage(h)
+		return saas.Host{}, DenyManage(h)
 	}
 	return h, nil
+}
+
+// find 读调用者看得到的一台未撤销的主机；看不到答 not_found。
+func (s *Service) find(ctx context.Context, r saas.Reader, viewerID, sourceID string) (saas.Host, error) {
+	return FindHost(ctx, r, s.tenant(), s.nowMs(), viewerID, sourceID)
+}
+
+// denyManage 是看得到却管不了时的错误：团队主机答 team_role_insufficient，个人空间答 source_access_denied。
+func denyManage(h saas.Host) error { return DenyManage(h) }
+
+// manage 在事务里核管理权，见 ManageHost。
+func (s *Service) manage(ctx context.Context, tx saas.Tx, accountID, sourceID string) (saas.Host, error) {
+	return ManageHost(ctx, tx, s.tenant(), s.nowMs(), accountID, sourceID)
 }
 
 // manageRead 是 manage 的只读版（列表与有效权限，不写库不加锁）。
@@ -337,22 +351,57 @@ func narrowedAccounts(before, after map[string]Effective) []string {
 // revokeAccess 在提交后撤销这些账号在该主机上已签的断言与中继令牌并踢掉他们的连接（重连时按新权限重新签）。
 // 失败只记日志：重试与全量重放由 S8 的 relayctl 兜底。
 func (s *Service) revokeAccess(tx saas.Tx, sourceID string, accounts []string, reason string) {
+	RevokeAccess(tx, s.relay, s.log, sourceID, accounts, reason)
+}
+
+// RevokeAccess 同 Service.revokeAccess，给授予服务之外的调用方（主机邀请合并时收窄了已有授予）用。
+func RevokeAccess(tx saas.Tx, relay relayctl.Control, log *obs.Logger, sourceID string, accounts []string, reason string) {
 	if len(accounts) == 0 {
 		return
 	}
 	accounts = slices.Clone(accounts)
 	tx.AfterCommit(func(ctx context.Context) {
 		for _, id := range accounts {
-			if _, err := s.relay.RevokeWhere(ctx, relayctl.Filter{Subject: id, SourceID: sourceID}); err != nil {
-				s.log.Warn("撤销已签令牌失败", obs.Operation("grants.revoke"), obs.SourceID(sourceID), obs.Error(err))
+			if _, err := relay.RevokeWhere(ctx, relayctl.Filter{Subject: id, SourceID: sourceID}); err != nil {
+				log.Warn("撤销已签令牌失败", obs.Operation("grants.revoke"), obs.SourceID(sourceID), obs.Error(err))
 			}
 		}
 		for _, id := range accounts {
-			if err := s.relay.Kick(ctx, relayctl.KickFilter{SourceID: sourceID, Subject: id}, reason); err != nil {
-				s.log.Warn("踢掉连接失败", obs.Operation("grants.kick"), obs.SourceID(sourceID), obs.Error(err))
+			if err := relay.Kick(ctx, relayctl.KickFilter{SourceID: sourceID, Subject: id}, reason); err != nil {
+				log.Warn("踢掉连接失败", obs.Operation("grants.kick"), obs.SourceID(sourceID), obs.Error(err))
 			}
 		}
 	})
+}
+
+// revokeInvites 把发给这些账号邮箱、在这台主机上的待处理主机邀请改成 revoked：授予被撤销或收窄之后，旧邀请不能再接受回来
+// （接受会按「角色取高、到期取晚」放宽甚至清掉新加的到期）。
+func (s *Service) revokeInvites(ctx context.Context, tx saas.Tx, sourceID string, accounts []string, actor string) error {
+	for _, id := range accounts {
+		person, err := tx.Account(ctx, s.tenant(), id)
+		if err != nil {
+			return err
+		}
+		if person == nil {
+			continue
+		}
+		revoked, err := tx.Invitations().RevokeHostByEmail(ctx, s.tenant(), person.Email, "", sourceID, actor, s.nowMs())
+		if err != nil {
+			return err
+		}
+		for _, inv := range revoked {
+			s.events.InvitationChanged(tx, inv, saas.InvitationRevoked)
+		}
+	}
+	return nil
+}
+
+// personal 是授予直接指向的账号（member / guest 主体）；team 主体不指向某个邮箱，没有待作废的邀请。
+func personal(g saas.Grant) []string {
+	if g.SubjectKind == saas.GrantSubjectMember || g.SubjectKind == saas.GrantSubjectGuest {
+		return []string{g.SubjectID}
+	}
+	return nil
 }
 
 // ---- grants.list / effective ----
@@ -501,7 +550,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 	if in.ExpiresAtMs != nil && *in.ExpiresAtMs <= nowMs {
 		return nil, core.Fail(gen.ErrBadRequest)
 	}
-	workspaces, err := cleanWorkspaces(in.WorkspaceIDs)
+	workspaces, err := CleanWorkspaces(in.WorkspaceIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -631,7 +680,11 @@ type expirePayload struct {
 
 // scheduleExpiry 把到期作业排到授予到期的那一刻（先撤掉旧的，改到期时间时用）；没有到期就只撤旧的。
 func (s *Service) scheduleExpiry(ctx context.Context, tx saas.Tx, grantID string, expiresAtMs *int64, nowMs int64) error {
-	if err := tx.Jobs().Cancel(ctx, s.tenant(), JobExpire, grantID); err != nil {
+	return scheduleExpiry(ctx, tx, s.tenant(), grantID, expiresAtMs, nowMs)
+}
+
+func scheduleExpiry(ctx context.Context, tx saas.Tx, tenantID, grantID string, expiresAtMs *int64, nowMs int64) error {
+	if err := tx.Jobs().Cancel(ctx, tenantID, JobExpire, grantID); err != nil {
 		return err
 	}
 	if expiresAtMs == nil {
@@ -641,7 +694,7 @@ func (s *Service) scheduleExpiry(ctx context.Context, tx saas.Tx, grantID string
 	if err != nil {
 		return err
 	}
-	_, _, err = tx.Jobs().Enqueue(ctx, s.tenant(), saas.NewJob{Kind: JobExpire, Payload: payload, RunAtMs: *expiresAtMs, DedupeKey: grantID}, nowMs)
+	_, _, err = tx.Jobs().Enqueue(ctx, tenantID, saas.NewJob{Kind: JobExpire, Payload: payload, RunAtMs: *expiresAtMs, DedupeKey: grantID}, nowMs)
 	return err
 }
 
@@ -693,7 +746,7 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 		return nil, core.Fail(gen.ErrBadRequest)
 	}
 	if hasWorkspaces {
-		ws, err := cleanWorkspaces(in.WorkspaceIDs)
+		ws, err := CleanWorkspaces(in.WorkspaceIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -745,7 +798,11 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 				return err
 			}
 		}
-		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_changed")
+		narrowed := narrowedAccounts(before, after)
+		if err := s.revokeInvites(ctx, tx, g.SourceID, narrowed, account.AccountID); err != nil {
+			return err
+		}
+		s.revokeAccess(tx, g.SourceID, narrowed, "grant_changed")
 		s.events.GrantChanged(tx, g)
 		if err := s.record(ctx, tx, call.IP, saas.ActorAccount, account.AccountID, h.TeamID, g.SourceID, ActionUpdate, "grant", g.GrantID); err != nil {
 			return err
@@ -794,6 +851,9 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		if err := tx.Jobs().Cancel(ctx, s.tenant(), JobExpire, g.GrantID); err != nil {
+			return err
+		}
+		if err := s.revokeInvites(ctx, tx, g.SourceID, personal(g), account.AccountID); err != nil {
 			return err
 		}
 		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_revoked")

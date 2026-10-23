@@ -367,8 +367,8 @@ func TestInvitationPermissionsAndQuotas(t *testing.T) {
 	r.exec("UPDATE accounts SET email_verified_at_ms = 1 WHERE account_id = $1", admin.accountID)
 	r.exec("UPDATE teams SET deleted_at_ms = 1, purge_at_ms = 2 WHERE team_id = $1", other)
 	r.expect(r.invite(outsider, other, r.email(), "member"), 410, "team_deleted")
-	// 主机邀请随 S6：501。
-	r.expect(r.do("POST", "/v1/invitations", map[string]any{"kind": "host", "sourceId": strings.Repeat("a", 32), "email": r.email(), "role": "viewer"}, admin.bearer()), 501, "not_implemented")
+	// 主机邀请：不存在的主机 404。
+	r.expect(r.do("POST", "/v1/invitations", map[string]any{"kind": "host", "sourceId": strings.Repeat("a", 32), "email": r.email(), "role": "viewer"}, admin.bearer()), 404, "not_found")
 }
 
 // 接受时再核额度：待处理的邀请占着席位，自己那条不重复计。

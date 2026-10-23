@@ -36,6 +36,8 @@ const (
 	NewDevice       = "new_device"
 	// TeamInvitation 是团队邀请邮件：链接带邀请 id 与一次性令牌（令牌在 # 片段里，S4）。
 	TeamInvitation = "team_invitation"
+	// HostInvitation 是主机邀请邮件（S6）：同团队邀请，链接带邀请 id 与一次性令牌。
+	HostInvitation = "host_invitation"
 )
 
 // Data 是渲染模板的数据。令牌只出现在 Link 的 # 片段里，且只在内存中。
@@ -51,12 +53,20 @@ type Data struct {
 	TeamName    string
 	InviterName string
 	RoleLabel   string
+	// HostName 是主机邀请的主机名（用户填的字符串，渲染前已 SanitizeLabel）。
+	HostName string
 }
 
-// roleLabels 是团队角色在邮件里的叫法。
+// roleLabels 是团队角色与主机角色在邮件里的叫法。
 var roleLabels = map[string]map[string]string{
-	LocaleZH: {"admin": "管理员", "member": "成员", "billing": "账单管理员", "guest": "访客"},
-	LocaleEN: {"admin": "an admin", "member": "a member", "billing": "a billing manager", "guest": "a guest"},
+	LocaleZH: {
+		"admin": "管理员", "member": "成员", "billing": "账单管理员", "guest": "访客",
+		"viewer": "查看者", "editor": "编辑者", "operator": "操作者", "driver": "驱动者",
+	},
+	LocaleEN: {
+		"admin": "an admin", "member": "a member", "billing": "a billing manager", "guest": "a guest",
+		"viewer": "a viewer", "editor": "an editor", "operator": "an operator", "driver": "a driver",
+	},
 }
 
 // RoleLabel 是团队角色在某种语言里的叫法；不认识的角色答空串，语言不认识时退回中文。

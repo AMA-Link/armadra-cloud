@@ -45,6 +45,10 @@ var (
 // GuestsAllowed 报告主机设置是否允许授予访客（allowGuests，缺省 true）。
 func GuestsAllowed(h saas.Host) bool { return settingsOf(h).AllowGuests }
 
+// LinkCreatorsOf 是主机设置里谁能签分享链接：owner（仅主机所有者）、owner_admin（缺省，加团队 owner / admin）、
+// driver（再加有效角色为 driver 的人）。
+func LinkCreatorsOf(h saas.Host) string { return settingsOf(h).LinkCreators }
+
 // settingsOf 是主机的生效设置：缺省 ← 团队的 defaultHostRole（只作 defaultRole 的预选值）← 主机自己写过的项。
 func settingsOf(h saas.Host) hostSettings {
 	out := hostSettings{LinkCreators: "owner_admin", AllowGuests: true, DefaultRole: "viewer"}

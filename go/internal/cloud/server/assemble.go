@@ -179,7 +179,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 
 	handlers := map[string]api.Handler{}
 	for name, handler := range accounts.New(accounts.Options{
-		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer, Stream: stream,
+		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer, Events: publisher, Stream: stream,
 		Unknown: lockouts, LoginGuard: lockouts.Guard, AppOrigin: cfg.AppOrigin,
 		MFA: &admin.RedisChallenges{Client: redisClient}, Wrapper: db.Wrapper(),
 	}).Handlers() {
@@ -194,7 +194,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 		handlers[name] = handler
 	}
 	inviteService := invitations.New(invitations.Options{
-		Core: coreCtx, Store: saasStore, Limits: limits, Mail: mailer, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+		Core: coreCtx, Store: saasStore, Limits: limits, Mail: mailer, Relay: durable, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
 		Events: publisher,
 	})
 	inviteService.Register(runner)

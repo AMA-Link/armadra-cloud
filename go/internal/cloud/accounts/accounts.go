@@ -11,6 +11,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/admin"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
@@ -31,6 +32,8 @@ type Options struct {
 	Limits *httpx.Limits
 	// Mail 把事务邮件插进发件箱（验证邮箱、找回口令、新设备提醒等）。
 	Mail *mail.Service
+	// Events 发领域事件；nil = 不发。
+	Events *events.Publisher
 	// Unknown 存未注册邮箱的失败计数与锁定（多实例共享的 Redis 版）；nil = 进程内计数。
 	Unknown core.UnknownStore
 	// Stream 发 me-stream 的票（me.streamTicket，票存在 Redis，任一实例都能兑换）；nil = 不实现这个过程（答 501）。
@@ -56,6 +59,7 @@ type Service struct {
 	gate   *httpx.Gate
 	limits *httpx.Limits
 	mail   *mail.Service
+	events *events.Publisher
 	// unknown 给未注册的邮箱同样计失败、同样锁定：锁定不暴露邮箱有没有注册。
 	unknown core.UnknownAccounts
 	stream  *core.MeStream
@@ -72,7 +76,7 @@ type Service struct {
 // New 建账号服务。
 func New(options Options) *Service {
 	s := &Service{
-		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits, mail: options.Mail,
+		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits, mail: options.Mail, events: options.Events,
 		appOrigin: strings.TrimRight(options.AppOrigin, "/"), onDeviceDecision: options.OnDeviceDecision,
 		mfa: options.MFA, wrapper: options.Wrapper,
 	}

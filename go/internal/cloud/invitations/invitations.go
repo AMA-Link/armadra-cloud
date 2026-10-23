@@ -1,6 +1,7 @@
-// Package invitations 是团队邀请的过程（设计 §4.4）：create / list / revoke / resend / get / accept / decline。
+// Package invitations 是邀请的过程（设计 §4.4、§4.7）：create / list / revoke / resend / get / accept / decline，
+// 两类邀请共用一套：团队邀请（接受后成为团队成员）与主机邀请（接受后落成云端授予，host.go）。
 // 邮件里的链接是 <APP_ORIGIN>/invite/<invitationId>#<令牌>：令牌只在片段里、库里只存哈希，由发信作业生成
-// （见 cloud/mail）。主机邀请（kind = host）随 S6，这里答 501 not_implemented。
+// （见 cloud/mail）。
 package invitations
 
 import (
@@ -12,10 +13,12 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/quota"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -44,6 +47,8 @@ type Options struct {
 	Store  saas.Store
 	Limits *httpx.Limits
 	Mail   *mail.Service
+	// Relay 在主机邀请合并收窄了已有授予时撤销已签的令牌并踢人（经 tx.AfterCommit）。
+	Relay relayctl.Control
 	// RequireEmailVerified 为真时未验证邮箱的账号不能邀请或接受（设计 §4.3）。
 	RequireEmailVerified bool
 	Log                  *obs.Logger
@@ -57,6 +62,7 @@ type Service struct {
 	store    saas.Store
 	limits   *httpx.Limits
 	mail     *mail.Service
+	relay    relayctl.Control
 	verified bool
 	log      *obs.Logger
 	events   *events.Publisher
@@ -69,7 +75,7 @@ func New(options Options) *Service {
 		log = obs.Nop()
 	}
 	return &Service{
-		c: options.Core, store: options.Store, limits: options.Limits, mail: options.Mail,
+		c: options.Core, store: options.Store, limits: options.Limits, mail: options.Mail, relay: options.Relay,
 		verified: options.RequireEmailVerified, log: log, events: options.Events,
 	}
 }
@@ -155,9 +161,14 @@ func (s *Service) verifiedMe(ctx context.Context, call *api.Call) (*saas.Account
 }
 
 func (s *Service) record(ctx context.Context, tx saas.Tx, call *api.Call, actor, teamID, action, invitationID string) error {
+	return s.recordFor(ctx, tx, call, actor, teamID, "", action, invitationID)
+}
+
+// recordFor 同 record，主机邀请另记主机。
+func (s *Service) recordFor(ctx context.Context, tx saas.Tx, call *api.Call, actor, teamID, sourceID, action, invitationID string) error {
 	return audit.Write(ctx, tx, s.tenant(), s.nowMs(), saas.AuditEntry{
 		TeamID: teamID, ActorKind: saas.ActorAccount, ActorID: actor, Action: action, TargetKind: "invitation", TargetID: invitationID,
-		IPPrefix: audit.IPPrefix(call.IP),
+		SourceID: sourceID, IPPrefix: audit.IPPrefix(call.IP),
 	})
 }
 
@@ -169,26 +180,35 @@ func state(inv saas.Invitation, nowMs int64) string {
 	return inv.State
 }
 
-// invitationOut 是邀请的线上形状（协议包 invitationSchema，团队邀请）。
+// invitationOut 是邀请的线上形状（协议包 invitationSchema）：团队邀请带 teamId / teamRole，主机邀请带 sourceId /
+// hostRole / workspaceIds。
 type invitationOut struct {
-	InvitationID string `json:"invitationId"`
-	Kind         string `json:"kind"`
-	Email        string `json:"email"`
-	State        string `json:"state"`
-	TeamID       string `json:"teamId,omitempty"`
-	TeamRole     string `json:"teamRole,omitempty"`
-	InvitedBy    string `json:"invitedBy"`
-	CreatedAtMs  int64  `json:"createdAtMs"`
-	ExpiresAtMs  int64  `json:"expiresAtMs"`
-	DecidedAtMs  *int64 `json:"decidedAtMs"`
+	InvitationID string   `json:"invitationId"`
+	Kind         string   `json:"kind"`
+	Email        string   `json:"email"`
+	State        string   `json:"state"`
+	TeamID       string   `json:"teamId,omitempty"`
+	TeamRole     string   `json:"teamRole,omitempty"`
+	SourceID     string   `json:"sourceId,omitempty"`
+	HostRole     string   `json:"hostRole,omitempty"`
+	WorkspaceIDs []string `json:"workspaceIds,omitempty"`
+	InvitedBy    string   `json:"invitedBy"`
+	CreatedAtMs  int64    `json:"createdAtMs"`
+	ExpiresAtMs  int64    `json:"expiresAtMs"`
+	DecidedAtMs  *int64   `json:"decidedAtMs"`
 }
 
 func view(inv saas.Invitation, nowMs int64) invitationOut {
-	return invitationOut{
-		InvitationID: inv.InvitationID, Kind: inv.Kind, Email: inv.Email, State: state(inv, nowMs), TeamID: inv.TeamID,
-		TeamRole: string(inv.TeamRole), InvitedBy: inv.InvitedBy, CreatedAtMs: inv.CreatedAtMs, ExpiresAtMs: inv.ExpiresAtMs,
-		DecidedAtMs: inv.DecidedAtMs,
+	out := invitationOut{
+		InvitationID: inv.InvitationID, Kind: inv.Kind, Email: inv.Email, State: state(inv, nowMs),
+		InvitedBy: inv.InvitedBy, CreatedAtMs: inv.CreatedAtMs, ExpiresAtMs: inv.ExpiresAtMs, DecidedAtMs: inv.DecidedAtMs,
 	}
+	if inv.Kind == saas.InvitationHost {
+		out.SourceID, out.HostRole, out.WorkspaceIDs = inv.SourceID, inv.HostRole, inv.WorkspaceIDs
+		return out
+	}
+	out.TeamID, out.TeamRole = inv.TeamID, string(inv.TeamRole)
+	return out
 }
 
 func normalizeEmail(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
@@ -209,16 +229,16 @@ func matchesToken(inv *saas.Invitation, token string) bool {
 // 事务里先把同 (团队, 邮箱) 下已过期的 pending 改成 expired，否则它们会占着部分唯一索引挡住重新邀请。
 func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 	var in struct {
-		Kind   string        `json:"kind"`
-		TeamID string        `json:"teamId"`
-		Email  string        `json:"email"`
-		Role   saas.TeamRole `json:"role"`
+		Kind         string   `json:"kind"`
+		TeamID       string   `json:"teamId"`
+		SourceID     string   `json:"sourceId"`
+		Email        string   `json:"email"`
+		Role         string   `json:"role"`
+		WorkspaceIDs []string `json:"workspaceIds"`
+		ExpiresAtMs  *int64   `json:"expiresAtMs"`
 	}
 	if err := call.Bind(&in); err != nil {
 		return nil, err
-	}
-	if in.Kind != saas.InvitationTeam {
-		return nil, core.Fail(gen.ErrNotImplemented) // 主机邀请随 S6
 	}
 	account, err := s.verifiedMe(ctx, call)
 	if err != nil {
@@ -227,6 +247,14 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 	if err := s.limits.Check(ctx, httpx.LimitInviteAcct, account.AccountID); err != nil {
 		return nil, err
 	}
+	if in.Kind == saas.InvitationHost {
+		return s.createHost(ctx, call, account, hostInput{
+			SourceID: in.SourceID, Email: in.Email, Role: in.Role, WorkspaceIDs: in.WorkspaceIDs, GrantExpiresAtMs: in.ExpiresAtMs,
+		})
+	}
+	if in.Kind != saas.InvitationTeam {
+		return nil, core.Fail(gen.ErrBadRequest)
+	}
 	email := normalizeEmail(in.Email)
 	var out invitationOut
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
@@ -234,7 +262,8 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		if in.Role == saas.TeamRole("guest") && !teams.SettingsOf(access.Team).AllowGuests {
+		role := saas.TeamRole(in.Role)
+		if role == saas.TeamRole("guest") && !teams.SettingsOf(access.Team).AllowGuests {
 			return core.Fail(gen.ErrGuestsDisabled)
 		}
 		nowMs := s.nowMs()
@@ -257,11 +286,11 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		} else if pending {
 			return core.Fail(gen.ErrConflict)
 		}
-		if err := s.checkSeat(ctx, tx, access, in.Role, nowMs); err != nil {
+		if err := s.checkSeat(ctx, tx, access, role, nowMs); err != nil {
 			return err
 		}
 		inv := saas.Invitation{
-			InvitationID: core.NewUUID(), Kind: saas.InvitationTeam, Email: email, TeamID: in.TeamID, TeamRole: in.Role,
+			InvitationID: core.NewUUID(), Kind: saas.InvitationTeam, Email: email, TeamID: in.TeamID, TeamRole: role,
 			InvitedBy: account.AccountID, CreatedAtMs: nowMs, ExpiresAtMs: nowMs + TTL.Milliseconds(), State: saas.InvitationPending,
 		}
 		if err := tx.Invitations().Insert(ctx, access.Scope, inv); err != nil {
@@ -316,16 +345,15 @@ func (s *Service) enqueueMail(ctx context.Context, tx saas.Tx, team saas.Team, i
 	})
 }
 
-// list 是 invitations.list：box = sent（缺省）是自己能管的团队邀请，可按 teamId 过滤；box = received 是发给
-// 自己邮箱的待处理邀请。主机邀请的筛选（sourceId）随 S6。
+// list 是 invitations.list：box = sent（缺省）是自己能管的邀请——团队邀请（可按 teamId 过滤）与主机邀请（可按
+// sourceId 过滤；不过滤时是调用者管得了的全部主机）；box = received 是发给自己邮箱的待处理邀请。
 func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 	account, err := s.me(ctx, call)
 	if err != nil {
 		return nil, err
 	}
-	if _, has := call.Input["sourceId"]; has {
-		return nil, core.Fail(gen.ErrNotImplemented)
-	}
+	sourceID, _ := call.Input["sourceId"].(string)
+	teamFilter, _ := call.Input["teamId"].(string)
 	nowMs := s.nowMs()
 	box, _ := call.Input["box"].(string)
 	out := []invitationOut{}
@@ -345,34 +373,15 @@ func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 		return map[string]any{"invitations": out}, nil
 	}
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
-		var teamIDs []string
-		if id, ok := call.Input["teamId"].(string); ok {
-			teamIDs = []string{id}
-		} else {
-			accesses, err := tx.TeamsOf(ctx, s.tenant(), account.AccountID)
-			if err != nil {
+		if sourceID == "" {
+			if err := s.listTeamInvitations(ctx, tx, account, teamFilter, nowMs, &out); err != nil {
 				return err
-			}
-			for _, a := range accesses {
-				if !a.Team.Deleted() && (a.Role == "owner" || a.Role == "admin") {
-					teamIDs = append(teamIDs, a.Team.TeamID)
-				}
 			}
 		}
-		for _, id := range teamIDs {
-			access, err := teams.Require(ctx, tx, s.tenant(), account.AccountID, id, teams.MinAdmin)
-			if err != nil {
-				return err
-			}
-			list, err := tx.Invitations().List(ctx, access.Scope)
-			if err != nil {
-				return err
-			}
-			for _, inv := range list {
-				out = append(out, view(inv, nowMs))
-			}
+		if teamFilter != "" && sourceID == "" {
+			return nil // 只按团队过滤时不混进主机邀请
 		}
-		return nil
+		return s.listHostInvitations(ctx, tx, account, sourceID, nowMs, &out)
 	})
 	if err != nil {
 		return nil, err
@@ -380,32 +389,87 @@ func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 	return map[string]any{"invitations": out}, nil
 }
 
-// lockForManage 找邀请、锁它所属的团队行、核调用者是 admin、再锁邀请行；返回团队访问与邀请。
-// 邀请不存在、不是团队邀请答 404；不是成员也答 404，角色不够 403。
-func (s *Service) lockForManage(ctx context.Context, tx saas.Tx, accountID, invitationID string) (teams.Access, *saas.Invitation, error) {
+func (s *Service) listTeamInvitations(ctx context.Context, tx saas.Tx, account *saas.Account, teamFilter string, nowMs int64, out *[]invitationOut) error {
+	var teamIDs []string
+	if teamFilter != "" {
+		teamIDs = []string{teamFilter}
+	} else {
+		accesses, err := tx.TeamsOf(ctx, s.tenant(), account.AccountID)
+		if err != nil {
+			return err
+		}
+		for _, a := range accesses {
+			if !a.Team.Deleted() && (a.Role == "owner" || a.Role == "admin") {
+				teamIDs = append(teamIDs, a.Team.TeamID)
+			}
+		}
+	}
+	for _, id := range teamIDs {
+		access, err := teams.Require(ctx, tx, s.tenant(), account.AccountID, id, teams.MinAdmin)
+		if err != nil {
+			return err
+		}
+		list, err := tx.Invitations().List(ctx, access.Scope)
+		if err != nil {
+			return err
+		}
+		for _, inv := range list {
+			*out = append(*out, view(inv, nowMs))
+		}
+	}
+	return nil
+}
+
+// managed 是 lockForManage 的结果：锁住的邀请，以及它所属的团队访问（团队邀请）或主机（主机邀请）。
+type managed struct {
+	inv    *saas.Invitation
+	access teams.Access
+	host   saas.Host
+}
+
+// teamID 是邀请所属的团队（审计用）：团队邀请取邀请的团队，团队主机的主机邀请取主机的团队，个人空间为空。
+func (m managed) teamID() string {
+	if m.inv.Kind == saas.InvitationHost {
+		return m.host.TeamID
+	}
+	return m.access.Scope.TeamID()
+}
+
+// lockForManage 找邀请、按「团队 → 主机 → 邀请」的顺序加锁、核调用者的管理权；返回锁住的邀请。
+// 团队邀请要团队 admin（不是成员 404，角色不够 403）；主机邀请要主机管理权（看不到主机 404，管不了 403）。
+func (s *Service) lockForManage(ctx context.Context, tx saas.Tx, accountID, invitationID string) (managed, error) {
 	probe, err := tx.Invitation(ctx, s.tenant(), invitationID)
 	if err != nil {
-		return teams.Access{}, nil, err
+		return managed{}, err
 	}
-	if probe == nil || probe.Kind != saas.InvitationTeam {
-		return teams.Access{}, nil, core.Fail(gen.ErrNotFound)
+	if probe == nil {
+		return managed{}, core.Fail(gen.ErrNotFound)
 	}
-	access, err := teams.Lock(ctx, tx, s.tenant(), accountID, probe.TeamID, teams.MinAdmin)
+	var out managed
+	switch probe.Kind {
+	case saas.InvitationTeam:
+		out.access, err = teams.Lock(ctx, tx, s.tenant(), accountID, probe.TeamID, teams.MinAdmin)
+	case saas.InvitationHost:
+		out.host, err = grants.ManageHost(ctx, tx, s.tenant(), s.nowMs(), accountID, probe.SourceID)
+	default:
+		err = core.Fail(gen.ErrNotFound)
+	}
 	if err != nil {
-		return teams.Access{}, nil, err
+		return managed{}, err
 	}
 	inv, err := tx.Invitations().Lock(ctx, s.tenant(), invitationID)
 	if err != nil {
-		return teams.Access{}, nil, err
+		return managed{}, err
 	}
-	if inv == nil || inv.TeamID != probe.TeamID {
-		return teams.Access{}, nil, core.Fail(gen.ErrNotFound)
+	if inv == nil || inv.Kind != probe.Kind || inv.TeamID != probe.TeamID || inv.SourceID != probe.SourceID {
+		return managed{}, core.Fail(gen.ErrNotFound)
 	}
-	return access, inv, nil
+	out.inv = inv
+	return out, nil
 }
 
-// revoke 是 invitations.revoke（团队 admin）：待处理（含已过期还没落库的）改 revoked；已撤销的再撤销是空操作；
-// 已接受或已拒绝的答 409 conflict。排队还没发出的邮件在发信时发现邀请不是待处理，自己丢弃。
+// revoke 是 invitations.revoke（团队 admin / 主机管理者）：待处理（含已过期还没落库的）改 revoked；已撤销的再撤销是
+// 空操作；已接受或已拒绝的答 409 conflict。排队还没发出的邮件在发信时发现邀请不是待处理，自己丢弃。
 func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 	id, _ := call.Input["invitationId"].(string)
 	account, err := s.me(ctx, call)
@@ -413,11 +477,11 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 		return nil, err
 	}
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
-		access, inv, err := s.lockForManage(ctx, tx, account.AccountID, id)
+		m, err := s.lockForManage(ctx, tx, account.AccountID, id)
 		if err != nil {
 			return err
 		}
-		switch inv.State {
+		switch m.inv.State {
 		case saas.InvitationRevoked:
 			return nil
 		case saas.InvitationAccepted, saas.InvitationDeclined:
@@ -426,8 +490,8 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 		if err := tx.Invitations().Decide(ctx, s.tenant(), id, saas.InvitationRevoked, account.AccountID, s.nowMs()); err != nil {
 			return err
 		}
-		s.events.InvitationChanged(tx, *inv, saas.InvitationRevoked)
-		return s.record(ctx, tx, call, account.AccountID, access.Scope.TeamID(), ActionRevoke, id)
+		s.events.InvitationChanged(tx, *m.inv, saas.InvitationRevoked)
+		return s.recordFor(ctx, tx, call, account.AccountID, m.teamID(), m.inv.SourceID, ActionRevoke, id)
 	})
 	if err != nil {
 		return nil, err
@@ -435,9 +499,9 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 	return map[string]any{}, nil
 }
 
-// resend 是 invitations.resend（团队 admin）：换新令牌（发信作业里生成）、重新计 7 天、旧链接作废；
-// 已撤销答 410 invitation_revoked，已接受或已拒绝答 409 conflict；已过期的可以重发（回到待处理，要再核额度）；
-// 按邀请每小时 5 次。
+// resend 是 invitations.resend（团队 admin / 主机管理者）：换新令牌（发信作业里生成）、重新计 7 天、旧链接作废；
+// 已撤销答 410 invitation_revoked，已接受或已拒绝答 409 conflict；已过期的可以重发（回到待处理，要再核额度与设置）；
+// 按邀请每小时 5 次。主机邀请重发不改授予的到期。
 func (s *Service) resend(ctx context.Context, call *api.Call) (any, error) {
 	id, _ := call.Input["invitationId"].(string)
 	account, err := s.verifiedMe(ctx, call)
@@ -449,10 +513,11 @@ func (s *Service) resend(ctx context.Context, call *api.Call) (any, error) {
 	}
 	var out invitationOut
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
-		access, inv, err := s.lockForManage(ctx, tx, account.AccountID, id)
+		m, err := s.lockForManage(ctx, tx, account.AccountID, id)
 		if err != nil {
 			return err
 		}
+		inv := m.inv
 		nowMs := s.nowMs()
 		switch inv.State {
 		case saas.InvitationRevoked:
@@ -460,21 +525,12 @@ func (s *Service) resend(ctx context.Context, call *api.Call) (any, error) {
 		case saas.InvitationAccepted, saas.InvitationDeclined:
 			return core.Fail(gen.ErrConflict)
 		}
-		if state(*inv, nowMs) == saas.InvitationExpired {
-			// 回到待处理会重新占一个席位，也可能已经有人被邀请进来了。
-			if invitee, err := tx.AccountByEmail(ctx, s.tenant(), inv.Email); err != nil {
-				return err
-			} else if invitee != nil {
-				if existing, err := tx.TeamAccess(ctx, s.tenant(), inv.TeamID, invitee.AccountID); err != nil {
-					return err
-				} else if existing != nil {
-					return core.Fail(gen.ErrMemberExists)
-				}
-			}
-			if inv.TeamRole == saas.TeamRole("guest") && !teams.SettingsOf(access.Team).AllowGuests {
-				return core.Fail(gen.ErrGuestsDisabled)
-			}
-			if err := s.checkSeat(ctx, tx, access, inv.TeamRole, nowMs); err != nil {
+		if inv.Kind == saas.InvitationHost && inv.GrantExpiresAtMs != nil && *inv.GrantExpiresAtMs <= nowMs {
+			return core.Fail(gen.ErrBadRequest) // 授予的到期已过，重发了也得不到访问
+		}
+		expired := state(*inv, nowMs) == saas.InvitationExpired
+		if expired {
+			if err := s.recheckBeforeReissue(ctx, tx, m, account.AccountID, nowMs); err != nil {
 				return err
 			}
 		}
@@ -485,18 +541,44 @@ func (s *Service) resend(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		if err := s.enqueueMail(ctx, tx, access.Team, *inv, account, invitee); err != nil {
+		if inv.Kind == saas.InvitationHost {
+			err = s.enqueueHostMail(ctx, tx, m.host, *inv, account, invitee)
+		} else {
+			err = s.enqueueMail(ctx, tx, m.access.Team, *inv, account, invitee)
+		}
+		if err != nil {
 			return err
 		}
 		inv.State, inv.ExpiresAtMs, inv.DecidedAtMs = saas.InvitationPending, nowMs+TTL.Milliseconds(), nil
 		s.events.InvitationChanged(tx, *inv, saas.InvitationPending)
 		out = view(*inv, nowMs)
-		return s.record(ctx, tx, call, account.AccountID, access.Scope.TeamID(), ActionResend, id)
+		return s.recordFor(ctx, tx, call, account.AccountID, m.teamID(), inv.SourceID, ActionResend, id)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// recheckBeforeReissue：已过期的邀请重发会回到待处理、重新占一个席位，也可能已经有人被邀请进来了，要把创建时的条件再核一遍。
+func (s *Service) recheckBeforeReissue(ctx context.Context, tx saas.Tx, m managed, callerID string, nowMs int64) error {
+	inv := m.inv
+	if inv.Kind == saas.InvitationHost {
+		return s.recheckHostReissue(ctx, tx, m.host, callerID, *inv)
+	}
+	if invitee, err := tx.AccountByEmail(ctx, s.tenant(), inv.Email); err != nil {
+		return err
+	} else if invitee != nil {
+		if existing, err := tx.TeamAccess(ctx, s.tenant(), inv.TeamID, invitee.AccountID); err != nil {
+			return err
+		} else if existing != nil {
+			return core.Fail(gen.ErrMemberExists)
+		}
+	}
+	if inv.TeamRole == saas.TeamRole("guest") && !teams.SettingsOf(m.access.Team).AllowGuests {
+		return core.Fail(gen.ErrGuestsDisabled)
+	}
+	return s.checkSeat(ctx, tx, m.access, inv.TeamRole, nowMs)
 }
 
 // maskEmail 遮掩邮箱：留本地部分第一个字符和域名（a***@example.com）。
@@ -514,6 +596,8 @@ type preview struct {
 	State       string `json:"state"`
 	TeamName    string `json:"teamName,omitempty"`
 	TeamRole    string `json:"teamRole,omitempty"`
+	SourceName  string `json:"sourceName,omitempty"`
+	HostRole    string `json:"hostRole,omitempty"`
 	InviterName string `json:"inviterName"`
 	EmailHint   string `json:"emailHint"`
 	ExpiresAtMs int64  `json:"expiresAtMs"`
@@ -540,7 +624,7 @@ func (s *Service) summary(ctx context.Context, call *api.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !matchesToken(inv, token) || inv.Kind != saas.InvitationTeam {
+	if !matchesToken(inv, token) {
 		return nil, core.Fail(gen.ErrNotFound)
 	}
 	nowMs := s.nowMs()
@@ -551,16 +635,25 @@ func (s *Service) summary(ctx context.Context, call *api.Call) (any, error) {
 		return nil, core.Fail(gen.ErrInvitationExpired)
 	}
 	out := preview{
-		Kind: inv.Kind, State: state(*inv, nowMs), TeamRole: string(inv.TeamRole), EmailHint: maskEmail(inv.Email), ExpiresAtMs: inv.ExpiresAtMs,
+		Kind: inv.Kind, State: state(*inv, nowMs), EmailHint: maskEmail(inv.Email), ExpiresAtMs: inv.ExpiresAtMs,
 	}
-	team, err := reader.TeamSummary(ctx, s.tenant(), inv.TeamID)
-	if err != nil {
-		return nil, err
+	if inv.Kind == saas.InvitationHost {
+		name, err := s.hostLabel(ctx, reader, *inv)
+		if err != nil {
+			return nil, err
+		}
+		out.SourceName, out.HostRole = name, inv.HostRole
+	} else {
+		out.TeamRole = string(inv.TeamRole)
+		team, err := reader.TeamSummary(ctx, s.tenant(), inv.TeamID)
+		if err != nil {
+			return nil, err
+		}
+		if team == nil || team.Deleted {
+			return nil, core.Fail(gen.ErrNotFound) // 团队已删除或清除
+		}
+		out.TeamName = mail.SanitizeLabel(team.Name, 128)
 	}
-	if team == nil || team.Deleted {
-		return nil, core.Fail(gen.ErrNotFound) // 团队已删除或清除
-	}
-	out.TeamName = mail.SanitizeLabel(team.Name, 128)
 	if inviter, err := reader.Account(ctx, s.tenant(), inv.InvitedBy); err != nil {
 		return nil, err
 	} else if inviter != nil {
@@ -571,7 +664,7 @@ func (s *Service) summary(ctx context.Context, call *api.Call) (any, error) {
 
 // accept 是 invitations.accept（要会话、邮箱已验证）：邀请 id 与令牌都对上 → 先锁团队行再锁邀请行 → 账号邮箱
 // 必须等于邀请的邮箱（403 invitation_email_mismatch）→ 已接受的原样答 → teams.Join 核对
-// 撤销 / 过期 / 已拒绝、团队状态、重复成员、邀请人身份、guest 设置与额度并插成员。
+// 撤销 / 过期 / 已拒绝、团队状态、重复成员、邀请人身份、guest 设置与额度并插成员。主机邀请走 acceptHost（host.go）。
 func (s *Service) accept(ctx context.Context, call *api.Call) (any, error) {
 	id, _ := call.Input["invitationId"].(string)
 	token, _ := call.Input["token"].(string)
@@ -582,14 +675,18 @@ func (s *Service) accept(ctx context.Context, call *api.Call) (any, error) {
 	if err := s.limits.Check(ctx, httpx.LimitTokenIP, call.IP); err != nil {
 		return nil, err
 	}
-	var teamID string
+	var teamID, sourceID string
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
 		probe, err := tx.Invitation(ctx, s.tenant(), id)
 		if err != nil {
 			return err
 		}
-		if !matchesToken(probe, token) || probe.Kind != saas.InvitationTeam {
+		if !matchesToken(probe, token) {
 			return core.Fail(gen.ErrNotFound)
+		}
+		if probe.Kind == saas.InvitationHost {
+			teamID, sourceID, err = s.acceptHost(ctx, tx, call, account, *probe, token)
+			return err
 		}
 		// 加锁顺序：团队行 → 邀请行；锁上之后再核一次令牌（期间可能被重发换掉）。Join 内部再锁一次是空操作。
 		if found, err := tx.Teams().LockTeam(ctx, s.tenant(), probe.TeamID); err != nil {
@@ -622,7 +719,17 @@ func (s *Service) accept(ctx context.Context, call *api.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"teamId": teamID}, nil
+	out := map[string]any{}
+	if teamID != "" && sourceID == "" {
+		out["teamId"] = teamID
+	}
+	if sourceID != "" {
+		out["sourceId"] = sourceID
+		if teamID != "" {
+			out["teamId"] = teamID // 团队主机：接受者同时成了团队成员
+		}
+	}
+	return out, nil
 }
 
 // decline 是 invitations.decline（要会话）：令牌与邮箱都对上才算；待处理改 declined，已拒绝的再拒绝是空操作；
@@ -642,7 +749,7 @@ func (s *Service) decline(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		if !matchesToken(inv, token) || inv.Kind != saas.InvitationTeam {
+		if !matchesToken(inv, token) {
 			return core.Fail(gen.ErrNotFound)
 		}
 		if inv.Email != account.Email {
@@ -663,7 +770,7 @@ func (s *Service) decline(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		s.events.InvitationChanged(tx, *inv, saas.InvitationDeclined)
-		return s.record(ctx, tx, call, account.AccountID, inv.TeamID, ActionDecline, id)
+		return s.recordFor(ctx, tx, call, account.AccountID, inv.TeamID, inv.SourceID, ActionDecline, id)
 	})
 	if err != nil {
 		return nil, err

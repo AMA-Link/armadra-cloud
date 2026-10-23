@@ -119,7 +119,7 @@ func (t *saasTx) DeviceCodes() saas.DeviceCodeRepo { return deviceCodeRepo{q: t.
 func (t *saasTx) Invitations() saas.InvitationRepo { return invitationRepo{q: t.q} }
 func (t *saasTx) Hosts() saas.HostRepo             { return hostRepo{q: t.q} }
 func (t *saasTx) Grants() saas.GrantRepo           { return grantRepo{q: t.q} }
-func (t *saasTx) Trust() saas.TrustRepo            { return struct{}{} }
+func (t *saasTx) Trust() saas.TrustRepo            { return trustRepo{q: t.q} }
 func (t *saasTx) Audit() saas.AuditRepo            { return auditRepo{q: t.q} }
 func (t *saasTx) Jobs() saas.JobRepo               { return jobRepo{q: t.q} }
 func (t *saasTx) Settings() saas.SettingsRepo      { return struct{}{} }

@@ -50,6 +50,8 @@ type Reader interface {
 	InvitationReader
 	HostReader
 	GrantReader
+	TrustReader
+	LinkReader
 	UsageReader
 	OpsReader
 	// Ping 探活：连接池里能取到连接并执行一条语句。
@@ -124,7 +126,6 @@ type AccountRepo interface {
 
 // 其余仓储先立名字，方法随各批加入。
 type (
-	TrustRepo    interface{}
 	SettingsRepo interface{}
 )
 

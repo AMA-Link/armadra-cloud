@@ -116,3 +116,54 @@ func Join(ctx context.Context, tx saas.Tx, tenantID string, nowMs int64, invitat
 	}
 	return inv.TeamID, nil
 }
+
+// EnsureGuestMember 给被接受的主机邀请用（设计 §4.7）：接受者还不是团队成员就先加成 guest 成员，已是成员就原样答他的角色。
+// 调用方已锁团队行（LockTeam）。团队在恢复期内 410 team_deleted；团队关了 guest 403 team_policy_denied
+// （details.setting = allowGuests）；guest 数越过额度 429 limit_reached（待处理的团队邀请也计入）。
+// 受邀者还不是成员，没有 TeamScope 可核；主机邀请就是授权，所以范围只在这里按邀请所在的团队构造。
+func EnsureGuestMember(ctx context.Context, tx saas.Tx, tenantID string, nowMs int64, teamID string, account *saas.Account, invitedBy string) (saas.TeamRole, error) {
+	scope := teamscope.Issue(tenantID, teamID, teamscope.Guest)
+	team, err := tx.Teams().Get(ctx, scope)
+	if err != nil {
+		return "", err
+	}
+	if team == nil {
+		return "", core.Fail(gen.ErrNotFound)
+	}
+	if team.Deleted() {
+		return "", core.Fail(gen.ErrTeamDeleted)
+	}
+	existing, err := tx.TeamAccess(ctx, tenantID, teamID, account.AccountID)
+	if err != nil {
+		return "", err
+	}
+	if existing != nil {
+		return existing.Role, nil
+	}
+	if !SettingsOf(*team).AllowGuests {
+		return "", core.FailWith(gen.ErrTeamPolicyDenied, map[string]any{"setting": "allowGuests"})
+	}
+	seats, err := tx.Teams().Seats(ctx, scope)
+	if err != nil {
+		return "", err
+	}
+	pending, err := tx.Invitations().PendingSeats(ctx, scope, nowMs)
+	if err != nil {
+		return "", err
+	}
+	e, err := tx.Entitlement(ctx, tenantID, saas.SpaceTeam, teamID)
+	if err != nil {
+		return "", err
+	}
+	lim := quota.ForTeam(saas.FreePlan, nil)
+	if e != nil {
+		lim = quota.ForTeam(e.Plan, e.Overrides)
+	}
+	if err := quota.Check(quota.Guests, seats.Guests+pending.Guests, lim.Guests); err != nil {
+		return "", err
+	}
+	if err := tx.Teams().AddMember(ctx, scope, account.AccountID, teamscope.Guest, invitedBy, nowMs); err != nil {
+		return "", err
+	}
+	return teamscope.Guest, nil
+}
