@@ -596,3 +596,41 @@ func TestDeferReleasesWithoutCountingAttemptOrBackoff(t *testing.T) {
 	e.clock.Advance(5 * time.Minute)
 	eventually(t, "到点再跑", func() bool { return calls.Load() == 2 })
 }
+
+// slowExtend 让 Extend 一直卡着，直到它的 ctx 结束。
+type slowExtend struct{ saas.Store }
+
+func (s slowExtend) Queue() saas.JobQueue { return slowQueue{s.Store.Queue()} }
+
+type slowQueue struct{ saas.JobQueue }
+
+func (slowQueue) Extend(ctx context.Context, _ string, _ int64, _ string, _, _ int64) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+func TestHandlerIsCancelledWhenRenewalRequestHangsPastTheLease(t *testing.T) {
+	e := open(t)
+	// 租约 300 毫秒，每 50 毫秒续租，但续租请求一直不返回：到租约到期时刻必须取消处理器。
+	r := jobs.New(jobs.Options{Store: slowExtend{e.store}, TenantID: tenant, Workers: 1, Poll: 20 * time.Millisecond, Lease: 300 * time.Millisecond, Renew: 50 * time.Millisecond})
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	r.Handle("t.hang", func(ctx context.Context, _ saas.Job) error {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return ctx.Err()
+	})
+	e.enqueue(saas.NewJob{Kind: "t.hang", RunAtMs: time.Now().UnixMilli()})
+	r.Start()
+	t.Cleanup(func() { r.Stop(5 * time.Second) })
+	<-started
+	begin := time.Now()
+	select {
+	case <-cancelled:
+		if time.Since(begin) > 2*time.Second {
+			t.Fatal("取消得太晚")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("续租卡住超过租约，处理器应被取消")
+	}
+}

@@ -138,7 +138,7 @@ func (s *Service) emailVerify(ctx context.Context, call *api.Call) (any, error) 
 			}
 			return s.mail.Enqueue(ctx, tx, mail.Mail{
 				Template: mail.EmailChanged, Locale: account.Locale, To: account.Email,
-				Params: mail.Params{DisplayName: account.DisplayName, NewEmail: record.Email},
+				Params: mail.Params{DisplayName: greetName(account), NewEmail: record.Email},
 			})
 		}
 	})
@@ -167,7 +167,7 @@ func (s *Service) emailVerifyResend(ctx context.Context, call *api.Call) (any, e
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
 		return s.mail.Enqueue(ctx, tx, mail.Mail{
 			Template: mail.VerifyEmail, Locale: account.Locale, To: account.Email, AccountID: account.AccountID,
-			Params: mail.Params{DisplayName: account.DisplayName},
+			Params: mail.Params{DisplayName: greetName(account)},
 		})
 	})
 	if err != nil {
@@ -205,7 +205,7 @@ func (s *Service) passwordResetStart(ctx context.Context, call *api.Call) (any, 
 	if account != nil && account.Status == saas.AccountActive {
 		letter = mail.Mail{
 			Template: mail.PasswordReset, Locale: account.Locale, To: account.Email, AccountID: account.AccountID,
-			Params: mail.Params{DisplayName: account.DisplayName},
+			Params: mail.Params{DisplayName: greetName(account)},
 		}
 	}
 	err = s.store.Tx(ctx, func(tx saas.Tx) error { return s.mail.Enqueue(ctx, tx, letter) })
@@ -258,7 +258,7 @@ func (s *Service) passwordResetFinish(ctx context.Context, call *api.Call) (any,
 		}
 		return s.mail.Enqueue(ctx, tx, mail.Mail{
 			Template: mail.PasswordChanged, Locale: account.Locale, To: account.Email,
-			Params: mail.Params{DisplayName: account.DisplayName},
+			Params: mail.Params{DisplayName: greetName(account)},
 		})
 	})
 	if err != nil {
@@ -310,7 +310,7 @@ func (s *Service) meEmailChange(ctx context.Context, call *api.Call) (any, error
 		}
 		return s.mail.Enqueue(ctx, tx, mail.Mail{
 			Template: mail.EmailChange, Locale: account.Locale, To: newEmail, AccountID: account.AccountID,
-			Params: mail.Params{DisplayName: account.DisplayName},
+			Params: mail.Params{DisplayName: greetName(account)},
 		})
 	})
 	if err != nil {
@@ -326,4 +326,13 @@ func (s *Service) auditDeviceDecision(ctx context.Context, tx saas.Tx, decision 
 		action = audit.SecurityDeviceApprove
 	}
 	return audit.WriteSecurity(ctx, tx, s.tenant(), s.nowMs(), audit.Security{AccountID: decision.AccountID, DeviceName: decision.Name}, action)
+}
+
+// greetName 是邮件里的称呼：只有邮箱已验证的账号才带显示名——显示名是注册者自己填的任意文字，
+// 发给还没验证的地址就成了陌生人借我们的邮件说话。
+func greetName(account *saas.Account) string {
+	if account.EmailVerifiedAtMs == nil {
+		return ""
+	}
+	return mail.SanitizeLabel(account.DisplayName, 64)
 }

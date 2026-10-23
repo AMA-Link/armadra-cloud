@@ -354,9 +354,18 @@ func (r *Runner) renew(ctx context.Context, cancelJob context.CancelFunc, job sa
 			cancelJob()
 			return
 		}
-		ok, err := r.o.Store.Queue().Extend(ctx, r.o.TenantID, job.ID, r.o.WorkerID, now, r.o.Lease.Milliseconds())
+		// 续租请求本身也受租约到期时刻约束：卡住超过它，别的实例可能已经接手，不能继续跑。
+		extendCtx, stop := context.WithTimeout(ctx, time.Duration(leaseUntil-now)*time.Millisecond)
+		ok, err := r.o.Store.Queue().Extend(extendCtx, r.o.TenantID, job.ID, r.o.WorkerID, now, r.o.Lease.Milliseconds())
+		timedOut := extendCtx.Err() != nil
+		stop()
 		if ctx.Err() != nil {
 			return // 作业已经结束，续租被一并取消
+		}
+		if timedOut && !ok {
+			r.o.Log.Warn("作业续租卡到租约到期，停手", obs.JobID(job.ID), obs.Kind(job.Kind))
+			cancelJob()
+			return
 		}
 		if err != nil {
 			r.o.Log.Warn("作业续租失败", obs.JobID(job.ID), obs.Kind(job.Kind), obs.Error(err))

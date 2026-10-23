@@ -1,4 +1,4 @@
-<p>{{.DisplayName}}，你好。</p>
+<p>{{if .DisplayName}}{{.DisplayName}}，你好。{{else}}你好。{{end}}</p>
 <p>
   账号刚在新设备登录：{{.DeviceName}}（{{.Platform}}）。如果不是你本人的操作，请立即更改口令并退出该设备。
 </p>

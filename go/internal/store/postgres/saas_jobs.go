@@ -90,6 +90,8 @@ func (r jobRepo) CancelUnsentMail(ctx context.Context, tenantID, accountID, temp
 	return int(tag.RowsAffected()), err
 }
 
+// TrimOutbox 不按账号加锁：只在没配 SMTP 时由 mail.send 调用，与别的事务抢发件箱行时若死锁，
+// saas.Store.Tx 回滚后重跑（最多 3 次），作业本身也会被重试，可以接受。
 func (r jobRepo) TrimOutbox(ctx context.Context, tenantID string, keep int) (int, error) {
 	rows, err := r.q.Query(ctx,
 		`DELETE FROM outbox_emails WHERE tenant_id = $1 AND email_id IN (

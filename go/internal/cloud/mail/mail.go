@@ -282,7 +282,7 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 	}
 	// 设备名与平台是客户端报的字符串：去网址特征并截短再渲染，不让陌生人借提醒邮件投放链接。
 	data := Data{
-		DisplayName: params.DisplayName, NewEmail: params.NewEmail,
+		DisplayName: SanitizeLabel(params.DisplayName, labelMax), NewEmail: params.NewEmail,
 		DeviceName: SanitizeLabel(params.DeviceName, labelMax), Platform: SanitizeLabel(params.Platform, labelMax),
 	}
 	if kind, ok := tokenKinds[email.Template]; ok {

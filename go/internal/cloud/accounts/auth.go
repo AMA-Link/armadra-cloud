@@ -182,7 +182,7 @@ func (s *Service) recordLogin(ctx context.Context, tx saas.Tx, account *saas.Acc
 	}
 	return s.mail.Enqueue(ctx, tx, mail.Mail{
 		Template: mail.NewDevice, Locale: account.Locale, To: account.Email,
-		Params: mail.Params{DisplayName: account.DisplayName, DeviceName: device.Name, Platform: device.Platform},
+		Params: mail.Params{DisplayName: greetName(account), DeviceName: device.Name, Platform: device.Platform},
 	})
 }
 
@@ -392,7 +392,7 @@ func (s *Service) changePassword(ctx context.Context, call *api.Call) (any, erro
 		}
 		return s.mail.Enqueue(ctx, tx, mail.Mail{
 			Template: mail.PasswordChanged, Locale: account.Locale, To: account.Email,
-			Params: mail.Params{DisplayName: account.DisplayName},
+			Params: mail.Params{DisplayName: greetName(account)},
 		})
 	})
 	if err != nil {

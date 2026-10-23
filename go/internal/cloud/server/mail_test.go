@@ -741,3 +741,26 @@ func TestDeviceCodeRedemptionWritesLoginLogAndReminds(t *testing.T) {
 		t.Fatalf("新设备提醒：%+v", letter)
 	}
 }
+
+// 显示名是注册者自己填的任意文字：邮箱没验证的账号，通知邮件不带它；验证之后才带。
+func TestNotificationsCarryDisplayNameOnlyWhenEmailIsVerified(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	email := r.email()
+	r.registerBearer(email)
+	verifyToken := tokenOf(t, r.waitMails(email, 1)[0], "/verify")
+	newDevice := func(name string) {
+		res := r.do("POST", "/v1/auth/login", map[string]any{"account": email, "password": password, "device": map[string]any{"platform": "desktop", "name": name}}, nil)
+		r.expect(res, 200, "")
+	}
+	newDevice("第一台")
+	unverified := r.waitMails(email, 2)[1]
+	if strings.Contains(unverified.Text, "测试用户") || strings.Contains(unverified.HTML, "测试用户") || !strings.HasPrefix(unverified.Text, "你好。") {
+		t.Fatalf("未验证邮箱不带显示名：%q", unverified.Text)
+	}
+	r.expect(r.verifyEmail(verifyToken), 200, "")
+	newDevice("第二台")
+	verified := r.waitMails(email, 3)[2]
+	if !strings.HasPrefix(verified.Text, "测试用户，你好。") {
+		t.Fatalf("已验证邮箱带显示名：%q", verified.Text)
+	}
+}

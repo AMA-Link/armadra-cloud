@@ -1,4 +1,4 @@
-<p>{{.DisplayName}}，你好。</p>
+<p>{{if .DisplayName}}{{.DisplayName}}，你好。{{else}}你好。{{end}}</p>
 <p>
   账号邮箱已改为 {{.NewEmail}}。如果不是你本人的操作，请立即重设口令并联系我们。
 </p>
