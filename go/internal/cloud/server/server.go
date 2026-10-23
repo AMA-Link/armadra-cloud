@@ -206,9 +206,18 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	if every <= 0 {
 		every = keyWatchEvery
 	}
+	baseline, _, err := db.Revision(ctx, TenantID)
+	if err != nil {
+		stopWatch()
+		return fail(err)
+	}
+	if err := db.RefreshKeys(ctx, TenantID); err != nil {
+		stopWatch()
+		return fail(err)
+	}
 	go func() {
 		defer close(watchDone)
-		watchKeys(watchCtx, db, logger, every)
+		watchKeys(watchCtx, db, logger, every, baseline)
 	}()
 	undo.push(func() { stopWatch(); <-watchDone })
 
@@ -263,11 +272,10 @@ func hostPort(addr net.Addr) string {
 }
 
 // watchKeys 每隔一段时间读一次租户修订号，变了就让签名钥缓存重读。
-func watchKeys(ctx context.Context, db *postgres.DB, logger *obs.Logger, every time.Duration) {
-	var last int64
-	if revision, ok, err := db.Revision(ctx, TenantID); err == nil && ok {
-		last = revision
-	}
+// 基线（baseline）由调用方在开始监视之前同步取好并先刷新一次缓存：基线之后的轮换一定被察觉；
+// 不能在后台协程里才取基线，那样协程启动前发生的轮换会被当成基线而永远不重读。
+func watchKeys(ctx context.Context, db *postgres.DB, logger *obs.Logger, every time.Duration, baseline int64) {
+	last := baseline
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
@@ -280,9 +288,11 @@ func watchKeys(ctx context.Context, db *postgres.DB, logger *obs.Logger, every t
 		if err != nil || !ok || revision == last {
 			continue
 		}
-		last = revision
+		// 重读成功才记下新基线；失败下一轮再试。
 		if err := db.RefreshKeys(ctx, TenantID); err != nil {
 			logger.Warn("签名钥缓存重读失败", obs.Error(err))
+			continue
 		}
+		last = revision
 	}
 }

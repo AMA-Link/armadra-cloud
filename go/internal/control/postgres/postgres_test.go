@@ -233,10 +233,16 @@ func TestRevocationReloadOnStartAndReconnect(t *testing.T) {
 		t.Fatal("过期的不算")
 	}
 
-	terminateListener(t, e, n)
+	// 只写表、不发通知的撤销要在「断线」之前写：先杀监听连接再写的话，节点可能在两步之间已经重连并重读完，
+	// 这条撤销就既没通知、也没赶上那次重读（要等 45 秒的周期重读），用例随机变红。先写后杀则重连的那次
+	// 重读必然读得到它——监听连接在杀掉之前不会重读，写入时它还没读过这一行。
 	if _, err := e.admin.Exec(ctx, "INSERT INTO relay_revoked_tokens (jti, exp_ms) VALUES ('during-outage', $1)", at); err != nil {
 		t.Fatal(err)
 	}
+	if revoked, _ := n.Tokens().IsRevoked(ctx, "during-outage"); revoked {
+		t.Fatal("没有通知，写表之后、重连重读之前不该读到")
+	}
+	terminateListener(t, e, n)
 	controltest.Eventually(t, "重连后全量重读到断线期间的撤销", func() bool {
 		r, _ := n.Tokens().IsRevoked(ctx, "during-outage")
 		return r
