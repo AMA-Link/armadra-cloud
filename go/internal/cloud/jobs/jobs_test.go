@@ -575,3 +575,24 @@ func TestPayloadRoundTrip(t *testing.T) {
 		t.Fatal("没有收到载荷")
 	}
 }
+
+func TestDeferReleasesWithoutCountingAttemptOrBackoff(t *testing.T) {
+	e := open(t)
+	now := e.clock.Now().UnixMilli()
+	var calls atomic.Int32
+	r := e.runner(20 * time.Millisecond)
+	r.Handle("t.defer", func(context.Context, saas.Job) error { calls.Add(1); return jobs.Defer(5 * time.Minute) })
+	id, _ := e.enqueue(saas.NewJob{Kind: "t.defer", RunAtMs: now})
+	r.Start()
+	t.Cleanup(func() { r.Stop(5 * time.Second) })
+	eventually(t, "延后", func() bool {
+		attempts, runAt, done, failed, last := e.row(id)
+		return calls.Load() == 1 && attempts == 0 && runAt == now+300_000 && done == nil && failed == nil && last == nil
+	})
+	time.Sleep(200 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatal("延后期间不再跑")
+	}
+	e.clock.Advance(5 * time.Minute)
+	eventually(t, "到点再跑", func() bool { return calls.Load() == 2 })
+}

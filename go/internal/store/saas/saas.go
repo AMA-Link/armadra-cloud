@@ -143,6 +143,8 @@ type JobRepo interface {
 	MarkOutboxSent(ctx context.Context, tenantID, emailID string, nowMs int64) error
 	MarkOutboxFailed(ctx context.Context, tenantID, emailID string, nowMs int64) error
 	DeleteOutbox(ctx context.Context, tenantID, emailID string) error
+	// TrimOutbox 只留最新的 keep 封还没发也没判失败的发件，更早的连同它们没做完的作业一起删；答删了几封。
+	TrimOutbox(ctx context.Context, tenantID string, keep int) (int, error)
 	// GCOutbox 删发出或失败早于 beforeMs 的行（outbox.gc，30 天）；GCJobs 删完成早于 doneBeforeMs、
 	// 失败早于 failedBeforeMs 的作业（jobs.gc，7 天与 30 天）。
 	GCOutbox(ctx context.Context, tenantID string, beforeMs int64) (int, error)
@@ -154,8 +156,9 @@ type JobQueue interface {
 	// Claim 领取最多 limit 个到期、未被租用、尝试次数未满且种类在 kinds 里（本实例登记过处理器）的作业：
 	// 租约到 nowMs+leaseMs，attempts 加一。
 	Claim(ctx context.Context, tenantID, worker string, kinds []string, nowMs, leaseMs int64, limit int) ([]Job, error)
-	// Release 把本实例持有的作业放回队列、不计这次尝试（关闭中被打断）：释放租约，attempts 减一。
-	Release(ctx context.Context, tenantID string, jobID int64, worker string) error
+	// Release 把本实例持有的作业放回队列、不计这次尝试（关闭中被打断、主动延后）：释放租约，attempts 减一；
+	// retryAtMs 大于 0 时把下次执行推到不早于它。
+	Release(ctx context.Context, tenantID string, jobID int64, worker string, retryAtMs int64) error
 	// SweepExhausted 把尝试次数已满、租约又过期的作业（最后一次执行时实例崩了）置 failed_at_ms、
 	// last_error = 'lease_expired'；答处理了几个。
 	SweepExhausted(ctx context.Context, tenantID string, nowMs int64) (int, error)

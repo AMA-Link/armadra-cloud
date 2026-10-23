@@ -13,7 +13,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
@@ -34,6 +39,11 @@ const (
 	VerifyTTL = 24 * time.Hour
 	ChangeTTL = 24 * time.Hour
 	ResetTTL  = 30 * time.Minute
+
+	// backlogCap 是没配 SMTP 时发件箱里等着发的邮件上限，超出丢最旧的。
+	backlogCap = 1000
+	// notConfiguredRetry 是没配 SMTP 时作业延后多久再看。
+	notConfiguredRetry = 5 * time.Minute
 
 	outboxRetention    = 30 * 24 * time.Hour
 	tokenRetention     = 24 * time.Hour
@@ -83,13 +93,20 @@ type Options struct {
 	AppOrigin string
 	Now       func() time.Time
 	Log       *obs.Logger
+	// BacklogCap 是没配 SMTP 时发件箱里等着发的邮件上限；缺省 1000。
+	BacklogCap int
 }
 
 // Service 是邮件服务。
 type Service struct {
 	o    Options
 	host string
+	// dropped 是没配 SMTP 时因积压超限丢掉的邮件数（指标的替身，测试与日志用）。
+	dropped atomic.Int64
 }
+
+// Dropped 是没配 SMTP 时因积压超限丢掉的邮件总数。
+func (s *Service) Dropped() int64 { return s.dropped.Load() }
 
 // New 建邮件服务；Templates 缺省用随包的。
 func New(options Options) (*Service, error) {
@@ -102,6 +119,9 @@ func New(options Options) (*Service, error) {
 	}
 	if options.Now == nil {
 		options.Now = time.Now
+	}
+	if options.BacklogCap <= 0 {
+		options.BacklogCap = backlogCap
 	}
 	if options.Log == nil {
 		options.Log = obs.Nop()
@@ -119,6 +139,9 @@ func (s *Service) nowMs() int64 { return s.o.Now().UnixMilli() }
 func (s *Service) Enqueue(ctx context.Context, tx saas.Tx, mail Mail) error {
 	if _, token := tokenKinds[mail.Template]; token && mail.AccountID == "" && !mail.Params.Decoy {
 		return errors.New("带令牌的模板必须给账号")
+	}
+	if mail.Params.Decoy {
+		mail.To = "" // 占位行不存被试探的地址
 	}
 	params, err := json.Marshal(mail.Params)
 	if err != nil {
@@ -208,10 +231,13 @@ func (s *Service) send(ctx context.Context, job saas.Job) error {
 	if err := json.Unmarshal(job.Payload, &payload); err != nil || payload.EmailID == "" {
 		return errors.New("作业载荷不合格式")
 	}
+	if IsDisabled(s.o.Sender) {
+		return s.deferUnconfigured(ctx)
+	}
 	var out *prepared
 	err := s.o.Store.Tx(ctx, func(tx saas.Tx) error {
 		out = nil
-		return s.prepare(ctx, tx, payload, &out)
+		return s.prepare(ctx, tx, payload, job.Attempts, &out)
 	})
 	if err != nil || out == nil {
 		return err
@@ -232,7 +258,7 @@ func (s *Service) send(ctx context.Context, job saas.Job) error {
 	})
 }
 
-func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, out **prepared) error {
+func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, attempt int, out **prepared) error {
 	tenant := s.o.TenantID
 	// 统一加锁顺序：账号行在发件箱行之前；同一账号同目的的两封令牌邮件因此串行，只有最后一枚有效。
 	if payload.AccountID != "" {
@@ -254,7 +280,11 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 	if params.Decoy {
 		return tx.Jobs().DeleteOutbox(ctx, tenant, email.EmailID)
 	}
-	data := Data{DisplayName: params.DisplayName, NewEmail: params.NewEmail, DeviceName: params.DeviceName, Platform: params.Platform}
+	// 设备名与平台是客户端报的字符串：去网址特征并截短再渲染，不让陌生人借提醒邮件投放链接。
+	data := Data{
+		DisplayName: params.DisplayName, NewEmail: params.NewEmail,
+		DeviceName: SanitizeLabel(params.DeviceName, labelMax), Platform: SanitizeLabel(params.Platform, labelMax),
+	}
 	if kind, ok := tokenKinds[email.Template]; ok {
 		account, err := tx.Account(ctx, tenant, payload.AccountID)
 		if err != nil {
@@ -275,16 +305,15 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 			return err
 		}
 		data.Link = s.o.AppOrigin + kind.path + "#" + token
-		if data.DisplayName == "" {
-			data.DisplayName = account.DisplayName
-		}
+		// 令牌邮件可能发给还没验证的地址：不带显示名（那是注册者自己填的任意文字）。
+		data.DisplayName = ""
 	}
 	subject, text, html, err := s.o.Templates.Render(email.Locale, email.Template, data)
 	if err != nil {
 		return err
 	}
 	*out = &prepared{template: email.Template, message: Message{
-		MessageID: email.MessageID, To: email.To, Subject: subject, Text: text, HTML: html,
+		MessageID: attemptMessageID(email.MessageID, attempt), To: email.To, Subject: subject, Text: text, HTML: html,
 	}}
 	return nil
 }
@@ -301,4 +330,50 @@ func deliverable(email *saas.OutboxEmail, account *saas.Account, purpose string)
 		return account.Email != email.To
 	}
 	return true
+}
+
+// attemptMessageID 给 Message-ID 加上尝试序号：每次重试的令牌都是新的，内容不同，不复用同一个 id。
+func attemptMessageID(id string, attempt int) string {
+	local, host, ok := strings.Cut(id, "@")
+	if !ok {
+		return id
+	}
+	return local + "." + strconv.Itoa(attempt) + "@" + host
+}
+
+// deferUnconfigured 处理没配 SMTP 的情况：限制积压，作业延后再看，不生成令牌、不计尝试。
+func (s *Service) deferUnconfigured(ctx context.Context) error {
+	var dropped int
+	err := s.o.Store.Tx(ctx, func(tx saas.Tx) (err error) {
+		dropped, err = tx.Jobs().TrimOutbox(ctx, s.o.TenantID, s.o.BacklogCap)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if dropped > 0 {
+		s.dropped.Add(int64(dropped))
+		s.o.Log.Warn("没配 SMTP，发件箱积压超限，丢掉最旧的邮件", obs.Operation("mail.backlog"), obs.Count(dropped))
+	}
+	return jobs.Defer(notConfiguredRetry)
+}
+
+const labelMax = 64
+
+var urlLike = regexp.MustCompile(`(?i)\S*://\S*|\bwww\.\S*|\S+@\S+|\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|net|org|io|cn|co|app|dev|xyz|top|info|me|ly|link|click|ru|tk)\b\S*`)
+
+// SanitizeLabel 清理客户端报的设备名一类字符串：去网址、邮箱地址和控制字符，折叠空白，按码点截到 max。
+func SanitizeLabel(s string, max int) string {
+	s = urlLike.ReplaceAllString(s, "")
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '<' || r == '>' {
+			return ' '
+		}
+		return r
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		s = string(r[:max])
+	}
+	return s
 }

@@ -39,7 +39,10 @@ type env struct {
 	runner *jobs.Runner
 }
 
-func open(t *testing.T) *env {
+func open(t *testing.T) *env { return openWith(t, nil, 0) }
+
+// openWith 可换发信方与没配 SMTP 时的积压上限（sender 为 nil 用内存发信方）。
+func openWith(t *testing.T, custom mail.Sender, backlog int) *env {
 	t.Helper()
 	url, schema := pgtest.Schema(t)
 	ctx := context.Background()
@@ -54,7 +57,11 @@ func open(t *testing.T) *env {
 	clk := &clock{}
 	clk.at.Store(time.Now().Truncate(time.Second).UnixMilli())
 	e := &env{t: t, ctx: ctx, db: db, store: db.SaaS(), clock: clk, sender: &mail.MemorySender{}}
-	e.mail, err = mail.New(mail.Options{Store: e.store, TenantID: tenant, Sender: e.sender, AppOrigin: appOrigin, Now: clk.Now})
+	var sender mail.Sender = e.sender
+	if custom != nil {
+		sender = custom
+	}
+	e.mail, err = mail.New(mail.Options{Store: e.store, TenantID: tenant, Sender: sender, AppOrigin: appOrigin, Now: clk.Now, BacklogCap: backlog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,5 +350,72 @@ func TestOutboxParamsHoldNoToken(t *testing.T) {
 	}
 	if strings.Contains(string(params), "token") || strings.Contains(string(params), "http") {
 		t.Fatalf("发件箱参数里没有令牌与链接：%s", params)
+	}
+}
+
+func TestDecoyRowStoresNoAddress(t *testing.T) {
+	e := open(t)
+	e.sender.FailNext(0)
+	// 占位行在作业跑之前就暂停作业，直接看入队时落库的内容。
+	e.runner.Stop(5 * time.Second)
+	e.enqueue(mail.Mail{Template: mail.PasswordReset, Locale: mail.LocaleZH, To: "probed@example.test", Params: mail.Params{Decoy: true}})
+	var to string
+	if err := e.db.Pool().QueryRow(e.ctx, "SELECT to_email FROM outbox_emails").Scan(&to); err != nil || to != "" {
+		t.Fatalf("占位行不存被试探的地址：%q %v", to, err)
+	}
+}
+
+func TestRetryDoesNotReuseMessageID(t *testing.T) {
+	e := open(t)
+	e.account("a1", "ann@example.test")
+	e.sender.FailNext(1)
+	e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleEN, To: "ann@example.test", AccountID: "a1"})
+	e.eventually("第一次失败", func() bool { return len(e.sender.Attempts()) == 1 })
+	e.clock.Advance(31 * time.Second)
+	e.waitMessages(1)
+	attempts := e.sender.Attempts()
+	if len(attempts) != 2 || attempts[0].MessageID == attempts[1].MessageID ||
+		!strings.HasSuffix(attempts[0].MessageID, "@app.example.test") || !strings.Contains(attempts[1].MessageID, ".2@") {
+		t.Fatalf("每次尝试一个 Message-ID：%+v", attempts)
+	}
+}
+
+func TestTokenMailCarriesNoDisplayNameAndDeviceNameIsSanitized(t *testing.T) {
+	e := open(t)
+	e.account("a1", "ann@example.test")
+	phish := "点击 https://evil.example 领奖"
+	e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleZH, To: "ann@example.test", AccountID: "a1", Params: mail.Params{DisplayName: phish}})
+	e.enqueue(mail.Mail{Template: mail.NewDevice, Locale: mail.LocaleZH, To: "ann@example.test",
+		Params: mail.Params{DisplayName: "Ann", DeviceName: "办公室 http://evil.example/x " + strings.Repeat("长", 100), Platform: "desktop"}})
+	for _, m := range e.waitMessages(2) {
+		if strings.Contains(m.Text, "evil.example") || strings.Contains(m.HTML, "evil.example") || strings.Contains(m.Text, "领奖") {
+			t.Fatalf("邮件里不该出现注册者填的文字或网址：%s", m.Text)
+		}
+		if strings.Contains(m.Subject, "Ann") {
+			t.Fatal("主题不带名字")
+		}
+	}
+}
+
+func TestWithoutSMTPJobsAreDeferredBacklogIsCappedAndNoTokenIsMinted(t *testing.T) {
+	e := openWith(t, mail.Disabled(), 3)
+	e.account("a1", "ann@example.test")
+	for range 5 {
+		e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleEN, To: "ann@example.test", AccountID: "a1"})
+		time.Sleep(5 * time.Millisecond) // created_at_ms 区分先后
+		e.clock.Advance(time.Millisecond)
+	}
+	e.eventually("积压只留最新的 3 封", func() bool {
+		return e.count("SELECT count(*) FROM outbox_emails") == 3 && e.mail.Dropped() == 2
+	})
+	e.eventually("作业延后、不计尝试", func() bool {
+		return e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND attempts = 0 AND locked_by IS NULL AND last_error IS NULL AND run_at_ms > $1",
+			e.clock.Now().UnixMilli()+int64(time.Minute/time.Millisecond)) == 3
+	})
+	if e.count("SELECT count(*) FROM email_tokens") != 0 {
+		t.Fatal("没配 SMTP 不生成令牌")
+	}
+	if e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send'") != 3 {
+		t.Fatal("被丢掉的邮件连同作业一起删")
 	}
 }

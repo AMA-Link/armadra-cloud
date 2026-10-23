@@ -1,11 +1,15 @@
 package mail
 
 import (
+	"bufio"
+	"context"
 	"io"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
+	"net"
 	"net/mail"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -54,8 +58,9 @@ func TestRenderEveryTemplateInBothLocales(t *testing.T) {
 					t.Fatalf("%s/%s 渲染不完整：%q", locale, name, part)
 				}
 			}
-			if !strings.Contains(text, "小明") || !strings.Contains(html, "小明") {
-				t.Errorf("%s/%s 应带显示名", locale, name)
+			// 令牌邮件可能发给还没验证的地址：不带显示名；其余带。
+			if tokenTemplates[name] == (strings.Contains(text, "小明") || strings.Contains(html, "小明")) {
+				t.Errorf("%s/%s 的显示名约定不符（令牌邮件不带，其余带）", locale, name)
 			}
 			if strings.ContainsAny(subject, "\r\n") {
 				t.Errorf("%s/%s 主题不能换行", locale, name)
@@ -93,11 +98,11 @@ func TestRenderSnapshots(t *testing.T) {
 		}
 	}
 	_, text, _, _ := templates.Render(LocaleZH, VerifyEmail, Data{DisplayName: "Ann", Link: "https://x.test/verify#T"})
-	if text != "Ann，你好。\n\n打开下面的链接验证邮箱，24 小时内有效：\nhttps://x.test/verify#T\n\n如果不是你本人的操作，请忽略这封邮件。\n" {
+	if text != "你好。\n\n打开下面的链接验证邮箱，24 小时内有效：\nhttps://x.test/verify#T\n\n如果不是你本人的操作，请忽略这封邮件。\n" {
 		t.Errorf("中文快照：%q", text)
 	}
 	_, text, _, _ = templates.Render(LocaleEN, PasswordReset, Data{DisplayName: "Ann", Link: "https://x.test/reset#T"})
-	if text != "Hi Ann,\n\nOpen the link below to reset your password. It expires in 30 minutes:\nhttps://x.test/reset#T\n\nIf this was not you, ignore this email. Your password stays the same.\n" {
+	if text != "Hello,\n\nOpen the link below to reset your password. It expires in 30 minutes:\nhttps://x.test/reset#T\n\nIf this was not you, ignore this email. Your password stays the same.\n" {
 		t.Errorf("英文快照：%q", text)
 	}
 	// 语言不认识时退回中文。
@@ -174,5 +179,79 @@ func TestSMTPRejectsHeaderInjection(t *testing.T) {
 	}
 	if _, err := NewSMTP(SMTPOptions{From: "not an address"}); err == nil {
 		t.Error("发件人地址不合法应拒绝")
+	}
+}
+
+func TestSanitizeLabel(t *testing.T) {
+	for in, want := range map[string]string{
+		"我的 MacBook": "我的 MacBook",
+		"点击 https://evil.example/login 领奖": "点击 领奖",
+		"www.evil.test 办公室":                "办公室",
+		"bob@evil.test 的电脑":                "的电脑",
+		"login-now.evil.com/x":             "",
+		"a<b>c\r\nd":                       "a b c d",
+		strings.Repeat("机", 100):           strings.Repeat("机", 64),
+	} {
+		if got := SanitizeLabel(in, labelMax); got != want {
+			t.Errorf("SanitizeLabel(%q) = %q，应为 %q", in, got, want)
+		}
+	}
+}
+
+func TestAttemptMessageID(t *testing.T) {
+	if got := attemptMessageID("abc@app.example.test", 2); got != "abc.2@app.example.test" {
+		t.Fatalf("%q", got)
+	}
+	if attemptMessageID("noat", 1) != "noat" {
+		t.Fatal("没有 @ 原样")
+	}
+}
+
+// 数据已被服务器接收（DATA 以 250 收尾）之后 QUIT 出错不算发信失败。
+func TestSMTPIgnoresQuitFailureAfterDataAccepted(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		r := bufio.NewReader(conn)
+		reply := func(line string) { _, _ = conn.Write([]byte(line + "\r\n")) }
+		reply("220 test")
+		inData := false
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			cmd := strings.ToUpper(strings.TrimSpace(line))
+			switch {
+			case inData:
+				if cmd == "." {
+					inData = false
+					reply("250 queued")
+				}
+			case strings.HasPrefix(cmd, "EHLO"), strings.HasPrefix(cmd, "HELO"):
+				reply("250 test")
+			case strings.HasPrefix(cmd, "MAIL"), strings.HasPrefix(cmd, "RCPT"):
+				reply("250 ok")
+			case cmd == "DATA":
+				inData = true
+				reply("354 go")
+			case cmd == "QUIT":
+				return // 不答就断开
+			}
+		}
+	}()
+	host, portText, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	sender, _ := NewSMTP(SMTPOptions{Host: host, Port: port, From: "no-reply@armadra.test", TLS: "none", Timeout: 5 * time.Second})
+	if err := sender.Send(context.Background(), Message{MessageID: "a@b", To: "ann@example.test", Subject: "x", Text: "t", HTML: "<p>t</p>"}); err != nil {
+		t.Fatalf("QUIT 失败不该让已被接收的邮件算失败：%v", err)
 	}
 }
