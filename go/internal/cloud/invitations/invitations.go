@@ -17,6 +17,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/quota"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -45,6 +46,8 @@ type Options struct {
 	Store  saas.Store
 	Limits *httpx.Limits
 	Mail   *mail.Service
+	// Relay 在主机邀请合并收窄了已有授予时撤销已签的令牌并踢人（经 tx.AfterCommit）。
+	Relay relayctl.Control
 	// RequireEmailVerified 为真时未验证邮箱的账号不能邀请或接受（设计 §4.3）。
 	RequireEmailVerified bool
 	Log                  *obs.Logger
@@ -56,6 +59,7 @@ type Service struct {
 	store    saas.Store
 	limits   *httpx.Limits
 	mail     *mail.Service
+	relay    relayctl.Control
 	verified bool
 	log      *obs.Logger
 }
@@ -67,7 +71,7 @@ func New(options Options) *Service {
 		log = obs.Nop()
 	}
 	return &Service{
-		c: options.Core, store: options.Store, limits: options.Limits, mail: options.Mail,
+		c: options.Core, store: options.Store, limits: options.Limits, mail: options.Mail, relay: options.Relay,
 		verified: options.RequireEmailVerified, log: log,
 	}
 }

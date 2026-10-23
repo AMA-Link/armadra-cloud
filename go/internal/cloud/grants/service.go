@@ -342,19 +342,24 @@ func narrowedAccounts(before, after map[string]Effective) []string {
 // revokeAccess 在提交后撤销这些账号在该主机上已签的断言与中继令牌并踢掉他们的连接（重连时按新权限重新签）。
 // 失败只记日志：重试与全量重放由 S8 的 relayctl 兜底。
 func (s *Service) revokeAccess(tx saas.Tx, sourceID string, accounts []string, reason string) {
+	RevokeAccess(tx, s.relay, s.log, sourceID, accounts, reason)
+}
+
+// RevokeAccess 同 Service.revokeAccess，给授予服务之外的调用方（主机邀请合并时收窄了已有授予）用。
+func RevokeAccess(tx saas.Tx, relay relayctl.Control, log *obs.Logger, sourceID string, accounts []string, reason string) {
 	if len(accounts) == 0 {
 		return
 	}
 	accounts = slices.Clone(accounts)
 	tx.AfterCommit(func(ctx context.Context) {
 		for _, id := range accounts {
-			if _, err := s.relay.RevokeWhere(ctx, relayctl.Filter{Subject: id, SourceID: sourceID}); err != nil {
-				s.log.Warn("撤销已签令牌失败", obs.Operation("grants.revoke"), obs.SourceID(sourceID), obs.Error(err))
+			if _, err := relay.RevokeWhere(ctx, relayctl.Filter{Subject: id, SourceID: sourceID}); err != nil {
+				log.Warn("撤销已签令牌失败", obs.Operation("grants.revoke"), obs.SourceID(sourceID), obs.Error(err))
 			}
 		}
 		for _, id := range accounts {
-			if err := s.relay.Kick(ctx, relayctl.KickFilter{SourceID: sourceID, Subject: id}, reason); err != nil {
-				s.log.Warn("踢掉连接失败", obs.Operation("grants.kick"), obs.SourceID(sourceID), obs.Error(err))
+			if err := relay.Kick(ctx, relayctl.KickFilter{SourceID: sourceID, Subject: id}, reason); err != nil {
+				log.Warn("踢掉连接失败", obs.Operation("grants.kick"), obs.SourceID(sourceID), obs.Error(err))
 			}
 		}
 	})

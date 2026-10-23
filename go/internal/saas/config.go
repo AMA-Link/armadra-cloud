@@ -45,6 +45,9 @@ type Config struct {
 	TunnelURL string
 	// InternodeURL 是别的节点转发通道时连的 /x/v1；缺省由 TunnelURL 把路径换成 /x/v1。
 	InternodeURL string
+	// InternodeCheckEvery 是已建立的 /x/v1 连接多久复查一次对端节点令牌有没有被撤销；0 取 5 秒。字段只为测试能缩短，
+	// 不走环境变量（原先是包级变量，测试改它与别的节点的 watch 协程读它之间没有同步）。
+	InternodeCheckEvery time.Duration
 	// Weight 是节点表里的权重（rendezvous 加权），缺省 1。
 	Weight int
 	// NodeToken 是本节点的节点令牌（armadra-cloud nodes token 签的）；转发通道时出示。空串表示不转发。
