@@ -33,6 +33,8 @@ const (
 	JobExpire = "grant.expire"
 	// JobExpireDue 每小时扫一遍到期却还没撤销的授予，补插 JobExpire（作业被去重挡掉或丢了的兜底）。
 	JobExpireDue = "grant.expireDue"
+	// JobIssuedGC 每小时删已到期的签发索引与撤销行（设计 §6.1 的 issued.gc）。
+	JobIssuedGC = "issued.gc"
 
 	expireBatch = 100
 	// maxAccessRows 是 sources.accessList 一次最多列的账号数。
@@ -110,6 +112,17 @@ func (s *Service) Register(runner *jobs.Runner) {
 	runner.Handle(JobExpire, s.expire)
 	runner.Handle(JobExpireDue, s.expireDue)
 	runner.Every(JobExpireDue, jobs.Hourly)
+	runner.Handle(JobIssuedGC, s.issuedGC)
+	runner.Every(JobIssuedGC, jobs.Hourly)
+}
+
+// issuedGC 是 issued.gc：删已到期的签发索引（cloud_issued_tokens，带 tenant_id）与撤销行——令牌过期之后，
+// 撤不撤都无所谓了。
+func (s *Service) issuedGC(ctx context.Context, _ saas.Job) error {
+	return s.store.Tx(ctx, func(tx saas.Tx) error {
+		_, err := tx.Issued().GC(ctx, s.tenant(), s.nowMs())
+		return err
+	})
 }
 
 // wrap 把存储层按约束映射出的业务错误换成控制核的错误。

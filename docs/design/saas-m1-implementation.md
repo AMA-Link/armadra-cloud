@@ -872,7 +872,7 @@ type Watcher interface {
 
 - **可见性在目录查询里，不经 `AccessPolicy`**：`grants.Policy` 随 S5b，S5a 的 `sources.list` / `get` / `me.sources` 直接用存储层的目录查询（`saas.HostFilter.ViewerID`）。可见 = 个人空间的所有者；团队主机给团队 owner / admin，以及登记它的成员（member 角色）；团队进入恢复期则团队主机全部不可见；billing / guest / 外人什么都看不到。S5b 把授予带来的可见性并进同一条查询，`core.AccessPolicy` 的 SaaS 实现 `grants.Policy` 包它（见 §4.6 的 S5b 实现注记）。
 - **管理权**：主机所有者，或团队主机的团队 owner / admin；看不到的一律 `404 not_found`，看得到但管不了（S5b 起才会出现）答 `403 forbidden`。
-- **撤销后的令牌**：S5a 的签发索引只有隧道令牌（`heartbeatHint` 签出时记 jti，`RelayInfo.TunnelJTI`），撤销时 `RevokeWhere` 把它们写进撤销表；断言与中继令牌随 S5b 进索引。`cloud_issued_tokens` 的落盘与重放仍是 S5b / S8。
+- **撤销后的令牌**：S5a 的签发索引只有隧道令牌（`heartbeatHint` 签出时记 jti，`RelayInfo.TunnelJTI`），撤销时 `RevokeWhere` 把它们写进撤销表；断言与中继令牌随 S5b 进索引（已完成，见 §4.6 的 S5b 实现注记）。`cloud_issued_tokens` 的落盘在 S5b（`relayctl.Durable`），重放仍是 S8。
 - **注册令牌按账号计**：核心的 `Registrations.Add` 的上限（20）按整个租户计，SaaS 不能用；`HostRepo.AddRegistration` 按账号计，并只清这个账号过期的令牌。`team_id` 带在令牌上，`PeekRegistration` 先不加锁地读出空间，再按「团队 → 账号 → 源」加锁后才 `ConsumeRegistration`（先删令牌再等团队锁会和清除作业互等）。
 - **登记事务回滚不消耗令牌**：核心的个人中转「先消耗，拒绝也不能再用」；SaaS 按设计 §4.5 的单事务，失败整个回滚，令牌留到自己过期。
 - **同一 `sourceId` 的登记**：`LockSource`（事务级咨询锁）串行化；已登记未撤销的源只允许同一账号在同一空间用同一把钥重登记，其余 `409 source_taken`；撤销后任何持有同一把钥的账号都可以登记到自己的空间（空间行重置标签与设置）。
@@ -928,6 +928,15 @@ type Watcher interface {
 - **`Filter.JTI`**：签发方复核发现自己签的令牌不该有效时，只撤自己签的那一枚。
 - **`Sources.List` 的游标防护**：策略重复给同一个游标（或绕回已取过的）答 `internal`，不再死循环。
 - **`Watcher`**：`Sees` / `Refresh` / `Close` 可并发调用，`Close` 之后 `Sees` 答 false、`Refresh` 什么都不做；`AccessChanged` 事件（S8 把 `grantChanged` / `memberChanged` 转成它）更新可见集合，`SourceRevoked` 移除。
+
+**S5b 实现注记（第二部分：授予、断言与撤销）**：
+
+- **`grants.*` 的管理权与错误**：看不到主机 `404 not_found`；看得到但管不了，团队主机答 `403 team_role_insufficient`，个人空间答 `403 source_access_denied`；团队主机先锁团队行并核成员（owner / admin / member，guest 与 billing 答 `team_role_insufficient`），再锁主机、授予（团队 → 主机 → 授予的顺序，与 S4 的团队 → 账号 → 其余一致）。
+- **主体校验**：`group` 一律 `403 plan_feature_unavailable`（M2）；`team` 只能是主机所属团队；`member` 的主体不是团队成员 `404`、角色不是 owner / admin / member `400`；`guest`：团队主机要求 guest 角色的成员（不是成员 `404`，角色不对 `400`），团队 `allowGuests` 关或主机设置 `allowGuests` 关答 `403 guests_disabled`，个人空间要账号存在且邮箱已验证（`403 email_unverified`）；以主机所有者为主体 `400`；`expiresAtMs` 必须在将来；同主机同主体已有有效授予 `409 conflict`（先查，唯一索引兜底）。授予不设数量上限，`limit_reached` 不会由 `grants.create` 给出（guest 额度在成为团队 guest 成员时已计）。
+- **收窄即撤销（§4.8 第 1 行）**：在锁内先对受影响的账号（账号主体就是他，`team` 主体是团队全体成员）取一份有效权限快照，改完再取一份，`Narrowed` 为真的账号，提交后 `RevokeWhere{Subject, SourceID}` 撤断言与中继令牌，再 `Kick{SourceID, Subject}` 按人踢（受影响的账号多于 50 个时只踢一次该主机的全部连接）；放宽、不变不撤。节点命令里 `subject` 在 G5 N2 之前退化为踢该源全部连接。`grantChanged` / `memberChanged` 事件随 S8 的事件总线（本批不发）。成员移除 / 离开 / 降级沿用 S4 的撤销流程，经同一个 `relayctl.Durable`，所以同样落盘。
+- **`grant.expire`**：授予有到期时排一个 `run_at = expires_at_ms`、`dedupe = grantId` 的作业，改到期时间先撤旧再排新，清掉到期或撤销授予就撤掉作业；处理器锁团队 → 主机 → 授予后重读，已撤销或到期被改到以后就结束，否则写 `revoked_by = 'system'`、对受影响的账号**无条件**撤令牌并踢人（令牌里的 `role` / `scp` 是旧的）、审计 `grant.expire`（actor = system）。每小时的 `grant.expireDue` 给到期却没撤销的授予补插作业（作业丢了或被去重挡掉的兜底）；`issued.gc` 每小时删已到期的签发索引与撤销行。
+- **`sources.assertion`**：事故开关 `assertionsPaused` → `503 unavailable`，限流 `assert.acct`（每账号每分钟 60 次）→ 主机已撤销 `410 source_revoked` → 看不到 / 没有有效权限 `403 source_access_denied`（团队停用先答 `403 team_suspended`，只对看得到这台主机的人）→ 版本门 → 签断言与中继令牌（断言 `jti` 前缀 `s.<deviceId>.<sourceId>`，中继令牌 `r.…`）→ **登记签发索引（先 PostgreSQL 后内层）→ 再读库复核**：主机已撤销则撤自己签的并答 `410`；没有有效权限则撤并答 `403`；有效权限比签发时窄（含团队角色变了）则撤自己签的并按新权限重签（至多 3 次，仍被打断答 `503 unavailable`）。撤销在库提交之后才撤索引里的令牌，所以复核看到未收窄，之后的撤销一定撤得到；与授予收窄、成员降级、主机撤销在「签出 / 登记」之间交错都不漏撤（`Options.Hook` 在 `signed` / `indexed` 两点停住请求的交错用例，加 6 路断言对 4 轮授予建撤的压力用例）。成功后在一个事务里写审计 `assertion.issue`（`jti` = 断言的 jti，`target = host`，团队主机带 `team_id`）。链接访客（`guest:<linkId>:…`）随 S6，S5b 的云端没有这类会话，一律 `403 source_access_denied`。
+- **`sources.accessList`**：所有者与每个有有效权限的账号（`team` 授予展开到 owner / admin / member 成员）一行，角色 / 范围 / 到期是合成后的结果，`grantId` 取贡献最高角色的那条授予（所有者行不挂授予），最多 500 行；`sources.accessRevoke` 撤销一个账号**本人**的 `member` / `guest` 授予（`team` 授予撤不掉单个人，要走 `grants.revoke`），没撤到任何授予 `404`，之后按收窄撤令牌。
 
 ### 4.7 分享与新设备信任（`cloud/links`、主机邀请、`cloud/trust`，S6）
 

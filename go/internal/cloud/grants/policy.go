@@ -13,10 +13,7 @@ import (
 )
 
 // 目录一页的行数。
-const (
-	defaultVisibleLimit = 200
-	maxVisibleLimit     = 200
-)
+const maxVisibleLimit = 200
 
 // PolicyOptions 是访问策略的装配。
 type PolicyOptions struct {
@@ -74,10 +71,7 @@ func (p *Policy) Visible(ctx context.Context, caller core.Caller, filter core.So
 	}
 	limit := filter.Limit
 	if limit <= 0 || limit > maxVisibleLimit {
-		limit = defaultVisibleLimit
-		if filter.Limit > maxVisibleLimit {
-			limit = maxVisibleLimit
-		}
+		limit = maxVisibleLimit
 	}
 	query := saas.HostFilter{ViewerID: caller.AccountID, Limit: limit + 1}
 	if filter.Cursor != "" {

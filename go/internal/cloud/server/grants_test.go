@@ -1006,3 +1006,24 @@ func TestTeamGuestOnlyGetsGrantedHostAndScope(t *testing.T) {
 	// guest 角色的人不能管授予。
 	r.expect(r.createGrant(guest, granted.id, guestOf(other.accountID), "viewer", nil), 403, "team_role_insufficient")
 }
+
+// issued.gc：每小时删已到期的签发索引与撤销行，没到期的不动。
+func TestIssuedGCJobDeletesExpiredRows(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	now := r.clock.Ms()
+	r.exec(`INSERT INTO cloud_issued_tokens (tenant_id, jti, account_id, source_id, device_id, exp_ms) VALUES
+	  ('cloud', 'old', 'a', 's', 'd', $1), ('cloud', 'live', 'a', 's', 'd', $2), ('other', 'old-other', 'a', 's', 'd', $1)`, now+1000, now+7_200_000)
+	r.exec("INSERT INTO relay_revoked_tokens (jti, exp_ms) VALUES ('old', $1), ('live', $2)", now+1000, now+7_200_000)
+	r.clock.Advance(61 * time.Minute)
+	eventuallyDB(t, "过期的行被清掉", func() bool {
+		return r.queryInt("SELECT count(*)::int FROM cloud_issued_tokens WHERE jti = 'old'") == 0 &&
+			r.queryInt("SELECT count(*)::int FROM relay_revoked_tokens WHERE jti = 'old'") == 0
+	})
+	if r.queryInt("SELECT count(*)::int FROM cloud_issued_tokens WHERE jti = 'live'") != 1 || r.queryInt("SELECT count(*)::int FROM relay_revoked_tokens WHERE jti = 'live'") != 1 {
+		t.Fatal("没到期的不该删")
+	}
+	if r.queryInt("SELECT count(*)::int FROM cloud_issued_tokens WHERE tenant_id = 'other'") != 1 {
+		t.Fatal("别的租户的行不该删")
+	}
+}
