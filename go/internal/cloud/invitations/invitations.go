@@ -82,6 +82,7 @@ func (s *Service) Handlers() map[string]api.Handler {
 		"invitations.revoke":  s.revoke,
 		"invitations.resend":  s.resend,
 		"invitations.get":     s.get,
+		"invitations.preview": s.preview,
 		"invitations.accept":  s.accept,
 		"invitations.decline": s.decline,
 	}
@@ -321,6 +322,11 @@ func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 	box, _ := call.Input["box"].(string)
 	out := []invitationOut{}
 	if box == "received" {
+		// 收件箱一律要求邮箱已验证（不看 REQUIRE_EMAIL_VERIFIED 开关）：未验证的地址可能是别人注册时随手填的，
+		// 不能借它看到发给那个地址的邀请；未验证答空列表。
+		if account.EmailVerifiedAtMs == nil {
+			return map[string]any{"invitations": out}, nil
+		}
 		received, err := s.store.Read().ReceivedInvitations(ctx, s.tenant(), account.Email, nowMs)
 		if err != nil {
 			return nil, err
@@ -456,6 +462,9 @@ func (s *Service) resend(ctx context.Context, call *api.Call) (any, error) {
 					return core.Fail(gen.ErrMemberExists)
 				}
 			}
+			if inv.TeamRole == saas.TeamRole("guest") && !teams.SettingsOf(access.Team).AllowGuests {
+				return core.Fail(gen.ErrGuestsDisabled)
+			}
 			if err := s.checkSeat(ctx, tx, access, inv.TeamRole, nowMs); err != nil {
 				return err
 			}
@@ -502,7 +511,15 @@ type preview struct {
 
 // get 是 invitations.get（匿名）：按 IP 每分钟 30 次；邀请 id 与令牌哈希必须都对上，否则一律 404 not_found
 // （不区分「没有这条邀请」与「令牌不对」）；已撤销 410、已过期 410；其余只答遮掩后的摘要。
-func (s *Service) get(ctx context.Context, call *api.Call) (any, error) {
+func (s *Service) get(ctx context.Context, call *api.Call) (any, error) { return s.summary(ctx, call) }
+
+// preview 是 invitations.preview（匿名，协议包 0.10.1）：同 get，令牌放请求体、不进 URL（query 会进代理与访问日志）。
+// get 的 ?token= 已弃用，暂保留兼容；两者共用限流桶与全部规则。
+func (s *Service) preview(ctx context.Context, call *api.Call) (any, error) {
+	return s.summary(ctx, call)
+}
+
+func (s *Service) summary(ctx context.Context, call *api.Call) (any, error) {
 	id, _ := call.Input["invitationId"].(string)
 	token, _ := call.Input["token"].(string)
 	if err := s.limits.Check(ctx, httpx.LimitTokenIP, call.IP); err != nil {
@@ -543,8 +560,8 @@ func (s *Service) get(ctx context.Context, call *api.Call) (any, error) {
 }
 
 // accept 是 invitations.accept（要会话、邮箱已验证）：邀请 id 与令牌都对上 → 先锁团队行再锁邀请行 → 账号邮箱
-// 必须等于邀请的邮箱（403 invitation_email_mismatch）→ 已接受的原样答；已撤销 / 过期 410 → teams.Join 核对
-// 团队状态、重复成员、guest 设置与额度并插成员。
+// 必须等于邀请的邮箱（403 invitation_email_mismatch）→ 已接受的原样答 → teams.Join 核对
+// 撤销 / 过期 / 已拒绝、团队状态、重复成员、邀请人身份、guest 设置与额度并插成员。
 func (s *Service) accept(ctx context.Context, call *api.Call) (any, error) {
 	id, _ := call.Input["invitationId"].(string)
 	token, _ := call.Input["token"].(string)
@@ -564,7 +581,7 @@ func (s *Service) accept(ctx context.Context, call *api.Call) (any, error) {
 		if !matchesToken(probe, token) || probe.Kind != saas.InvitationTeam {
 			return core.Fail(gen.ErrNotFound)
 		}
-		// 加锁顺序：团队行 → 邀请行。
+		// 加锁顺序：团队行 → 邀请行；锁上之后再核一次令牌（期间可能被重发换掉）。Join 内部再锁一次是空操作。
 		if found, err := tx.Teams().LockTeam(ctx, s.tenant(), probe.TeamID); err != nil {
 			return err
 		} else if !found {
@@ -580,25 +597,15 @@ func (s *Service) accept(ctx context.Context, call *api.Call) (any, error) {
 		if inv.Email != account.Email {
 			return core.Fail(gen.ErrInvitationEmailMismatch)
 		}
-		nowMs := s.nowMs()
-		teamID = inv.TeamID
-		switch state(*inv, nowMs) {
-		case saas.InvitationAccepted:
+		if inv.State == saas.InvitationAccepted {
+			teamID = inv.TeamID
 			return nil // 已接受的再接受答原结果
-		case saas.InvitationRevoked:
-			return core.Fail(gen.ErrInvitationRevoked)
-		case saas.InvitationExpired:
-			return core.Fail(gen.ErrInvitationExpired)
-		case saas.InvitationDeclined:
-			return core.Fail(gen.ErrConflict)
 		}
-		if err := teams.Join(ctx, tx, s.tenant(), nowMs, *inv, account.AccountID); err != nil {
+		nowMs := s.nowMs()
+		if teamID, err = teams.Join(ctx, tx, s.tenant(), nowMs, id, account); err != nil {
 			return err
 		}
-		if err := tx.Invitations().Decide(ctx, s.tenant(), id, saas.InvitationAccepted, account.AccountID, nowMs); err != nil {
-			return err
-		}
-		return s.record(ctx, tx, call, account.AccountID, inv.TeamID, ActionAccept, id)
+		return s.record(ctx, tx, call, account.AccountID, teamID, ActionAccept, id)
 	})
 	if err != nil {
 		return nil, err

@@ -113,6 +113,21 @@ func TestInvitationFlow(t *testing.T) {
 	if !reflect.DeepEqual(res.json, want) {
 		t.Fatalf("摘要：%s", res.body)
 	}
+	// preview：令牌放请求体，答复与 get 相同；不存在与令牌不对同样的 404。
+	pv := r.do("POST", invitePath(id, "preview"), map[string]any{"token": token}, nil)
+	r.expect(pv, 200, "")
+	if !reflect.DeepEqual(pv.json, res.json) {
+		t.Fatalf("preview 应与 get 相同：%s / %s", pv.body, res.body)
+	}
+	pBad := r.do("POST", invitePath(id, "preview"), map[string]any{"token": "wrong"}, nil)
+	pMissing := r.do("POST", invitePath("nope", "preview"), map[string]any{"token": token}, nil)
+	r.expect(pBad, 404, "not_found")
+	r.expect(pMissing, 404, "not_found")
+	delete(pBad.json, "requestId")
+	delete(pMissing.json, "requestId")
+	if !reflect.DeepEqual(pBad.json, pMissing.json) {
+		t.Fatalf("preview 不存在与令牌不对应答同样的形状：%v / %v", pBad.json, pMissing.json)
+	}
 	bad := r.do("GET", invitePath(id)+"?token=wrong", nil, nil)
 	missing := r.do("GET", invitePath("nope")+"?token="+url.QueryEscape(token), nil, nil)
 	r.expect(bad, 404, "not_found")
@@ -171,12 +186,14 @@ func TestInvitationMailFollowsInviteeLocale(t *testing.T) {
 	team := r.seedTeam("lang", map[string]string{owner.accountID: "owner"})
 	email := r.email()
 	r.verifiedAs(email, hdr("Accept-Language", "en-US,en;q=0.9")) // 收件人有账号，用他的语言
-	r.expect(r.invite(owner, team, email, "guest"), 200, "")
-	mails := r.waitMails(email, 1)
+	res := r.invite(owner, team, email, "guest")
+	r.expect(res, 200, "")
+	id := res.json["invitationId"].(string)
+	r.waitInvite(email, id)
 	// 注册时还会发验证邮件：取邀请那封。
 	var invite mail.Message
-	for _, m := range mails {
-		if strings.Contains(m.Subject, "Invitation") {
+	for _, m := range r.mail.Messages() {
+		if m.To == email && strings.Contains(m.Text, "/invite/"+id) {
 			invite = m
 		}
 	}
@@ -437,12 +454,19 @@ func TestInvitationMailSkipsRevokedAndRetries(t *testing.T) {
 	owner := r.verified()
 	team := r.seedTeam("mailskip", map[string]string{owner.accountID: "owner"})
 	email := r.email()
+	// 先等注册验证邮件的作业走完，别让它吃掉下面的 FailNext。
+	eventuallyDB(t, "注册邮件作业走完", func() bool {
+		return r.queryInt("SELECT count(*)::int FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NULL AND failed_at_ms IS NULL") == 0
+	})
 	r.mail.FailNext(1)
 	res := r.invite(owner, team, email, "member")
 	r.expect(res, 200, "")
 	id := res.json["invitationId"].(string)
-	eventuallyDB(t, "第一次发信失败", func() bool { return len(r.mail.Attempts()) == 1 })
-	r.clock.Advance(31 * time.Second) // 退避 30 秒
+	// 等这条邀请的发信作业记下失败（last_error 非空）再推进时钟（退避 30 秒），否则会撞上还没记下的失败。
+	eventuallyDB(t, "第一次发信失败并记下", func() bool {
+		return r.queryInt("SELECT count(*)::int FROM jobs WHERE kind = 'mail.send' AND payload->>'invitationId' = $1 AND last_error IS NOT NULL", id) == 1
+	})
+	r.clock.Advance(31 * time.Second)
 	token := r.waitInvite(email, id)
 	if got := len(r.mail.Attempts()); got < 2 {
 		t.Fatalf("应有重试：%d", got)
@@ -522,4 +546,92 @@ func TestInvitationConcurrentCreateRespectsQuota(t *testing.T) {
 	if n := r2.queryInt("SELECT count(*)::int FROM team_members WHERE team_id = $1", t2); n != 3 {
 		t.Fatalf("成员数 %d", n)
 	}
+}
+
+// 收件箱一律要求邮箱已验证（不看开关）：未验证的账号看不到发给那个地址的邀请。
+func TestInvitationReceivedBoxNeedsVerifiedEmail(t *testing.T) {
+	r := newRig(t, rigOptions{env: map[string]string{"REQUIRE_EMAIL_VERIFIED": "0"}})
+	owner := r.verified()
+	team := r.seedTeam("inbox", map[string]string{owner.accountID: "owner"})
+	email := r.email()
+	r.expect(r.invite(owner, team, email, "member"), 200, "")
+	squatter := r.registerBearer(email) // 邮箱没验证
+	res := r.do("GET", "/v1/invitations?box=received", nil, squatter.bearer())
+	r.expect(res, 200, "")
+	if list := res.json["invitations"].([]any); len(list) != 0 {
+		t.Fatalf("未验证邮箱的收件箱应为空：%s", res.body)
+	}
+	r.exec("UPDATE accounts SET email_verified_at_ms = 1 WHERE account_id = $1", squatter.accountID)
+	if list := r.do("GET", "/v1/invitations?box=received", nil, squatter.bearer()).json["invitations"].([]any); len(list) != 1 {
+		t.Fatal("验证后应看得到")
+	}
+}
+
+// 邀请人被移除或不再是 admin：他发出的待处理邀请同事务撤销；兜底——邀请人身份变了而邀请还在，接受答 409。
+func TestInvitationsDieWithTheirInviter(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	owner, admin, admin2 := r.verified(), r.verified(), r.verified()
+	team := r.seedTeam("inviter", map[string]string{owner.accountID: "owner", admin.accountID: "admin", admin2.accountID: "admin"})
+	invite := func(by session) string {
+		res := r.do("POST", "/v1/invitations", map[string]any{"kind": "team", "teamId": team, "email": r.email(), "role": "guest"}, by.bearer())
+		r.expect(res, 200, "")
+		return res.json["invitationId"].(string)
+	}
+	state := func(id string) string {
+		return r.queryString("SELECT state FROM invitations WHERE invitation_id = $1", id)
+	}
+
+	byDemoted, byRemoved, byOwner := invite(admin), invite(admin2), invite(owner)
+	r.expect(r.do("PATCH", teamPath(team, "members", admin.accountID), map[string]any{"role": "member"}, owner.bearer()), 200, "")
+	if state(byDemoted) != "revoked" || state(byOwner) != "pending" {
+		t.Fatalf("降级的 admin 发出的邀请应撤销，别人的不动：%s %s", state(byDemoted), state(byOwner))
+	}
+	r.expect(r.do("DELETE", teamPath(team, "members", admin2.accountID), nil, owner.bearer()), 200, "")
+	if state(byRemoved) != "revoked" {
+		t.Fatalf("被移除成员发出的邀请应撤销：%s", state(byRemoved))
+	}
+
+	// 兜底：绕过服务层把邀请人降级，邀请仍 pending，接受时 Join 核对邀请人身份，答 409。
+	email := r.email()
+	invitee := r.verifiedAs(email, nil)
+	res := r.invite(owner, team, email, "member")
+	r.expect(res, 200, "")
+	id := res.json["invitationId"].(string)
+	token := r.waitInvite(email, id)
+	r.exec("UPDATE invitations SET invited_by = $1 WHERE invitation_id = $2", admin.accountID, id) // admin 已降为 member
+	r.expect(r.do("POST", invitePath(id, "accept"), map[string]any{"token": token}, invitee.bearer()), 409, "conflict")
+	if n := r.queryInt("SELECT count(*)::int FROM team_members WHERE account_id = $1", invitee.accountID); n != 0 {
+		t.Fatal("不该加成员")
+	}
+}
+
+// 过期重发也受 allowGuests 约束；团队名与邀请人显示名里的域名形态不进邮件。
+func TestInvitationResendExpiredGuestAndLabelSanitizing(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	owner := r.verified()
+	team := r.seedTeam("g-resend", map[string]string{owner.accountID: "owner"})
+	r.exec("UPDATE teams SET name = 'evil . com 福利 Dev' WHERE team_id = $1", team)
+	r.exec("UPDATE accounts SET display_name = '客服 evil。io' WHERE account_id = $1", owner.accountID)
+	email := r.email()
+	res := r.invite(owner, team, email, "guest")
+	r.expect(res, 200, "")
+	id := res.json["invitationId"].(string)
+	r.waitInvite(email, id)
+	var letter mail.Message
+	for _, m := range r.mail.Messages() {
+		if m.To == email && strings.Contains(m.Text, "/invite/"+id) {
+			letter = m
+		}
+	}
+	for _, part := range []string{letter.Subject, letter.Text, letter.HTML} {
+		if strings.Contains(part, "evil") {
+			t.Fatalf("团队名与显示名里的域名形态不该进邮件：%q", part)
+		}
+	}
+	if !strings.Contains(letter.Subject, "福利 Dev") || !strings.Contains(letter.Text, "客服") {
+		t.Fatalf("其余文字应保留：%q / %q", letter.Subject, letter.Text)
+	}
+	r.exec("UPDATE invitations SET state = 'expired' WHERE invitation_id = $1", id)
+	r.expect(r.do("PATCH", teamPath(team, "settings"), map[string]any{"allowGuests": false}, owner.bearer()), 200, "")
+	r.expect(r.do("POST", invitePath(id, "resend"), nil, owner.bearer()), 403, "guests_disabled")
 }

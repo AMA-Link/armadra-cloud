@@ -122,6 +122,12 @@ func (s *Service) memberRole(ctx context.Context, call *api.Call) (any, error) {
 			if err := tx.Teams().SetRole(ctx, access.Scope, target.AccountID, in.Role); err != nil {
 				return err
 			}
+			// 不再是 admin 的人，发出的待处理邀请随之撤销（Join 时也会核对邀请人仍是 admin 以上）。
+			if in.Role != teamscope.Admin && in.Role != teamscope.Owner {
+				if _, err := tx.Invitations().RevokeByInviter(ctx, access.Scope, target.AccountID, account.AccountID, s.nowMs()); err != nil {
+					return err
+				}
+			}
 			if narrows(target.Role, in.Role) {
 				if err := s.revokeMember(ctx, tx, access, account.AccountID, target.AccountID, in.Role == teamscope.Billing || in.Role == teamscope.Guest); err != nil {
 					return err
@@ -205,6 +211,9 @@ func (s *Service) removeMember(ctx context.Context, tx saas.Tx, access Access, a
 		if other == "" {
 			return core.Fail(gen.ErrTeamLastOwner)
 		}
+	}
+	if _, err := tx.Invitations().RevokeByInviter(ctx, access.Scope, target.AccountID, actorID, s.nowMs()); err != nil {
+		return err
 	}
 	heir, err := tx.Teams().OldestOwner(ctx, access.Scope, target.AccountID)
 	if err != nil {

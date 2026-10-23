@@ -94,6 +94,14 @@ func (r invitationRepo) PendingSeats(ctx context.Context, scope saas.TeamScope, 
 	return s, err
 }
 
+func (r invitationRepo) RevokeByInviter(ctx context.Context, scope saas.TeamScope, inviterID, decidedBy string, nowMs int64) (int, error) {
+	tag, err := r.q.Exec(ctx,
+		`UPDATE invitations SET state = 'revoked', decided_by = NULLIF($1, ''), decided_at_ms = $2
+		 WHERE tenant_id = $3 AND team_id = $4 AND kind = 'team' AND invited_by = $5 AND state = 'pending'`,
+		decidedBy, nowMs, scope.TenantID(), scope.TeamID(), inviterID)
+	return int(tag.RowsAffected()), err
+}
+
 func (r invitationRepo) Decide(ctx context.Context, tenantID, invitationID, state, decidedBy string, nowMs int64) error {
 	_, err := r.q.Exec(ctx,
 		"UPDATE invitations SET state = $1, decided_by = NULLIF($2, ''), decided_at_ms = $3 WHERE tenant_id = $4 AND invitation_id = $5",
