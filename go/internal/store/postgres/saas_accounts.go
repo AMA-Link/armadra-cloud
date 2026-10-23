@@ -104,3 +104,58 @@ func (r accountRepo) SetDisplayName(ctx context.Context, tenantID, accountID, di
 		displayName, nowMs, tenantID, accountID)
 	return err
 }
+
+func (r accountRepo) SetEmailVerified(ctx context.Context, tenantID, accountID string, nowMs int64) error {
+	_, err := r.q.Exec(ctx,
+		`UPDATE accounts SET email_verified_at_ms = COALESCE(email_verified_at_ms, $1), updated_at_ms = $1
+		 WHERE tenant_id = $2 AND account_id = $3`, nowMs, tenantID, accountID)
+	return err
+}
+
+func (r accountRepo) ChangeEmail(ctx context.Context, tenantID, accountID, newEmail string, nowMs int64) error {
+	_, err := r.q.Exec(ctx,
+		`UPDATE accounts SET email = $1, email_verified_at_ms = $2, updated_at_ms = $2
+		 WHERE tenant_id = $3 AND account_id = $4`, strings.ToLower(newEmail), nowMs, tenantID, accountID)
+	return err
+}
+
+func (r accountRepo) InsertEmailToken(ctx context.Context, tenantID string, t saas.EmailToken) error {
+	_, err := r.q.Exec(ctx,
+		`INSERT INTO email_tokens (tenant_id, token_hash, account_id, purpose, email, created_at_ms, expires_at_ms)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		tenantID, t.TokenHash, t.AccountID, t.Purpose, strings.ToLower(t.Email), t.CreatedAtMs, t.ExpiresAtMs)
+	return err
+}
+
+func (r accountRepo) ConsumeEmailToken(ctx context.Context, tenantID, tokenHash string, nowMs int64) (bool, error) {
+	tag, err := r.q.Exec(ctx,
+		`UPDATE email_tokens SET consumed_at_ms = $1
+		 WHERE tenant_id = $2 AND token_hash = $3 AND consumed_at_ms IS NULL AND expires_at_ms > $1`,
+		nowMs, tenantID, tokenHash)
+	return err == nil && tag.RowsAffected() == 1, err
+}
+
+func (r accountRepo) InvalidateEmailTokens(ctx context.Context, tenantID, accountID, purpose string, nowMs int64) (int, error) {
+	tag, err := r.q.Exec(ctx,
+		`UPDATE email_tokens SET consumed_at_ms = $1
+		 WHERE tenant_id = $2 AND account_id = $3 AND purpose = $4 AND consumed_at_ms IS NULL`,
+		nowMs, tenantID, accountID, purpose)
+	return int(tag.RowsAffected()), err
+}
+
+func (r accountRepo) GCEmailTokens(ctx context.Context, tenantID string, beforeMs int64) (int, error) {
+	tag, err := r.q.Exec(ctx, "DELETE FROM email_tokens WHERE tenant_id = $1 AND expires_at_ms < $2", tenantID, beforeMs)
+	return int(tag.RowsAffected()), err
+}
+
+func (r reader) EmailToken(ctx context.Context, tenantID, tokenHash string) (*saas.EmailToken, error) {
+	var t saas.EmailToken
+	err := r.q.QueryRow(ctx,
+		`SELECT token_hash, account_id, purpose, email, created_at_ms, expires_at_ms, consumed_at_ms
+		 FROM email_tokens WHERE tenant_id = $1 AND token_hash = $2`, tenantID, tokenHash).
+		Scan(&t.TokenHash, &t.AccountID, &t.Purpose, &t.Email, &t.CreatedAtMs, &t.ExpiresAtMs, &t.ConsumedAtMs)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &t, err
+}
