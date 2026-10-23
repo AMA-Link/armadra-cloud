@@ -71,7 +71,7 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 
 ## 切换到 Go 版中继（0.10.0）与回滚
 
-0.10.0 起 `ghcr.io/ama-link/armadra-relay` 镜像里是 Go 实现。镜像名、入口（tini + `armadra-relay`）、缺省命令、端口 8443、uid 10002、`/data` 卷、健康检查与全部参数、环境变量都不变；库格式也不变（同一份迁移与账本），Go 版与 Node 版可以交替打开同一个数据目录。
+0.10.0 起 `ghcr.io/ama-link/armadra-relay` 镜像里是 Go 实现。镜像名、入口（`armadra-relay`）、缺省命令、端口 8443、uid 10002、`/data` 卷、健康检查与全部参数、环境变量都不变；库格式也不变（同一份迁移与账本），Go 版与 Node 版可以交替打开同一个数据目录。
 
 升级：
 

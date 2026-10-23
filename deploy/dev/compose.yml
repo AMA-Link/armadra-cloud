@@ -74,7 +74,7 @@ services:
     profiles: ["stack"]
     build:
       context: ../..
-      dockerfile: apps/relay/Dockerfile
+      dockerfile: go/Dockerfile
     image: armadra-relay:local
     environment:
       RELAY_NODE_ID: dev-container-1
