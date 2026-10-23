@@ -1256,6 +1256,7 @@ type Tx interface {
 - **主机上下线**：`coreCtx.Presence` 接 `Plane.Presence()`（`relay:presence`），`core.MeStream` 整个只订阅一次、每个事件查一次源再分发给各连接；`sourceRevoked` 走 `cloud:events`。
 - **修正 `core` 的一个顺序**：`attachment.offer` 现在在 `Refresh` 之前判可见性——否则 SaaS 的 `Watcher` 在 `sourceRevoked` 上先把主机从可见集合删掉、事件随后被「看不到」过滤掉，撤销之前看得到它的人收不到 `sourceRevoked`。
 - **票**：`me.streamTicket` 的票写进 Redis `cloud:ticket:<sha256>`（值 `{accountId, deviceId}`，`accountId` 在访客会话里是 sub，30 秒，`GETDEL` 一次性），任一实例发的票可在任一实例的 `GET /v1/me/stream` 兑换；兑换时由设备记录重建调用方（`core.CallerFor`，与访问令牌认证共用）并复核设备仍有效。WebSocket 外壳在 `cloud/mestream`（与个人中转同一套协议：子协议 `armadra-ticket.<票>`、30 秒 ping 与会话复核、有界队列），关闭时先以 1001 关闭所有连接再停 HTTP。
+- **审查后的补强**：① 30 秒心跳在复核设备之后调连接自己的重算函数（`AttachResyncable`），Prepare / 发布失败或事件丢了，可见集合最多过期一个心跳；② 团队邀请的邀请人只在仍是 owner / admin 时才进受众；③ `Attach` 先登记、先订阅总线再解析可见集合，窗口里到的事件先存着、解析完按序补投；④ 准备阶段每个账号单独超时（3 秒）、8 路并发，`grantChanged` 仍逐账号走 `Policy.Access`（可见性不等于有效权限非空，团队 owner / admin 看得到全部主机，所以不用 `AccessBases` 合成），同一账号的整份重算合并（在跑时来的多次请求只多算一轮）；⑤ 订阅重连后的 1012 关闭在 0–10 秒内随机错开；`teams.restore` 发 `memberChanged`（不带 `accountId`）；`RevokeByInviter` 级联撤销的邀请逐条发 `invitationChanged`（`RevokeByInviter` 现在答被撤的邀请）。
 - **测试**：两个控制面实例 + Redis：票跨实例兑换（一次性、过期、设备登出作废、Redis 里不含票明文）；邀请 → 接受 → 改角色 → 移除的事件按受众到达另一个实例上的连接（未验证邮箱的受邀账号、无关账号收不到）；授予后另一个实例上的连接开始收到这台主机的上下线、撤销后不再收到、主机撤销跨实例到达；实例关闭时连接以 1001 关闭；`Hub` 的顺序与「只投一次」、断线重连回调（只杀自己的订阅连接）。
 
 ## §8 测试

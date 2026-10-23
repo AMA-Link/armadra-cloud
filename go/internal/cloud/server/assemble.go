@@ -130,7 +130,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 		Client: redisClient, Channel: deps.EventsChannel, Origin: "cloud/" + instance, Bus: coreCtx.Events,
 		Prepare: accessPreparer(coreCtx, policy, stream, logger),
 		// 事件订阅断线重连后，断线期间的事件丢了：让客户端重连并重新拉取。
-		OnResubscribed: func() { shell.CloseAll(websocket.CloseServiceRestart, "resubscribed") },
+		OnResubscribed: func() { shell.CloseAllSpread(websocket.CloseServiceRestart, "resubscribed", resubscribeSpread) },
 		Log:            logger,
 	})
 	if err := hub.Start(ctx); err != nil {

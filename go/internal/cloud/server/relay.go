@@ -163,24 +163,53 @@ func accessPreparer(c *core.Context, policy *grants.Policy, stream *core.MeStrea
 	return func(ctx context.Context, event core.Event, audience *core.Audience) {
 		switch e := event.(type) {
 		case events.GrantChanged:
-			for _, id := range local(audience) {
-				_, visible, err := policy.Access(ctx, core.Caller{AccountID: id}, e.SourceID)
+			// 可见性不等于有效权限非空（团队 owner / admin 看得到全部主机），所以逐账号走 Policy.Access，
+			// 而不是用 AccessBases 合成；每个账号单独超时、有限并发，一个慢账号拖不垮整批。
+			forEach(local(audience), func(id string) {
+				actx, cancel := context.WithTimeout(ctx, prepareEach)
+				defer cancel()
+				_, visible, err := policy.Access(actx, core.Caller{AccountID: id}, e.SourceID)
 				if err != nil {
 					log.Warn("重算授予变动后的可见性失败", obs.Operation("events.access"), obs.SourceID(e.SourceID), obs.Error(err))
-					continue
+					return
 				}
 				c.Events.Deliver(grants.AccessChanged{SourceID: e.SourceID, AccountID: id, Visible: visible}, nil)
-			}
+			})
 		case events.MemberChanged:
 			targets := local(audience)
 			if e.AccountID != "" {
 				targets = []string{e.AccountID}
 			}
-			for _, id := range targets {
-				if failed := stream.Resync(ctx, id); failed > 0 {
+			forEach(targets, func(id string) {
+				actx, cancel := context.WithTimeout(ctx, prepareEach)
+				defer cancel()
+				if failed := stream.Resync(actx, id); failed > 0 {
 					log.Warn("成员变动后整份重算可见性失败", obs.Operation("events.access"), obs.Count(failed))
 				}
-			}
+			})
 		}
 	}
+}
+
+// prepareEach 是准备阶段每个账号的超时；prepareWorkers 是同时处理的账号数。
+const (
+	prepareEach    = 3 * time.Second
+	prepareWorkers = 8
+	// resubscribeSpread 是订阅断线重连后关闭 me-stream 连接的随机错开时长，避免客户端同一刻重连重拉。
+	resubscribeSpread = 10 * time.Second
+)
+
+// forEach 对 ids 有限并发地执行 fn，全部做完才返回。
+func forEach(ids []string, fn func(string)) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, prepareWorkers)
+	for _, id := range ids {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			fn(id)
+		}()
+	}
+	wg.Wait()
 }

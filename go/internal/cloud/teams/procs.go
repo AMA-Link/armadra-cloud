@@ -271,6 +271,7 @@ func (s *Service) restore(ctx context.Context, call *api.Call) (any, error) {
 				return err
 			}
 			team.DeletedAtMs, team.PurgeAtMs = nil, nil
+			s.events.TeamRestored(tx, access.Scope.TeamID())
 			if err := s.record(ctx, tx, call, account.AccountID, access.Scope.TeamID(), ActionRestore, "team", access.Scope.TeamID()); err != nil {
 				return err
 			}

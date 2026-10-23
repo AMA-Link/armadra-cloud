@@ -72,6 +72,17 @@ func (p *Publisher) TeamRemoved(tx saas.Tx, teamID string) {
 	})
 }
 
+// TeamRestored：团队从恢复期里恢复。事件不带 accountId（团队整个回来了），受众是全体成员。
+func (p *Publisher) TeamRestored(tx saas.Tx, teamID string) {
+	if !p.enabled() {
+		return
+	}
+	event := NewMemberChanged(teamID, "", MemberAdded, p.Core.NowMs())
+	p.emit(tx, event, func(ctx context.Context, r saas.Reader) ([]string, error) {
+		return r.TeamAccountIDs(ctx, p.tenant(), teamID)
+	})
+}
+
 // InvitationChanged：邀请状态变化。受众是邀请人、团队 admin 以上，以及被邀请邮箱对应的账号——只推邮箱已验证的账号
 // （与 invitations.list 的 received 同一条规则，设计 §4.4、§7.1）。
 func (p *Publisher) InvitationChanged(tx saas.Tx, inv saas.Invitation, state string) {
@@ -80,13 +91,19 @@ func (p *Publisher) InvitationChanged(tx saas.Tx, inv saas.Invitation, state str
 	}
 	event := NewInvitationChanged(inv.InvitationID, inv.TeamID, inv.SourceID, state, p.Core.NowMs())
 	p.emit(tx, event, func(ctx context.Context, r saas.Reader) ([]string, error) {
-		out := []string{inv.InvitedBy}
+		var out []string
 		if inv.TeamID != "" {
 			staff, err := r.TeamStaffIDs(ctx, p.tenant(), inv.TeamID)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, staff...)
+			// 团队邀请的邀请人只在仍是 owner / admin 时才收（被移除或降级的邀请人收不到）。
+			if slices.Contains(staff, inv.InvitedBy) {
+				out = append(out, inv.InvitedBy)
+			}
+		} else {
+			out = append(out, inv.InvitedBy)
 		}
 		if inv.SourceID != "" {
 			if space, err := r.SpaceOf(ctx, p.tenant(), inv.SourceID); err != nil {

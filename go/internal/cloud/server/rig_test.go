@@ -87,6 +87,8 @@ type rigOptions struct {
 	redisRelay bool
 	// redisHook 挂在 Redis 客户端上（注入故障）。
 	redisHook goredis.Hook
+	// streamPing 缩短 me-stream 的心跳与可见集合兜底重算间隔。
+	streamPing time.Duration
 	// flushEvery 缩短设备最近使用与主机最近在线的落盘间隔。
 	flushEvery time.Duration
 	// incidentEvery 缩短事故开关按库同步的间隔。
@@ -190,6 +192,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 		deps.Relay = relayctl.NewMemory(clk.Now)
 	}
 	deps.RedisHook = options.redisHook
+	deps.StreamPing = options.streamPing
 	if options.flushEvery > 0 {
 		deps.FlushEvery = options.flushEvery
 	}

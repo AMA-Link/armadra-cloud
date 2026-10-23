@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"sync"
@@ -143,7 +144,7 @@ func (m *MeStream) attach(conn *websocket.Conn, caller core.Caller) {
 			c.stop()
 		}
 	}
-	detach, err := m.core.Attach(caller, func(event core.Event) { send(event) }, c.stop)
+	detach, resync, err := m.core.AttachResyncable(caller, func(event core.Event) { send(event) }, c.stop)
 	if err != nil {
 		// 访客的链接查不了（库出错）：关掉让客户端重连，别留一条永远收不到事件的连接。
 		m.mu.Lock()
@@ -194,6 +195,10 @@ func (m *MeStream) attach(conn *websocket.Conn, caller core.Caller) {
 					time.AfterFunc(streamCloseGrace, c.stop)
 					return
 				default:
+					// 兜底：Prepare / 发布失败或事件丢了，可见集合最多过期一个心跳。
+					rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
+					_ = resync(rctx)
+					rcancel()
 					send(tsEvent{Type: "ping", TS: m.now().UnixMilli()})
 				}
 			}
@@ -233,7 +238,10 @@ func (m *MeStream) attach(conn *websocket.Conn, caller core.Caller) {
 }
 
 // CloseAll 以 code 与原因关闭所有连接（1001 going away：关闭；1012 service restart：事件订阅断线重连，客户端重连后重拉）。
-func (m *MeStream) CloseAll(code int, reason string) {
+func (m *MeStream) CloseAll(code int, reason string) { m.CloseAllSpread(code, reason, 0) }
+
+// CloseAllSpread 同 CloseAll，但每条连接在 0 到 spread 之间随机等一会儿再关，避免所有客户端同一刻重连重拉。
+func (m *MeStream) CloseAllSpread(code int, reason string, spread time.Duration) {
 	m.mu.Lock()
 	clients := make([]*streamClient, 0, len(m.clients))
 	for c := range m.clients {
@@ -241,8 +249,15 @@ func (m *MeStream) CloseAll(code int, reason string) {
 	}
 	m.mu.Unlock()
 	for _, c := range clients {
-		_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(streamWriteTimeout))
-		time.AfterFunc(streamCloseGrace, c.stop)
+		closeOne := func() {
+			_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(streamWriteTimeout))
+			time.AfterFunc(streamCloseGrace, c.stop)
+		}
+		if spread <= 0 {
+			closeOne()
+			continue
+		}
+		time.AfterFunc(rand.N(spread), closeOne)
 	}
 }
 

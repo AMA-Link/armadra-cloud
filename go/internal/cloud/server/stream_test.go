@@ -309,3 +309,90 @@ func TestMeStreamClosesWithGoingAwayOnShutdown(t *testing.T) {
 		t.Fatalf("关闭码：%d", code)
 	}
 }
+
+// 漏更新后的兜底：库里的授予被撤了而事件没有处理（这里直接改库，等同于 Prepare / 发布失败），
+// 连接的可见集合在一个心跳内收敛，不再收到这台主机的事件。
+func TestVisibleSetConvergesOnHeartbeatAfterMissedEvent(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{redisRelay: true, streamPing: 400 * time.Millisecond})
+	node := r.newFakeNode("node-1")
+	owner, friend := r.verified(), r.verified()
+	h := r.addHost(owner, nil, "0.11.0")
+	r.mustGrant(owner, h.id, guestOf(friend.accountID), "viewer", nil)
+	friendStream := r.stream(friend)
+	time.Sleep(300 * time.Millisecond) // 服务端在升级之后才登记连接
+	online := func(at int64) {
+		t.Helper()
+		if err := node.plane.Presence().Publish(context.Background(), control.PresenceEvent{
+			Type: control.PresenceSourceOnline, SourceID: h.id, Node: "node-1", TunnelID: "t", CoreVersion: "0.11.0", AtMs: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	atMs := r.clock.Ms()
+	online(atMs)
+	friendStream.waitFor("授予有效时收到上线", func(e map[string]any) bool { return e["type"] == "sourceOnline" && e["sinceMs"] == float64(atMs) })
+	// 绕过事件直接撤授予：可见集合此刻是过期的。
+	r.exec("UPDATE source_grants SET revoked_at_ms = 1 WHERE subject_id = $1", friend.accountID)
+	online(atMs + 1)
+	friendStream.waitFor("过期窗口里仍收到", func(e map[string]any) bool { return e["sinceMs"] == float64(atMs+1) })
+	// 一个心跳（加上重算）之后收敛。
+	deadline := time.Now().Add(5 * time.Second)
+	for n := int64(2); ; n++ {
+		online(atMs + n)
+		time.Sleep(300 * time.Millisecond)
+		if countSince(friendStream, float64(atMs+n)) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("可见集合没有在心跳内收敛")
+		}
+	}
+}
+
+func countSince(c *streamConn, sinceMs float64) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, e := range c.events {
+		if e["type"] == "sourceOnline" && e["sinceMs"] == sinceMs {
+			n++
+		}
+	}
+	return n
+}
+
+// 被移除的原邀请人收不到他发出的邀请的事件（他不再是 owner / admin）；级联撤销的邀请发 invitationChanged revoked
+// 给仍是管理者的人；恢复团队发 memberChanged 给全体成员。
+func TestRemovedInviterGetsNoInvitationEventsAndCascadeAndRestoreEmit(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner, admin := r.verified(), r.verified()
+	team := r.seedTeam("inviter", map[string]string{owner.accountID: "owner", admin.accountID: "admin"})
+	inviteeEmail := r.email()
+	res := r.invite(admin, team, inviteeEmail, "member")
+	r.expect(res, 200, "")
+	invitationID := res.json["invitationId"].(string)
+
+	ownerStream, adminStream := r.stream(owner), r.stream(admin)
+	// 移除 admin：他发出的待处理邀请被级联撤销。
+	r.expect(r.do("DELETE", "/v1/teams/"+team+"/members/"+admin.accountID, nil, owner.bearer()), 200, "")
+	ev := ownerStream.waitFor("级联撤销的邀请发 revoked", func(e map[string]any) bool {
+		return e["type"] == "invitationChanged" && e["state"] == "revoked" && e["invitationId"] == invitationID
+	})
+	if ev["teamId"] != team {
+		t.Fatalf("事件：%v", ev)
+	}
+	adminStream.waitFor("被移除者收到 removed", func(e map[string]any) bool { return e["type"] == "memberChanged" && e["change"] == "removed" })
+	adminStream.quiet(400*time.Millisecond, isType("invitationChanged"), "被移除的原邀请人不该收到邀请事件")
+
+	// 删除再恢复团队：成员收到 memberChanged（恢复不带 accountId）。
+	r.expect(r.do("DELETE", "/v1/teams/"+team, nil, owner.bearer()), 200, "")
+	ownerStream.waitFor("删除事件", func(e map[string]any) bool {
+		return e["type"] == "memberChanged" && e["change"] == "removed" && e["accountId"] == nil
+	})
+	r.expect(r.do("POST", "/v1/teams/"+team+"/restore", map[string]any{}, owner.bearer()), 200, "")
+	ownerStream.waitFor("恢复事件", func(e map[string]any) bool {
+		return e["type"] == "memberChanged" && e["change"] == "added" && e["accountId"] == nil
+	})
+}

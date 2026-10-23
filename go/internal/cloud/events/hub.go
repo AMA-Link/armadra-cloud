@@ -176,7 +176,7 @@ func (h *Hub) deliverLoop(ctx context.Context) {
 			func() {
 				defer func() { _ = recover() }()
 				if h.o.Prepare != nil {
-					pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					pctx, cancel := context.WithTimeout(ctx, 30*time.Second) // 每个账号另有自己的超时
 					h.o.Prepare(pctx, it.event, it.audience)
 					cancel()
 				}
