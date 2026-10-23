@@ -78,3 +78,49 @@ func TestTrafficRefusesStaleLedger(t *testing.T) {
 		t.Fatalf("账本落后应拒绝：%v", err)
 	}
 }
+
+// 转发的通道只在入口节点计（#51 的验收）：持有节点对转来的流不计数。
+func TestForwardedTrafficCountsOnEntryOnly(t *testing.T) {
+	url, schema := pgtest.Schema(t)
+	db, err := postgres.Open(context.Background(), postgres.Options{URL: url, Schema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	r := newRig(t)
+	withDB := func(c *Config) { c.DatabaseURL = withSearchPath(url, schema) }
+	a := r.start("a", withDB)
+	b := r.start("b", withDB)
+	r.env.StartCore(t, a.URL, relayenv.CoreOptions{Capabilities: []string{"e2e"}})
+	r.online(a)
+	c := r.channel(b, r.relayToken(relayenv.Claims{"team": "team_1"}))
+	c.echo(t, []byte("forwarded"))
+	_ = c.c.Close()
+	b.stop()
+	a.stop()
+	conn, err := pgx.Connect(context.Background(), withSearchPath(url, schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	rows, err := conn.Query(context.Background(), "SELECT node, team_id, bytes_to_source FROM relay_traffic_buckets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var node, team string
+		var up int64
+		if err := rows.Scan(&node, &team, &up); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, node+"/"+team)
+		if up != 9 {
+			t.Fatalf("上行字节：%d", up)
+		}
+	}
+	if len(got) != 1 || got[0] != "b/team_1" {
+		t.Fatalf("只在入口节点 b 计：%v", got)
+	}
+}

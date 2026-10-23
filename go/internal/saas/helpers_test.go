@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -103,11 +104,13 @@ type running struct {
 
 func (r *rig) config(name string, over func(*Config)) Config {
 	r.t.Helper()
+	addr := freeAddr(r.t)
 	cfg, issues := LoadConfig(map[string]string{
-		"RELAY_LISTEN": "127.0.0.1:0", "RELAY_NODE_ID": name, "RELAY_DOMAIN": domain,
+		"RELAY_LISTEN": addr, "RELAY_NODE_ID": name, "RELAY_DOMAIN": domain,
 		"RELAY_CLOUD_ISSUER": r.env.Issuer.Issuer, "RELAY_REDIS_URL": r.redis,
-		"RELAY_TUNNEL_URL": "ws://" + name + ".edge.example.test/t/v1", "RELAY_ALLOW_INSECURE_TUNNEL": "1",
+		"RELAY_TUNNEL_URL": "ws://" + addr + "/t/v1", "RELAY_ALLOW_INSECURE_TUNNEL": "1",
 		"RELAY_JWKS_URL": r.jwks.URL + gen.PathJwksWellKnown, "RELAY_DRAIN_GRACE_MS": "1000",
+		"RELAY_NODE_TOKEN": r.nodeToken(name, nil),
 	}, func() (string, error) { return "h", nil })
 	if len(issues) > 0 {
 		r.t.Fatal(issues)
@@ -155,6 +158,30 @@ func (r *rig) start(name string, over func(*Config)) *running {
 		r.t.Fatal("节点起不来：超时")
 	}
 	return nil
+}
+
+// freeAddr 找一个空闲的回环端口（节点表里要写真实的隧道与 /x/v1 地址）。
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().String()
+}
+
+// nodeToken 签一枚节点令牌（sub = 节点名）。
+func (r *rig) nodeToken(name string, over relayenv.Claims) string {
+	iat := time.Now().Unix()
+	claims := relayenv.Claims{
+		"iss": r.env.Issuer.Issuer, "sub": name, "aud": gen.TokenAudienceRelayNode,
+		"iat": iat, "exp": iat + 3600, "jti": "n." + name + "." + randomHex(6), "ver": 1,
+	}
+	for k, v := range over {
+		claims[k] = v
+	}
+	return r.env.Sign(r.t, gen.TokenTypeNode, claims)
 }
 
 // relayToken 签一枚中继令牌（源是测试源）。
