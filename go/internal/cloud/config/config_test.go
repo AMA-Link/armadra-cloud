@@ -195,3 +195,33 @@ func TestTrustedProxyAndUnknownVariables(t *testing.T) {
 		t.Fatalf("缺省偏好：%q", c.TrustedProxy.Prefer)
 	}
 }
+
+// 连接串里带口令：DATABASE_URL 与 REDIS_URL 也可以用 *_FILE 给，两个都给是配错，错误不回显取值。
+func TestConnectionStringsFromFiles(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "db")
+	redis := filepath.Join(dir, "redis")
+	if err := os.WriteFile(db, []byte("postgres://u:file-pass@127.0.0.1:5432/db\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(redis, []byte("redis://:redis-pass@127.0.0.1:6379\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(with(map[string]string{"DATABASE_URL": "-", "DATABASE_URL_FILE": db, "REDIS_URL": "-", "REDIS_URL_FILE": redis}))
+	if err != nil || !strings.Contains(c.DatabaseURL, "file-pass") || !strings.Contains(c.RedisURL, "redis-pass") {
+		t.Fatalf("从文件读连接串：%v", err)
+	}
+	if _, err := config.Load(with(map[string]string{"DATABASE_URL_FILE": db})); err == nil || !strings.Contains(err.Error(), "只能给一个") {
+		t.Fatalf("DATABASE_URL 与 DATABASE_URL_FILE 同给应拒绝：%v", err)
+	}
+	if _, err := config.Load(with(map[string]string{"REDIS_URL": "-", "REDIS_URL_FILE": filepath.Join(dir, "none")})); err == nil || strings.Contains(err.Error(), "redis-pass") {
+		t.Fatalf("文件不存在应拒绝：%v", err)
+	}
+	env := with(map[string]string{"DATABASE_URL": "-", "DATABASE_URL_FILE": db, "REDIS_URL": "-", "REDIS_URL_FILE": redis})
+	if dbURL, redisURL, err := config.LoadRedis(env); err != nil || !strings.Contains(dbURL, "file-pass") || !strings.Contains(redisURL, "redis-pass") {
+		t.Fatalf("LoadRedis：%v", err)
+	}
+	if _, err := config.LoadDatabaseURL(env); err != nil {
+		t.Fatal(err)
+	}
+}
