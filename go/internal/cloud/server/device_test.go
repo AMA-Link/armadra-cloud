@@ -341,15 +341,101 @@ func TestDeviceCodeRateLimits(t *testing.T) {
 	}
 	r.startDevice(other)
 
-	// 猜码：授权页每 IP 每分钟 30 次，批准与拒绝共用同一个桶。
-	for i := 0; i < 28; i++ {
-		r.expect(r.deviceGet(browser, "BCDF-GHJK"), 404, "not_found")
+	// 猜码的 IP 桶：授权页每 IP 每分钟 30 次，批准与拒绝共用同一个桶。账号桶（10 次失败 / 小时）
+	// 会先于它触发，所以这里每个账号只猜 8 次，换账号继续。
+	guess := func(n int) session {
+		s := r.registerCookie(r.email())
+		for i := 0; i < n; i++ {
+			r.expect(r.deviceGet(s, "BCDF-GHJK"), 404, "not_found")
+		}
+		return s
 	}
-	r.expect(r.approve(browser, "BCDF-GHJL", true), 404, "not_found")
-	r.expect(r.deviceGet(browser, "BCDF-GHJK"), 404, "not_found")
-	r.expect(r.deviceGet(browser, "BCDF-GHJK"), 429, "rate_limited")
-	r.expect(r.approve(browser, "BCDF-GHJM", true), 429, "rate_limited")
-	r.expect(r.do("POST", "/v1/auth/device/deny", map[string]any{"userCode": "BCDF-GHJM"}, browser.write()), 429, "rate_limited")
+	guess(8)
+	guess(8)
+	guess(8)
+	last := guess(4) // 共 28 次
+	r.expect(r.approve(last, "BCDF-GHJL", true), 404, "not_found")
+	r.expect(r.deviceGet(last, "BCDF-GHJK"), 404, "not_found")
+	r.expect(r.deviceGet(last, "BCDF-GHJK"), 429, "rate_limited")
+	r.expect(r.approve(last, "BCDF-GHJM", true), 429, "rate_limited")
+	r.expect(r.do("POST", "/v1/auth/device/deny", map[string]any{"userCode": "BCDF-GHJM"}, last.write()), 429, "rate_limited")
+	_ = browser
+}
+
+func TestDeviceCodeGuessLimitPerAccount(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	s := r.registerCookie(r.email())
+	_, real := r.startDevice(nil)
+	// 同一账号每小时 10 次查无此码；换 IP 也一样（账号桶不看 IP）。批准与拒绝的失败同样计数。
+	for i := 0; i < 4; i++ {
+		r.expect(r.do("GET", "/v1/auth/device?userCode=BCDF-GHJK", nil, s.cookieRead().add("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i))), 404, "not_found")
+	}
+	for i := 0; i < 3; i++ {
+		r.expect(r.do("POST", "/v1/auth/device/approve", map[string]any{"userCode": "BCDF-GHJL", "approve": true}, s.write().add("X-Forwarded-For", fmt.Sprintf("198.51.101.%d", i))), 404, "not_found")
+	}
+	for i := 0; i < 3; i++ {
+		r.expect(r.do("POST", "/v1/auth/device/deny", map[string]any{"userCode": "BCDF-GHJM"}, s.write().add("X-Forwarded-For", fmt.Sprintf("198.51.102.%d", i))), 404, "not_found")
+	}
+	other := hdr("X-Forwarded-For", "198.51.103.7")
+	blocked := r.do("GET", "/v1/auth/device?userCode="+real, nil, s.cookieRead().add("X-Forwarded-For", "198.51.103.7"))
+	r.expect(blocked, 429, "rate_limited")
+	if blocked.header.Get("Retry-After") == "" {
+		t.Fatal("429 要带 Retry-After")
+	}
+	// 满了之后连真码也进不去（批准一样）；别的账号不受影响。
+	r.expect(r.do("POST", "/v1/auth/device/approve", map[string]any{"userCode": real, "approve": true}, s.write().add("X-Forwarded-For", "198.51.103.8")), 429, "rate_limited")
+	_ = other
+	fresh := r.registerCookie(r.email())
+	r.expect(r.deviceGet(fresh, real), 200, "")
+	// 过期（410）不计入账号桶。
+	r.clock.Advance(11 * time.Minute)
+	fresh = r.registerCookie(r.email())
+	for i := 0; i < 12; i++ {
+		r.expect(r.deviceGet(fresh, real), 410, "device_code_expired")
+	}
+}
+
+func TestDeviceCodeApproveNeedsCookieOrElevatedBearer(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	native := r.registerBearer(r.email())
+	deviceCode, userCode := r.startDevice(nil)
+	body := map[string]any{"userCode": userCode, "approve": true}
+
+	// Bearer 会话没提权：批准 401 mfa_required；授权页与拒绝不受限。
+	r.expect(r.do("POST", "/v1/auth/device/approve", body, native.bearer()), 401, "mfa_required")
+	if got := r.pollStatus(deviceCode); got != "pending" {
+		t.Fatalf("被拒的批准改了状态：%s", got)
+	}
+	r.expect(r.do("GET", "/v1/auth/device?userCode="+userCode, nil, native.bearer()), 200, "")
+	// 提权后（10 分钟窗口内）可批准；窗口过了又不行。
+	r.expect(r.do("POST", "/v1/auth/step-up", map[string]any{"password": password}, native.bearer()), 200, "")
+	r.expect(r.do("POST", "/v1/auth/device/approve", body, native.bearer()), 200, "")
+	r.clock.Advance(pollInterval)
+	if got := r.pollStatus(deviceCode); got != "approved" {
+		t.Fatalf("状态 %s", got)
+	}
+	r.clock.Advance(10 * time.Minute)
+	native.access = r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": native.refresh}, nil).json["session"].(map[string]any)["accessToken"].(string)
+	_, second := r.startDevice(nil)
+	r.expect(r.do("POST", "/v1/auth/device/approve", map[string]any{"userCode": second, "approve": true}, native.bearer()), 401, "mfa_required")
+	// Bearer 拒绝不需要提权。
+	r.expect(r.do("POST", "/v1/auth/device/deny", map[string]any{"userCode": second}, native.bearer()), 200, "")
+}
+
+func TestDevicePollIPLimit(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	// 每 IP 每分钟 120 次，在开事务之前就判；未知码本身不触发别的限速。
+	for i := 0; i < 120; i++ {
+		if got := r.pollStatus(fmt.Sprintf("unknown-%d", i)); got != "expired" {
+			t.Fatalf("状态 %s", got)
+		}
+	}
+	over := r.poll("unknown-x")
+	r.expect(over, 429, "rate_limited")
+	if over.header.Get("Retry-After") == "" {
+		t.Fatal("429 要带 Retry-After")
+	}
+	r.expect(r.do("POST", "/v1/auth/device/poll", map[string]any{"deviceCode": "y"}, hdr("X-Forwarded-For", "203.0.113.77")), 200, "")
 }
 
 func TestDeviceCodeRedeemOnceUnderConcurrency(t *testing.T) {
