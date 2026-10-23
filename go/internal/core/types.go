@@ -129,6 +129,8 @@ type RelayInfo struct {
 	ExpiresAtMs int64        `json:"expiresAtMs"`
 	Nodes       []TunnelNode `json:"nodes"`
 	Limits      TunnelLimits `json:"limits"`
+	// TunnelJTI 是隧道令牌的 jti，SaaS 记进签发索引；不进答复。
+	TunnelJTI string `json:"-"`
 }
 
 // LinkCreated 是 links.create 的答复。

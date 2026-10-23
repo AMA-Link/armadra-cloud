@@ -391,7 +391,7 @@ func (s *Sources) RelayForTeam(ctx context.Context, source store.SourceRecord, t
 	}
 	return RelayInfo{
 		TunnelToken: tunnel.Token, ExpiresAtMs: tunnel.ExpiresAtMs,
-		Nodes: nodes,
+		Nodes: nodes, TunnelJTI: tunnel.JTI,
 		Limits: TunnelLimits{
 			MaxStreams: gen.LimitMaxStreams, StreamWindow: gen.LimitStreamWindow,
 			TunnelWindow: gen.LimitTunnelWindow, MaxFrameBytes: gen.LimitMaxFrameBytes,

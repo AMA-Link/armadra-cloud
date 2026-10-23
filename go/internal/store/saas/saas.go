@@ -39,6 +39,7 @@ type Store interface {
 type Reader interface {
 	TeamReader
 	InvitationReader
+	HostReader
 	// Ping 探活：连接池里能取到连接并执行一条语句。
 	Ping(ctx context.Context) error
 	// Account 按账号 id 读完整的账号行；没有答 nil。
@@ -62,7 +63,7 @@ type Tx interface {
 	Teams() TeamRepo             // 团队、成员、设置；LockTeam / LockAccount
 	DeviceCodes() DeviceCodeRepo // 设备码（S3）
 	Invitations() InvitationRepo
-	Hosts() HostRepo // source_spaces、注册令牌（带空间）、登记事务
+	Hosts() HostRepo // source_spaces、注册令牌（带空间）
 	Grants() GrantRepo
 	Trust() TrustRepo
 	Audit() AuditRepo       // 只追加
@@ -109,7 +110,6 @@ type AccountRepo interface {
 
 // 其余仓储先立名字，方法随各批加入。
 type (
-	HostRepo     interface{}
 	GrantRepo    interface{}
 	TrustRepo    interface{}
 	SettingsRepo interface{}

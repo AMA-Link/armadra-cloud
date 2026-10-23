@@ -117,7 +117,7 @@ func (t *saasTx) Accounts() saas.AccountRepo       { return accountRepo{q: t.q, 
 func (t *saasTx) Teams() saas.TeamRepo             { return teamRepo{q: t.q, locked: &t.locked} }
 func (t *saasTx) DeviceCodes() saas.DeviceCodeRepo { return deviceCodeRepo{q: t.q} }
 func (t *saasTx) Invitations() saas.InvitationRepo { return invitationRepo{q: t.q} }
-func (t *saasTx) Hosts() saas.HostRepo             { return struct{}{} }
+func (t *saasTx) Hosts() saas.HostRepo             { return hostRepo{q: t.q} }
 func (t *saasTx) Grants() saas.GrantRepo           { return struct{}{} }
 func (t *saasTx) Trust() saas.TrustRepo            { return struct{}{} }
 func (t *saasTx) Audit() saas.AuditRepo            { return auditRepo{q: t.q} }
