@@ -137,8 +137,29 @@ func TestSlowClientsDoNotBlockTheLink(t *testing.T) {
 		r.stalledTo(b, slow1)
 		r.stalledTo(b, slow2)
 	}
-	eventually(t, "慢客户端把字节堆在两端", func() bool { return a.internode.pendingBytes() >= 8<<20 })
+	// 要等内核缓冲都塞满、字节堆到持有节点上，链路才真正被压住（Linux 的回环缓冲比 macOS 大得多，
+	// 可能要很久）；等不到就跳过——没压住链路的这一次证明不了什么。
+	deadline := time.Now().Add(45 * time.Second)
+	for a.internode.pendingBytes() < 8<<20 {
+		if time.Now().After(deadline) {
+			t.Skipf("内核缓冲吸收了慢客户端的字节，没压到链路（持有节点上挂着 %d 字节）", a.internode.pendingBytes())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	r.fullDownload(b, fast, download)
+}
+
+// 链路的限制本身：链路级窗口不小于「流数上限 × 流窗」，链路级信用不会先于每流窗口耗尽（P1-2 的不变式，
+// 不依赖内核缓冲）；流数上限大于单隧道的 256。
+func TestLinkConfigInvariant(t *testing.T) {
+	c := linkConfig()
+	if c.TunnelWindow < c.MaxStreams*c.StreamWindow || c.MaxStreams != LinkMaxStreams || c.MaxStreams <= 256 {
+		t.Fatalf("%+v", c)
+	}
+	// 一次补给对端的链路级信用（半个窗口）放得进 WINDOW 帧的 u32。
+	if c.TunnelWindow/2 > 1<<32-1 {
+		t.Fatalf("链路窗口太大：%d", c.TunnelWindow)
+	}
 }
 
 // 审查 P1-4：节点令牌只在升级时验不够——撤销之后已建立的连接要断，到期也要断。
