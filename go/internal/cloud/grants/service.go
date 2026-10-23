@@ -563,6 +563,14 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 				return core.Fail(gen.ErrConflict) // 同主机同主体只有一条有效授予
 			}
 		}
+		accounts, err := s.affected(ctx, tx, saas.Grant{SubjectKind: kind, SubjectID: subjectID})
+		if err != nil {
+			return err
+		}
+		before, err := s.snapshot(ctx, tx, h.SourceID, accounts)
+		if err != nil {
+			return err
+		}
 		grant := saas.Grant{
 			GrantID: core.NewUUID(), SourceID: h.SourceID, TeamID: h.TeamID, SubjectKind: kind, SubjectID: subjectID, Role: in.Role,
 			WorkspaceIDs: workspaces, ExpiresAtMs: in.ExpiresAtMs, GrantedBy: account.AccountID,
@@ -574,6 +582,12 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		if err := s.scheduleExpiry(ctx, tx, grant.GrantID, grant.ExpiresAtMs, nowMs); err != nil {
 			return err
 		}
+		// 新增一条授予也可能让合成结果变窄（driver@w1 + 新的 viewer 整台 = viewer 整台）：收窄即撤。
+		after, err := s.snapshot(ctx, tx, h.SourceID, accounts)
+		if err != nil {
+			return err
+		}
+		s.revokeAccess(tx, h.SourceID, narrowedAccounts(before, after), "grant_created")
 		if err := s.record(ctx, tx, call.IP, saas.ActorAccount, account.AccountID, h.TeamID, h.SourceID, ActionCreate, "grant", grant.GrantID); err != nil {
 			return err
 		}
