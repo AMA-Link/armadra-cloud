@@ -1,0 +1,49 @@
+# armadra-cloud 控制面镜像：Go 实现（go/cmd/armadra-cloud）。构建上下文是仓库根：
+#   docker build -f go/Dockerfile.cloud -t armadra-cloud:local .
+#
+# 运行镜像是 distroless static，写法与中继镜像（go/Dockerfile）一致：没有 shell、包管理器与 tini，Go 二进制自己当
+# PID 1（不起子进程，SIGTERM 由它自己的优雅关闭处理，按设计 §2.1 的顺序收尾）。
+#   入口        armadra-cloud，缺省命令 serve；容器里的命令行：docker compose exec cloud armadra-cloud nodes token --node a
+#               （migrate、keys rotate、nodes token|revoke、operators add|totp 都在同一个二进制里）
+#   用户        uid / gid 10002（与中继镜像相同）；没有本地状态，状态全在 PostgreSQL 与 Redis，所以不声明卷，根文件系统可只读
+#   端口        8100（明文，TLS 由前面的反向代理终止）
+#   健康检查    armadra-cloud health（打本机监听端口的 /health）
+#   配置        全部是 ARMADRA_CLOUD_* 环境变量，秘密用 *_FILE（见 deploy/saas/README 与 docs/design/saas-m1-implementation.md §2）
+#   页面        控制台（Armadra apps/web 的构建产物）放在 /app/web，缺省 ARMADRA_CLOUD_WEB_ROOT=/app/web：
+#               发布构建传 --build-arg WEB_IMAGE=ghcr.io/ama-link/armadra-server:<deploy/compat.json 的 web>，
+#               或运行时挂载一份构建产物；缺省是空目录（没有 index.html 时不托管页面，/ 答 404，服务照常）。
+#   排障        没有 shell：docker run --rm -it --network container:<名> --pid container:<名> busybox，或 docker debug。
+#
+# 版本号缺省取根 package.json（/health 与 version 子命令报它），--build-arg VERSION=<v> 可覆盖。
+ARG GO_IMAGE=golang:1.27.1-bookworm
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12
+ARG WEB_IMAGE=web-empty
+
+FROM ${GO_IMAGE} AS prep
+RUN mkdir -p /rootfs/app/web
+
+FROM scratch AS web-empty
+COPY --from=prep /rootfs/app/web /app/web
+
+FROM ${WEB_IMAGE} AS web
+
+FROM ${GO_IMAGE} AS build
+ARG VERSION=
+WORKDIR /src/go
+COPY go/go.mod go/go.sum ./
+RUN go mod download
+COPY package.json /src/package.json
+COPY go/ ./
+RUN v="${VERSION:-$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' /src/package.json)}" \
+ && test -n "$v" \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${v}" -o /out/armadra-cloud ./cmd/armadra-cloud
+
+FROM ${RUNTIME_IMAGE} AS runtime
+COPY --from=build /out/armadra-cloud /usr/local/bin/armadra-cloud
+COPY --from=web /app/web /app/web
+ENV ARMADRA_CLOUD_WEB_ROOT=/app/web ARMADRA_CLOUD_LISTEN=0.0.0.0:8100 PATH=/usr/local/bin
+USER 10002:10002
+EXPOSE 8100
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["armadra-cloud","health"]
+ENTRYPOINT ["armadra-cloud"]
+CMD ["serve"]

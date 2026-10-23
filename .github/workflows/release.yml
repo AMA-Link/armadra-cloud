@@ -55,13 +55,19 @@ jobs:
           v="${{ steps.version.outputs.version }}"
           for app in cloud relay; do
             image="ghcr.io/ama-link/armadra-${app}"
-            dockerfile="apps/${app}/Dockerfile"
-            [ "$app" = relay ] && dockerfile="go/Dockerfile"
+            # 两个镜像都是 Go 构建（TS apps/cloud 不再构建镜像）。
+            dockerfile="go/Dockerfile"
+            [ "$app" = cloud ] && dockerfile="go/Dockerfile.cloud"
             docker build -f "$dockerfile" -t "${image}:${v}" -t "${image}:latest" .
           done
           # 冒烟过了才推。
           docker run --rm "ghcr.io/ama-link/armadra-relay:${v}" personal --help
           docker run --rm "ghcr.io/ama-link/armadra-cloud:${v}" version
+          # 缺配置时 serve 以 64 退出并只列变量名（证明入口、用户与二进制可用）。
+          set +e
+          docker run --rm "ghcr.io/ama-link/armadra-cloud:${v}" serve
+          [ "$?" -eq 64 ] || { echo "armadra-cloud serve 冒烟：退出码不是 64"; exit 1; }
+          set -e
           for app in cloud relay; do
             image="ghcr.io/ama-link/armadra-${app}"
             docker push "${image}:${v}"
