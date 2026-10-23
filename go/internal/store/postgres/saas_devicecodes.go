@@ -41,6 +41,12 @@ func (r deviceCodeRepo) Create(ctx context.Context, tenantID string, c saas.Devi
 	return tag.RowsAffected() == 1, nil
 }
 
+func (r deviceCodeRepo) Find(ctx context.Context, tenantID, hash string) (*saas.DeviceCode, error) {
+	return one(toDeviceCode(r.q.QueryRow(ctx,
+		"SELECT "+deviceCodeColumns+" FROM device_codes WHERE tenant_id = $1 AND device_code_hash = $2",
+		tenantID, hash)))
+}
+
 func (r deviceCodeRepo) Get(ctx context.Context, tenantID, hash string) (*saas.DeviceCode, error) {
 	return one(toDeviceCode(r.q.QueryRow(ctx,
 		"SELECT "+deviceCodeColumns+" FROM device_codes WHERE tenant_id = $1 AND device_code_hash = $2 FOR UPDATE",
