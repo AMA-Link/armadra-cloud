@@ -458,7 +458,13 @@ func TestTeamsMemberRules(t *testing.T) {
 	// 转移所有权：目标必须是 admin；成功后原 owner 降 admin。
 	r.expect(r.do("POST", teamPath(team, "transfer-ownership"), map[string]any{"accountId": guest.accountID}, owner.bearer()), 400, "bad_request")
 	r.expect(r.do("POST", teamPath(team, "transfer-ownership"), map[string]any{"accountId": outsider.accountID}, owner.bearer()), 404, "not_found")
+	r.seedHost("rules-host", team, owner.accountID)
+	r.exec(`INSERT INTO source_grants (tenant_id, grant_id, source_id, team_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
+	  VALUES ('cloud', 'g-owner', 'rules-host', $1, 'member', $2, 'viewer', $2, 1, 1)`, team, owner.accountID)
 	r.expect(r.do("POST", teamPath(team, "transfer-ownership"), map[string]any{"accountId": admin.accountID}, owner.bearer()), 200, "")
+	if n := r.queryInt("SELECT count(*)::int FROM source_grants WHERE grant_id = 'g-owner' AND revoked_at_ms IS NULL"); n != 1 {
+		t.Fatal("原 owner 降 admin 只撤令牌，保留显式授予")
+	}
 	for who, want := range map[string]string{owner.accountID: "admin", admin.accountID: "owner"} {
 		if got := r.queryString("SELECT role FROM team_members WHERE team_id = $1 AND account_id = $2", team, who); got != want {
 			t.Fatalf("转移后 %s 的角色 %s，应为 %s", who, got, want)
@@ -501,8 +507,20 @@ func TestTeamsRemovalRevokesAccess(t *testing.T) {
 		t.Fatalf("应在每台团队主机上踢人：%+v", r.run.Relay.Commands())
 	}
 	if n := r.queryInt("SELECT count(*)::int FROM source_grants WHERE grant_id = 'g1' AND revoked_at_ms IS NOT NULL"); n != 1 {
-		t.Fatal("成员的授予应撤销")
+		t.Fatal("降为 billing 应撤销成员的授予")
 	}
+	// 只收窄不改成员身份（admin 降 member、原 owner 降 admin）：撤令牌踢人，但保留显式授予。
+	r.exec(`INSERT INTO source_grants (tenant_id, grant_id, source_id, team_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
+	  VALUES ('cloud', 'g-admin', 'host-b', $1, 'member', $2, 'viewer', $3, 1, 1)`, team, admin.accountID, owner.accountID)
+	r.expect(r.do("PATCH", teamPath(team, "members", admin.accountID), map[string]any{"role": "member"}, owner.bearer()), 200, "")
+	if !r.run.Relay.IsRevoked("t-admin-b") {
+		t.Fatal("admin 降 member 应撤令牌")
+	}
+	if n := r.queryInt("SELECT count(*)::int FROM source_grants WHERE grant_id = 'g-admin' AND revoked_at_ms IS NULL"); n != 1 {
+		t.Fatal("admin 降 member 应保留显式授予")
+	}
+	r.expect(r.do("PATCH", teamPath(team, "members", admin.accountID), map[string]any{"role": "admin"}, owner.bearer()), 200, "")
+	issue("t-admin-c", admin.accountID, "host-b")
 	// 升回 member（放宽）不撤销：新签的令牌不受影响。
 	issue("t-member-c", member.accountID, "host-a")
 	r.expect(r.do("PATCH", teamPath(team, "members", member.accountID), map[string]any{"role": "member"}, admin.bearer()), 200, "")
@@ -525,7 +543,7 @@ func TestTeamsRemovalRevokesAccess(t *testing.T) {
 	r.expect(r.do("GET", teamPath(team), nil, member.bearer()), 404, "not_found")
 	// 移除 admin：owner 移除，令牌同样撤销。
 	r.expect(r.do("DELETE", teamPath(team, "members", admin.accountID), nil, owner.bearer()), 200, "")
-	if !r.run.Relay.IsRevoked("t-admin-b") {
+	if !r.run.Relay.IsRevoked("t-admin-c") {
 		t.Fatal("被移除成员的令牌应撤销")
 	}
 	if n := r.queryInt("SELECT count(*)::int FROM audit_log WHERE team_id = $1 AND action IN ('member.leave', 'member.remove')", team); n != 2 {
@@ -651,6 +669,14 @@ func TestTeamsDeleteRestorePurge(t *testing.T) {
 	if teams := r.do("GET", "/v1/me", nil, owner.bearer()).json["teams"].([]any); len(teams) != 0 {
 		t.Fatal("me.get 不列已删除的团队")
 	}
+	// 删除 → 新建 → 恢复：恢复也受个人账号的团队额度约束（Free 1 个），不能借此绕过。
+	r.expect(r.do("POST", "/v1/teams", map[string]any{"slug": "replacement", "name": "替身"}, owner.bearer()), 200, "")
+	res = r.do("POST", teamPath(team, "restore"), nil, owner.bearer())
+	r.expect(res, 429, "limit_reached")
+	if d := res.json["details"].(map[string]any); d["quota"] != "teams" || d["limit"] != float64(1) {
+		t.Fatalf("details：%s", res.body)
+	}
+	r.exec("DELETE FROM teams WHERE slug = 'replacement'") // 成员与 entitlements 随团队级联
 	// 恢复：清两个时间、撤掉作业；再恢复是幂等的。
 	res = r.do("POST", teamPath(team, "restore"), nil, owner.bearer())
 	r.expect(res, 200, "")
