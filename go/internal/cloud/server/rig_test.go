@@ -85,6 +85,8 @@ type rigOptions struct {
 	grantsHook func(stage string)
 	// redisRelay 用真正的 Redis 实现代替内存实现（缺省内存实现，断言发出的命令）；键前缀随机，测试结束删掉。
 	redisRelay bool
+	// redisHook 挂在 Redis 客户端上（注入故障）。
+	redisHook goredis.Hook
 	// flushEvery 缩短设备最近使用与主机最近在线的落盘间隔。
 	flushEvery time.Duration
 }
@@ -178,6 +180,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	} else {
 		deps.Relay = relayctl.NewMemory(clk.Now)
 	}
+	deps.RedisHook = options.redisHook
 	if options.flushEvery > 0 {
 		deps.FlushEvery = options.flushEvery
 	}

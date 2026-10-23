@@ -62,6 +62,8 @@ type Deps struct {
 	Mail mail.Sender
 	// GrantsHook 让测试在断言签发的交错点（"signed"、"indexed"）停住，验证与并发撤销交错也不漏撤；生产不设。
 	GrantsHook func(stage string)
+	// RedisHook 挂在 Redis 客户端上（测试注入故障：让命令失败）；生产不设。
+	RedisHook goredis.Hook
 	// FlushEvery 缩短设备最近使用与主机最近在线的落盘间隔（缺省 5 分钟；测试用）。
 	FlushEvery time.Duration
 	// Relay 用内存实现代替 Redis 实现（测试断言发出的撤销与节点命令）；生产不设。
@@ -166,6 +168,9 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	if err != nil {
 		return fail(err)
 	}
+	if hooker, ok := redisClient.(interface{ AddHook(goredis.Hook) }); ok && deps.RedisHook != nil {
+		hooker.AddHook(deps.RedisHook)
+	}
 	undo.push(func() { _ = redisClient.Close() })
 
 	// 5. 装配：对节点的约定（Plane）、核心、路由。
@@ -213,7 +218,10 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 			return fail(fmt.Errorf("指标监听失败：%s", cfg.MetricsListen))
 		}
 		render := func() string {
-			return "# HELP armadra_cloud_up 控制面在跑。\n# TYPE armadra_cloud_up gauge\narmadra_cloud_up 1\n"
+			return "# HELP armadra_cloud_up 控制面在跑。\n# TYPE armadra_cloud_up gauge\narmadra_cloud_up 1\n" +
+				"# HELP armadra_cloud_lockout_unavailable_total 因 Redis 不可用而拒绝登录的次数（失败关闭）。\n" +
+				"# TYPE armadra_cloud_lockout_unavailable_total counter\n" +
+				fmt.Sprintf("armadra_cloud_lockout_unavailable_total %d\n", assembly.lockouts.Unavailable())
 		}
 		metricsServer = &http.Server{
 			Handler: obs.MetricsHandler(render, cfg.MetricsToken), ReadHeaderTimeout: httpHeaderWait,

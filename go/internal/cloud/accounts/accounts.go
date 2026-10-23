@@ -32,6 +32,9 @@ type Options struct {
 	Mail *mail.Service
 	// Unknown 存未注册邮箱的失败计数与锁定（多实例共享的 Redis 版）；nil = 进程内计数。
 	Unknown core.UnknownStore
+	// LoginGuard 在 auth.login 里探活共享的失败计数存储（Redis）：不可用答 503，对已注册与未注册的邮箱一视同仁
+	// （失败关闭，设计 §4.3）。nil = 不探活（测试与单进程）。
+	LoginGuard func(ctx context.Context) error
 	// AppOrigin 是控制台来源，设备码的 verificationUrl 以它开头。
 	AppOrigin string
 	// OnDeviceDecision 在批准 / 拒绝设备码的事务里调用；nil = 写安全日志 security.deviceApprove /
@@ -49,6 +52,8 @@ type Service struct {
 	mail   *mail.Service
 	// unknown 给未注册的邮箱同样计失败、同样锁定：锁定不暴露邮箱有没有注册。
 	unknown core.UnknownAccounts
+	// guard 见 Options.LoginGuard。
+	guard func(ctx context.Context) error
 
 	appOrigin        string
 	onDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
@@ -64,6 +69,10 @@ func New(options Options) *Service {
 		s.onDeviceDecision = s.auditDeviceDecision
 	}
 	s.unknown.Store = options.Unknown
+	s.guard = options.LoginGuard
+	if s.guard == nil {
+		s.guard = func(context.Context) error { return nil }
+	}
 	return s
 }
 

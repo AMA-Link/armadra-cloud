@@ -39,7 +39,7 @@ type assembly struct {
 	core    *core.Context
 	auth    *core.Authenticator
 	relay   *relayctl.Memory
-	// lockouts 是未注册邮箱的 Redis 失败计数（回落次数进指标）。
+	// lockouts 是未注册邮箱的 Redis 失败计数（因 Redis 不可用而拒绝的次数进指标）。
 	lockouts *httpx.UnknownLockouts
 	// jobs 是作业运行器（serve 在监听前启动、关闭时停止领取）。
 	jobs *jobs.Runner
@@ -121,7 +121,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	}
 
 	lockouts := httpx.NewUnknownLockouts(redisClient, func(err error) {
-		logger.Warn("登录失败计数回落到进程内计数，已注册与未注册邮箱的锁定可能不一致", obs.Operation("lockout"), obs.Error(err))
+		logger.Warn("登录失败计数的 Redis 不可用，登录一律答 503（失败关闭）", obs.Operation("lockout"), obs.Error(err))
 	})
 	sender, err := mailSender(cfg, logger, now, deps)
 	if err != nil {
@@ -144,7 +144,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	handlers := map[string]api.Handler{}
 	for name, handler := range accounts.New(accounts.Options{
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer,
-		Unknown: lockouts, AppOrigin: cfg.AppOrigin,
+		Unknown: lockouts, LoginGuard: lockouts.Guard, AppOrigin: cfg.AppOrigin,
 	}).Handlers() {
 		handlers[name] = handler
 	}

@@ -118,6 +118,10 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 	if err := s.limits.Check(ctx, httpx.LimitLoginAcct, email); err != nil {
 		return nil, err
 	}
+	// 失败关闭（设计 §4.3）：共享的失败计数存储不可用时，在分出已注册 / 未注册之前就对两类邮箱一律答 503。
+	if err := s.guard(ctx); err != nil {
+		return nil, err
+	}
 	account, err := s.store.Read().AccountByEmail(ctx, s.tenant(), email)
 	if err != nil {
 		return nil, err
@@ -128,6 +132,10 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 		return nil, s.unknown.Login(ctx, s.c.NowMs, email, in.Password)
 	}
 	if err := core.VerifyPassword(ctx, s.c, &account.AccountRecord, in.Password, s.nowMs()); err != nil {
+		// 未注册的路径以一次 Redis 记账收尾；这条路径同样以一次探活收尾，探活与记账之间 Redis 掉线也不会让两类邮箱的答案不同。
+		if guardErr := s.guard(ctx); guardErr != nil {
+			return nil, guardErr
+		}
 		return nil, err
 	}
 	// 停用在口令比对之后答，不让没有口令的人枚举停用账号。

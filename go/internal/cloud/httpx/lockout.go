@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 
@@ -37,45 +39,94 @@ redis.call('HSET', KEYS[1], 'failures', failures, 'lastFailure', now, 'lockedUnt
 redis.call('PEXPIRE', KEYS[1], ARGV[6])
 return { 0, 0 }`
 
+// 故障时的失败关闭（设计 §4.3）：计数共享在 Redis，Redis 不可用时已注册账号（计数在账号行）与未注册邮箱
+// （计数在 Redis）的锁定行为必然分叉——任何回落到各实例进程内的计数都会在多实例下暴露邮箱是否注册。
+// 所以不回落：auth.login 在分出「已注册 / 未注册」之前先过 Guard（对 Redis 做一次探活），Redis 不可用时
+// 对两类邮箱一律答 503 unavailable（带重试等待），不比对口令、不计数；分叉之后的最终答复同样复核一次 Guard
+// （已注册的路径在口令比对失败后、未注册的路径在 Fail 出错时），所以探活与记账之间 Redis 掉线也不会让两类邮箱
+// 的答案不同。登录因此在 Redis 故障期间整体不可用（Redis 本来也是 /ready 的硬依赖，实例会被摘出轮换）；已登录
+// 的会话、刷新与其他过程不受影响。
+
+// guardTimeout 是探活的超时；guardBackoff 是出错之后快速失败的时长（别去打一个正在出问题的 Redis）。
+const (
+	guardTimeout = 500 * time.Millisecond
+	guardBackoff = time.Second
+	// RetryAfterUnavailable 是故障时 503 的重试等待。
+	RetryAfterUnavailable = 5 * time.Second
+)
+
 // UnknownLockouts 是 core.UnknownStore 的 Redis 实现：未注册邮箱（按规范化邮箱的 SHA-256）的失败计数与
 // 锁定放在 Redis，多个实例共享，所以锁定不暴露邮箱有没有注册，也不因实例不同而不一致。
-// Redis 出错时退回 Fallback（进程内计数），不让登录因为 Redis 抖动而答 500。
-//
-// 已知退化：回落期间各实例各记各的，且回落前 Redis 里已有的计数不可见——多实例下，故障窗口里「已注册」的
-// 账号（计数在账号行，PostgreSQL）和「未注册」的邮箱（计数回落到各实例内存）达到锁定的次数可能不同，
-// 攻击者在这个窗口里可能据此区分邮箱是否注册。每次回落都报告（OnError）并计数（Fallbacks，指标
-// armadra_cloud_lockout_fallback_total），运维据此告警；上多实例前要定回落策略（设计 §9.1 S8 / S9）。
+// Redis 出错时失败关闭（见上）：Fail 答 503 unavailable，每次记警告日志并计入指标
+// armadra_cloud_lockout_unavailable_total，运维据此告警。
 type UnknownLockouts struct {
-	Client   goredis.UniversalClient
-	Fallback core.UnknownStore
-	OnError  func(error)
+	Client  goredis.UniversalClient
+	OnError func(error)
+	// Now 缺省 time.Now（探活的快速失败窗口用）。
+	Now func() time.Time
 
-	script    *goredis.Script
-	fallbacks atomic.Int64
+	script      *goredis.Script
+	unavailable atomic.Int64
+
+	mu        sync.Mutex
+	downUntil time.Time
 }
 
 var _ core.UnknownStore = (*UnknownLockouts)(nil)
 
 // NewUnknownLockouts 建 Redis 版未知名字计数。
 func NewUnknownLockouts(client goredis.UniversalClient, onError func(error)) *UnknownLockouts {
-	return &UnknownLockouts{Client: client, Fallback: core.NewMemoryUnknownStore(), OnError: onError, script: goredis.NewScript(failScript)}
+	return &UnknownLockouts{Client: client, OnError: onError, Now: time.Now, script: goredis.NewScript(failScript)}
 }
 
-// Fallbacks 是回落到进程内计数的次数（指标用）。
-func (u *UnknownLockouts) Fallbacks() int64 { return u.fallbacks.Load() }
+// Unavailable 是因 Redis 不可用而拒绝的次数（指标用）。
+func (u *UnknownLockouts) Unavailable() int64 { return u.unavailable.Load() }
 
-// Fail 实现 core.UnknownStore。
+func (u *UnknownLockouts) now() time.Time {
+	if u.Now == nil {
+		return time.Now()
+	}
+	return u.Now()
+}
+
+// markDown 记一次 Redis 出错：之后一小段时间内 Guard 直接失败。
+func (u *UnknownLockouts) markDown(err error) error {
+	u.unavailable.Add(1)
+	if u.OnError != nil && err != nil {
+		u.OnError(err)
+	}
+	u.mu.Lock()
+	u.downUntil = u.now().Add(guardBackoff)
+	u.mu.Unlock()
+	return core.FailAfter(gen.ErrUnavailable, RetryAfterUnavailable)
+}
+
+// Guard 探活 Redis：不可用答 503 unavailable（带重试等待）。登录在分出已注册 / 未注册之前调用，
+// 分叉之后的最终答复前再调一次（设计 §4.3）。
+func (u *UnknownLockouts) Guard(ctx context.Context) error {
+	u.mu.Lock()
+	down := u.now().Before(u.downUntil)
+	u.mu.Unlock()
+	if down {
+		u.unavailable.Add(1)
+		return core.FailAfter(gen.ErrUnavailable, RetryAfterUnavailable)
+	}
+	probe, cancel := context.WithTimeout(ctx, guardTimeout)
+	defer cancel()
+	if err := u.Client.Ping(probe).Err(); err != nil {
+		return u.markDown(err)
+	}
+	return nil
+}
+
+// Fail 实现 core.UnknownStore。Redis 出错答 503 unavailable，不计数也不回落。
 func (u *UnknownLockouts) Fail(ctx context.Context, name string, nowMs int64) (int64, bool, error) {
 	sum := sha256.Sum256([]byte(name))
 	reply, err := u.script.Run(ctx, u.Client, []string{LockoutPrefix + hex.EncodeToString(sum[:])},
 		nowMs, gen.IdentityThrottleLockThreshold, gen.IdentityThrottleLockBaseMs, gen.IdentityThrottleLockMaxMs,
 		gen.IdentityThrottleFailureWindowMs, gen.IdentityThrottleFailureWindowMs+gen.IdentityThrottleLockMaxMs).Slice()
 	if err != nil || len(reply) != 2 {
-		u.fallbacks.Add(1)
-		if u.OnError != nil && err != nil {
-			u.OnError(err)
-		}
-		return u.Fallback.Fail(ctx, name, nowMs)
+		return 0, false, u.markDown(err)
 	}
 	locked, _ := reply[0].(int64)
 	until, _ := reply[1].(int64)
