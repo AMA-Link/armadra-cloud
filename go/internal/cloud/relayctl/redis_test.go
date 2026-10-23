@@ -738,7 +738,7 @@ type partialEnv struct {
 }
 
 // newPartialEnv 起 PostgreSQL（随机 schema）、带故障钩子的 Redis 实现与打开兜底作业的 Durable。
-func newPartialEnv(t *testing.T, hits func(name, key string) bool) *partialEnv {
+func newPartialEnv(t *testing.T, hits func(prefix, name, key string) bool) *partialEnv {
 	t.Helper()
 	e := newRedisEnv(t)
 	url, schema := pgtest.Schema(t)
@@ -754,7 +754,7 @@ func newPartialEnv(t *testing.T, hits func(name, key string) bool) *partialEnv {
 	client := goredis.NewClient(opts)
 	t.Cleanup(func() { _ = client.Close() })
 	fail := &atomic.Bool{}
-	client.AddHook(failWhen{on: fail, hits: hits})
+	client.AddHook(failWhen{on: fail, hits: func(name, key string) bool { return hits(e.prefix, name, key) }})
 	plane, err := controlredis.New(ctx, controlredis.Options{
 		Options: cluster.Options{Issuer: "https://x.test", Mode: "saas", Origin: "cloud/a"}, Client: client, Prefix: e.prefix,
 	})
@@ -796,16 +796,15 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	}
 }
 
-func writesToRevoked(prefix string) func(name, key string) bool {
-	return func(name, key string) bool { return name == "set" && strings.HasPrefix(key, prefix+"revoked:") }
+func writesToRevoked(prefix, name, key string) bool {
+	return name == "set" && strings.HasPrefix(key, prefix+"revoked:")
 }
 
 // Redis 部分故障（订阅与读都健康，只是写撤销键被拒）：撤销只落了 PostgreSQL 的话会一直悬着。
 // 现在同一个 PostgreSQL 事务里有 relay.revoke 作业（按 jti 去重），故障恢复后作业运行器把撤销送到节点；
 // 正常成功的撤销会取消作业。补登记索引失败也不会跳过撤销。
 func TestDurableRevokeSurvivesPartialRedisFailureViaJob(t *testing.T) {
-	var p *partialEnv
-	p = newPartialEnv(t, func(name, key string) bool { return writesToRevoked(p.prefix)(name, key) })
+	p := newPartialEnv(t, writesToRevoked)
 	node, _ := p.newNode("node-1")
 	exp := inHour()
 	for _, i := range []relayctl.Issued{
@@ -842,8 +841,7 @@ func TestDurableRevokeSurvivesPartialRedisFailureViaJob(t *testing.T) {
 
 // 踢人命令发布失败：排 relay.kick 作业，恢复后到达节点。
 func TestDurableSinkKickFailureRetriesViaJob(t *testing.T) {
-	var p *partialEnv
-	p = newPartialEnv(t, func(name, key string) bool { return name == "publish" })
+	p := newPartialEnv(t, func(_, name, _ string) bool { return name == "publish" })
 	_, sink := p.newNode("node-1")
 	if err := p.d.IndexIssued(ctx, relayctl.Issued{Subject: "a1", SourceID: "s1", DeviceID: "d1", JTI: "r.k", ExpMs: inHour()}); err != nil {
 		t.Fatal(err)
@@ -868,8 +866,7 @@ func TestDurableSinkKickFailureRetriesViaJob(t *testing.T) {
 
 // nodes revoke 的 RevokeToken：PostgreSQL 同事务排作业，Redis 失败后由运行器重试。
 func TestRevokeTokenQueuesRetryJob(t *testing.T) {
-	var p *partialEnv
-	p = newPartialEnv(t, func(name, key string) bool { return writesToRevoked(p.prefix)(name, key) })
+	p := newPartialEnv(t, writesToRevoked)
 	node, _ := p.newNode("node-1")
 	jti := "n.node-a.0123456789abcdef01234567"
 	p.fail.Store(true)
