@@ -74,7 +74,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	handlers := map[string]api.Handler{}
 	for name, handler := range accounts.New(accounts.Options{
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits,
-		Unknown: lockouts,
+		Unknown: lockouts, AppOrigin: cfg.AppOrigin,
 	}).Handlers() {
 		handlers[name] = handler
 	}
