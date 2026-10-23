@@ -69,14 +69,15 @@
 
 - `sourceSummary.ownerName`：主机所有者的显示名（`owner: boolean` 保留）；personal 是账号名，访客看不到所有者时为空串。已部署的中继不报这个字段：缺省时客户端什么都不显示。
 - `sources.list` 入参加 `status`（`online` / `offline` / `revoked`）、`tag`（多个标签取「且」；GET 里重复写）、`q`（名称模糊）、`cursor`、`limit`（1–200，缺省 50）；出参加 `nextCursor`（`null` 或缺省 = 没有下一页；已部署的中继不报这个字段，客户端按没有下一页处理）。personal 的目录一页放得下，没有标签：`status = revoked` 与给了 `tag` 都筛出空，`nextCursor` 恒为 `null`。
+- 主机登记（1.4 补充，Refs #60）：`sources.register` 在 SaaS 里于一个事务内消耗注册令牌、核版本门（团队主机的 `coreVersion` 低于 `MIN_CORE_VERSION_TEAM_ASSERTION` 或解析不了答 `426 protocol_unsupported`；个人空间不设门）、锁空间行后核主机配额（`429 limit_reached`，`details = { quota: "hosts", used, limit }`）与团队状态（`403 team_suspended`）；任何一步失败整个事务回滚，注册令牌不被消耗（它十分钟后自己过期）。令牌签发之后账号不再是团队的可登记成员、团队进入恢复期、或成员登记开关关了，令牌作废，答 `401 registration_token_invalid`。已登记且未撤销的 `sourceId` 只能由登记它的账号在同一空间里用同一把钥重新登记（幂等，不占第二个名额），其余答 `409 source_taken`。SaaS 里每个账号同时有效的注册令牌至多 20 枚。`sources.heartbeatHint` 在 SaaS 的节点表为空时答 `503 unavailable`，不兜底到共用地址。
 
 <!-- rpc:begin contract=§4 -->
 
 | procedure                   | 方法与路径                                         | scope                  | 错误码                                                                                                                                              |
 | --------------------------- | -------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sources.registrationToken` | `POST /v1/sources/registration-tokens`             | `session`              | `email_unverified`、`limit_reached`、`team_role_insufficient`、`team_policy_denied`、`host_registration_disabled`、`team_suspended`、`team_deleted` |
-| `sources.register`          | `POST /v1/sources/register`                        | `anonymous`            | `registration_token_invalid`、`source_taken`、`protocol_unsupported`、`rate_limited`                                                                |
-| `sources.heartbeatHint`     | `GET /v1/sources/me/relay`                         | `source`               | `source_revoked`、`unauthenticated`                                                                                                                 |
+| `sources.register`          | `POST /v1/sources/register`                        | `anonymous`            | `registration_token_invalid`、`source_taken`、`protocol_unsupported`、`rate_limited`、`limit_reached`、`team_suspended`                             |
+| `sources.heartbeatHint`     | `GET /v1/sources/me/relay`                         | `source`               | `source_revoked`、`unauthenticated`、`unavailable`                                                                                                  |
 | `sources.list`              | `GET /v1/sources`                                  | `session`              | —                                                                                                                                                   |
 | `sources.get`               | `GET /v1/sources/{sourceId}`                       | `session`              | `not_found`                                                                                                                                         |
 | `sources.update`            | `PATCH /v1/sources/{sourceId}`                     | `owner`                | `not_found`、`bad_request`                                                                                                                          |

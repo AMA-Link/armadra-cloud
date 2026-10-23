@@ -6315,6 +6315,35 @@
               }
             }
           },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "team_suspended"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
           "409": {
             "description": "409",
             "content": {
@@ -6383,7 +6412,8 @@
                     "code": {
                       "type": "string",
                       "enum": [
-                        "rate_limited"
+                        "rate_limited",
+                        "limit_reached"
                       ]
                     },
                     "message": {
@@ -6537,6 +6567,35 @@
                       "type": "string",
                       "enum": [
                         "source_revoked"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "503",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "unavailable"
                       ]
                     },
                     "message": {
