@@ -41,6 +41,7 @@ export const SITEVERIFY_TIMEOUT_MS = 10_000;
 /**
  * 挑战能要求的 procedure；personal 缺省只要求登录（§16：core 接受链接时没有挑战组件）。
  * `auth.changePassword`（§18）可选：要了之后客户端改口令时也得先过挑战。
+ * `auth.register`、`auth.passwordResetStart`（§16）只有 SaaS 控制面实现，personal 不收这两项。
  */
 export const CHALLENGE_SCOPES: readonly ChallengeScope[] = [
   "auth.login",
@@ -59,6 +60,8 @@ export const CHALLENGE_ACTIONS: Readonly<Record<ChallengeScope, string>> = {
   "auth.login": "armadra-login",
   "links.accept": "armadra-accept",
   "auth.changePassword": "armadra-password",
+  "auth.register": "armadra-register",
+  "auth.passwordResetStart": "armadra-reset",
 };
 
 /** 令牌长度上限（Turnstile 文档：最长 2048 字符）。 */

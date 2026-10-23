@@ -29,6 +29,7 @@
 - 代码注释与日志、CLI 文案是简体中文短句，标识符用英文；夹具（`packages/platform-protocol/fixtures/`）作表驱动测试，测试不迁就实现去改夹具。
 - 存储与兼容：迁移 SQL 以 TS 包里的为准（`packages/control-store-sql/migrations/`、`packages/control-store-postgres/migrations/`），`go generate` 拷到 `go/internal/store/{sqlite,postgres}/migrations/` 供 `go:embed`，`repo-check` 按 `migrations.lock` 校验两份逐字节一致；新迁移只在 TS 包里加。`go/testdata/compat/` 是 TS 存储写出来的固定夹具（SQLite 库、PostgreSQL 转储、`state.json`）和生成脚本（`state-schema.ts`、`snapshot.ts` 是它自带的最小结构，TS 版个人中转已删除），`internal/store/compat` 的测试让 Go 读这些夹具、再把 Go 写过的库交回 TS 的存储（`control-store-*`）读；合同或记录形状变了，同 PR 重新生成夹具（`node go/testdata/compat/make-fixtures.mjs`，用法见脚本头）。
 - Redis 的测试读 `REDIS_URL`（`pnpm dev:up` 的 Redis 是 `redis://127.0.0.1:6390`，CI 的 `go` 作业带 Redis 服务容器），每个测试一个随机前缀、用完只删这个前缀的键；没有这个变量就跳过，CI 里（`CI` 非空）一律失败。多节点控制面（`internal/control/{redis,postgres}`）的键、频道、表与 JSON 形状以 Go 实现为准（线上形状与已删除的 Node 版相同，滚动切换时两种节点可共用同一个 Redis / 库）；合同测试在 `internal/control/controltest`。
+- 邮件的集成测试读 `MAILPIT_SMTP_ADDR`（`pnpm dev:up` 的 mailpit 是 `127.0.0.1:1026`）与 `MAILPIT_API_URL`（`http://127.0.0.1:8026`），CI 的 `go` 作业带 mailpit 服务容器；mailpit 是共用的，每个测试用随机收件地址、只按 `to:` 查自己的信，不清空信箱；没有这两个变量就跳过，CI 里（`CI` 非空）一律失败。
 - PostgreSQL 的测试读 `ARMADRA_CLOUD_TEST_DATABASE_URL`（`pnpm dev:up` 的库或 CI 的服务容器），每个测试一个随机名字的 schema、用完只删它；没有这个变量就跳过并说明。CI 的 `go` 作业带 PostgreSQL 服务容器并装 TS 依赖，所以两边都会跑。
 - 验证：`pnpm go:check`（gofmt、`go vet`、staticcheck、`go test -race`、生成物新鲜度）。
 

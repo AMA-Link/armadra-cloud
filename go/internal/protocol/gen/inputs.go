@@ -52,6 +52,21 @@ var RouteInputs = map[string]*schema.Schema{
 				},
 				Required: []string{"platform", "name"},
 			}},
+			{Name: "challenge", Schema: &schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "provider", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"turnstile"},
+					}},
+					{Name: "token", Schema: &schema.Schema{
+						Type:      "string",
+						MinLength: schema.Int(1),
+						MaxLength: schema.Int(2048),
+					}},
+				},
+				Required: []string{"provider", "token"},
+			}},
 		},
 		Required: []string{"email", "password", "displayName", "device"},
 	},
@@ -359,6 +374,21 @@ var RouteInputs = map[string]*schema.Schema{
 				Type:          "string",
 				Format:        "email",
 				FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+			}},
+			{Name: "challenge", Schema: &schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "provider", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"turnstile"},
+					}},
+					{Name: "token", Schema: &schema.Schema{
+						Type:      "string",
+						MinLength: schema.Int(1),
+						MaxLength: schema.Int(2048),
+					}},
+				},
+				Required: []string{"provider", "token"},
 			}},
 		},
 		Required: []string{"email"},

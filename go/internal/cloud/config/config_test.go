@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -156,11 +157,12 @@ func TestChallengeScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Turnstile.Scope) != 2 || c.Turnstile.Scope[0] != core.ScopeLogin || c.Turnstile.Scope[1] != core.ScopeLinksAccept {
-		t.Fatalf("缺省范围取本版本认识的子集：%v", c.Turnstile.Scope)
+	want := []core.ChallengeScope{core.ScopeLogin, core.ScopeRegister, core.ScopeResetStart, core.ScopeLinksAccept}
+	if !reflect.DeepEqual(c.Turnstile.Scope, want) {
+		t.Fatalf("缺省范围四项都生效：%v", c.Turnstile.Scope)
 	}
-	if len(c.Warnings) != 2 {
-		t.Fatalf("协议还没有入参的两项应各有一条提示：%v", c.Warnings)
+	if len(c.Warnings) != 0 {
+		t.Fatalf("缺省范围不再有启动警告：%v", c.Warnings)
 	}
 	if _, err := config.Load(with(map[string]string{"TURNSTILE_SITE_KEY": "site", "TURNSTILE_SECRET_FILE": secret, "CHALLENGE_SCOPE": "auth.nope"})); err == nil {
 		t.Fatal("不认识的范围应拒绝")

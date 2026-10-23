@@ -41,6 +41,9 @@ const (
 	ScopeLogin          ChallengeScope = "auth.login"
 	ScopeLinksAccept    ChallengeScope = "links.accept"
 	ScopeChangePassword ChallengeScope = "auth.changePassword"
+	// 下面两项只有 SaaS 控制面实现（personal 没有注册与找回），不在 ChallengeScopes 里。
+	ScopeRegister   ChallengeScope = "auth.register"
+	ScopeResetStart ChallengeScope = "auth.passwordResetStart"
 )
 
 // TurnstileSiteverifyURL 是 Turnstile 的服务端校验地址。
@@ -58,7 +61,7 @@ const (
 	maxSeen = 10_000
 )
 
-// ChallengeScopes 是全部能挑战的 procedure。
+// ChallengeScopes 是 personal 能挑战的 procedure（ParseChallengeScope 的白名单）。
 var ChallengeScopes = []ChallengeScope{ScopeLogin, ScopeLinksAccept, ScopeChangePassword}
 
 // DefaultChallengeScope 是缺省要求挑战的 procedure。
@@ -70,6 +73,8 @@ var ChallengeActions = map[ChallengeScope]string{
 	ScopeLogin:          "armadra-login",
 	ScopeLinksAccept:    "armadra-accept",
 	ScopeChangePassword: "armadra-password",
+	ScopeRegister:       "armadra-register",
+	ScopeResetStart:     "armadra-reset",
 }
 
 // Verdict 是一次校验的结论。

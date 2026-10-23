@@ -696,3 +696,17 @@ describe("协议 1.4 补充：控制台缺口（G1–G9）", () => {
     ).toBe(true);
   });
 });
+
+describe("platform.info 的挑战范围（cloud-api §16）", () => {
+  it("客户端解析忽略不认识的 scope 项，认识的保留", async () => {
+    const { platformChallengeSchema } = await import(
+      "../src/cloud-api/index.ts"
+    );
+    const parsed = platformChallengeSchema.parse({
+      provider: "turnstile",
+      siteKey: "k",
+      scope: ["auth.login", "auth.future", "auth.register"],
+    });
+    expect(parsed.scope).toEqual(["auth.login", "auth.register"]);
+  });
+});

@@ -109,7 +109,9 @@
                             "enum": [
                               "auth.login",
                               "links.accept",
-                              "auth.changePassword"
+                              "auth.changePassword",
+                              "auth.register",
+                              "auth.passwordResetStart"
                             ],
                             "type": "string"
                           }
@@ -307,6 +309,26 @@
                       "platform",
                       "name"
                     ]
+                  },
+                  "challenge": {
+                    "type": "object",
+                    "properties": {
+                      "provider": {
+                        "enum": [
+                          "turnstile"
+                        ],
+                        "type": "string"
+                      },
+                      "token": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      }
+                    },
+                    "required": [
+                      "provider",
+                      "token"
+                    ]
                   }
                 },
                 "required": [
@@ -414,6 +436,8 @@
                     "code": {
                       "type": "string",
                       "enum": [
+                        "challenge_required",
+                        "challenge_invalid",
                         "password_too_short",
                         "password_too_long",
                         "password_too_common",
@@ -3241,6 +3265,26 @@
                   "email": {
                     "type": "string",
                     "format": "email"
+                  },
+                  "challenge": {
+                    "type": "object",
+                    "properties": {
+                      "provider": {
+                        "enum": [
+                          "turnstile"
+                        ],
+                        "type": "string"
+                      },
+                      "token": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      }
+                    },
+                    "required": [
+                      "provider",
+                      "token"
+                    ]
                   }
                 },
                 "required": [
@@ -3257,6 +3301,36 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "challenge_required",
+                        "challenge_invalid"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
                 }
               }
             }
