@@ -433,7 +433,9 @@ func TestResetMailToAnAddressNoLongerTheAccountsIsDropped(t *testing.T) {
 	e.mail.Register(runner)
 	runner.Start()
 	t.Cleanup(func() { runner.Stop(5 * time.Second) })
-	e.eventually("处理完", func() bool { return e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NOT NULL") == 1 })
+	e.eventually("处理完", func() bool {
+		return e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NOT NULL") == 1
+	})
 	if len(e.sender.Messages()) != 0 || e.count("SELECT count(*) FROM email_tokens") != 0 {
 		t.Fatal("不发信也不生成令牌")
 	}
