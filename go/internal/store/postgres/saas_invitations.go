@@ -106,12 +106,11 @@ func (r invitationRepo) PendingSeats(ctx context.Context, scope saas.TeamScope, 
 	return s, err
 }
 
-func (r invitationRepo) RevokeByInviter(ctx context.Context, scope saas.TeamScope, inviterID, decidedBy string, nowMs int64) (int, error) {
-	tag, err := r.q.Exec(ctx,
+func (r invitationRepo) RevokeByInviter(ctx context.Context, scope saas.TeamScope, inviterID, decidedBy string, nowMs int64) ([]saas.Invitation, error) {
+	return list(ctx, r.q, scanInvitation,
 		`UPDATE invitations SET state = 'revoked', decided_by = NULLIF($1, ''), decided_at_ms = $2
-		 WHERE tenant_id = $3 AND team_id = $4 AND kind = 'team' AND invited_by = $5 AND state = 'pending'`,
+		 WHERE tenant_id = $3 AND team_id = $4 AND kind = 'team' AND invited_by = $5 AND state = 'pending' RETURNING `+invitationColumns,
 		decidedBy, nowMs, scope.TenantID(), scope.TeamID(), inviterID)
-	return int(tag.RowsAffected()), err
 }
 
 func (r invitationRepo) Decide(ctx context.Context, tenantID, invitationID, state, decidedBy string, nowMs int64) error {
@@ -134,16 +133,22 @@ func (r invitationRepo) SetToken(ctx context.Context, tenantID, invitationID, to
 	return err
 }
 
-func (r invitationRepo) RevokeHostByEmail(ctx context.Context, tenantID, email, teamID, sourceID, decidedBy string, nowMs int64) (int, error) {
+func (r invitationRepo) RevokeHostByEmail(ctx context.Context, tenantID, email, teamID, sourceID, decidedBy string, nowMs int64) ([]saas.Invitation, error) {
 	if teamID == "" && sourceID == "" {
-		return 0, nil
+		return nil, nil
 	}
-	tag, err := r.q.Exec(ctx,
+	return list(ctx, r.q, scanInvitation,
 		`UPDATE invitations SET state = 'revoked', decided_by = NULLIF($1, ''), decided_at_ms = $2
 		 WHERE tenant_id = $3 AND kind = 'host' AND state = 'pending' AND email = lower($4)
-		   AND (($5 <> '' AND team_id = $5) OR ($6 <> '' AND source_id = $6))`,
+		   AND (($5 <> '' AND team_id = $5) OR ($6 <> '' AND source_id = $6)) RETURNING `+invitationColumns,
 		decidedBy, nowMs, tenantID, email, teamID, sourceID)
-	return int(tag.RowsAffected()), err
+}
+
+func (r invitationRepo) RevokeByEmail(ctx context.Context, tenantID, email, decidedBy string, nowMs int64) ([]saas.Invitation, error) {
+	return list(ctx, r.q, scanInvitation,
+		`UPDATE invitations SET state = 'revoked', decided_by = NULLIF($1, ''), decided_at_ms = $2
+		 WHERE tenant_id = $3 AND state = 'pending' AND email = lower($4) RETURNING `+invitationColumns,
+		decidedBy, nowMs, tenantID, email)
 }
 
 func (r invitationRepo) InsertHost(ctx context.Context, tenantID string, i saas.Invitation) error {

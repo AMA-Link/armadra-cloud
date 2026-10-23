@@ -92,6 +92,10 @@ type GrantReader interface {
 	ListGrants(ctx context.Context, tenantID string, query GrantQuery) ([]Grant, error)
 	// AccessBasis 读合成有效权限的事实；主机没有空间行答 SourceFound = false。
 	AccessBasis(ctx context.Context, tenantID, accountID, sourceID string) (AccessBasis, error)
+	// AccessBases 是 AccessBasis 的批量版（访问清单与收窄快照用，逐账号查询批量化）：同一台主机、一批账号，
+	// 固定几条查询，不随账号数增长；每个账号的答案与单个 AccessBasis 完全一致（重复的账号 id 去重，不在库里的账号
+	// AccountActive = false）。主机没有空间行时每个账号都答 SourceFound = false。
+	AccessBases(ctx context.Context, tenantID string, accountIDs []string, sourceID string) (map[string]AccessBasis, error)
 	// AccessAccounts 是可能经由某个来路到达主机的账号：所有者、member / guest 授予的主体、团队主机的全体成员，升序去重。
 	AccessAccounts(ctx context.Context, tenantID, sourceID string) ([]string, error)
 	// TeamAccountIDs 是团队全体成员的账号 id，升序。

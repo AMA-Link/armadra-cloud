@@ -19,6 +19,9 @@ type Options struct {
 	Mode string
 	// NodeID 是本节点的名字（路由的 Node 由隧道层写；这里只记着，供日志与诊断）。
 	NodeID string
+	// Origin 是广播外壳里的发送方标识（自己发的不再投递一次）；缺省随机。控制面实例用 cloud/<实例 id>，
+	// 同一份 Redis 上节点与控制面的 origin 因此互不相同。
+	Origin string
 	// JWKS 返回公钥集的 JSON；缺省是空集。
 	JWKS func(ctx context.Context) ([]byte, error)
 	// Now 供测试换时钟，缺省 time.Now。
@@ -65,15 +68,19 @@ func NewBase(o Options) *Base {
 	for k, r := range o.Limits {
 		rules[k] = r
 	}
-	var origin [8]byte
-	_, _ = rand.Read(origin[:])
+	origin := o.Origin
+	if origin == "" {
+		var raw [8]byte
+		_, _ = rand.Read(raw[:])
+		origin = hex.EncodeToString(raw[:])
+	}
 	return &Base{
 		opts: o,
 		Local: control.NewMemory(control.MemoryOptions{
 			Issuer: o.Issuer, Mode: o.Mode, JWKS: o.JWKS, Now: o.Now, Limits: o.Limits,
 		}),
 		out:     control.NewDispatcher(1, 0),
-		Origin:  hex.EncodeToString(origin[:]),
+		Origin:  origin,
 		rules:   rules,
 		revoked: map[string]int64{},
 	}

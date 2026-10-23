@@ -79,6 +79,27 @@ func (r reader) Entitlement(ctx context.Context, tenantID, spaceKind, spaceID st
 	return &e, err
 }
 
+func (r reader) TeamStaffIDs(ctx context.Context, tenantID, teamID string) ([]string, error) {
+	return list(ctx, r.q, func(s scanner) (string, error) {
+		var id string
+		return id, s.Scan(&id)
+	}, "SELECT account_id FROM team_members WHERE tenant_id = $1 AND team_id = $2 AND role IN ('owner', 'admin') ORDER BY account_id",
+		tenantID, teamID)
+}
+
+func (r reader) TeamEntitlements(ctx context.Context, tenantID string) ([]saas.TeamEntitlement, error) {
+	return list(ctx, r.q, func(s scanner) (saas.TeamEntitlement, error) {
+		var e saas.TeamEntitlement
+		var overrides []byte
+		err := s.Scan(&e.TeamID, &e.Plan, &overrides)
+		e.Overrides = overrides
+		return e, err
+	}, `SELECT t.team_id, COALESCE(e.plan, 'free'), COALESCE(e.overrides, '{}'::jsonb)
+	    FROM teams t
+	    LEFT JOIN entitlements e ON e.tenant_id = t.tenant_id AND e.space_kind = 'team' AND e.space_id = t.team_id
+	    WHERE t.tenant_id = $1 ORDER BY t.team_id`, tenantID)
+}
+
 func (r reader) TeamSummary(ctx context.Context, tenantID, teamID string) (*saas.TeamSummary, error) {
 	var t saas.TeamSummary
 	err := r.q.QueryRow(ctx, "SELECT name, deleted_at_ms IS NOT NULL FROM teams WHERE tenant_id = $1 AND team_id = $2",

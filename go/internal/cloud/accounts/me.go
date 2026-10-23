@@ -201,3 +201,18 @@ func (s *Service) meDeviceRevoke(ctx context.Context, call *api.Call) (any, erro
 	}
 	return map[string]any{}, nil
 }
+
+// meStreamTicket 是 me.streamTicket（契约 §6）：发一张 30 秒、一次性的票，存在 Redis，之后在任一实例的
+// GET /v1/me/stream 兑换。账号本人要账号可用；访客会话（链接）照样可以，事件按链接过滤。
+func (s *Service) meStreamTicket(ctx context.Context, call *api.Call) (any, error) {
+	caller, err := call.Caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if caller.AccountID != "" {
+		if _, err := s.owner(ctx, caller); err != nil {
+			return nil, err
+		}
+	}
+	return s.stream.IssueTicket(ctx, caller)
+}

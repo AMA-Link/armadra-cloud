@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -81,24 +82,52 @@ func TestUnknownLockoutsMatchAccountThrottle(t *testing.T) {
 	}
 }
 
-// Redis 连不上：退回进程内计数，不答 500。
-func TestUnknownLockoutsFallBackWhenRedisIsDown(t *testing.T) {
+// Redis 连不上：失败关闭。Fail 与 Guard 都答 503 unavailable（带重试等待），不回落到进程内计数；
+// 出错后一小段时间内 Guard 快速失败，恢复后放行；每次拒绝都报告并计数。
+func TestUnknownLockoutsFailClosedWhenRedisIsDown(t *testing.T) {
 	client := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1", DialTimeout: 100 * time.Millisecond, MaxRetries: -1})
 	defer func() { _ = client.Close() }()
 	var reported int
 	u := httpx.NewUnknownLockouts(client, func(error) { reported++ })
+	clock := time.Unix(1_000, 0)
+	u.Now = func() time.Time { return clock }
 	var guard core.UnknownAccounts
 	guard.Store = u
 	now := func() int64 { return 1_000_000 }
-	for i := 0; i < 5; i++ {
-		if code, _ := core.CodeOf(guard.Login(context.Background(), now, "x@example.com", "pw")); code != "credentials_invalid" {
-			t.Fatalf("第 %d 次：%v", i+1, code)
+	// 未注册路径：记账出错 → 503，永远不会因为回落计数而答 account_locked。
+	for i := 0; i < 8; i++ {
+		err := guard.Login(context.Background(), now, "x@example.com", "pw")
+		code, _ := core.CodeOf(err)
+		var e *core.Error
+		if code != "unavailable" || !errors.As(err, &e) || e.RetryAfter != httpx.RetryAfterUnavailable {
+			t.Fatalf("第 %d 次：%v %v", i+1, code, err)
 		}
 	}
-	if code, _ := core.CodeOf(guard.Login(context.Background(), now, "x@example.com", "pw")); code != "account_locked" {
-		t.Fatalf("退路也要锁：%v", code)
+	if reported != 8 || u.Unavailable() != 8 {
+		t.Fatalf("每次都报告并计数：报告 %d 次，计数 %d", reported, u.Unavailable())
 	}
-	if reported == 0 || u.Fallbacks() != int64(reported) || u.Fallbacks() != 6 {
-		t.Fatalf("每次回落都报告并计数：报告 %d 次，计数 %d", reported, u.Fallbacks())
+	// 探活：第一次真去连（出错并进入快速失败窗口），窗口内不再连。
+	if code, _ := core.CodeOf(u.Guard(context.Background())); code != "unavailable" {
+		t.Fatalf("探活：%v", code)
+	}
+	before := reported
+	if code, _ := core.CodeOf(u.Guard(context.Background())); code != "unavailable" || reported != before {
+		t.Fatalf("窗口内快速失败、不再连 Redis：%v 报告 %d→%d", code, before, reported)
+	}
+	// 窗口过后重新探活（这里仍连不上，仍 503）。
+	clock = clock.Add(2 * time.Second)
+	if code, _ := core.CodeOf(u.Guard(context.Background())); code != "unavailable" || reported != before+1 {
+		t.Fatalf("窗口过后重新探活：%v 报告 %d", code, reported)
+	}
+}
+
+// Redis 可用时探活放行。
+func TestGuardPassesWhenRedisIsUp(t *testing.T) {
+	u := httpx.NewUnknownLockouts(redisClient(t), nil)
+	if err := u.Guard(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if u.Unavailable() != 0 {
+		t.Fatal("没有拒绝过")
 	}
 }

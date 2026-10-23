@@ -83,6 +83,99 @@ func (r reader) AccessBasis(ctx context.Context, tenantID, accountID, sourceID s
 	return b, err
 }
 
+func (r reader) AccessBases(ctx context.Context, tenantID string, accountIDs []string, sourceID string) (map[string]saas.AccessBasis, error) {
+	out := make(map[string]saas.AccessBasis, len(accountIDs))
+	ids := make([]string, 0, len(accountIDs))
+	for _, id := range accountIDs {
+		if _, dup := out[id]; !dup {
+			out[id] = saas.AccessBasis{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var (
+		shared      saas.AccessBasis
+		revoked     bool
+		teamStatus  string
+		teamDeleted bool
+	)
+	err := r.q.QueryRow(ctx,
+		`SELECT s.revoked_at_ms IS NOT NULL, s.core_version, p.owner_account_id, COALESCE(p.team_id, ''),
+		        COALESCE(t.status, ''), COALESCE(t.deleted_at_ms IS NOT NULL, false)
+		 FROM source_spaces p
+		 JOIN sources s ON s.tenant_id = p.tenant_id AND s.source_id = p.source_id
+		 LEFT JOIN teams t ON t.tenant_id = p.tenant_id AND t.team_id = p.team_id
+		 WHERE p.tenant_id = $1 AND p.source_id = $2`, tenantID, sourceID).
+		Scan(&revoked, &shared.CoreVersion, &shared.OwnerID, &shared.TeamID, &teamStatus, &teamDeleted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	shared.SourceFound, shared.SourceRevoked = true, revoked
+	shared.TeamDeleted, shared.TeamSuspended = teamDeleted, teamStatus == saas.TeamSuspended
+
+	active := map[string]bool{}
+	statuses, err := list(ctx, r.q, func(s scanner) ([2]string, error) {
+		var row [2]string
+		return row, s.Scan(&row[0], &row[1])
+	}, "SELECT account_id, status FROM accounts WHERE tenant_id = $1 AND account_id = ANY($2)", tenantID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range statuses {
+		active[row[0]] = row[1] == saas.AccountActive
+	}
+	roles := map[string]saas.TeamRole{}
+	if shared.TeamID != "" {
+		members, err := list(ctx, r.q, func(s scanner) ([2]string, error) {
+			var row [2]string
+			return row, s.Scan(&row[0], &row[1])
+		}, "SELECT account_id, role FROM team_members WHERE tenant_id = $1 AND team_id = $2 AND account_id = ANY($3)",
+			tenantID, shared.TeamID, ids)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range members {
+			roles[row[0]] = saas.TeamRole(row[1])
+		}
+	}
+	grants, err := list(ctx, r.q, scanGrant,
+		"SELECT "+grantColumns+` FROM source_grants WHERE tenant_id = $1 AND source_id = $2 AND revoked_at_ms IS NULL
+		 AND ((subject_kind IN ('member', 'guest') AND subject_id = ANY($3)) OR (subject_kind = 'team' AND subject_id = $4))
+		 ORDER BY created_at_ms, grant_id`, tenantID, sourceID, ids, shared.TeamID)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		b := shared
+		b.AccountActive, b.TeamRole = active[id], roles[id]
+		out[id] = b
+	}
+	// 授予按创建顺序分发：账号主体的归它自己，团队主体的归全体。
+	for _, g := range grants {
+		if g.SubjectKind == saas.GrantSubjectTeam {
+			if shared.TeamID == "" || g.SubjectID != shared.TeamID {
+				continue
+			}
+			for _, id := range ids {
+				b := out[id]
+				b.Grants = append(b.Grants, g)
+				out[id] = b
+			}
+			continue
+		}
+		if b, ok := out[g.SubjectID]; ok {
+			b.Grants = append(b.Grants, g)
+			out[g.SubjectID] = b
+		}
+	}
+	return out, nil
+}
+
 func (r reader) AccessAccounts(ctx context.Context, tenantID, sourceID string) ([]string, error) {
 	return list(ctx, r.q, func(s scanner) (string, error) {
 		var id string

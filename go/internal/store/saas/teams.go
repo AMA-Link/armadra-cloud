@@ -72,6 +72,13 @@ type Entitlement struct {
 	Overrides json.RawMessage
 }
 
+// TeamEntitlement 是一个团队的计划与 overrides（没有 entitlements 行的团队是 Free、overrides 为空）。
+type TeamEntitlement struct {
+	TeamID    string
+	Plan      string
+	Overrides json.RawMessage
+}
+
 // Seats 是团队里占额度的人数：非 guest 成员与 guest 成员。
 type Seats struct {
 	Members int
@@ -89,6 +96,11 @@ type TeamReader interface {
 	OwnedTeamCount(ctx context.Context, tenantID, accountID string) (int, error)
 	// Entitlement 读空间的计划；没有行答 nil（即 Free）。
 	Entitlement(ctx context.Context, tenantID, spaceKind, spaceID string) (*Entitlement, error)
+	// TeamStaffIDs 是团队 owner 与 admin 的账号 id，升序（事件受众：邀请、授予变动要通知管理者）。
+	TeamStaffIDs(ctx context.Context, tenantID, teamID string) ([]string, error)
+	// TeamEntitlements 是租户全部团队的计划与 overrides（含恢复期内的），按 team_id 升序：serve 启动与
+	// Redis 订阅重新就绪时全量重写 relay:quota:team:*（设计 §7.2）。
+	TeamEntitlements(ctx context.Context, tenantID string) ([]TeamEntitlement, error)
 	// TeamSummary 读团队的名字与删除状态（匿名的邀请摘要用：调用方已核过邀请令牌）；团队不存在答 nil。
 	TeamSummary(ctx context.Context, tenantID, teamID string) (*TeamSummary, error)
 	// DueTeams 是恢复期已满、该清除的团队 id（purge_at_ms <= nowMs），最多 limit 个。

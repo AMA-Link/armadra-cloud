@@ -35,6 +35,8 @@ type IssuedRepo interface {
 	Insert(ctx context.Context, tenantID string, token IssuedToken) error
 	// Revoke 选出符合过滤的未到期令牌，把 jti 写进撤销表（已有则不动），并从签发索引里删掉；答被撤销的令牌。
 	Revoke(ctx context.Context, tenantID string, filter IssuedFilter, nowMs int64) ([]IssuedToken, error)
+	// RevokeToken 直接把一枚 jti 写进撤销表（已有则不动），不经签发索引：节点令牌（nodes revoke）没有账号与主机。
+	RevokeToken(ctx context.Context, jti string, expMs int64) error
 	// Active 是签发索引里未到期的令牌（serve 启动与 Redis 重连时重建 cloud:issued:*）。
 	Active(ctx context.Context, tenantID string, nowMs int64) ([]IssuedToken, error)
 	// Revoked 是撤销表里未到期的令牌（重放进 Redis）。
