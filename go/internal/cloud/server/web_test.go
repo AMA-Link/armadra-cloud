@@ -23,7 +23,7 @@ func TestWebRootHostsConsole(t *testing.T) {
 	r := newRig(t, rigOptions{env: map[string]string{"WEB_ROOT": root}})
 	const csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://*.src.src.localhost https://challenges.cloudflare.com; " +
 		"script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
-	for _, path := range []string{"/", "/login", "/verify", "/reset", "/device", "/t/abc", "/h/abc/x", "/j/abc", "/invite/i1", "/ops/teams", "/ops"} {
+	for _, path := range []string{"/", "/login", "/register", "/verify", "/reset", "/device", "/me", "/me/hosts", "/me/hosts/h1", "/me/links", "/me/account", "/me/tokens", "/t/abc", "/t/abc/members", "/h/abc/x", "/j/abc", "/invite/i1", "/ops/teams", "/ops"} {
 		res := r.do("GET", path, nil, nil)
 		r.expect(res, 200, "")
 		if !strings.Contains(string(res.body), "<title>console</title>") ||
@@ -49,6 +49,12 @@ func TestWebRootHostsConsole(t *testing.T) {
 	r.expect(info, 200, "")
 	if info.json["webApp"] != appOrigin {
 		t.Fatalf("platform.info.webApp：%s", info.body)
+	}
+	for _, path := range []string{"/v1/nowhere", "/v1/me/nowhere", "/v1/unknown/x"} {
+		res := r.do("GET", path, nil, nil)
+		if strings.Contains(string(res.body), "<title>console</title>") {
+			t.Fatalf("%s 不该回落成 index.html", path)
+		}
 	}
 	if r.do("GET", "/v1/me", nil, nil).status == 200 {
 		t.Fatal("API 路径不该被页面吞掉")
