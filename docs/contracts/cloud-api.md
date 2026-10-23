@@ -510,7 +510,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 - 停用 / 恢复账号或团队（`accountStatus` / `teamStatus`，必须写 `reason`）：拒绝登录与断言、踢掉连接。
 - 中继节点列表与排空（`relayNodes` / `relayNodeDrain`，GOAWAY rebalance）。
-- 事故开关（`incident` / `incidentSet`）：停签断言、停注册；中继侧拒绝新连接、保留在线连接。
+- 事故开关（`incident` / `incidentSet`）：停签断言、停注册；中继侧拒绝新连接、保留在线连接。三项开关：`pauseAssertions`（停签断言）、`pauseRegistrations`（停注册）、`rejectNewConnections`（中继节点拒绝新的隧道与端到端升级，在线连接保留；1.4 发布后的只加不改补充，协议包 0.11.0 起，缺省 = 关）；`incidentSet` 只改给出的项，必须带 `reason`。
 - 租户搜索 `admin.tenants`：账号与团队混排的一张表（名称 / 邮箱 / slug 模糊查）；详情与停用 / 恢复按 `kind` 走 `account` / `accountStatus` 或 `team` / `teamStatus`，详情多席位、本月流量与最近 5 条运营动作。
 - 节点行多当前连接数 `connections`。
 - 对外状态（M2）：`status.get` 匿名可读（`GET /v1/status`，组件状态与公告），`admin.statusPublish` 发布。

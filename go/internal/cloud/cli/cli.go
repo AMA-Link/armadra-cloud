@@ -64,8 +64,12 @@ func Run(args []string, env config.Env, stdout, stderr io.Writer, options Option
 		if len(rest) > 0 && rest[0] == "rotate" {
 			return keysRotate(rest[1:], env, stdout, stderr, options)
 		}
-	case "nodes", "operators":
-		if len(rest) > 0 && (rest[0] == "token" || rest[0] == "revoke" || rest[0] == "add" || rest[0] == "totp") {
+	case "operators":
+		if len(rest) > 0 && (rest[0] == "add" || rest[0] == "totp") {
+			return operators(rest[0], rest[1:], env, stdout, stderr, options)
+		}
+	case "nodes":
+		if len(rest) > 0 && (rest[0] == "token" || rest[0] == "revoke") {
 			fmt.Fprintf(stderr, "这个命令还没有提供：%s %s\n", command, rest[0])
 			return ExitUsage
 		}

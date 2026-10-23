@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -111,4 +113,54 @@ func (d *DB) EnsureAuditPartitions(ctx context.Context, now time.Time) ([]string
 		return nil, err
 	}
 	return append([]string(nil), names...), nil
+}
+
+// auditPartitionName 解 audit_log_YYYY_MM；不是整月分区（例如兜底分区）答 false。
+var auditPartitionName = regexp.MustCompile(`^audit_log_(\d{4})_(\d{2})$`)
+
+// DropAuditPartitionsBefore 删掉整月都早于 cutoff 的审计分区（月底边界 <= cutoff），答被删的分区名（升序）。
+// 同样在 advisory lock 下做，先 SET LOCAL lock_timeout：摘分区要父表的排他锁，拿不到就失败重试，不能无限排在业务写入前面。
+func (d *DB) DropAuditPartitionsBefore(ctx context.Context, cutoff time.Time) ([]string, error) {
+	var dropped []string
+	err := d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		dropped = dropped[:0]
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(auditLock)); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '"+auditLockTimeout+"'"); err != nil {
+			return err
+		}
+		names, err := list(ctx, tx, func(s scanner) (string, error) {
+			var name string
+			return name, s.Scan(&name)
+		}, `SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+		    WHERE i.inhparent = to_regclass('audit_log') ORDER BY c.relname`)
+		if err != nil {
+			return err
+		}
+		for _, name := range names {
+			match := auditPartitionName.FindStringSubmatch(name)
+			if match == nil {
+				continue
+			}
+			year, _ := strconv.Atoi(match[1])
+			month, _ := strconv.Atoi(match[2])
+			if month < 1 || month > 12 {
+				continue
+			}
+			end := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
+			if end.After(cutoff.UTC()) {
+				continue
+			}
+			if _, err := tx.Exec(ctx, "DROP TABLE "+pgx.Identifier{name}.Sanitize()); err != nil {
+				return err
+			}
+			dropped = append(dropped, name)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append([]string(nil), dropped...), nil
 }
