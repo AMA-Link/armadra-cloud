@@ -2,10 +2,13 @@ package core_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core/coretest"
+	"github.com/AMA-Link/armadra-cloud/go/internal/jose"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 )
@@ -218,4 +221,73 @@ func TestBuildSourceRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	eq(t, [2]any{reborn.RegisteredAtMs, reborn.RevokedAtMs == nil}, [2]any{int64(100), true}, "撤销后重登记")
+}
+
+// loopingPolicy 的 Visible 永远答同一个游标：Sources.List 循环取页不能死循环。
+type loopingPolicy struct {
+	denyAll
+	pages int
+	cycle bool
+}
+
+func (l *loopingPolicy) Visible(_ context.Context, _ core.Caller, f core.SourceFilter) ([]core.VisibleSource, string, error) {
+	l.pages++
+	if l.pages > 50 {
+		return nil, "", nil // 兜底：真死循环时让测试失败而不是挂住
+	}
+	switch {
+	case !l.cycle || f.Cursor == "":
+		return nil, "same", nil
+	case f.Cursor == "same":
+		return nil, "other", nil
+	}
+	return nil, "same", nil // other → same：绕回已取过的游标
+}
+
+func TestSourcesListStopsOnRepeatedCursor(t *testing.T) {
+	for _, cycle := range []bool{false, true} {
+		e := newEnv(t, coretest.Options{})
+		owner := e.owner()
+		sources := e.register(owner, sourceID)
+		policy := &loopingPolicy{cycle: cycle}
+		e.h.Context.Policy = policy
+		_, err := sources.List(e.ctx, owner)
+		eq(t, code(err), "internal", "重复的游标")
+		if policy.pages > 4 {
+			t.Fatalf("取了 %d 页才停", policy.pages)
+		}
+	}
+}
+
+// GrantExtra.Scp 直接作断言的 scp（多个工作空间）；只含 ro 时中继令牌带 ro。
+func TestGrantExtraScpOverridesScope(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	sources := e.register(owner, sourceID)
+	source, err := e.h.Context.Ports.Sources.Get(e.ctx, e.h.Context.TenantID, sourceID)
+	e.must(err)
+	device, err := e.h.Context.Ports.Devices.Get(e.ctx, e.h.Context.TenantID, owner.DeviceID)
+	e.must(err)
+	grant, err := sources.Grant(e.ctx, *source, *device, core.GrantExtra{Scp: []string{"ws:a", "ws:b"}, Role: "editor"})
+	e.must(err)
+	claims := tokenClaims(t, grant.Assertion)
+	eq(t, fmt.Sprint(claims["scp"]), "[ws:a ws:b]", "scp")
+	eq(t, claims["role"], "editor", "role")
+	eq(t, tokenClaims(t, grant.RelayToken)["ro"], nil, "没有 ro")
+	grant, err = sources.Grant(e.ctx, *source, *device, core.GrantExtra{Scp: []string{"ws:a", "ro"}})
+	e.must(err)
+	eq(t, tokenClaims(t, grant.RelayToken)["ro"], true, "ro 进中继令牌")
+}
+
+func tokenClaims(t *testing.T, token string) map[string]any {
+	t.Helper()
+	parts, err := jose.Split(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(parts.Payload, &claims); err != nil {
+		t.Fatal(err)
+	}
+	return claims
 }
