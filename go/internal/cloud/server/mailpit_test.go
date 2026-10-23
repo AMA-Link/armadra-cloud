@@ -131,7 +131,7 @@ func TestMailpitChineseMessageAndNewDevice(t *testing.T) {
 	email := r.email()
 	r.registerBearer(email)
 	verify := mailpit.wait(email, 1)[0]
-	if verify.Subject != "验证你的邮箱" || !strings.Contains(verify.Text, "测试用户，你好。") || !strings.Contains(verify.HTML, "<p>") {
+	if verify.Subject != "验证你的邮箱" || !strings.Contains(verify.Text, "你好。") || !strings.Contains(verify.HTML, "<p>") {
 		t.Fatalf("中文邮件（RFC 2047 主题与 UTF-8 正文）：%+v", verify)
 	}
 	res := r.do("POST", "/v1/auth/login", map[string]any{"account": email, "password": password, "device": map[string]any{"platform": "desktop", "name": "办公室电脑"}}, nil)

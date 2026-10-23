@@ -141,33 +141,49 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 	nowMs := s.nowMs()
 	device, refresh := core.NewDevice(account.AccountID, in.Device, s.gate.TransportFor(call.Request), core.SessionScopeSession, nowMs, 0)
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
-		// 新设备（同平台同名 30 天内没出现过）要提醒：先看已有的设备，再插新的。
-		known, err := tx.Ports().Devices.ListBySubject(ctx, s.tenant(), account.AccountID)
-		if err != nil {
-			return err
-		}
-		if err := tx.Ports().Devices.Insert(ctx, s.tenant(), device, nowMs); err != nil {
-			return err
-		}
-		who := audit.Security{AccountID: account.AccountID, DeviceName: device.Name, IP: call.IP}
-		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityLogin); err != nil {
-			return err
-		}
-		if !isNewDevice(known, device, nowMs) {
-			return nil
-		}
-		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityNewDevice); err != nil {
-			return err
-		}
-		return s.mail.Enqueue(ctx, tx, mail.Mail{
-			Template: mail.NewDevice, Locale: account.Locale, To: account.Email,
-			Params: mail.Params{DisplayName: account.DisplayName, DeviceName: device.Name, Platform: device.Platform},
-		})
+		return s.recordLogin(ctx, tx, account, device, call.IP, nowMs)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return s.respond(ctx, call, device, refresh, account)
+}
+
+// recordLogin 在事务里把登录的设备插进库、写登录的安全日志；新设备另写 security.newDevice 并发提醒。
+// 登录（auth.login）与设备码兑换（auth.devicePoll）共用。
+//
+// 新设备 = 同平台同名的设备 30 天内没出现过，或者这个账号 30 天内没有从同一个 IP 前缀、用同名设备登录过
+// （同名的设备名谁都能起，光靠名字挡不住别人冒用常用设备名登录）。
+func (s *Service) recordLogin(ctx context.Context, tx saas.Tx, account *saas.Account, device store.DeviceRecord, ip string, nowMs int64) error {
+	known, err := tx.Ports().Devices.ListBySubject(ctx, s.tenant(), account.AccountID)
+	if err != nil {
+		return err
+	}
+	fresh := isNewDevice(known, device, nowMs)
+	if prefix := audit.IPPrefix(ip); !fresh && prefix != "" {
+		seen, err := tx.Audit().SeenLogin(ctx, s.tenant(), account.AccountID, device.Name, prefix, nowMs-newDeviceWindow.Milliseconds())
+		if err != nil {
+			return err
+		}
+		fresh = !seen
+	}
+	if err := tx.Ports().Devices.Insert(ctx, s.tenant(), device, nowMs); err != nil {
+		return err
+	}
+	who := audit.Security{AccountID: account.AccountID, DeviceName: device.Name, IP: ip}
+	if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityLogin); err != nil {
+		return err
+	}
+	if !fresh {
+		return nil
+	}
+	if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityNewDevice); err != nil {
+		return err
+	}
+	return s.mail.Enqueue(ctx, tx, mail.Mail{
+		Template: mail.NewDevice, Locale: account.Locale, To: account.Email,
+		Params: mail.Params{DisplayName: account.DisplayName, DeviceName: device.Name, Platform: device.Platform},
+	})
 }
 
 // newDeviceWindow 是「新设备」的回看期：同平台同名的设备 30 天内出现过就不算新。
@@ -365,6 +381,10 @@ func (s *Service) changePassword(ctx context.Context, call *api.Call) (any, erro
 		}
 		if !found {
 			return core.Fail(gen.ErrUnauthenticated)
+		}
+		// 口令变了，之前发出的「改邮箱确认」链接一律作废（否则拿到旧邮件的人能在改口令之后把邮箱改走）。
+		if err := s.killEmailChange(ctx, tx, account.AccountID, nowMs); err != nil {
+			return err
 		}
 		who := audit.Security{AccountID: account.AccountID, DeviceName: device.Name, IP: call.IP}
 		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityPasswordChanged); err != nil {

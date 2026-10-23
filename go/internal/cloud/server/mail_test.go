@@ -125,7 +125,7 @@ func TestRegisterVerifyEmailFlow(t *testing.T) {
 	s := r.registerBearer(email)
 
 	letters := r.waitMails(email, 1)
-	if letters[0].Subject != "验证你的邮箱" || !strings.Contains(letters[0].Text, "测试用户") {
+	if letters[0].Subject != "验证你的邮箱" || strings.Contains(letters[0].Text, "测试用户") {
 		t.Fatalf("缺省中文：%+v", letters[0])
 	}
 	token := tokenOf(t, letters[0], "/verify")
@@ -146,7 +146,8 @@ func TestRegisterVerifyEmailFlow(t *testing.T) {
 	if err := r.run.DB.Pool().QueryRow(context.Background(), "SELECT sent_at_ms, message_id FROM outbox_emails WHERE to_email = $1", email).Scan(&sentAt, &messageID); err != nil || sentAt == nil {
 		t.Fatalf("发件箱应记已发：%v %v", sentAt, err)
 	}
-	if letters[0].MessageID != messageID || !strings.HasSuffix(messageID, "@127.0.0.1:8100") {
+	// 发件箱里存基础 id；每次尝试的邮件头带尝试序号。
+	if letters[0].MessageID != strings.Replace(messageID, "@", ".1@", 1) || !strings.HasSuffix(messageID, "@127.0.0.1:8100") {
 		t.Fatalf("Message-ID：%s", messageID)
 	}
 
@@ -613,4 +614,130 @@ func TestGarbageCollectionJobs(t *testing.T) {
 		_ = r.run.DB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM outbox_emails").Scan(&n)
 		return n == 0
 	})
+}
+
+// insertToken 直接写一枚已知明文的令牌（只存哈希），模拟「很久以前发出、落在别人手里」的链接。
+func (r *rig) insertToken(accountID, purpose, email, token string) {
+	r.t.Helper()
+	nowMs := r.clock.Ms()
+	r.exec(`INSERT INTO email_tokens (tenant_id, token_hash, account_id, purpose, email, created_at_ms, expires_at_ms)
+	        VALUES ('cloud', $1, $2, $3, $4, $5, $6)`, hashOf(token), accountID, purpose, email, nowMs, nowMs+3600_000)
+}
+
+func (r *rig) startEmailChange(s session, newEmail string) response {
+	return r.do("POST", "/v1/me/email", map[string]any{"newEmail": newEmail, "password": password}, s.bearer())
+}
+
+// 改邮箱的确认链接在找回口令或改口令之后作废（账号接管：拿到旧邮件的人不能在口令变了之后把邮箱改走）。
+func TestEmailChangeLinkDiesAfterPasswordResetOrChange(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	email, newEmail := r.email(), r.email()
+	s := r.registerBearer(email)
+	r.expect(r.startEmailChange(s, newEmail), 200, "")
+	changeToken := tokenOf(t, r.waitMails(newEmail, 1)[0], "/verify")
+
+	r.expect(r.resetStart(email), 200, "")
+	resetToken := tokenOf(t, r.waitMails(email, 2)[1], "/reset")
+	r.expect(r.resetFinish(resetToken, newPassword), 200, "")
+	r.expect(r.verifyEmail(changeToken), 400, "email_token_invalid")
+
+	// 改口令同理。
+	s = parseSession(r, r.login(email, newPassword, nil))
+	other := r.email()
+	r.expect(r.do("POST", "/v1/me/email", map[string]any{"newEmail": other, "password": newPassword}, s.bearer()), 200, "")
+	changeToken = tokenOf(t, r.waitMails(other, 1)[0], "/verify")
+	r.expect(r.do("POST", "/v1/auth/password", map[string]any{"password": newPassword, "newPassword": "another-long-passphrase-9"}, s.bearer()), 200, "")
+	r.expect(r.verifyEmail(changeToken), 400, "email_token_invalid")
+	if r.login(email, "another-long-passphrase-9", nil).status != 200 {
+		t.Fatal("邮箱没变")
+	}
+}
+
+func TestUnsentEmailChangeMailIsCancelledByPasswordReset(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	email, newEmail := r.email(), r.email()
+	s := r.registerBearer(email)
+	r.waitMails(email, 1)
+	r.mail.FailNext(1000) // 之后的邮件都发不出去，确认邮件停在队里
+	r.expect(r.startEmailChange(s, newEmail), 200, "")
+	eventuallyDB(t, "确认邮件的第一次发送失败", func() bool { return len(r.mail.Attempts()) >= 2 })
+	r.insertToken(s.accountID, "reset", email, "known-reset-token")
+	r.expect(r.resetFinish("known-reset-token", newPassword), 200, "")
+	r.mail.FailNext(0)
+	r.clock.Advance(31 * time.Second)
+	r.waitMails(email, 2) // 「口令已更改」通知发出，说明作业在跑
+	r.noMail(newEmail)
+}
+
+func TestEmailChangeConfirmationKillsResetLinkToOldAddress(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	email, newEmail := r.email(), r.email()
+	s := r.registerBearer(email)
+	r.expect(r.resetStart(email), 200, "")
+	resetToken := tokenOf(t, r.waitMails(email, 2)[1], "/reset")
+	r.expect(r.startEmailChange(s, newEmail), 200, "")
+	changeToken := tokenOf(t, r.waitMails(newEmail, 1)[0], "/verify")
+	r.expect(r.verifyEmail(changeToken), 200, "")
+	r.expect(r.resetFinish(resetToken, newPassword), 400, "email_token_invalid")
+}
+
+func TestResetTokenForAnotherAddressIsRejected(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	s := r.registerBearer(r.email())
+	r.insertToken(s.accountID, "reset", r.email(), "stale-address-token")
+	r.expect(r.resetFinish("stale-address-token", newPassword), 400, "email_token_invalid")
+}
+
+func TestNewDeviceReminderFollowsIPPrefix(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	email := r.email()
+	r.registerBearer(email)
+	r.waitMails(email, 1)
+	loginFrom := func(ip string) {
+		res := r.login(email, password, hdr("X-Forwarded-For", ip))
+		r.expect(res, 200, "")
+	}
+	loginFrom(r.ip) // 同名同来源：不提醒
+	r.noMail2(email, 1)
+	loginFrom("203.0.113.9") // 同名、新的 /24：提醒
+	r.waitMails(email, 2)
+	loginFrom("203.0.113.77") // 同一 /24 再来：不再提醒
+	r.noMail2(email, 2)
+}
+
+// noMail2 断言发给 to 的邮件还是 n 封。
+func (r *rig) noMail2(to string, n int) {
+	r.t.Helper()
+	time.Sleep(300 * time.Millisecond)
+	count := 0
+	for _, m := range r.mail.Messages() {
+		if m.To == to {
+			count++
+		}
+	}
+	if count != n {
+		r.t.Fatalf("发给 %s 的邮件应还是 %d 封，现在 %d 封", to, n, count)
+	}
+}
+
+func TestDeviceCodeRedemptionWritesLoginLogAndReminds(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	email := r.email()
+	browser := r.registerCookie(email)
+	r.waitMails(email, 1)
+	deviceCode, userCode := r.startDevice(nil)
+	r.expect(r.approve(browser, userCode, true), 200, "")
+	r.clock.Advance(pollInterval + time.Second)
+	if r.pollStatus(deviceCode) != "approved" {
+		t.Fatal("应已批准")
+	}
+	var logins int
+	_ = r.run.DB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM audit_log WHERE account_id = $1 AND action = 'security.login' AND device_name = '我的 Mac'", browser.accountID).Scan(&logins)
+	if logins != 1 {
+		t.Fatalf("兑换写 security.login：%d", logins)
+	}
+	letter := r.waitMails(email, 2)[1]
+	if letter.Subject != "新设备登录" || !strings.Contains(letter.Text, "我的 Mac") {
+		t.Fatalf("新设备提醒：%+v", letter)
+	}
 }

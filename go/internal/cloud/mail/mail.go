@@ -328,6 +328,9 @@ func deliverable(email *saas.OutboxEmail, account *saas.Account, purpose string)
 		return account.EmailVerifiedAtMs == nil && account.Email == email.To
 	case saas.EmailPurposeChange:
 		return account.Email != email.To
+	case saas.EmailPurposeReset:
+		// 排队期间邮箱换了：旧地址不再是账号的邮箱，找回链接不能再寄给它。
+		return account.Email == email.To
 	}
 	return true
 }

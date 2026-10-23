@@ -239,3 +239,63 @@ func TestSaaSAuditAppend(t *testing.T) {
 func timeAt(year, month, day int) time.Time {
 	return time.Date(year, time.Month(month), day, 12, 0, 0, 0, time.UTC)
 }
+
+func TestSaaSCancelUnsentMailAndSeenLogin(t *testing.T) {
+	e := openSaaS(t)
+	ctx, s := e.ctx, e.db.SaaS()
+	if _, err := e.db.EnsureAuditPartitions(ctx, timeAt(2026, 10, 23)); err != nil {
+		t.Fatal(err)
+	}
+	enqueue := func(tx saas.Tx, id, account, template string) {
+		t.Helper()
+		jobID, _, err := tx.Jobs().Enqueue(ctx, saasTenant, saas.NewJob{Kind: "mail.send", Payload: json.RawMessage(`{"emailId":"` + id + `","accountId":"` + account + `"}`), RunAtMs: 1}, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Jobs().InsertOutbox(ctx, saasTenant, saas.OutboxEmail{
+			EmailID: id, JobID: &jobID, Template: template, Locale: "en", To: id + "@example.com",
+			Params: json.RawMessage(`{}`), MessageID: id + "@app.test", CreatedAtMs: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err := s.Tx(ctx, func(tx saas.Tx) error {
+		enqueue(tx, "c1", "a1", "email_change")
+		enqueue(tx, "c2", "a1", "password_reset")
+		enqueue(tx, "c3", "a2", "email_change")
+		enqueue(tx, "c4", "a1", "email_change")
+		if err := tx.Jobs().MarkOutboxSent(ctx, saasTenant, "c4", 5); err != nil {
+			return err
+		}
+		var err error
+		n, err = tx.Jobs().CancelUnsentMail(ctx, saasTenant, "a1", "email_change")
+		return err
+	}); err != nil || n != 1 {
+		t.Fatalf("只删该账号该模板还没发的：%d %v", n, err)
+	}
+	if e.count("SELECT count(*) FROM outbox_emails") != 3 {
+		t.Fatal("别的账号、别的模板、已发的都留着")
+	}
+
+	at := timeAt(2026, 10, 23).UnixMilli()
+	if err := s.Tx(ctx, func(tx saas.Tx) error {
+		return tx.Audit().Append(ctx, saasTenant, saas.AuditEntry{AtMs: at, EventID: "l1", AccountID: "a1", ActorKind: saas.ActorAccount, ActorID: "a1", Action: "security.login", DeviceName: "笔记本", IPPrefix: "10.1.2.0/24"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seen := func(name, prefix string, since int64) bool {
+		t.Helper()
+		var got bool
+		if err := s.Tx(ctx, func(tx saas.Tx) (err error) {
+			got, err = tx.Audit().SeenLogin(ctx, saasTenant, "a1", name, prefix, since)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if !seen("笔记本", "10.1.2.0/24", at-1000) || seen("笔记本", "10.1.3.0/24", at-1000) || seen("台式机", "10.1.2.0/24", at-1000) || seen("笔记本", "10.1.2.0/24", at+1) {
+		t.Fatal("SeenLogin 要同名、同前缀、在窗口内")
+	}
+}

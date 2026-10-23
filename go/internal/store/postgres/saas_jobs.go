@@ -81,6 +81,15 @@ func (r jobRepo) DeleteOutbox(ctx context.Context, tenantID, emailID string) err
 	return err
 }
 
+func (r jobRepo) CancelUnsentMail(ctx context.Context, tenantID, accountID, template string) (int, error) {
+	tag, err := r.q.Exec(ctx,
+		`DELETE FROM outbox_emails o USING jobs j
+		 WHERE o.tenant_id = $1 AND j.tenant_id = $1 AND o.job_id = j.job_id AND j.kind = 'mail.send'
+		   AND j.payload->>'accountId' = $2 AND o.template = $3 AND o.sent_at_ms IS NULL AND o.failed_at_ms IS NULL`,
+		tenantID, accountID, template)
+	return int(tag.RowsAffected()), err
+}
+
 func (r jobRepo) TrimOutbox(ctx context.Context, tenantID string, keep int) (int, error) {
 	rows, err := r.q.Query(ctx,
 		`DELETE FROM outbox_emails WHERE tenant_id = $1 AND email_id IN (
@@ -140,6 +149,16 @@ func (r auditRepo) Append(ctx context.Context, tenantID string, e saas.AuditEntr
 		e.AtMs, e.EventID, tenantID, e.TeamID, e.AccountID, e.ActorKind, e.ActorID, e.Action,
 		e.TargetKind, e.TargetID, e.SourceID, e.JTI, e.IPPrefix, e.DeviceName, e.Reason)
 	return err
+}
+
+func (r auditRepo) SeenLogin(ctx context.Context, tenantID, accountID, deviceName, ipPrefix string, sinceMs int64) (bool, error) {
+	var seen bool
+	err := r.q.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM audit_log WHERE tenant_id = $1 AND account_id = $2
+		   AND action IN ('security.login', 'security.register') AND at_ms >= $3
+		   AND device_name = $4 AND ip_prefix = $5)`,
+		tenantID, accountID, sinceMs, deviceName, ipPrefix).Scan(&seen)
+	return seen, err
 }
 
 // queue 是作业队列的非事务操作，直接走连接池。

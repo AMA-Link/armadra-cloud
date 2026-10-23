@@ -37,7 +37,8 @@ func (s *Service) liveToken(ctx context.Context, token string, purposes ...strin
 	return record, nil
 }
 
-// consume 在已锁账号的事务里消耗令牌：别的请求抢先用掉或刚好过期都按无效答，事务随之回滚。
+// consume 在已锁账号的事务里一步消耗令牌（条件 UPDATE 同时核对目的、未用、未过期）：别的请求抢先用掉、
+// 刚好过期、目的不符都按无效答，事务随之回滚。
 func (s *Service) consume(ctx context.Context, tx saas.Tx, record *saas.EmailToken) (*saas.Account, error) {
 	found, err := tx.Accounts().LockAccount(ctx, s.tenant(), record.AccountID)
 	if err != nil {
@@ -46,7 +47,7 @@ func (s *Service) consume(ctx context.Context, tx saas.Tx, record *saas.EmailTok
 	if !found {
 		return nil, core.Fail(gen.ErrEmailTokenInvalid)
 	}
-	ok, err := tx.Accounts().ConsumeEmailToken(ctx, s.tenant(), record.TokenHash, s.nowMs())
+	consumed, err := tx.Accounts().ConsumeEmailToken(ctx, s.tenant(), record.TokenHash, record.Purpose, s.nowMs())
 	if err != nil {
 		return nil, err
 	}
@@ -54,10 +55,28 @@ func (s *Service) consume(ctx context.Context, tx saas.Tx, record *saas.EmailTok
 	if err != nil {
 		return nil, err
 	}
-	if !ok || account == nil || account.Status != saas.AccountActive {
+	if consumed == nil || consumed.AccountID != record.AccountID || account == nil || account.Status != saas.AccountActive {
 		return nil, core.Fail(gen.ErrEmailTokenInvalid)
 	}
 	return account, nil
+}
+
+// killEmailChange 作废账号所有「改邮箱确认」：已发出的令牌记已用，排队还没发的邮件删掉。
+func (s *Service) killEmailChange(ctx context.Context, tx saas.Tx, accountID string, nowMs int64) error {
+	if _, err := tx.Accounts().InvalidateEmailTokens(ctx, s.tenant(), accountID, saas.EmailPurposeChange, nowMs); err != nil {
+		return err
+	}
+	_, err := tx.Jobs().CancelUnsentMail(ctx, s.tenant(), accountID, mail.EmailChange)
+	return err
+}
+
+// killPasswordReset 作废账号所有找回口令的链接：已发出的令牌记已用，排队还没发的邮件删掉。
+func (s *Service) killPasswordReset(ctx context.Context, tx saas.Tx, accountID string, nowMs int64) error {
+	if _, err := tx.Accounts().InvalidateEmailTokens(ctx, s.tenant(), accountID, saas.EmailPurposeReset, nowMs); err != nil {
+		return err
+	}
+	_, err := tx.Jobs().CancelUnsentMail(ctx, s.tenant(), accountID, mail.PasswordReset)
+	return err
 }
 
 // emailVerify 是 auth.emailVerify：验证邮箱（verify）或确认新邮箱（change）。
@@ -102,11 +121,16 @@ func (s *Service) emailVerify(ctx context.Context, call *api.Call) (any, error) 
 			if err := tx.Accounts().ChangeEmail(ctx, s.tenant(), account.AccountID, record.Email, nowMs); err != nil {
 				return err
 			}
-			// 同账号同目的的其余令牌一并作废；发往旧地址的验证令牌也不再有意义。
-			for _, purpose := range []string{saas.EmailPurposeChange, saas.EmailPurposeVerify} {
-				if _, err := tx.Accounts().InvalidateEmailTokens(ctx, s.tenant(), account.AccountID, purpose, nowMs); err != nil {
-					return err
-				}
+			// 同账号同目的的其余令牌一并作废；发往旧地址的验证令牌也不再有意义；
+			// 寄往旧地址的找回口令链接同样作废（旧地址不再是账号的邮箱）。
+			if err := s.killEmailChange(ctx, tx, account.AccountID, nowMs); err != nil {
+				return err
+			}
+			if _, err := tx.Accounts().InvalidateEmailTokens(ctx, s.tenant(), account.AccountID, saas.EmailPurposeVerify, nowMs); err != nil {
+				return err
+			}
+			if err := s.killPasswordReset(ctx, tx, account.AccountID, nowMs); err != nil {
+				return err
 			}
 			email = record.Email
 			if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityEmailChanged); err != nil {
@@ -214,11 +238,19 @@ func (s *Service) passwordResetFinish(ctx context.Context, call *api.Call) (any,
 		if err != nil {
 			return err
 		}
+		// 令牌发往的地址必须仍是账号当前的邮箱（中间改过邮箱的话，旧地址收到的链接不能再用来重置口令）。
+		if account.Email != record.Email {
+			return core.Fail(gen.ErrEmailTokenInvalid)
+		}
 		// 撤销钩子在提交之后才投递；core 的低层函数全部走本事务的端口。
 		if err := core.SetPasswordNames(ctx, s.bound(tx), account.AccountID, policyNames(account.Email, account.DisplayName), in.NewPassword, nowMs, ""); err != nil {
 			return err
 		}
-		if _, err := tx.Accounts().InvalidateEmailTokens(ctx, s.tenant(), account.AccountID, saas.EmailPurposeReset, nowMs); err != nil {
+		if err := s.killPasswordReset(ctx, tx, account.AccountID, nowMs); err != nil {
+			return err
+		}
+		// 找回成功也让之前发出的「改邮箱确认」链接作废：它们可能落在别人手里。
+		if err := s.killEmailChange(ctx, tx, account.AccountID, nowMs); err != nil {
 			return err
 		}
 		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, audit.Security{AccountID: account.AccountID, IP: call.IP}, audit.SecurityPasswordReset); err != nil {

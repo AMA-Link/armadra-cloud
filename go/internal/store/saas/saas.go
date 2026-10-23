@@ -128,6 +128,8 @@ type (
 type AuditRepo interface {
 	// Append 追加一行；event_id 空则由调用方先生成。
 	Append(ctx context.Context, tenantID string, entry AuditEntry) error
+	// SeenLogin 报告账号从 sinceMs 起有没有在同名设备、同一 IP 前缀登录（或注册）过：新设备提醒用。
+	SeenLogin(ctx context.Context, tenantID, accountID, deviceName, ipPrefix string, sinceMs int64) (bool, error)
 }
 
 // JobRepo 是业务事务里的作业入队与发件箱。
@@ -143,6 +145,9 @@ type JobRepo interface {
 	MarkOutboxSent(ctx context.Context, tenantID, emailID string, nowMs int64) error
 	MarkOutboxFailed(ctx context.Context, tenantID, emailID string, nowMs int64) error
 	DeleteOutbox(ctx context.Context, tenantID, emailID string) error
+	// CancelUnsentMail 删账号名下还没发出的某个模板的发件（作业随后发现发件箱行没了就结束）：
+	// 账号上的敏感状态变了（改口令、改邮箱），排在队里的旧链接邮件不能再发出去。
+	CancelUnsentMail(ctx context.Context, tenantID, accountID, template string) (int, error)
 	// TrimOutbox 只留最新的 keep 封还没发也没判失败的发件，更早的连同它们没做完的作业一起删；答删了几封。
 	TrimOutbox(ctx context.Context, tenantID string, keep int) (int, error)
 	// GCOutbox 删发出或失败早于 beforeMs 的行（outbox.gc，30 天）；GCJobs 删完成早于 doneBeforeMs、
