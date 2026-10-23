@@ -65,7 +65,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		PasswordPolicy: core.DefaultPasswordPolicy, Now: now, Events: core.NewEventBus(),
 		RelayOrigin: relayOrigin, RelayBaseURL: relayOrigin, TunnelNodes: hosts.TunnelNodes(durable),
 	}
-	policy := grants.NewPolicy(grants.PolicyOptions{Core: coreCtx, Store: saasStore, Relay: durable})
+	policy := grants.NewPolicy(grants.PolicyOptions{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger})
 	coreCtx.Policy = policy
 	if cfg.Turnstile != nil {
 		gate, err := challengeGate(cfg, logger, now, deps.Challenge)

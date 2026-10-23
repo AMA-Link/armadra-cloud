@@ -106,7 +106,16 @@ func (s *Service) issue(ctx context.Context, ip string, caller core.Caller, sour
 		}
 	}
 	s.stage("indexed")
-	// 复核：主机还在、权限没有比签发时更窄。
+	// 复核：设备还活着（签发中途登出、改口令、撤设备的拿不到令牌）、主机还在、团队没停用、权限没有比签发时更窄。
+	live, err := s.c.Ports.Devices.Get(ctx, s.tenant(), caller.DeviceID)
+	if err != nil {
+		s.undo(ctx, issued)
+		return core.Grant{}, false, err
+	}
+	if live == nil || !core.IsLiveDevice(*live, s.nowMs()) {
+		s.undo(ctx, issued)
+		return core.Grant{}, false, core.Fail(gen.ErrUnauthenticated)
+	}
 	fresh, err := s.c.Ports.Sources.Get(ctx, s.tenant(), sourceID)
 	if err != nil {
 		s.undo(ctx, issued)
@@ -120,6 +129,10 @@ func (s *Service) issue(ctx context.Context, ip string, caller core.Caller, sour
 	if err != nil {
 		s.undo(ctx, issued)
 		return core.Grant{}, false, err
+	}
+	if suspended(basis) {
+		s.undo(ctx, issued)
+		return core.Grant{}, false, core.Fail(gen.ErrTeamSuspended)
 	}
 	if eff.None() {
 		s.undo(ctx, issued)

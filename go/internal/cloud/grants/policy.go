@@ -2,11 +2,13 @@ package grants
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
+	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
@@ -21,6 +23,7 @@ type PolicyOptions struct {
 	Store saas.Store
 	// Relay 查主机在线时隧道上报的 coreVersion（版本门取它，不取登记时的）。
 	Relay relayctl.Control
+	Log   *obs.Logger
 }
 
 // Policy 是 core.AccessPolicy 的 SaaS 实现（设计 §4.2、§4.6）：可见性来自授予与团队角色，管理权是主机所有者
@@ -30,13 +33,18 @@ type Policy struct {
 	store    saas.Store
 	relay    relayctl.Control
 	personal core.AccessPolicy
+	log      *obs.Logger
 }
 
 var _ core.AccessPolicy = (*Policy)(nil)
 
 // NewPolicy 建访问策略；装配时把它设为 core.Context.Policy。
 func NewPolicy(options PolicyOptions) *Policy {
-	return &Policy{c: options.Core, store: options.Store, relay: options.Relay, personal: core.NewPersonalPolicy(options.Core)}
+	log := options.Log
+	if log == nil {
+		log = obs.Nop()
+	}
+	return &Policy{c: options.Core, store: options.Store, relay: options.Relay, personal: core.NewPersonalPolicy(options.Core), log: log}
 }
 
 func (p *Policy) tenant() string { return p.c.TenantID }
@@ -144,6 +152,21 @@ func (p *Policy) CanManage(ctx context.Context, caller core.Caller, target core.
 	return nil
 }
 
+// 令牌寿命与 scp 的界限。
+const (
+	// minTokenLife 是授予剩余寿命的下限（毫秒）：不足就不签。
+	minTokenLife = 1000
+	// MaxScopeEntries 是断言 scp 的项数上限（协议包 assertion-claims）。
+	MaxScopeEntries = 64
+)
+
+var errScopeTooLarge = errors.New("scp 项数超限")
+
+// suspended 报告账号所在团队的这台主机的团队已停用（成员才看得到；删除的团队与外人不算）。
+func suspended(b saas.AccessBasis) bool {
+	return b.SourceFound && !b.SourceRevoked && b.TeamID != "" && b.TeamSuspended && !b.TeamDeleted && b.TeamRole != ""
+}
+
 // signedView 是签断言时依据的事实：有效权限与团队角色。签发方登记索引后再算一遍，对不上（收窄了）就撤自己签的令牌。
 type signedView struct {
 	extra    core.GrantExtra
@@ -174,11 +197,20 @@ func (p *Policy) intent(ctx context.Context, accountID string, source store.Sour
 	if err != nil {
 		return signedView{}, err
 	}
-	if basis.SourceFound && !basis.SourceRevoked && basis.TeamID != "" && basis.TeamSuspended && !basis.TeamDeleted && basis.TeamRole != "" {
+	if suspended(basis) {
 		return signedView{}, core.Fail(gen.ErrTeamSuspended)
 	}
-	eff := Compose(basis, accountID, p.c.NowMs())
+	nowMs := p.c.NowMs()
+	eff := Compose(basis, accountID, nowMs)
 	if eff.None() {
+		return signedView{}, core.Fail(gen.ErrSourceAccessDenied)
+	}
+	// 授予快到期了（不足 1 秒）签不出有用的令牌；scp 超过协议上限（多个授予的范围并集）也不签。
+	if eff.ExpiresAtMs != nil && *eff.ExpiresAtMs-nowMs < minTokenLife {
+		return signedView{}, core.Fail(gen.ErrSourceAccessDenied)
+	}
+	if len(eff.WorkspaceIDs) > MaxScopeEntries {
+		p.log.Warn("合成后的 scp 超过上限，不签断言", obs.Operation("grants.intent"), obs.SourceID(source.SourceID), obs.Error(errScopeTooLarge))
 		return signedView{}, core.Fail(gen.ErrSourceAccessDenied)
 	}
 	if err := p.versionGate(ctx, source, basis, eff); err != nil {
@@ -190,6 +222,9 @@ func (p *Policy) intent(ctx context.Context, accountID string, source store.Sour
 	}
 	if extra.Scp == nil {
 		extra.Scp = []string{}
+	}
+	if eff.ExpiresAtMs != nil {
+		extra.ExpiresAtMs = *eff.ExpiresAtMs // 令牌寿命不超过授予的到期
 	}
 	if basis.TeamID != "" {
 		extra.Team = &gen.AssertionClaimsTeam{TeamID: basis.TeamID, Role: string(basis.TeamRole)}

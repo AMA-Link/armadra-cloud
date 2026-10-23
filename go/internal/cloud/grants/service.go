@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"slices"
 	"sort"
 
@@ -41,9 +42,24 @@ const (
 	maxAccessRows = 500
 	// maxListedGrants 是 grants.list 一次最多答的授予数。
 	maxListedGrants = 1000
-	// kickBatch：受影响的账号多于这个数时只踢一次该主机的全部连接（重连的人按新权限重新签），不逐人踢。
-	kickBatch = 50
 )
+
+// workspacePattern 是 scp 里 ws:<id> 的 id（协议包 scopeEntrySchema）。
+var workspacePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
+
+// cleanWorkspaces 校验并去重排序：每项符合 scopeEntrySchema，至多 64 项。
+func cleanWorkspaces(ids []string) ([]string, error) {
+	out := sortedUnique(ids)
+	if len(out) > MaxScopeEntries {
+		return nil, core.Fail(gen.ErrBadRequest)
+	}
+	for _, id := range out {
+		if !workspacePattern.MatchString(id) {
+			return nil, core.Fail(gen.ErrBadRequest)
+		}
+	}
+	return out, nil
+}
 
 // Options 是授予服务的装配。
 type Options struct {
@@ -257,18 +273,27 @@ func (s *Service) manageRead(ctx context.Context, accountID, sourceID string) (s
 
 // effectiveOf 读事实并合成一个账号对一台主机的有效权限。
 func (s *Service) effectiveOf(ctx context.Context, r saas.Reader, accountID, sourceID string) (Effective, saas.AccessBasis, error) {
+	return s.effectiveAt(ctx, r, accountID, sourceID, s.nowMs())
+}
+
+func (s *Service) effectiveAt(ctx context.Context, r saas.Reader, accountID, sourceID string, atMs int64) (Effective, saas.AccessBasis, error) {
 	basis, err := r.AccessBasis(ctx, s.tenant(), accountID, sourceID)
 	if err != nil {
 		return Effective{}, basis, err
 	}
-	return Compose(basis, accountID, s.nowMs()), basis, nil
+	return Compose(basis, accountID, atMs), basis, nil
 }
 
 // snapshot 是一批账号此刻对主机的有效权限。
 func (s *Service) snapshot(ctx context.Context, r saas.Reader, sourceID string, accounts []string) (map[string]Effective, error) {
+	return s.snapshotAt(ctx, r, sourceID, accounts, s.nowMs())
+}
+
+// snapshotAt 是一批账号在 atMs 那一刻对主机的有效权限（到期作业用到期前一毫秒的快照作「之前」）。
+func (s *Service) snapshotAt(ctx context.Context, r saas.Reader, sourceID string, accounts []string, atMs int64) (map[string]Effective, error) {
 	out := make(map[string]Effective, len(accounts))
 	for _, id := range accounts {
-		eff, _, err := s.effectiveOf(ctx, r, id, sourceID)
+		eff, _, err := s.effectiveAt(ctx, r, id, sourceID, atMs)
 		if err != nil {
 			return nil, err
 		}
@@ -312,12 +337,6 @@ func (s *Service) revokeAccess(tx saas.Tx, sourceID string, accounts []string, r
 			if _, err := s.relay.RevokeWhere(ctx, relayctl.Filter{Subject: id, SourceID: sourceID}); err != nil {
 				s.log.Warn("撤销已签令牌失败", obs.Operation("grants.revoke"), obs.SourceID(sourceID), obs.Error(err))
 			}
-		}
-		if len(accounts) > kickBatch {
-			if err := s.relay.Kick(ctx, relayctl.KickFilter{SourceID: sourceID}, reason); err != nil {
-				s.log.Warn("踢掉连接失败", obs.Operation("grants.kick"), obs.SourceID(sourceID), obs.Error(err))
-			}
-			return
 		}
 		for _, id := range accounts {
 			if err := s.relay.Kick(ctx, relayctl.KickFilter{SourceID: sourceID, Subject: id}, reason); err != nil {
@@ -473,6 +492,10 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 	if in.ExpiresAtMs != nil && *in.ExpiresAtMs <= nowMs {
 		return nil, core.Fail(gen.ErrBadRequest)
 	}
+	workspaces, err := cleanWorkspaces(in.WorkspaceIDs)
+	if err != nil {
+		return nil, err
+	}
 	var out grantOut
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
 		h, err := s.manage(ctx, tx, account.AccountID, in.SourceID)
@@ -482,6 +505,9 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		kind, subjectID, err := s.subjectOf(ctx, tx, h, in.Subject)
 		if err != nil {
 			return err
+		}
+		if kind == saas.GrantSubjectGuest && h.TeamID != "" && len(workspaces) == 0 {
+			return core.Fail(gen.ErrBadRequest) // 团队 guest 只能被授予到具体的工作空间，不给整台主机
 		}
 		existing, err := tx.ListGrants(ctx, s.tenant(), saas.GrantQuery{SourceID: h.SourceID})
 		if err != nil {
@@ -494,7 +520,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		}
 		grant := saas.Grant{
 			GrantID: core.NewUUID(), SourceID: h.SourceID, TeamID: h.TeamID, SubjectKind: kind, SubjectID: subjectID, Role: in.Role,
-			WorkspaceIDs: sortedUnique(in.WorkspaceIDs), ExpiresAtMs: in.ExpiresAtMs, GrantedBy: account.AccountID,
+			WorkspaceIDs: workspaces, ExpiresAtMs: in.ExpiresAtMs, GrantedBy: account.AccountID,
 			Origin: saas.GrantOriginGrant, CreatedAtMs: nowMs, UpdatedAtMs: nowMs,
 		}
 		if err := tx.Grants().Insert(ctx, s.tenant(), grant); err != nil {
@@ -643,7 +669,10 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 		return nil, core.Fail(gen.ErrBadRequest)
 	}
 	if hasWorkspaces {
-		ws := sortedUnique(in.WorkspaceIDs)
+		ws, err := cleanWorkspaces(in.WorkspaceIDs)
+		if err != nil {
+			return nil, err
+		}
 		patch.WorkspaceIDs = &ws
 	}
 	nowMs := s.nowMs()
@@ -664,6 +693,9 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 		g, h, err := s.lockGrant(ctx, tx, account.AccountID, in.GrantID)
 		if err != nil {
 			return err
+		}
+		if patch.WorkspaceIDs != nil && len(*patch.WorkspaceIDs) == 0 && g.SubjectKind == saas.GrantSubjectGuest && g.TeamID != "" {
+			return core.Fail(gen.ErrBadRequest) // 团队 guest 不能改成整台主机
 		}
 		accounts, err := s.affected(ctx, tx, g)
 		if err != nil {
@@ -750,7 +782,7 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 
 // ---- grant.expire ----
 
-// expire 是 grant.expire：到期那一刻写 revoked_at_ms（revoked_by = system），撤销受影响账号在这台主机上的已签令牌并踢人。
+// expire 是 grant.expire：到期那一刻写 revoked_at_ms（revoked_by = system），对权限真正收窄的账号撤销他在这台主机上的已签令牌并踢人。
 // 可重放：授予已撤销、到期时间被改到以后就直接结束。
 func (s *Service) expire(ctx context.Context, job saas.Job) error {
 	var payload expirePayload
@@ -780,11 +812,20 @@ func (s *Service) expire(ctx context.Context, job saas.Job) error {
 		if err != nil {
 			return err
 		}
+		// 「之前」取到期前一毫秒（授予还生效），「之后」取此刻（授予已撤销）：只撤真正收窄的账号，
+		// 另有来路（别的授予、所有者）而权限没变的人不受牵连。
+		before, err := s.snapshotAt(ctx, tx, g.SourceID, accounts, *g.ExpiresAtMs-1)
+		if err != nil {
+			return err
+		}
 		if ok, err := tx.Grants().Revoke(ctx, s.tenant(), g.GrantID, saas.GrantRevokedBySystem, nowMs); err != nil || !ok {
 			return err
 		}
-		// 到期之后重新签的令牌按新权限来；已签的一律撤（令牌里的 role / scp 还是旧的）。
-		s.revokeAccess(tx, g.SourceID, accounts, "grant_expired")
+		after, err := s.snapshot(ctx, tx, g.SourceID, accounts)
+		if err != nil {
+			return err
+		}
+		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_expired")
 		return s.record(ctx, tx, "", saas.ActorSystem, "", g.TeamID, g.SourceID, ActionExpire, "grant", g.GrantID)
 	})
 }
