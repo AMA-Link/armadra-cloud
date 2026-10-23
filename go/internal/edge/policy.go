@@ -69,8 +69,8 @@ type PolicyOptions struct {
 type Gate interface {
 	// Refuse 在验令牌之前判断（事故开关开着时答 limit_reached）；答空串放行。只读本地状态，不做 I/O。
 	Refuse() gen.ErrorCode
-	// Admit 在通道开成之前占名额。放行时 release 非空，连接结束时恰好调一次（可能做网络 I/O，
-	// 不在 epoll 循环里调）；被拒时答错误码；err 非空按 503 处理。
+	// Admit 在通道开成之前占名额。放行时 release 非空，连接结束时恰好调一次；release 可能在 epoll
+	// 循环上调用，必须立即返回（网络 I/O 自己投递到别的协程）。被拒时答错误码；err 非空按 503 处理。
 	Admit(ctx context.Context, in GateInput) (release func(), code gen.ErrorCode, err error)
 }
 
@@ -315,15 +315,14 @@ func (p *Policy) Release(d Decision) {
 	}
 }
 
-// ReleaseUpgradeAsync 同 ReleaseUpgrade（另还 extra，可为空），但投递给工作协程立即返回：epoll 循环的
-// 回调用它，控制面（redis / postgres）的网络 I/O 不会拖住整条循环。同一个账号的调用保持顺序。
+// ReleaseUpgradeAsync 同 ReleaseUpgrade，但投递给工作协程立即返回：epoll 循环的回调用它，
+// 控制面（redis / postgres）的网络 I/O 不会拖住整条循环。同一个账号的调用保持顺序。
+// extra（Gate 的名额，可为空）直接调用：Gate 的释放自己投递、立即返回，不占账号并发的队列。
 func (p *Policy) ReleaseUpgradeAsync(subject string, extra func()) {
-	p.dispatch.Go(subject, func() {
-		p.ReleaseUpgrade(subject)
-		if extra != nil {
-			extra()
-		}
-	})
+	p.dispatch.Go(subject, func() { p.ReleaseUpgrade(subject) })
+	if extra != nil {
+		extra()
+	}
 }
 
 // Close 排空并释放自建的工作协程（调用方给的 Dispatcher 归调用方）。关闭之后的投递仍会执行。
@@ -487,7 +486,8 @@ func (p *Policy) Take(f ConnectionFilter) []Handle {
 		if f.Subject != "" && c.subject != f.Subject {
 			continue
 		}
-		if f.DeviceID != "" && c.device != f.DeviceID {
+		// 按设备踢：连接没带 dev 的（老令牌）也踢，宁多踢不漏踢。
+		if f.DeviceID != "" && c.device != "" && c.device != f.DeviceID {
 			continue
 		}
 		delete(p.conns, h)
