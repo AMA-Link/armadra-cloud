@@ -340,3 +340,48 @@ func TestStepUpWithTOTPForOperators(t *testing.T) {
 	other := r.registerBearer(r.email())
 	r.expect(r.do("POST", "/v1/auth/step-up", map[string]any{"totpCode": "123456"}, other.bearer()), 401, "mfa_invalid")
 }
+
+// auth.stepUp 的 totpCode 另按账号计 mfa.acct（与 auth.mfaVerify 共用一个桶）：换设备猜码也逃不掉。
+func TestStepUpTOTPIsRateLimitedPerAccount(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	op := r.operatorAccount()
+	var sessions []session
+	for i := 0; i < 6; i++ { // 每台设备的 stepup.dev 额度是 10，不会先触发
+		res := r.do("POST", "/v1/auth/login", map[string]any{"account": op.email, "password": password, "device": device}, nil)
+		r.expect(res, 200, "")
+		sessions = append(sessions, parseSession(r, res))
+	}
+	attempts := 0
+	for attempts < 10 {
+		r.expect(r.do("POST", "/v1/auth/step-up", map[string]any{"totpCode": "000000"}, sessions[attempts%6].bearer()), 401, "mfa_invalid")
+		attempts++
+	}
+	res := r.do("POST", "/v1/auth/step-up", map[string]any{"totpCode": r.code(op, 0)}, sessions[0].bearer())
+	r.expect(res, 429, "rate_limited")
+	// 口令提权不受这个桶影响。
+	r.expect(r.do("POST", "/v1/auth/step-up", map[string]any{"password": password}, sessions[1].bearer()), 200, "")
+}
+
+// operators totp --reset 换种子的同一事务里撤销该账号的运营会话；普通会话不受影响；首次登记不撤。
+func TestResetTOTPRevokesOperatorSessions(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	op := r.operatorAccount()
+	ops := r.operatorLogin(op, false)
+	normal := parseSession(r, r.do("POST", "/v1/auth/login", map[string]any{"account": op.email, "password": password, "device": device}, nil))
+	r.expect(r.do("GET", "/v1/admin/incident", nil, ops.bearer()), 200, "")
+
+	env := config.MapEnv{"ARMADRA_CLOUD_DATABASE_URL": r.cfg.DatabaseURL, "ARMADRA_CLOUD_MASTER_KEY": masterHex}
+	var out, errOut bytes.Buffer
+	if code := cli.Run([]string{"operators", "totp", "--email", op.email, "--reset"}, env, &out, &errOut, cli.Options{Version: "test", Now: r.clock.Now}); code != 0 {
+		t.Fatalf("--reset：%d %s", code, errOut.String())
+	}
+	r.expect(r.do("GET", "/v1/admin/incident", nil, ops.bearer()), 401, "")
+	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": ops.refresh, "scope": "operator"}, nil), 401, "session_revoked")
+	r.expect(r.do("GET", "/v1/me", nil, normal.bearer()), 200, "")
+	if n := r.queryInt("SELECT count(*)::int FROM devices WHERE subject = $1 AND scope = 'operator' AND revoked_at_ms IS NULL", op.accountID); n != 0 {
+		t.Fatalf("运营设备都撤了：%d", n)
+	}
+	// 新种子可以登录。
+	fresh := opAccount{email: op.email, accountID: op.accountID, seed: seedFromURI(t, out.String()[strings.Index(out.String(), "otpauth://"):])}
+	r.operatorLogin(fresh, false)
+}
