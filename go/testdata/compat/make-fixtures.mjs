@@ -18,8 +18,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { stateToSnapshot } from "../../../apps/relay/src/personal/snapshot.ts";
-import { stateSchema } from "../../../apps/relay/src/personal/state.ts";
+import { stateToSnapshot } from "./snapshot.ts";
+import { stateSchema } from "./state-schema.ts";
 import { openDatabase } from "../../../packages/control-store-sqlite/src/open.ts";
 import { createSqlitePorts } from "../../../packages/control-store-sqlite/src/ports.ts";
 import { importTenant as importSqlite } from "../../../packages/control-store-sqlite/src/tenants.ts";
