@@ -53,6 +53,7 @@ import {
   DOMAIN,
   echo,
   freePort,
+  metric,
   redisClient,
 } from "./saas-nodes.mjs";
 
@@ -75,6 +76,7 @@ export async function runSaasE2e({ root, report }) {
   const nodes = {};
   const cores = [];
   const sockets = [];
+  const containerNames = [];
   let cloud;
   let redis;
   let adminRedis;
@@ -165,28 +167,32 @@ export async function runSaasE2e({ root, report }) {
             cwd: join(root, "go"),
           });
         }
-        containers.push(
-          await startContainer(pgName, IMAGES.postgres, [[ports.pg, 5432]], {
-            POSTGRES_USER: "armadra",
-            POSTGRES_PASSWORD: pgPassword,
-            POSTGRES_DB: "armadra_cloud",
-          }),
-          await startContainer(
-            redisName,
-            IMAGES.redis,
-            [[ports.redis, 6379]],
-            {},
-            ["redis-server", "--save", "", "--appendonly", "no"],
-          ),
-          await startContainer(
-            `armadra-e2e-saas-mail-${tag}`,
-            IMAGES.mailpit,
-            [
-              [ports.smtp, 1025],
-              [ports.mail, 8025],
-            ],
-            {},
-          ),
+        const launch = async (name, image, portMap, env, args) => {
+          containerNames.push(name);
+          containers.push(
+            await startContainer(name, image, portMap, env, args),
+          );
+        };
+        await launch(pgName, IMAGES.postgres, [[ports.pg, 5432]], {
+          POSTGRES_USER: "armadra",
+          POSTGRES_PASSWORD: pgPassword,
+          POSTGRES_DB: "armadra_cloud",
+        });
+        await launch(redisName, IMAGES.redis, [[ports.redis, 6379]], {}, [
+          "redis-server",
+          "--save",
+          "",
+          "--appendonly",
+          "no",
+        ]);
+        await launch(
+          `armadra-e2e-saas-mail-${tag}`,
+          IMAGES.mailpit,
+          [
+            [ports.smtp, 1025],
+            [ports.mail, 8025],
+          ],
+          {},
         );
         redis = { url: `redis://127.0.0.1:${ports.redis}` };
         await until(
@@ -295,72 +301,71 @@ export async function runSaasE2e({ root, report }) {
       },
     );
 
+    // 起一个节点（节点令牌由控制面签）；场景 13 还要再起一个新节点 c 接同一个 Redis。
+    const startRelay = async (name) => {
+      const { stdout } = await runCli(
+        cloudBin,
+        ["nodes", "token", "--node", name],
+        cloudEnv,
+      );
+      const token = secret(stdout.trim(), `节点 ${name} 的节点令牌`);
+      const port = await freePort();
+      const metricsPort = await freePort();
+      const proc = startProcess(`relay-${name}`, relayBin, ["saas", "serve"], {
+        RELAY_LISTEN: `127.0.0.1:${port}`,
+        RELAY_NODE_ID: name,
+        RELAY_DOMAIN: DOMAIN,
+        RELAY_CLOUD_ISSUER: base,
+        RELAY_REDIS_URL: redis.url,
+        RELAY_TUNNEL_URL: `ws://127.0.0.1:${port}/t/v1`,
+        RELAY_ALLOW_INSECURE_TUNNEL: "1",
+        RELAY_NODE_TOKEN: token,
+        RELAY_DATABASE_URL: `postgres://armadra_relay_traffic:${trafficPassword}@127.0.0.1:${ports.pg}/armadra_cloud`,
+        RELAY_METRICS_LISTEN: `127.0.0.1:${metricsPort}`,
+        RELAY_METRICS_TOKEN: metricsToken,
+        RELAY_DRAIN_GRACE_MS: "3000",
+        RELAY_LOG_LEVEL: "debug",
+      });
+      const node = {
+        ...proc,
+        name,
+        origin: `http://127.0.0.1:${port}`,
+        tunnelUrl: `ws://127.0.0.1:${port}/t/v1`,
+        metrics: async () => {
+          const response = await fetch(
+            `http://127.0.0.1:${metricsPort}/metrics`,
+            {
+              headers: { authorization: `Bearer ${metricsToken}` },
+            },
+          );
+          expectEqual(response.status, 200, `${name} 的 /metrics`);
+          return response.text();
+        },
+      };
+      nodes[name] = node;
+      await until(
+        `节点 ${name} 就绪`,
+        async () => {
+          if (!node.running)
+            throw new Error(
+              `节点 ${name} 提前退出：${redact(node.logs.join("").slice(-1200))}`,
+            );
+          try {
+            return (await fetch(`${node.origin}/ready`)).ok;
+          } catch {
+            return false;
+          }
+        },
+        30_000,
+        200,
+      );
+      return node;
+    };
+
     await report.step(
       "节点令牌（nodes token）与两个节点：节点表各一项，url 是各自的隧道地址",
       async () => {
-        for (const name of ["a", "b"]) {
-          const { stdout } = await runCli(
-            cloudBin,
-            ["nodes", "token", "--node", name],
-            cloudEnv,
-          );
-          const token = secret(stdout.trim(), `节点 ${name} 的节点令牌`);
-          const port = await freePort();
-          const metricsPort = await freePort();
-          const proc = startProcess(
-            `relay-${name}`,
-            relayBin,
-            ["saas", "serve"],
-            {
-              RELAY_LISTEN: `127.0.0.1:${port}`,
-              RELAY_NODE_ID: name,
-              RELAY_DOMAIN: DOMAIN,
-              RELAY_CLOUD_ISSUER: base,
-              RELAY_REDIS_URL: redis.url,
-              RELAY_TUNNEL_URL: `ws://127.0.0.1:${port}/t/v1`,
-              RELAY_ALLOW_INSECURE_TUNNEL: "1",
-              RELAY_NODE_TOKEN: token,
-              RELAY_DATABASE_URL: `postgres://armadra_relay_traffic:${trafficPassword}@127.0.0.1:${ports.pg}/armadra_cloud`,
-              RELAY_METRICS_LISTEN: `127.0.0.1:${metricsPort}`,
-              RELAY_METRICS_TOKEN: metricsToken,
-              RELAY_DRAIN_GRACE_MS: "3000",
-              RELAY_LOG_LEVEL: "debug",
-            },
-          );
-          const node = {
-            ...proc,
-            name,
-            origin: `http://127.0.0.1:${port}`,
-            tunnelUrl: `ws://127.0.0.1:${port}/t/v1`,
-            metrics: async () => {
-              const response = await fetch(
-                `http://127.0.0.1:${metricsPort}/metrics`,
-                {
-                  headers: { authorization: `Bearer ${metricsToken}` },
-                },
-              );
-              expectEqual(response.status, 200, `${name} 的 /metrics`);
-              return response.text();
-            },
-          };
-          nodes[name] = node;
-          await until(
-            `节点 ${name} 就绪`,
-            async () => {
-              if (!node.running)
-                throw new Error(
-                  `节点 ${name} 提前退出：${redact(node.logs.join("").slice(-1200))}`,
-                );
-              try {
-                return (await fetch(`${node.origin}/ready`)).ok;
-              } catch {
-                return false;
-              }
-            },
-            30_000,
-            200,
-          );
-        }
+        for (const name of ["a", "b"]) await startRelay(name);
         await until(
           "节点表有 a、b",
           async () => (await adminRedis.command("HLEN", "relay:nodes")) === 2,
@@ -525,13 +530,16 @@ export async function runSaasE2e({ root, report }) {
       relayToken: secret(res.body.relayToken, "中继令牌"),
       relay: decodePart(res.body.relayToken),
     });
-    const closedWithin = (ws, what, ms = 20_000) =>
-      Promise.race([
+    const closedWithin = (ws, what, ms = 20_000) => {
+      const waiting = Promise.race([
         closeOf(ws),
         sleep(ms).then(() =>
           Promise.reject(new Error(`${what}：通道没被关掉`)),
         ),
       ]);
+      waiting.catch(() => {}); // 先挂空处理，避免没走到 await 时 unhandledRejection 打崩清理
+      return waiting;
+    };
     const events = { a: undefined };
 
     /* ---------- 场景 1 ---------- */
@@ -563,7 +571,6 @@ export async function runSaasE2e({ root, report }) {
         await verifyEmail(A);
         const me = await A.expectCall("me.get", 200, "", "GET", "/v1/me");
         expectEqual(me.body.emailVerified, true, "emailVerified");
-        // 重发后旧链接失效（设计 §8.3）：已验证的账号重发是空操作，这里只验证 resend 不报错。
         events.a = await openStream(A);
       },
     );
@@ -847,7 +854,7 @@ export async function runSaasE2e({ root, report }) {
         opened.ws.close(1000);
         await closeOf(opened.ws);
         expect(
-          (await nodes.b.metrics()).includes("relay_routes_remote_total"),
+          metric(await nodes.b.metrics(), "relay_routes_remote_total") >= 1,
           "b 走了节点间转发",
         );
         // 流量最终出现在 b 的行上、team_id = T，a 上没有这个源的 e2e 行（节点每 60 秒落库，晚点再收口）。
@@ -1296,11 +1303,47 @@ export async function runSaasE2e({ root, report }) {
       },
     );
 
+    // 逐键转储 Redis（场景 13 清空前后各一份，场景 14 都扫）。
+    const dumpRedis = async () => {
+      const out = [];
+      let cursor = "0";
+      do {
+        const [next, keys] = await adminRedis.command(
+          "SCAN",
+          cursor,
+          "COUNT",
+          "1000",
+        );
+        cursor = next;
+        for (const key of keys) {
+          const type = await adminRedis.command("TYPE", key);
+          out.push(key);
+          if (type === "string")
+            out.push(String(await adminRedis.command("GET", key)));
+          else if (type === "hash")
+            out.push((await adminRedis.command("HGETALL", key)).join("\n"));
+          else if (type === "zset")
+            out.push(
+              (await adminRedis.command("ZRANGE", key, 0, -1)).join("\n"),
+            );
+          else if (type === "set")
+            out.push((await adminRedis.command("SMEMBERS", key)).join("\n"));
+          else if (type === "list")
+            out.push(
+              (await adminRedis.command("LRANGE", key, 0, -1)).join("\n"),
+            );
+        }
+      } while (cursor !== "0");
+      return out;
+    };
+    let redisBeforeWipe = [];
+
     /* ---------- 场景 13 ---------- */
     await report.step(
       "场景 13：撤销后重启 Redis（数据清空）→ 控制面重放，B 的旧中继令牌仍被拒",
       async () => {
         const jtis = [bToken1.jti, bToken2.jti];
+        redisBeforeWipe = await dumpRedis();
         adminRedis.close();
         await exec("docker", ["restart", "-t", "1", redisName]);
         await until(
@@ -1330,17 +1373,20 @@ export async function runSaasE2e({ root, report }) {
           60_000,
           500,
         );
+        // 节点内存里的撤销表是并集、不会被 Redis 清空洗掉，所以另起一个新节点 c 接同一个 Redis：
+        // 它只能靠控制面重放回 Redis 的撤销记录拒绝旧令牌。
+        const fresh = await startRelay("c");
         for (const token of [bToken1.relayToken, bToken2.relayToken]) {
           await until(
-            "重放后旧令牌仍被拒 4401",
-            async () => (await channel(nodes.b, H1.id, token)).code === 4401,
+            "新节点 c 上旧令牌被拒 4401",
+            async () => (await channel(fresh, H1.id, token)).code === 4401,
             30_000,
             300,
           );
           expectEqual(
-            (await channel(nodes.a, H1.id, token)).code,
+            (await channel(nodes.b, H1.id, token)).code,
             4401,
-            "a 上的旧令牌",
+            "b 上的旧令牌",
           );
         }
         // a 在场景 12 排空了（/ready 按设计不就绪），所以只看控制面与 b；b 的节点表项要在 Redis 清空后重新写回。
@@ -1378,8 +1424,16 @@ export async function runSaasE2e({ root, report }) {
     await report.step(
       "场景 14：泄密扫描：日志、库转储、Redis 转储里没有登记过的令牌、口令、邮件令牌",
       async () => {
-        await nodes.b.stop();
-        await nodes.a.stop();
+        for (const node of Object.values(nodes)) await node.stop();
+        // 节点退出时最后 Flush：此时 a 上没有这个源的流量行（场景 5 的轮询只能在落库前后某个时刻看到）。
+        const finalRows = await psql(
+          `SELECT node, team_id FROM relay_traffic_buckets WHERE source_id = '${H1.id}'`,
+        );
+        expect(
+          finalRows.length >= 1 &&
+            finalRows.every(([node, team]) => node === "b" && team === teamId),
+          `最终流量行：${JSON.stringify(finalRows)}`,
+        );
         const dump = (
           await exec("docker", [
             "exec",
@@ -1392,39 +1446,7 @@ export async function runSaasE2e({ root, report }) {
             "--data-only",
           ])
         ).stdout;
-        const redisText = [];
-        let cursor = "0";
-        do {
-          const [next, keys] = await adminRedis.command(
-            "SCAN",
-            cursor,
-            "COUNT",
-            "1000",
-          );
-          cursor = next;
-          for (const key of keys) {
-            const type = await adminRedis.command("TYPE", key);
-            redisText.push(key);
-            if (type === "string")
-              redisText.push(String(await adminRedis.command("GET", key)));
-            else if (type === "hash")
-              redisText.push(
-                (await adminRedis.command("HGETALL", key)).join("\n"),
-              );
-            else if (type === "zset")
-              redisText.push(
-                (await adminRedis.command("ZRANGE", key, 0, -1)).join("\n"),
-              );
-            else if (type === "set")
-              redisText.push(
-                (await adminRedis.command("SMEMBERS", key)).join("\n"),
-              );
-            else if (type === "list")
-              redisText.push(
-                (await adminRedis.command("LRANGE", key, 0, -1)).join("\n"),
-              );
-          }
-        } while (cursor !== "0");
+        const redisText = [...redisBeforeWipe, ...(await dumpRedis())];
         const haystacks = {
           控制面日志: cloud.logs.join(""),
           节点日志: Object.values(nodes)
@@ -1438,7 +1460,7 @@ export async function runSaasE2e({ root, report }) {
           for (const [value, label] of secretEntries())
             if (text.includes(value)) leaks.push(`${where}：${label}`);
         expectEqual(leaks.join("；"), "", "泄露的秘密");
-        return `库转储 ${dump.length} 字节，Redis ${redisText.length} 段`;
+        return `库转储 ${dump.length} 字节，Redis ${redisText.length} 段（清空前后各一份）`;
       },
     );
   } catch (error) {
@@ -1455,6 +1477,9 @@ export async function runSaasE2e({ root, report }) {
     await cloud?.stop().catch(() => {});
     adminRedis?.close();
     for (const container of containers) await container.stop();
+    // 兜底：startContainer 中途失败时，按预定名字清理自己起的容器。
+    for (const name of containerNames)
+      await exec("docker", ["rm", "-f", "-v", name], { allowFail: true });
     if (work) rmSync(work, { recursive: true, force: true });
     await sleep(0);
   }
