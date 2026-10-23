@@ -1,37 +1,36 @@
 # armadra-cloud
 
-Armadra 平台的服务端：控制面 `apps/cloud`、中继 `apps/relay`（Node）与 `apps/relay-workers`（Cloudflare Workers），以及两仓共用的协议包 `@armadra/platform-protocol`。MIT 许可。
+Armadra 平台的服务端：控制面 `apps/cloud`、中继 `go/`（Go，`armadra-relay`）与 `apps/relay-workers`（Cloudflare Workers），以及两仓共用的协议包 `@armadra/platform-protocol`。MIT 许可。
 
 中继有两种运行模式：
 
 - **saas**：多租户，配合控制面、PostgreSQL 与 Redis。
-- **personal**：单人中转，一个进程、不带外部数据库（状态在数据目录里的 SQLite 或状态文件）。
+- **personal**：单人中转，一个进程、不带外部数据库（状态在数据目录里的 SQLite）。
 
 ## 目录
 
-| 路径                             | 内容                                                                                            |
-| -------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `apps/cloud`                     | 控制面（`armadra-cloud`）                                                                       |
-| `apps/relay`                     | 中继（`armadra-relay`）                                                                         |
-| `packages/platform-protocol`     | 协议包：隧道帧、断言、`/v1` 契约、错误码、身份参数、夹具                                        |
-| `packages/relay-kernel`          | 中继内核：隧道、边缘判定、限流、令牌校验（运行时无关）                                          |
-| `packages/relay-runtime-node`    | 中继的 Node 运行时：`ws`、HTTP 外壳、clientIp、`startRelay`                                     |
-| `packages/relay-runtime-workers` | 中继的 Workers 运行时：Worker 入口、`SourceDO`、`ControlDO`、DO SQLite                          |
-| `apps/relay-workers`             | Workers 中继的 wrangler 项目（`relay.armadra.com`）                                             |
-| `packages/control-store-sql`     | SQLite 迁移与账本判定（Node 与 DO SQLite 共用）                                                 |
-| `packages/control-store-sqlite`  | 控制核端口的 SQLite 实现（`node:sqlite`，可移植部分 Workers 复用）                              |
-| `packages/control-core`          | 控制核：存储端口、账号 / 会话 / 源 / 链接服务、`/v1` 路由                                       |
-| `packages/cloud-shared`          | 内部共享：配置、日志、健康检查、HTTP、JWS、PostgreSQL 与 Redis                                  |
-| `deploy/`                        | compose 与部署说明（[deploy/README.md](deploy/README.md)）                                      |
-| `docs/`                          | 契约与运维文档（[索引](docs/README.md)）                                                        |
-| `tools/`                         | 仓库校验、契约生成、工作流校验、第三方声明                                                      |
-| `go/`                            | 中继 Go 重写（#59）：协议、JWS 与身份算法、存储（SQLite / PostgreSQL）、控制核服务与 `/v1` 路由 |
+| 路径                             | 内容                                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `apps/cloud`                     | 控制面（`armadra-cloud`）                                                                                     |
+| `packages/platform-protocol`     | 协议包：隧道帧、断言、`/v1` 契约、错误码、身份参数、夹具                                                      |
+| `packages/relay-kernel`          | 中继内核：隧道、边缘判定、限流、令牌校验（运行时无关）                                                        |
+| `packages/e2e-fake-core`         | 端到端的假 core（Node `http` + `ws` 的隧道客户端），给 `pnpm e2e` 的 saas / workers 模式用                    |
+| `packages/relay-runtime-workers` | 中继的 Workers 运行时：Worker 入口、`SourceDO`、`ControlDO`、DO SQLite                                        |
+| `apps/relay-workers`             | Workers 中继的 wrangler 项目（`relay.armadra.com`）                                                           |
+| `packages/control-store-sql`     | SQLite 迁移与账本判定（Go 中继与 DO SQLite 共用）                                                             |
+| `packages/control-store-sqlite`  | 控制核端口的 SQLite 实现（`node:sqlite`，可移植部分 Workers 复用）                                            |
+| `packages/control-core`          | 控制核：存储端口、账号 / 会话 / 源 / 链接服务、`/v1` 路由                                                     |
+| `packages/cloud-shared`          | 内部共享：配置、日志、健康检查、HTTP、JWS、PostgreSQL 与 Redis                                                |
+| `deploy/`                        | compose 与部署说明（[deploy/README.md](deploy/README.md)）                                                    |
+| `docs/`                          | 契约与运维文档（[索引](docs/README.md)）                                                                      |
+| `tools/`                         | 仓库校验、契约生成、工作流校验、第三方声明                                                                    |
+| `go/`                            | 中继（`armadra-relay`，#59 的 Go 重写）：协议、JWS 与身份算法、存储、控制核服务、`/v1` 路由、数据面、个人中转 |
 
 ## 准备
 
 - Node ≥ 24（原生类型剥离，开发态直接跑 `.ts`）
 - pnpm 12.8.1（`corepack enable`）
-- Go 1.27.1（只有 `go/` 和第三方声明要用；`go:check`、`notices` 需要）
+- Go 1.27.1（中继在 `go/`：`relay:personal`、`dev`、`go:check`、`notices` 与镜像之外的本地运行都要）
 - Docker（只用于本地 PostgreSQL / Redis 与镜像构建）
 
 ```sh
@@ -53,7 +52,7 @@ Armadra 的页面产物（`apps/web/dist`）在 `ARMADRA_WEB_DIST` 或 `../Armad
 
 子命令：`personal init | serve | status | passwd | rotate-key | links list|revoke | traffic | migrate | backup | doctor`（`armadra-relay personal --help`）。一个账号（地址 + 账号 + 口令），状态只有 `<data-dir>/relay.db`（新装缺省，`--store sqlite`）（0.3.x 之前的 `<data-dir>/state.json` 先用 `personal migrate --to sqlite` 迁过去）：账号、口令哈希、签名钥、源 / 设备 / 链接登记，不存任何消息内容，见[运维手册](docs/runbooks/personal-storage.md)。TLS 缺省自签 CA，可选 ACME 或文件证书。接口见[契约](docs/contracts/cloud-api.md) §10–§11。
 
-中继是 Go 实现（`go/cmd/armadra-relay`；0.10.0 之前的 Node 版 `apps/relay/src` 留到下一版删除）。容器：`docker build -f apps/relay/Dockerfile -t ghcr.io/ama-link/armadra-relay:local .`，之后 `docker run --rm ghcr.io/ama-link/armadra-relay:local personal --help`；部署按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。
+中继是 Go 实现（`go/cmd/armadra-relay`；0.10.0 之前的 Node 版已删除）。容器：`docker build -f go/Dockerfile -t ghcr.io/ama-link/armadra-relay:local .`，之后 `docker run --rm ghcr.io/ama-link/armadra-relay:local personal --help`；部署按 [deploy/personal/compose.yml](deploy/personal/compose.yml) 的注释起。
 
 ## Cloudflare Workers 上的个人中转
 

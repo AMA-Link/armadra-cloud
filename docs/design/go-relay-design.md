@@ -406,6 +406,24 @@ G6 只管怎么落地：
 | Q6  | 运行镜像底座：`debian:bookworm-slim` + tini，还是 distroless static                   | distroless static（没有 shell，体积小）；需要排障时用调试镜像。G4 为保持入口逐项一致暂用 bookworm-slim，distroless 留到 G4.1 再评估 |
 | Q7  | 线上 `relay.armadra.com` 要不要换成 Go 节点                                           | 先不换（D2，Workers 继续服务）；Go 节点在 SaaS 域名上线并稳定后再评估                                                               |
 
+### G4.1 的 Q6 评估结论：换 distroless static
+
+2026-10-23 在 `go/Dockerfile` 上实测，结论是换，已随 G4.1 落地（`gcr.io/distroless/static-debian12`）。
+
+| 项           | bookworm-slim + tini（0.10.0）        | distroless static                                               |
+| ------------ | ------------------------------------- | --------------------------------------------------------------- |
+| 镜像体积     | 106 MB                                | 22.8 MB                                                         |
+| 入口         | `tini -- armadra-relay`               | `armadra-relay`（Go 当 PID 1，不起子进程，不需要回收僵尸进程）  |
+| 健康检查     | `armadra-relay health`（exec 形式）   | 同；不依赖 shell 与 curl                                        |
+| 运行用户     | 镜像内建 `armadra`（uid / gid 10002） | `USER 10002:10002`，无 passwd 条目；`/data` 在镜像里先 chown    |
+| `/data` 卷   | 命名卷首次挂载继承目录属主            | 同（实测命名卷可写，`personal init` / `serve` 正常）            |
+| 优雅停止     | SIGTERM 经 tini 转发                  | `docker stop` 约 1 秒退出、退出码 0（Go 自己处理 SIGTERM）      |
+| CA 证书      | `apt-get install ca-certificates`     | 镜像自带；ACME 与 HTTPS 出站不受影响                            |
+| 排障         | `exec relay sh`                       | 没有 shell；子命令（`status`、`doctor`、`traffic`…）照常 `exec` |
+| 构建依赖外网 | 构建时 `apt-get`                      | 构建时只拉基础镜像，不再 `apt-get`                              |
+
+可接受的理由：运维用到的全是 `armadra-relay` 子命令，`exec relay armadra-relay …` 照用；没有 shell 的损失只在临场排障，用 `docker run --rm -it --network container:<名> --pid container:<名> busybox` 或 `docker debug` 补，`go/Dockerfile` 头注释写了办法。`pnpm e2e --mode personal` 对 distroless 镜像全部通过。回滚到 0.10.0 或更早的镜像不受影响（镜像是自包含的，入口各用各的）。
+
 ## §10 与旧方案的关系
 
 | 旧方案                                                                                                   | 处理                                                           |

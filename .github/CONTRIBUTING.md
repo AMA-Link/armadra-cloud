@@ -38,7 +38,7 @@ docs(contract): cloud-api §12 媒体票
 ```
 
 - 类型 / Types：`feat`、`fix`、`docs`、`test`、`refactor`、`perf`、`build`、`chore`、`ci`、`release`、`revert`。
-- 范围 / Scopes：模块或目录名，例如 `relay`、`cloud`、`relay-kernel`、`relay-runtime-node`、`relay-runtime-workers`、`relay-workers`、`control-core`、`platform-protocol`、`cloud-shared`、`contract`、`deploy`、`e2e`、`changelog`；跨两处用逗号，例如 `test(relay,e2e)`。 / A module or directory name; join two with a comma.
+- 范围 / Scopes：模块或目录名，例如 `relay`、`cloud`、`relay-kernel`、`relay-runtime-workers`、`relay-workers`、`control-core`、`platform-protocol`、`cloud-shared`、`contract`、`deploy`、`e2e`、`changelog`；跨两处用逗号，例如 `test(relay,e2e)`。 / A module or directory name; join two with a comma.
 - 一个模块连同它的测试一个提交；不要在提交信息里加生成说明或自动署名。 / One commit per module together with its tests; no generated notes or automatic trailers.
 
 ## 提交 PR / Opening pull requests
@@ -51,7 +51,7 @@ docs(contract): cloud-api §12 媒体票
 
 ## 本仓库的约束 / Repository rules
 
-- `apps/relay` 不 import `apps/cloud`；两个 app 都不 import Armadra 源码，往来只经 `@armadra/platform-protocol` 与容器镜像。 / `apps/relay` never imports `apps/cloud`; neither app imports Armadra sources, and everything shared goes through `@armadra/platform-protocol` and container images.
+- 中继的包不 import `apps/cloud`；各 app 都不 import Armadra 源码，往来只经 `@armadra/platform-protocol` 与容器镜像。 / Relay packages never import `apps/cloud`; no app imports Armadra sources, and everything shared goes through `@armadra/platform-protocol` and container images.
 - 中继与控制面都不持久化、不记录流正文、终端输出、画布内容、口令与令牌明文。 / Neither the relay nor the control plane persists or logs stream bodies, terminal output, canvas content, passwords or plaintext tokens.
 - `personal` 模式与其入口（`pnpm relay:personal`、`deploy/personal/compose.yml`）不依赖 PostgreSQL / Redis。SaaS 业务路由只预留，答 501 `not_implemented`。 / `personal` mode and its entry points do not depend on PostgreSQL / Redis. SaaS business routes are reserved and answer 501 `not_implemented`.
 - 改接口形状先改协议包，再 `pnpm contract:generate`；[契约](../docs/contracts/cloud-api.md)已有 §N 不改号，新增节往后加。 / Change shapes in the protocol package first, then run `pnpm contract:generate`; keep existing §N numbers in the [contract](../docs/contracts/cloud-api.md) and append new sections.

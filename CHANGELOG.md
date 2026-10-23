@@ -1,5 +1,17 @@
 # Changelog
 
+## 未发布 / Unreleased
+
+### 变更 / Changed
+
+- 中继镜像 Dockerfile 从 `apps/relay/Dockerfile` 挪到 `go/Dockerfile`，运行底座从 `debian:bookworm-slim` + tini 换成 distroless static（Refs #59，G4.1；106 MB 降到 22.8 MB，入口 `armadra-relay`，uid 10002、`/data`、8443、健康检查不变；没有 shell，排障办法见 `go/Dockerfile` 头注释）。`pnpm dev` 的 relay 改起 Go 二进制。
+  The relay image Dockerfile moves from `apps/relay/Dockerfile` to `go/Dockerfile` and the runtime base changes from `debian:bookworm-slim` + tini to distroless static (Refs #59, G4.1; 106 MB down to 22.8 MB, entrypoint `armadra-relay`; uid 10002, `/data`, port 8443 and the health check are unchanged; there is no shell, see the header of `go/Dockerfile` for troubleshooting). The relay in `pnpm dev` now runs the Go binary.
+
+### 移除 / Removed
+
+- 删除 TypeScript 版个人中转 `apps/relay` 与 `packages/relay-runtime-node`（Refs #59，G4.1）；`relay-kernel`、`control-core`、`control-store-*` 留给 Workers 版。随之去掉只被它们用的 `acme-client` 补丁与 `follow-redirects` 覆盖，第三方声明少了约 45 个包。端到端的假 core 拆成 `packages/e2e-fake-core`，兼容夹具生成脚本自带最小的状态结构。
+  Removed the TypeScript personal relay `apps/relay` and `packages/relay-runtime-node` (Refs #59, G4.1); `relay-kernel`, `control-core` and `control-store-*` stay for the Workers relay. The `acme-client` patch and the `follow-redirects` override that only they needed are gone, and the third-party notices drop about 45 packages. The e2e fake core becomes `packages/e2e-fake-core`, and the compat fixture generator carries its own minimal state schema.
+
 ## 0.10.0（2026-10-23）
 
 ### 新增 / Added
