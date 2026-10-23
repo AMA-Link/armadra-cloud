@@ -83,6 +83,8 @@ type GrantExtra struct {
 	Link   *gen.AssertionClaimsLink
 	Device *DeviceInput
 	Scope  *store.LinkScope
+	// Scp 非 nil 时直接作断言的 scp，取代 Scope 换出的（SaaS 的授予可以限在多个工作空间；空切片 = 整台主机）。
+	Scp []string
 	// Team 是团队主机的团队与调用者在团队里的角色：进断言的 team 声明，teamId 也进中继令牌。
 	Team *gen.AssertionClaimsTeam
 	// Role 是有效角色（断言的 role 声明）；空 = 不带。
@@ -141,6 +143,9 @@ func (s *Sources) Grant(ctx context.Context, source store.SourceRecord, device s
 		return Grant{}, err
 	}
 	scp := ScopeClaims(extra.Scope)
+	if extra.Scp != nil {
+		scp = extra.Scp
+	}
 	readOnly := false
 	for _, entry := range scp {
 		readOnly = readOnly || entry == gen.ScopeReadOnly
@@ -406,6 +411,8 @@ func (s *Sources) List(ctx context.Context, caller Caller) ([]SourceSummary, err
 		return nil, err
 	}
 	var visible []VisibleSource
+	// 循环取页直到 next 为空；策略实现若重复给同一个游标（或绕回已取过的）会让这里死循环，所以见过的游标不再取。
+	seen := map[string]bool{}
 	for cursor := ""; ; {
 		page, next, err := s.c.access().Visible(ctx, caller, SourceFilter{Cursor: cursor})
 		if err != nil {
@@ -415,6 +422,10 @@ func (s *Sources) List(ctx context.Context, caller Caller) ([]SourceSummary, err
 		if next == "" {
 			break
 		}
+		if seen[next] || next == cursor {
+			return nil, Fail(gen.ErrInternal)
+		}
+		seen[next] = true
 		cursor = next
 	}
 	out := make([]SourceSummary, 0, len(visible))

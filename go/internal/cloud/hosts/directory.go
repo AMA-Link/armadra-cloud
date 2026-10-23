@@ -2,7 +2,6 @@ package hosts
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/url"
 	"regexp"
@@ -42,6 +41,9 @@ var (
 	linkCreators = []string{"owner", "owner_admin", "driver"}
 	hostRoles    = []string{"viewer", "editor", "operator", "driver"}
 )
+
+// GuestsAllowed 报告主机设置是否允许授予访客（allowGuests，缺省 true）。
+func GuestsAllowed(h saas.Host) bool { return settingsOf(h).AllowGuests }
 
 // settingsOf 是主机的生效设置：缺省 ← 团队的 defaultHostRole（只作 defaultRole 的预选值）← 主机自己写过的项。
 func settingsOf(h saas.Host) hostSettings {
@@ -120,32 +122,12 @@ func (s *Service) detail(ctx context.Context, viewerID string, h saas.Host) (det
 	}, nil
 }
 
-// cursor 是目录游标的线上编码（对客户端不透明）。
-type cursor struct {
-	R int64  `json:"r"`
-	S string `json:"s"`
-}
-
-func encodeCursor(h saas.Host) string {
-	data, _ := json.Marshal(cursor{R: h.RegisteredAtMs, S: h.SourceID})
-	return base64.RawURLEncoding.EncodeToString(data)
-}
-
-func decodeCursor(text string) (*saas.HostCursor, error) {
-	data, err := base64.RawURLEncoding.DecodeString(text)
-	var c cursor
-	if err != nil || json.Unmarshal(data, &c) != nil || c.S == "" {
-		return nil, core.Fail(gen.ErrBadRequest)
-	}
-	return &saas.HostCursor{RegisteredAtMs: c.R, SourceID: c.S}, nil
-}
-
 // page 取一页：online 非 nil 时按在线状态再筛（在线状态在中继，不在库里），逐批取到凑满一页。
 // 答这一页与下一页的起点（没有下一页为 nil）。
 func (s *Service) page(ctx context.Context, filter saas.HostFilter, online *bool, limit int) ([]saas.Host, *saas.Host, error) {
 	if online == nil {
 		filter.Limit = limit + 1
-		rows, err := s.store.Read().ListHosts(ctx, s.tenant(), filter)
+		rows, err := s.dir.Hosts(ctx, s.store.Read(), filter)
 		if err != nil || len(rows) <= limit {
 			return rows, nil, err
 		}
@@ -154,7 +136,7 @@ func (s *Service) page(ctx context.Context, filter saas.HostFilter, online *bool
 	var matched []saas.Host
 	for {
 		filter.Limit = batchSize
-		rows, err := s.store.Read().ListHosts(ctx, s.tenant(), filter)
+		rows, err := s.dir.Hosts(ctx, s.store.Read(), filter)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -203,8 +185,8 @@ func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 		filter.SpaceKind, filter.TeamID = space.Kind, space.TeamID
 	}
 	if in.Cursor != "" {
-		if filter.After, err = decodeCursor(in.Cursor); err != nil {
-			return nil, err
+		if filter.After, err = saas.DecodeHostCursor(in.Cursor); err != nil {
+			return nil, core.Fail(gen.ErrBadRequest)
 		}
 	}
 	var online *bool
@@ -230,7 +212,7 @@ func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 	}
 	var next any
 	if more != nil {
-		next = encodeCursor(*more)
+		next = saas.HostCursor{RegisteredAtMs: more.RegisteredAtMs, SourceID: more.SourceID}.Encode()
 	}
 	return map[string]any{"sources": out, "nextCursor": next}, nil
 }
@@ -244,7 +226,7 @@ func (s *Service) meSources(ctx context.Context, call *api.Call) (any, error) {
 	out := []summaryOut{}
 	filter := saas.HostFilter{ViewerID: account.AccountID, Limit: batchSize}
 	for len(out) < maxMeSources {
-		rows, err := s.store.Read().ListHosts(ctx, s.tenant(), filter)
+		rows, err := s.dir.Hosts(ctx, s.store.Read(), filter)
 		if err != nil {
 			return nil, err
 		}
@@ -266,7 +248,7 @@ func (s *Service) meSources(ctx context.Context, call *api.Call) (any, error) {
 
 // find 读调用者看得到的一台未撤销的主机；看不到（不存在、别人的、别的团队的）答 not_found。
 func (s *Service) find(ctx context.Context, r saas.Reader, viewerID, sourceID string) (saas.Host, error) {
-	rows, err := r.ListHosts(ctx, s.tenant(), saas.HostFilter{ViewerID: viewerID, SourceID: sourceID, Limit: 1})
+	rows, err := s.dir.Hosts(ctx, r, saas.HostFilter{ViewerID: viewerID, SourceID: sourceID, Limit: 1})
 	if err != nil {
 		return saas.Host{}, err
 	}
@@ -274,14 +256,6 @@ func (s *Service) find(ctx context.Context, r saas.Reader, viewerID, sourceID st
 		return saas.Host{}, core.Fail(gen.ErrNotFound)
 	}
 	return rows[0], nil
-}
-
-// canManage：主机所有者，或团队主机的团队 owner / admin（设计 §4.6）。
-func canManage(h saas.Host, viewerID string) bool {
-	if h.OwnerAccountID == viewerID {
-		return true
-	}
-	return h.TeamID != "" && (h.ViewerRole == saas.RoleOwner || h.ViewerRole == saas.RoleAdmin)
 }
 
 func sourceIDOf(call *api.Call) string {
@@ -321,7 +295,7 @@ func (s *Service) manage(ctx context.Context, tx saas.Tx, accountID, sourceID st
 	if err != nil {
 		return saas.Host{}, err
 	}
-	if !canManage(h, accountID) {
+	if !h.CanManage(accountID) {
 		return saas.Host{}, core.Fail(gen.ErrForbidden)
 	}
 	return h, nil

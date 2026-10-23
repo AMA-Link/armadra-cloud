@@ -27,6 +27,12 @@ const (
 	ActionRevoke   = "host.revoke"
 )
 
+// Directory 是主机目录的可见性来源（SaaS 实现方案 §4.2）：只返回 filter.ViewerID 此刻能看到的主机，
+// 可见性（所有者、团队角色、授予）由实现决定；r 可以是只读连接，也可以是事务。grants.Policy 实现它。
+type Directory interface {
+	Hosts(ctx context.Context, r saas.Reader, filter saas.HostFilter) ([]saas.Host, error)
+}
+
 // Options 是主机服务的装配。
 type Options struct {
 	Core   *core.Context
@@ -34,6 +40,8 @@ type Options struct {
 	Limits *httpx.Limits
 	// Relay 查在线、签发索引、撤销已签令牌、踢人与关隧道（经 tx.AfterCommit，提交后才发）。
 	Relay relayctl.Control
+	// Directory 是目录的可见性来源；缺省只看所有者与团队角色（没有授予）——生产装配传 grants.Policy。
+	Directory Directory
 	// RequireEmailVerified 为真时未验证邮箱的账号不能要注册令牌（设计 §4.3）。
 	RequireEmailVerified bool
 	Log                  *obs.Logger
@@ -45,6 +53,7 @@ type Service struct {
 	store    saas.Store
 	limits   *httpx.Limits
 	relay    relayctl.Control
+	dir      Directory
 	sources  *core.Sources
 	verified bool
 	log      *obs.Logger
@@ -56,8 +65,12 @@ func New(options Options) *Service {
 	if log == nil {
 		log = obs.Nop()
 	}
+	dir := options.Directory
+	if dir == nil {
+		dir = storeDirectory{now: options.Core.NowMs, tenant: options.Core.TenantID}
+	}
 	return &Service{
-		c: options.Core, store: options.Store, limits: options.Limits, relay: options.Relay,
+		c: options.Core, store: options.Store, limits: options.Limits, relay: options.Relay, dir: dir,
 		sources: core.NewSources(options.Core), verified: options.RequireEmailVerified, log: log,
 	}
 }
@@ -161,4 +174,15 @@ func spaceOf(call *api.Call) (space spaceIn, present bool, err error) {
 		return spaceIn{}, false, core.Fail(gen.ErrBadRequest)
 	}
 	return space, true, nil
+}
+
+// storeDirectory 是不带授予的缺省目录：直接问存储（时钟取控制核的）。
+type storeDirectory struct {
+	now    func() int64
+	tenant string
+}
+
+func (d storeDirectory) Hosts(ctx context.Context, r saas.Reader, filter saas.HostFilter) ([]saas.Host, error) {
+	filter.NowMs = d.now()
+	return r.ListHosts(ctx, d.tenant, filter)
 }

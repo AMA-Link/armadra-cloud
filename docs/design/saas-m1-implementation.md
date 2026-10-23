@@ -149,7 +149,7 @@
 | `cloud:mfa:<sha256>`                            | 控制面                 | 控制面       | 运营登录的 MFA 挑战（5 分钟），值 `{accountId, attempts}`；`auth.mfaVerify` 每次失败 `HINCRBY`，到 5 次删键                                                                                                                                                                    |
 | `cloud:limit:<种类>:<sha256>`                   | 控制面                 | 控制面       | 速率限流桶。把 `control/redis` 里的限流脚本与 `remoteHit` 抽成可单独构造的 `redis.NewLimiter(client, prefix, rules)`（S1b），控制面用前缀 `cloud:limit:` 自己建一个，不借第二个 `Plane`                                                                                        |
 
-- **跨主机的踢人**（账号停用、设备撤销等，§4.8）：不发不带 `sourceId` 的 `kick`。控制面从 `cloud:issued:acct:<id>` 取出这个账号有令牌的全部主机，逐个发 `kick {sourceId, subject[, deviceId]}`——老节点也能执行（退化为踢该源全部连接）。
+- **跨主机的踢人**（账号停用、设备撤销等，§4.8）：不发不带 `sourceId` 的 `kick`。控制面从 `cloud:issued:acct:<id>` 取出这个账号有令牌的全部主机，逐个发 `kick {sourceId, subject[, deviceId]}`——N2 起的节点按人精确踢，老节点也能执行（退化为踢该源全部连接）。
 - **节点令牌**（契约 §30，#72）：`armadra-cloud nodes token --node a` 用租户签名钥签头 `typ = armadra-node`（`gen.TokenTypeNode`）、声明 `{iss, sub: "a", aud: "relay-node", iat, exp, jti: "n.<nodeId>.<随机>", ver}` 的 JWS（`nodeTokenClaimsSchema`，`aud` 即 `gen.TokenAudienceRelayNode`；`sub` 是节点名，`^[a-z0-9][a-z0-9-]{0,62}$`），缺省 30 天。节点之间 `/x/v1` 升级时出示，持有节点按 JWKS 验签、`typ`、`aud` 与撤销表（Go 设计 §3.6）；M1 控制面自己不收节点令牌。`nodes revoke` 走普通撤销（§7.2）。
 
 ## §3 数据模型
@@ -870,7 +870,7 @@ type Watcher interface {
 
 **S5a 实现注记**（与上表的差别与补充）：
 
-- **可见性在目录查询里，不经 `AccessPolicy`**：`grants.Policy` 随 S5b，S5a 的 `sources.list` / `get` / `me.sources` 直接用存储层的目录查询（`saas.HostFilter.ViewerID`）。可见 = 个人空间的所有者；团队主机给团队 owner / admin，以及登记它的成员（member 角色）；团队进入恢复期则团队主机全部不可见；billing / guest / 外人什么都看不到。S5b 把授予带来的可见性并进同一条查询，`core.AccessPolicy` 的 SaaS 实现包它。
+- **可见性在目录查询里，不经 `AccessPolicy`**：`grants.Policy` 随 S5b，S5a 的 `sources.list` / `get` / `me.sources` 直接用存储层的目录查询（`saas.HostFilter.ViewerID`）。可见 = 个人空间的所有者；团队主机给团队 owner / admin，以及登记它的成员（member 角色）；团队进入恢复期则团队主机全部不可见；billing / guest / 外人什么都看不到。S5b 把授予带来的可见性并进同一条查询，`core.AccessPolicy` 的 SaaS 实现 `grants.Policy` 包它（见 §4.6 的 S5b 实现注记）。
 - **管理权**：主机所有者，或团队主机的团队 owner / admin；看不到的一律 `404 not_found`，看得到但管不了（S5b 起才会出现）答 `403 forbidden`。
 - **撤销后的令牌**：S5a 的签发索引只有隧道令牌（`heartbeatHint` 签出时记 jti，`RelayInfo.TunnelJTI`），撤销时 `RevokeWhere` 把它们写进撤销表；断言与中继令牌随 S5b 进索引。`cloud_issued_tokens` 的落盘与重放仍是 S5b / S8。
 - **注册令牌按账号计**：核心的 `Registrations.Add` 的上限（20）按整个租户计，SaaS 不能用；`HostRepo.AddRegistration` 按账号计，并只清这个账号过期的令牌。`team_id` 带在令牌上，`PeekRegistration` 先不加锁地读出空间，再按「团队 → 账号 → 源」加锁后才 `ConsumeRegistration`（先删令牌再等团队锁会和清除作业互等）。
@@ -917,6 +917,18 @@ type Watcher interface {
 | 8    | 提交后把两个 `jti` 记进签发索引（PostgreSQL 与 Redis，§7.2）；审计 `assertion.issue`（`jti` = 断言的 jti，`target = host`，`team_id`）                                                                                                                                                                                                                                     |
 | 9    | 答 `relayOrigin = relayBaseUrl = https://<sourceId>.src.<RELAY_DOMAIN>`、`online`（读路由）                                                                                                                                                                                                                                                                                |
 
+**S5b 实现注记（第一部分：访问策略与签发索引）**：
+
+- **`grants.Policy` 就是 `core.AccessPolicy`**：装配时设为 `core.Context.Policy`，也是 `hosts.Directory` 的实现——S5a 的 `sources.list` / `get` / `update` / `revoke` / `me.sources` 不再直接问存储，一律经 `Policy.Hosts`（填好时钟再调 `ListHosts`）。链接访客（`guest:<linkId>:…`）转给 core 的 `personalPolicy`，随 S6。
+- **可见性 ≠ 可达**：目录看得到 = 个人空间的所有者与 `guest` 授予；团队主机（团队未进恢复期）给团队 owner / admin 看全部，member 看自己登记的以及 `member` / `team` 授予到的，guest 角色看 `guest` 授予到的，billing 与外人什么都看不到。团队 owner / admin 看得到全部却不一定拿得到断言（有效权限空 → `403 source_access_denied`，这是 M2 访问申请要解决的）。可见性 SQL（`visibleSQL`）与 `grants.Compose` 逐个主体对照（`TestDirectoryVisibilityMatchesEffectivePermissions`）。
+- **团队主机的所有者要仍是 owner / admin / member**：降为 billing / guest 就既看不到、管不了，也拿不到断言（与 §4.8「降为 billing 或 guest」撤令牌一致，否则撤了立刻又能重签）。
+- **来路枚举**：契约 `sourceSummary.via` 只有 `owner | link | team | org`，个人空间里被授予的访客按 `link` 答，团队主机上的非所有者按 `team`。
+- **断言的 `scp`**：授予可以限在多个工作空间，`GrantExtra` 加 `Scp`（非 nil 时取代链接范围换出的 `scp`）；整台主机不带 `scp`。
+- **签发索引落盘（`relayctl.Durable`）**：包住内层（内存 / S8 的 Redis）：`IndexIssued` 先 `INSERT cloud_issued_tokens` 再进内层；`RevokeWhere` 以 PostgreSQL 为准选出未到期的令牌、写 `relay_revoked_tokens`、从索引删，再让内层撤并踢人（内层可能有 PostgreSQL 已删的条目——签发方与撤销交错时——所以两边都撤）；core 的撤销钩子（登出、撤设备、改口令、撤链接与源）同样先落盘；PostgreSQL 命中的令牌补登记进内层后按 `Filter{JTI}` 逐个撤（内层索引缺了也撤到），设备撤销的踢人用两边命中的并集、按 (源, subject, 设备) 去重发 `Kick`（`Control.Revoke` 答命中的条目）。索引过滤带 `tenant_id`，前缀里的 LIKE 通配符按字面。重放（启动与 Redis 重连时把撤销表与索引写回 Redis）仍随 S8。
+- **`Filter.JTI`**：签发方复核发现自己签的令牌不该有效时，只撤自己签的那一枚。
+- **`Sources.List` 的游标防护**：策略重复给同一个游标（或绕回已取过的）答 `internal`，不再死循环。
+- **`Watcher`**：`Sees` / `Refresh` / `Close` 可并发调用，`Close` 之后 `Sees` 答 false、`Refresh` 什么都不做；`AccessChanged` 事件（S8 把 `grantChanged` / `memberChanged` 转成它）更新可见集合，`SourceRevoked` 移除；`AccessChanged` 是 `core.InternalEvent`，`MeStream.offer` 只交给 `Watcher.Refresh`、不进客户端队列，空 `AccountID` 只允许移除（`Visible = false`），放宽必须点名账号。
+
 ### 4.7 分享与新设备信任（`cloud/links`、主机邀请、`cloud/trust`，S6）
 
 - **链接**包一层 `core.Links`：`links.create` 先查管理权与主机设置 `linkCreators`（`driver` 档 = 有效角色为 driver 的人也能签）、团队主机的 `allowGuests`；`links.list` / `update` / `revoke` 加 `space` 过滤；`links.accept` 对团队主机且 `allowAnonymousLinks = false` 时要求带会话（`403 anonymous_links_disabled`）。core 的条件加一与 `max_uses` 语义不变（能力设计 §11.3）；撤销链接经撤销钩子踢 `guest:<linkId>:` 前缀。
@@ -951,7 +963,7 @@ type Watcher interface {
 | 团队停用 / 删除                                                      | 团队行                          | 团队每台主机的 src 集合全部                                          | 每台主机 `kick {sourceId}`（隧道保留）                            | `memberChanged`（删除时）       |
 | 链接撤销                                                             | 链接与访客设备（core）          | src 集合里 `subject` 以 `guest:<linkId>:` 开头的                     | `kick {sourceId, subjectPrefix}`                                  | `accessRevoked`（core 现有）    |
 
-- 在 G5（N2）之前，带 `subject` / `deviceId` / `subjectPrefix` 的 `kick` 在节点上退化为踢该源全部连接；按人精确踢的验收（S5b、S7）依赖 N2。
+- 带 `subject` / `deviceId` / `subjectPrefix` 的 `kick` 在 G5（N2）起的节点上按人精确踢；只有不认识这些字段的老节点才退化为踢该源全部连接（多踢不漏踢）。
 - 签发与撤销的竞态：签发方一律「签令牌 → 登记签发索引 → 再读库复核，已撤销则自己撤并答错误」（见 §4.5 的 S5a 注记）。
 - 时序：库事务提交 → 撤销令牌（先 PostgreSQL 后 Redis，§7.2）→ 发节点命令 → 发事件。Redis 失败时重试 3 次后插 `relay.revoke` 作业兜底（重放幂等），并记错误日志；重连时的全量重放也会补上。
 

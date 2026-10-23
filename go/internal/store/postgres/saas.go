@@ -118,12 +118,12 @@ func (t *saasTx) Teams() saas.TeamRepo             { return teamRepo{q: t.q, loc
 func (t *saasTx) DeviceCodes() saas.DeviceCodeRepo { return deviceCodeRepo{q: t.q} }
 func (t *saasTx) Invitations() saas.InvitationRepo { return invitationRepo{q: t.q} }
 func (t *saasTx) Hosts() saas.HostRepo             { return hostRepo{q: t.q} }
-func (t *saasTx) Grants() saas.GrantRepo           { return struct{}{} }
+func (t *saasTx) Grants() saas.GrantRepo           { return grantRepo{q: t.q} }
 func (t *saasTx) Trust() saas.TrustRepo            { return struct{}{} }
 func (t *saasTx) Audit() saas.AuditRepo            { return auditRepo{q: t.q} }
 func (t *saasTx) Jobs() saas.JobRepo               { return jobRepo{q: t.q} }
 func (t *saasTx) Settings() saas.SettingsRepo      { return struct{}{} }
-func (t *saasTx) Issued() saas.IssuedRepo          { return struct{}{} }
+func (t *saasTx) Issued() saas.IssuedRepo          { return issuedRepo{q: t.q} }
 
 // Ports 把核心端口绑到本事务（TxPorts）。
 func (t *saasTx) Ports() *store.Ports { return portsOf(ports{d: t.d, tx: t.pgx}) }

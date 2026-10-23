@@ -114,9 +114,19 @@ type attachment struct {
 	onOverflow func()
 }
 
+// InternalEvent 标记只给 Watcher.Refresh 的内部事件（例如授予变动让可见集合更新）：offer 把它交给 Watcher 后
+// 就丢掉，绝不进客户端的事件队列。
+type InternalEvent interface {
+	Event
+	InternalOnly()
+}
+
 // offer 按可见性过滤后放进队列；不做任何 I/O。
 func (a *attachment) offer(event Event, audience *Audience) {
 	a.watcher.Refresh(event)
+	if _, internal := event.(InternalEvent); internal {
+		return
+	}
 	if audience != nil {
 		if a.caller.LinkID != audience.LinkID {
 			return

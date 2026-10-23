@@ -52,16 +52,31 @@ func scanHost(row scanner) (saas.Host, error) {
 // likeEscaper 把模糊词里的 LIKE 通配符转义（配 ESCAPE '\'）。
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
-// ListHosts 列出 ViewerID 此刻能看到的主机。可见性写在这条查询里：个人空间只有所有者；团队主机给团队 owner / admin，
-// 以及登记它的成员（member 角色）；团队已进恢复期的不可见。授予带来的可见性随 S5b 并进这里。
+// visibleSQL 是目录可见性（设计 §4.6）：$2 是查询者，$3 是时钟。
+//
+//   - 个人空间：所有者，以及被授予 guest 的账号。
+//   - 团队主机（团队未进恢复期）：团队 owner / admin 看到全部（他们管得了）；member 看到自己登记的，以及
+//     member / team 授予到的；guest 角色的成员只看 guest 授予到的；billing 与外人什么都看不到。
+//   - 授予只算没撤销、没到期的。与 grants 包的有效权限合成保持一致（表驱动测试逐格对照）。
+const visibleSQL = `(
+  (p.team_id IS NULL AND (p.owner_account_id = $2 OR EXISTS (
+     SELECT 1 FROM source_grants g WHERE g.tenant_id = p.tenant_id AND g.source_id = p.source_id
+       AND g.subject_kind = 'guest' AND g.subject_id = $2 AND g.revoked_at_ms IS NULL
+       AND (g.expires_at_ms IS NULL OR g.expires_at_ms > $3))))
+  OR (p.team_id IS NOT NULL AND vm.role IS NOT NULL AND t.deleted_at_ms IS NULL AND (
+     vm.role IN ('owner', 'admin')
+     OR (vm.role = 'member' AND p.owner_account_id = $2)
+     OR EXISTS (
+       SELECT 1 FROM source_grants g WHERE g.tenant_id = p.tenant_id AND g.source_id = p.source_id
+         AND g.revoked_at_ms IS NULL AND (g.expires_at_ms IS NULL OR g.expires_at_ms > $3)
+         AND ((vm.role IN ('owner', 'admin', 'member')
+               AND ((g.subject_kind = 'member' AND g.subject_id = $2) OR (g.subject_kind = 'team' AND g.subject_id = p.team_id)))
+              OR (vm.role = 'guest' AND g.subject_kind = 'guest' AND g.subject_id = $2))))))`
+
+// ListHosts 列出 ViewerID 此刻能看到的主机。可见性写在这条查询里（visibleSQL），不在调用方。
 func (r reader) ListHosts(ctx context.Context, tenantID string, f saas.HostFilter) ([]saas.Host, error) {
-	args := []any{tenantID, f.ViewerID}
-	where := []string{
-		"p.tenant_id = $1",
-		`((p.team_id IS NULL AND p.owner_account_id = $2)
-		  OR (p.team_id IS NOT NULL AND vm.role IS NOT NULL AND t.deleted_at_ms IS NULL
-		      AND (vm.role IN ('owner', 'admin') OR (vm.role = 'member' AND p.owner_account_id = $2))))`,
-	}
+	args := []any{tenantID, f.ViewerID, f.NowMs}
+	where := []string{"p.tenant_id = $1", visibleSQL}
 	arg := func(value any) string {
 		args = append(args, value)
 		return fmt.Sprintf("$%d", len(args))
