@@ -59,6 +59,12 @@ type TeamAccess struct {
 	Plan string
 }
 
+// TeamSummary 是团队的名字与是否在恢复期内。
+type TeamSummary struct {
+	Name    string
+	Deleted bool
+}
+
 // Entitlement 是空间的计划（entitlements 行）；Overrides 是逐项放宽额度的 JSON 对象。
 type Entitlement struct {
 	Plan      string
@@ -83,6 +89,8 @@ type TeamReader interface {
 	OwnedTeamCount(ctx context.Context, tenantID, accountID string) (int, error)
 	// Entitlement 读空间的计划；没有行答 nil（即 Free）。
 	Entitlement(ctx context.Context, tenantID, spaceKind, spaceID string) (*Entitlement, error)
+	// TeamSummary 读团队的名字与删除状态（匿名的邀请摘要用：调用方已核过邀请令牌）；团队不存在答 nil。
+	TeamSummary(ctx context.Context, tenantID, teamID string) (*TeamSummary, error)
 	// DueTeams 是恢复期已满、该清除的团队 id（purge_at_ms <= nowMs），最多 limit 个。
 	DueTeams(ctx context.Context, tenantID string, nowMs int64, limit int) ([]string, error)
 }

@@ -369,6 +369,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - 过期答 `410 invitation_expired`，已撤销答 `410 invitation_revoked`，其余无效情形答 `404 not_found`。接受是幂等的：已接受的再次接受答原结果。
 - 主机邀请由云端实现为**云端授予加 guest 成员关系**，不落成 core 的邀请：接受后控制面登记一条对该主机的授予（`grants`，§24），之后按授予向 core 签带 `role` / `scp` 的断言。分享链接仍落成 core 的邀请，core 的接受与消费逻辑不变（设计 §11.3）。
 - `invitations.resend`：换新令牌、重新计 7 天、旧链接作废，按邀请限流。
+- **`invitations.preview`**（协议包 0.10.1 起，只加不改）：`POST /v1/invitations/{invitationId}/preview`，令牌放请求体，答复与错误同 `invitations.get`。`invitations.get` 的 `?token=` 会进代理与访问日志，**已弃用**，客户端应改用 `preview`；服务端暂保留 `get` 以兼容。
 - `invitations.list` 的 `box = sent`（缺省）列自己能管的邀请，`received` 列发给自己邮箱的待处理邀请。
 
 <!-- rpc:begin contract=§22 -->
@@ -380,6 +381,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 | `invitations.revoke`  | `DELETE /v1/invitations/{invitationId}`       | `team:admin` / `owner` | `not_found`、`team_role_insufficient`                                                                                                                                                                        |
 | `invitations.resend`  | `POST /v1/invitations/{invitationId}/resend`  | `team:admin` / `owner` | `not_found`、`team_role_insufficient`、`invitation_revoked`、`conflict`、`rate_limited`                                                                                                                      |
 | `invitations.get`     | `GET /v1/invitations/{invitationId}`          | `anonymous`            | `not_found`、`invitation_expired`、`invitation_revoked`、`rate_limited`                                                                                                                                      |
+| `invitations.preview` | `POST /v1/invitations/{invitationId}/preview` | `anonymous`            | `not_found`、`invitation_expired`、`invitation_revoked`、`rate_limited`                                                                                                                                      |
 | `invitations.accept`  | `POST /v1/invitations/{invitationId}/accept`  | `session`              | `not_found`、`invitation_expired`、`invitation_revoked`、`invitation_email_mismatch`、`email_unverified`、`limit_reached`、`team_policy_denied`、`member_exists`、`team_deleted`、`conflict`、`rate_limited` |
 | `invitations.decline` | `POST /v1/invitations/{invitationId}/decline` | `session`              | `not_found`、`invitation_expired`、`invitation_revoked`、`invitation_email_mismatch`                                                                                                                         |
 

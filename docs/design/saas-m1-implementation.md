@@ -849,6 +849,12 @@ type Watcher interface {
 | `resend` | 换新令牌（作业里生成）、`expires_at = now + 7 天`、`resend_count + 1`；按邀请每小时 5 次                                                                                                                                                                                                                                                                                                                                                          |
 | 过期     | 读时把 `pending` 且过期的按 `expired` 答；`invitations.expire` 作业每小时落库并发 `invitationChanged`                                                                                                                                                                                                                                                                                                                                             |
 
+- **收件箱规则**：`invitations.list` 的 `box = received` 一律要求邮箱已验证（**不看** `REQUIRE_EMAIL_VERIFIED` 开关），未验证答空列表——未验证的地址可能是别人注册时随手填的，不能借它读到发给那个地址的邀请。
+- **邀请人失效**：邀请人被移除、离开，或被降到 admin 以下时，同事务把他发出的待处理团队邀请改 `revoked`；`teams.Join` 另外核对邀请人此刻仍是 admin 以上（兜底，否则 `409 conflict`）。
+- **`teams.Join(ctx, tx, tenantID, nowMs, invitationID, account)`**：`accept` 的后半段自己 `LockTeam`、锁邀请行，核对 `kind = team`、仍待处理（撤销 / 过期 / 已拒绝各有各的码）、账号邮箱等于邀请邮箱，再核团队状态、重复成员、邀请人身份、guest 设置与额度，插成员并置 `accepted`；令牌由 `accept` 先核。`TeamScope` 因此不出 `cloud/teams`。
+- **预览**：`invitations.get` 的 `?token=` 会进代理与访问日志，已弃用（保留兼容）；客户端用 `invitations.preview`（`POST …/preview`，令牌在体里，协议包 0.10.1），两者共用限流与全部规则。
+- **标签清理**：团队名与邀请人显示名进邮件前经 `SanitizeLabel`：去网址、邮箱，以及任何「域名形态」（字母数字串 + `.` + 两个以上字母，点两侧的空白与全角点先归一），宁可多删。
+
 ### 4.5 主机（`cloud/hosts`，S5a）
 
 | 过程                        | 规则                                                                                                                                                                                                                                                                                                          |
@@ -1149,6 +1155,8 @@ type Tx interface {
 | `grantChanged`                                     | 主机 owner、团队 admin 以上、授予主体涉及的账号                                              |
 | `deviceTrustRequested` / `deviceTrustResolved`     | 按团队设置 `deviceEndorsers` / `memberSelfEndorse` 算出的背书人 + 请求者本人                 |
 | `planChanged`                                      | 空间的 owner / admin / billing（个人空间是本人）                                             |
+
+- `invitationChanged` 推给被邀请邮箱对应的账号时，**只推邮箱已验证的账号**（与 `invitations.list` 的 `received` 同一条规则，§4.4）。
 
 ### 7.2 撤销、签发索引与持久化（`cloud/relayctl`）
 

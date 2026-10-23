@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var tokenTemplates = map[string]bool{VerifyEmail: true, EmailChange: true, PasswordReset: true}
+var tokenTemplates = map[string]bool{VerifyEmail: true, EmailChange: true, PasswordReset: true, TeamInvitation: true}
 
 func TestBothLocalesHaveTheSameTemplates(t *testing.T) {
 	templates, err := LoadTemplates()
@@ -45,7 +45,8 @@ func TestRenderEveryTemplateInBothLocales(t *testing.T) {
 	const link = "https://app.example.test/verify#TOKEN-IN-FRAGMENT"
 	for _, locale := range Locales {
 		for _, name := range templates.Names(locale) {
-			data := Data{DisplayName: "小明", NewEmail: "new@example.test", DeviceName: "工作笔记本", Platform: "desktop"}
+			data := Data{DisplayName: "小明", NewEmail: "new@example.test", DeviceName: "工作笔记本", Platform: "desktop",
+				TeamName: "研发组", InviterName: "小红", RoleLabel: RoleLabel(locale, "member")}
 			if tokenTemplates[name] {
 				data.Link = link
 			}
@@ -83,15 +84,17 @@ func TestRenderSnapshots(t *testing.T) {
 		LocaleZH: {
 			VerifyEmail: "验证你的邮箱", EmailChange: "确认新的邮箱地址", EmailChanged: "账号邮箱已更改",
 			PasswordReset: "重设口令", PasswordChanged: "口令已更改", NewDevice: "新设备登录",
+			TeamInvitation: "加入团队「研发」的邀请",
 		},
 		LocaleEN: {
 			VerifyEmail: "Verify your email", EmailChange: "Confirm your new email address", EmailChanged: "Account email changed",
 			PasswordReset: "Reset your password", PasswordChanged: "Password changed", NewDevice: "New device sign-in",
+			TeamInvitation: `Invitation to join the team "研发"`,
 		},
 	}
 	for locale, byName := range subjects {
 		for name, want := range byName {
-			subject, _, _, err := templates.Render(locale, name, Data{DisplayName: "Ann", Link: "L"})
+			subject, _, _, err := templates.Render(locale, name, Data{DisplayName: "Ann", Link: "L", TeamName: "研发"})
 			if err != nil || subject != want {
 				t.Errorf("%s/%s 主题：%q，应为 %q（%v）", locale, name, subject, want, err)
 			}
@@ -104,6 +107,14 @@ func TestRenderSnapshots(t *testing.T) {
 	_, text, _, _ = templates.Render(LocaleEN, PasswordReset, Data{DisplayName: "Ann", Link: "https://x.test/reset#T"})
 	if text != "Hello,\n\nOpen the link below to reset your password. It expires in 30 minutes:\nhttps://x.test/reset#T\n\nIf this was not you, ignore this email. Your password stays the same.\n" {
 		t.Errorf("英文快照：%q", text)
+	}
+	_, text, _, _ = templates.Render(LocaleZH, TeamInvitation, Data{TeamName: "研发", InviterName: "小红", RoleLabel: RoleLabel(LocaleZH, "guest"), Link: "https://x.test/invite/i1#T"})
+	if text != "你好。\n\n小红 邀请你以访客身份加入团队「研发」。打开下面的链接查看并接受，7 天内有效：\nhttps://x.test/invite/i1#T\n\n如果你不认识邀请人，或不打算加入，请忽略这封邮件。\n" {
+		t.Errorf("邀请中文快照：%q", text)
+	}
+	_, text, _, _ = templates.Render(LocaleEN, TeamInvitation, Data{TeamName: "R&D", RoleLabel: RoleLabel(LocaleEN, "admin"), Link: "https://x.test/invite/i1#T"})
+	if !strings.Contains(text, "You are invited to join the team \"R&D\" as an admin.") {
+		t.Errorf("邀请英文快照（没有邀请人）：%q", text)
 	}
 	// 语言不认识时退回中文。
 	subject, _, _, _ := templates.Render("fr", VerifyEmail, Data{})
@@ -189,6 +200,11 @@ func TestSanitizeLabel(t *testing.T) {
 		"www.evil.test 办公室":                "办公室",
 		"bob@evil.test 的电脑":                "的电脑",
 		"login-now.evil.com/x":             "",
+		"evil . com 抽奖":                    "抽奖",
+		"evil。com 抽奖":                      "抽奖",
+		"evil．io":                          "",
+		"团队 a-b.net/x?y=1":                 "团队",
+		"v1.2 版":                           "v1.2 版",
 		"a<b>c\r\nd":                       "a b c d",
 		strings.Repeat("机", 100):           strings.Repeat("机", 64),
 	} {

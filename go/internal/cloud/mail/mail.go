@@ -68,6 +68,10 @@ type Params struct {
 	NewEmail    string `json:"newEmail,omitempty"`
 	DeviceName  string `json:"deviceName,omitempty"`
 	Platform    string `json:"platform,omitempty"`
+	// TeamName、InviterName、Role 是团队邀请的：团队名、邀请人显示名与被邀请的角色码。
+	TeamName    string `json:"teamName,omitempty"`
+	InviterName string `json:"inviterName,omitempty"`
+	Role        string `json:"role,omitempty"`
 	// Decoy：找回口令对没注册的邮箱插的占位行，与真发件走同样的库写入，作业里直接丢弃（防枚举，不留地址）。
 	Decoy bool `json:"decoy,omitempty"`
 }
@@ -80,7 +84,9 @@ type Mail struct {
 	To     string
 	// AccountID：带令牌的模板必填（令牌属于哪个账号）。
 	AccountID string
-	Params    Params
+	// InvitationID：团队邀请必填（发信时生成令牌、写进这条邀请）。
+	InvitationID string
+	Params       Params
 }
 
 // Options 是邮件服务的装配。
@@ -140,6 +146,9 @@ func (s *Service) Enqueue(ctx context.Context, tx saas.Tx, mail Mail) error {
 	if _, token := tokenKinds[mail.Template]; token && mail.AccountID == "" && !mail.Params.Decoy {
 		return errors.New("带令牌的模板必须给账号")
 	}
+	if mail.Template == TeamInvitation && mail.InvitationID == "" {
+		return errors.New("团队邀请邮件必须给邀请 id")
+	}
 	if mail.Params.Decoy {
 		mail.To = "" // 占位行不存被试探的地址
 	}
@@ -148,7 +157,7 @@ func (s *Service) Enqueue(ctx context.Context, tx saas.Tx, mail Mail) error {
 		return err
 	}
 	emailID := core.RandomToken(16)
-	payload, err := json.Marshal(sendPayload{EmailID: emailID, AccountID: mail.AccountID})
+	payload, err := json.Marshal(sendPayload{EmailID: emailID, AccountID: mail.AccountID, InvitationID: mail.InvitationID})
 	if err != nil {
 		return err
 	}
@@ -172,8 +181,9 @@ func normalizeLocale(locale string) string {
 }
 
 type sendPayload struct {
-	EmailID   string `json:"emailId"`
-	AccountID string `json:"accountId,omitempty"`
+	EmailID      string `json:"emailId"`
+	AccountID    string `json:"accountId,omitempty"`
+	InvitationID string `json:"invitationId,omitempty"`
 }
 
 // HashToken 是库里存的令牌哈希：SHA-256 的十六进制。
@@ -284,6 +294,18 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 	data := Data{
 		DisplayName: SanitizeLabel(params.DisplayName, labelMax), NewEmail: params.NewEmail,
 		DeviceName: SanitizeLabel(params.DeviceName, labelMax), Platform: SanitizeLabel(params.Platform, labelMax),
+		TeamName: SanitizeLabel(params.TeamName, labelMax), InviterName: SanitizeLabel(params.InviterName, labelMax),
+		RoleLabel: RoleLabel(email.Locale, params.Role),
+	}
+	if email.Template == TeamInvitation {
+		link, ok, err := s.inviteLink(ctx, tx, payload.InvitationID, email.To)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return tx.Jobs().DeleteOutbox(ctx, tenant, email.EmailID)
+		}
+		data.Link = link
 	}
 	if kind, ok := tokenKinds[email.Template]; ok {
 		account, err := tx.Account(ctx, tenant, payload.AccountID)
@@ -316,6 +338,24 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 		MessageID: attemptMessageID(email.MessageID, attempt), To: email.To, Subject: subject, Text: text, HTML: html,
 	}}
 	return nil
+}
+
+// inviteLink 在发信时给团队邀请生成令牌：只把哈希写进邀请行（旧令牌随之作废，重试会换新的），明文只进邮件的
+// 链接片段。邀请已不是待处理（撤销、接受、过期）或收件地址对不上，这封信没有意义，答 ok = false。
+func (s *Service) inviteLink(ctx context.Context, tx saas.Tx, invitationID, to string) (string, bool, error) {
+	inv, err := tx.Invitations().Lock(ctx, s.o.TenantID, invitationID)
+	if err != nil {
+		return "", false, err
+	}
+	nowMs := s.nowMs()
+	if inv == nil || !inv.Pending(nowMs) || inv.Email != strings.ToLower(to) {
+		return "", false, nil
+	}
+	token := core.RandomToken(32)
+	if err := tx.Invitations().SetToken(ctx, s.o.TenantID, invitationID, HashToken(token), nowMs); err != nil {
+		return "", false, err
+	}
+	return s.o.AppOrigin + "/invite/" + invitationID + "#" + token, true, nil
 }
 
 // deliverable：令牌邮件发信时账号还要满足条件，否则这封信没有意义，丢掉。
@@ -363,11 +403,23 @@ func (s *Service) deferUnconfigured(ctx context.Context) error {
 
 const labelMax = 64
 
-var urlLike = regexp.MustCompile(`(?i)\S*://\S*|\bwww\.\S*|\S+@\S+|\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|net|org|io|cn|co|app|dev|xyz|top|info|me|ly|link|click|ru|tk)\b\S*`)
+// urlLike 抓网址、邮箱和任何「域名形态」（一串字母数字，点，再两个以上字母），点两侧允许空白——
+// 「evil . com」「evil。com」（全角点）这类混淆在 SanitizeLabel 里先归一再匹配。代价是「J. Smith」这类
+// 带句点的名字也会被去掉，但这些标签只是展示用的，宁可多删。
+var urlLike = regexp.MustCompile(`(?i)\S*://\S*|\bwww\.\S*|\S+@\S+|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.[a-z]{2,}\S*`)
 
-// SanitizeLabel 清理客户端报的设备名一类字符串：去网址、邮箱地址和控制字符，折叠空白，按码点截到 max。
+// dotLike 是常见的「点」的变体（全角句号、全角点、半角日文句号、中点、小圆点），归一成 ASCII 点。
+var dotLike = strings.NewReplacer("。", ".", "．", ".", "｡", ".", "․", ".", "·", ".", "﹒", ".")
+
+// spacedDot 是点两侧的空白（evil . com）。
+var spacedDot = regexp.MustCompile(`\s*\.\s*`)
+
+// SanitizeLabel 清理客户端或用户填的展示字符串（设备名、团队名、显示名）：去网址、邮箱、域名形态和控制字符，折叠空白，按码点截到 max。
 func SanitizeLabel(s string, max int) string {
-	s = urlLike.ReplaceAllString(s, "")
+	// 归一后的字符串只用来判断；没有命中就保留原文（别把名字里的间隔号改成点）。
+	if normalized := spacedDot.ReplaceAllString(dotLike.Replace(s), "."); urlLike.MatchString(normalized) {
+		s = urlLike.ReplaceAllString(normalized, "")
+	}
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || r == '<' || r == '>' {
 			return ' '

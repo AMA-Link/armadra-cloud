@@ -1,0 +1,15 @@
+{
+  "input": {
+    "invitationId": "tinv_01JAAAAAAAAAAAAAAAAAAAAAAA",
+    "token": "test-invite-token"
+  },
+  "output": {
+    "kind": "team",
+    "state": "pending",
+    "teamName": "Dev Team",
+    "teamRole": "member",
+    "inviterName": "Dev",
+    "emailHint": "a***@armadra.test",
+    "expiresAtMs": 1760604800000
+  }
+}
