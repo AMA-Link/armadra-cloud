@@ -68,8 +68,9 @@ const OLD_HOST_VERSION = "0.9.0"; // 低于团队断言的最低版本
 /* ------------------------------ 编排 ------------------------------ */
 
 export async function runSaasE2e({ root, report }) {
-  const { FakeCore } =
-    await import("../../packages/e2e-fake-core/src/fake-core.ts");
+  const { FakeCore } = await import(
+    "../../packages/e2e-fake-core/src/fake-core.ts"
+  );
   const tag = randomBytes(4).toString("hex");
   const containers = [];
   const nodes = {};
