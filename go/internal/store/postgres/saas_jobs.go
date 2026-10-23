@@ -46,6 +46,13 @@ func (r jobRepo) Enqueue(ctx context.Context, tenantID string, job saas.NewJob, 
 	return id, true, nil
 }
 
+func (r jobRepo) Cancel(ctx context.Context, tenantID, kind, dedupeKey string) error {
+	_, err := r.q.Exec(ctx,
+		`DELETE FROM jobs WHERE tenant_id = $1 AND kind = $2 AND dedupe_key = $3
+		 AND done_at_ms IS NULL AND failed_at_ms IS NULL AND locked_by IS NULL`, tenantID, kind, dedupeKey)
+	return err
+}
+
 func (r jobRepo) InsertOutbox(ctx context.Context, tenantID string, e saas.OutboxEmail) error {
 	_, err := r.q.Exec(ctx,
 		`INSERT INTO outbox_emails (tenant_id, email_id, job_id, template, locale, to_email, params, message_id, created_at_ms)

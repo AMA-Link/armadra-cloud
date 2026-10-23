@@ -116,7 +116,7 @@ func (t *saasTx) AfterCommit(fn func(ctx context.Context)) { t.after = append(t.
 func (t *saasTx) Accounts() saas.AccountRepo       { return accountRepo{q: t.q, locked: &t.locked} }
 func (t *saasTx) Teams() saas.TeamRepo             { return teamRepo{q: t.q, locked: &t.locked} }
 func (t *saasTx) DeviceCodes() saas.DeviceCodeRepo { return deviceCodeRepo{q: t.q} }
-func (t *saasTx) Invitations() saas.InvitationRepo { return struct{}{} }
+func (t *saasTx) Invitations() saas.InvitationRepo { return invitationRepo{q: t.q} }
 func (t *saasTx) Hosts() saas.HostRepo             { return struct{}{} }
 func (t *saasTx) Grants() saas.GrantRepo           { return struct{}{} }
 func (t *saasTx) Trust() saas.TrustRepo            { return struct{}{} }

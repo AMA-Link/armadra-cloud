@@ -43,6 +43,8 @@ type Membership struct {
 	Slug   string
 	Name   string
 	Role   TeamRole
+	// Plan 是团队的计划代号（没有 entitlements 行 = free）。
+	Plan string
 }
 
 // Incident 是运营方的事故开关（platform_settings 键 incident，设计 §4.9）。

@@ -53,11 +53,12 @@ func (r reader) Memberships(ctx context.Context, tenantID, accountID string) ([]
 	return list(ctx, r.q, func(s scanner) (saas.Membership, error) {
 		var m saas.Membership
 		var role string
-		err := s.Scan(&m.TeamID, &m.Slug, &m.Name, &role)
+		err := s.Scan(&m.TeamID, &m.Slug, &m.Name, &role, &m.Plan)
 		m.Role = saas.TeamRole(role)
 		return m, err
-	}, `SELECT t.team_id, t.slug, t.name, m.role
+	}, `SELECT t.team_id, t.slug, t.name, m.role, COALESCE(e.plan, 'free')
 	    FROM team_members m JOIN teams t ON t.tenant_id = m.tenant_id AND t.team_id = m.team_id
+	    LEFT JOIN entitlements e ON e.tenant_id = t.tenant_id AND e.space_kind = 'team' AND e.space_id = t.team_id
 	    WHERE m.tenant_id = $1 AND m.account_id = $2 AND t.deleted_at_ms IS NULL
 	    ORDER BY m.joined_at_ms, t.team_id`, tenantID, accountID)
 }

@@ -37,6 +37,8 @@ type Store interface {
 
 // Reader 是只读查询；Tx 也实现它。
 type Reader interface {
+	TeamReader
+	InvitationReader
 	// Ping 探活：连接池里能取到连接并执行一条语句。
 	Ping(ctx context.Context) error
 	// Account 按账号 id 读完整的账号行；没有答 nil。
@@ -105,23 +107,13 @@ type AccountRepo interface {
 	GCEmailTokens(ctx context.Context, tenantID string, beforeMs int64) (int, error)
 }
 
-// TeamRepo 是团队相关的仓储（方法随 S4 加入）。团队范围的方法收 TeamScope，不收裸 teamID。
-type TeamRepo interface {
-	// LockTeam 对团队行 SELECT … FOR UPDATE，答它存不存在。改成员前先锁它，
-	// 与 team_owner_guard 触发器用同一把锁（设计 §3.4 0005）。同一事务里必须先于 LockAccount，否则 ErrLockOrder。
-	LockTeam(ctx context.Context, tenantID, teamID string) (found bool, err error)
-	// LockTeams 一次锁多个团队：升序去重再逐个锁。同一事务里单个调用 LockTeam 的 id 也必须升序。
-	LockTeams(ctx context.Context, tenantID string, teamIDs ...string) error
-}
-
 // 其余仓储先立名字，方法随各批加入。
 type (
-	InvitationRepo interface{}
-	HostRepo       interface{}
-	GrantRepo      interface{}
-	TrustRepo      interface{}
-	SettingsRepo   interface{}
-	IssuedRepo     interface{}
+	HostRepo     interface{}
+	GrantRepo    interface{}
+	TrustRepo    interface{}
+	SettingsRepo interface{}
+	IssuedRepo   interface{}
 )
 
 // AuditRepo 是审计与安全日志（只追加）。
@@ -134,6 +126,8 @@ type AuditRepo interface {
 
 // JobRepo 是业务事务里的作业入队与发件箱。
 type JobRepo interface {
+	// Cancel 删掉某种作业里 dedupe_key 相符、还没完成也没被领走的（恢复团队时撤掉清除作业）。
+	Cancel(ctx context.Context, tenantID, kind, dedupeKey string) error
 	// Enqueue 入队一个作业（ON CONFLICT DO NOTHING）；同一事务里 pg_notify('cloud_jobs')，随提交送达。
 	// 被 dedupe / slot 挡掉答 inserted = false。
 	Enqueue(ctx context.Context, tenantID string, job NewJob, nowMs int64) (jobID int64, inserted bool, err error)
