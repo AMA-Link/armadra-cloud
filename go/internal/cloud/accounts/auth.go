@@ -418,6 +418,10 @@ func (s *Service) stepUp(ctx context.Context, call *api.Call) (any, error) {
 		}
 	case in.TOTPCode != nil:
 		// 用户侧两步验证是 M2；M1 只有运营账号登记了 TOTP，其余账号没有可验的凭据。同一个码不能第二次用。
+		// 设备级的 stepup.dev 挡不住换设备猜码：另按账号计 mfa.acct（与 auth.mfaVerify 共用一个桶）。
+		if err := s.limits.Check(ctx, httpx.LimitMFAAcct, account.AccountID); err != nil {
+			return nil, err
+		}
 		ok, err := false, error(nil)
 		if account.HasScope(saas.ScopeOperator) && s.wrapper != nil {
 			ok, err = admin.VerifyAccountTOTP(ctx, s.store, s.wrapper, s.tenant(), account.AccountID, *in.TOTPCode, s.nowMs())
