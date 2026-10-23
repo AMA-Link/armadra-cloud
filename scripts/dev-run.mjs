@@ -25,6 +25,15 @@ function readEnvFile(file) {
   return env;
 }
 
+/** Go 版 saas serve 必填 RELAY_TUNNEL_URL；早先生成的 .env.dev 没有它，补缺省并提示。 */
+const relayEnv = readEnvFile(new URL(`../${ENV_FILE}`, import.meta.url));
+if (!relayEnv.RELAY_TUNNEL_URL) {
+  relayEnv.RELAY_TUNNEL_URL = `ws://${relayEnv.RELAY_LISTEN ?? "127.0.0.1:8101"}/t/v1`;
+  console.warn(
+    `${ENV_FILE} 缺少 RELAY_TUNNEL_URL，按 ${relayEnv.RELAY_TUNNEL_URL} 启动；请把这一行加进 ${ENV_FILE}`,
+  );
+}
+
 const processes = [
   {
     name: "cloud",
@@ -44,7 +53,7 @@ const processes = [
     args: ["saas", "serve"],
     env: {
       ...process.env,
-      ...readEnvFile(new URL(`../${ENV_FILE}`, import.meta.url)),
+      ...relayEnv,
     },
   },
 ];

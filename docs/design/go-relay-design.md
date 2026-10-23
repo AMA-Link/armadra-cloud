@@ -321,7 +321,7 @@ G6 只管怎么落地：
 
 - 命令行、环境变量、退出码。
 - 指标名、日志形状、健康检查的 JSON。
-- 镜像名、入口、端口、uid、卷。
+- 镜像名、入口、端口、uid、卷。入口在 G4.1 由 `tini -- armadra-relay` 变成 `armadra-relay`（distroless，无 tini 与 shell），经 §9 Q6 的 G4.1 评估接受；覆盖 entrypoint 调 tini 或 `exec` 进 shell 的用法不再可用。
 
 ### 4.3 Armadra 那边要跟着改的（切换批 G4 同时开一个 Armadra PR）
 
@@ -329,7 +329,7 @@ G6 只管怎么落地：
   1. `ARMADRA_RELAY_BIN`
   2. cloud 仓的 `go/bin/armadra-relay`（不存在就 `go build`）
   3. 镜像
-- **dev-stack**：`docker-compose.cloud-src.yml` 照旧用 `apps/relay/Dockerfile` 构建，路径不变，内容换成 Go。
+- **dev-stack**：`docker-compose.cloud-src.yml` 在 G4 照旧用 `apps/relay/Dockerfile` 构建，路径不变，内容换成 Go；G4.1 起 Dockerfile 挪到 `go/Dockerfile`，Armadra 同步改（Armadra PR：https://github.com/AMA-Link/Armadra/pull/492，探针 `cloud-source.mjs` 与文档一并改；先合并 cloud #95，再合并这个 PR）。
 - **两个 devstack 集成测试**：读的环境变量与 `.data/personal/dev.env` 保持不变。`scripts/relay-personal.mjs` 改成启动 Go 二进制。
 - **探针里的旧代码**：还在发 `armadra-relay-token` 头（这条路径 0.5.0 起答 404），顺手清理。
 

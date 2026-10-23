@@ -121,18 +121,18 @@
 
 0.10.0 起 `ghcr.io/ama-link/armadra-relay` 是 Go 实现，镜像由 `go/Dockerfile` 构建（Node 版源码删除后，原 `apps/relay/Dockerfile` 挪到这里）。下面这些与之前的 Node 镜像一致，入口与底座的变化见表后：
 
-| 项       | 值                                                                             |
-| -------- | ------------------------------------------------------------------------------ |
-| 镜像名   | `ghcr.io/ama-link/armadra-relay:<版本>` 与 `:latest`                           |
-| 入口     | `armadra-relay` 加子命令；缺省命令 `saas serve`                                |
-| 运行用户 | uid / gid 10002（`armadra`）                                                   |
-| 卷与端口 | `/data`、8443                                                                  |
-| 环境     | `RELAY_WEB_ROOT=/app/web`、`RELAY_DATA_DIR=/data`、`RELAY_LISTEN=0.0.0.0:8443` |
-| 健康检查 | 每 30 秒、超时 5 秒、3 次，`health` 子命令                                     |
-| 页面     | `WEB_IMAGE` 构建参数把 `/app/web` 拷进来                                       |
-| 库       | 同一份迁移与账本（SQLite `relay_migrations`、PostgreSQL `cloud_migrations`）   |
+| 项       | 值                                                                                           |
+| -------- | -------------------------------------------------------------------------------------------- |
+| 镜像名   | `ghcr.io/ama-link/armadra-relay:<版本>` 与 `:latest`                                         |
+| 入口     | 0.10.0：`tini -- armadra-relay`；下一个版本起：`armadra-relay`；缺省命令 `saas serve`        |
+| 运行用户 | uid / gid 10002（0.10.0 镜像里名为 `armadra`；distroless 镜像无该 passwd 条目，只有数字 id） |
+| 卷与端口 | `/data`、8443                                                                                |
+| 环境     | `RELAY_WEB_ROOT=/app/web`、`RELAY_DATA_DIR=/data`、`RELAY_LISTEN=0.0.0.0:8443`               |
+| 健康检查 | 每 30 秒、超时 5 秒、3 次，`health` 子命令                                                   |
+| 页面     | `WEB_IMAGE` 构建参数把 `/app/web` 拷进来                                                     |
+| 库       | 同一份迁移与账本（SQLite `relay_migrations`、PostgreSQL `cloud_migrations`）                 |
 
-变了的只有：运行镜像底座从 `debian:bookworm-slim` 换成 distroless static（约 23 MB，没有 shell、`tini` 与包管理器；Go 二进制直接当 PID 1，入口由 `tini -- armadra-relay` 变成 `armadra-relay`；`docker compose exec relay armadra-relay …` 照用，要 shell 排障见 `go/Dockerfile` 头注释）；容器里的命令行是 `armadra-relay`（不再是 `node /app/out/cli.js`）；Go 版不写 `state.json`；`--node-id` 同时作用于隧道层。`saas serve` 在切换版里仍是占位；之后的版本换成真正的 SaaS 中继节点（上面的变量表），新增必填的 `RELAY_TUNNEL_URL`。
+变了的只有：下一个版本起运行镜像底座从 `debian:bookworm-slim` 换成 distroless static（约 23 MB，没有 shell、`tini` 与包管理器；Go 二进制直接当 PID 1，入口由 `tini -- armadra-relay` 变成 `armadra-relay`，覆盖 entrypoint 调 tini 或 `exec` 进 shell 的用法不再可用；`docker compose exec relay armadra-relay …` 照用，要 shell 排障见 `go/Dockerfile` 头注释）；容器里的命令行是 `armadra-relay`（不再是 `node /app/out/cli.js`）；Go 版不写 `state.json`；`--node-id` 同时作用于隧道层。`saas serve` 在切换版里仍是占位；之后的版本换成真正的 SaaS 中继节点（上面的变量表），新增必填的 `RELAY_TUNNEL_URL`。
 
 升级：备份（`personal backup` 或 `pg_dump`）→ 数据目录是 `state.json` 的先停服并 `run --rm relay personal migrate --data-dir /data --to sqlite` → 换成 0.10.0 镜像起服 → `exec relay armadra-relay personal status` 与 `doctor` 核对。回滚：停服，镜像换回上一版（如 `0.9.3`）再起，Go 版写过的库 Node 版照常读写。步骤与注意事项见[运维手册](../docs/runbooks/personal-storage.md#切换到-go-版中继0100与回滚)。
 

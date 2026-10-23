@@ -36,6 +36,7 @@ const lines = [
   "RELAY_DOMAIN=src.localhost",
   "RELAY_CLOUD_ISSUER=http://127.0.0.1:8100",
   "RELAY_REDIS_URL=redis://127.0.0.1:6390",
+  "RELAY_TUNNEL_URL=ws://127.0.0.1:8101/t/v1",
   "RELAY_ALLOW_INSECURE_TUNNEL=1",
 ];
 writeFileSync(".env.dev", lines.join("\n") + "\n", { mode: 0o600 });
