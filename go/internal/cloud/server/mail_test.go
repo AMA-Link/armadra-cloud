@@ -353,6 +353,7 @@ func TestPasswordResetStartDoesNotEnumerate(t *testing.T) {
 	r.waitMails(known, 1)
 	disabled := r.email()
 	s := r.registerBearer(disabled)
+	r.waitMails(disabled, 1) // 注册的验证邮件先发出去，再停用：之后不该再有任何邮件
 	r.exec("UPDATE accounts SET status = 'disabled' WHERE account_id = $1", s.accountID)
 	unknown := r.email()
 
@@ -372,7 +373,7 @@ func TestPasswordResetStartDoesNotEnumerate(t *testing.T) {
 	// 已注册的收到邮件；停用的与没注册的都没有，也不在发件箱留下地址。
 	r.waitMails(known, 2)
 	r.noMail(unknown)
-	r.noMail(disabled)
+	r.noMail2(disabled, 1)
 	eventually := func(what string, ok func() bool) {
 		t.Helper()
 		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
@@ -384,7 +385,7 @@ func TestPasswordResetStartDoesNotEnumerate(t *testing.T) {
 	}
 	eventually("占位发件被丢弃", func() bool {
 		var n int
-		_ = r.run.DB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM outbox_emails WHERE to_email = ANY($1)", []string{unknown, disabled}).Scan(&n)
+		_ = r.run.DB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM outbox_emails WHERE to_email = '' OR to_email = $1 OR (to_email = $2 AND template = 'password_reset')", unknown, disabled).Scan(&n)
 		return n == 0
 	})
 	// 三种情形做同样的库写入：各插了一行发件箱和一个 mail.send 作业。

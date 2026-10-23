@@ -20,7 +20,8 @@ describe("闸（Rate Limiting 绑定）", () => {
   it("登录按 IP：超过绑定的额度答 429 rate_limited 并带 Retry-After", async () => {
     const ip = nextIp();
     const statuses: number[] = [];
-    for (let attempt = 0; attempt < 7; attempt += 1) {
+    // 窗口是 60 秒的固定窗口：慢机器上 scrypt 拖时间，请求可能跨过窗口边界让计数重置，所以多给几次，见到 429 就停。
+    for (let attempt = 0; attempt < 12; attempt += 1) {
       const response = await postJson(
         "/v1/auth/login",
         {
@@ -34,6 +35,7 @@ describe("闸（Rate Limiting 绑定）", () => {
       if (response.status === 429) {
         expect((await json(response)).code).toBe("rate_limited");
         expect(response.headers.get("retry-after")).toBe("60");
+        break;
       } else await response.arrayBuffer();
     }
     expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);

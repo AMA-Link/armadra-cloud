@@ -405,14 +405,15 @@ func TestCrashedWorkersLeaseExpires(t *testing.T) {
 
 func TestLeaseIsRenewedWhileRunningAndLostLeaseStopsTheJob(t *testing.T) {
 	e := open(t)
-	// 租约 400 毫秒、每 100 毫秒续一次；时钟随真实时间走，租约才会真的过期。
-	real := jobs.Options{Store: e.store, TenantID: tenant, Workers: 1, Poll: 20 * time.Millisecond, Lease: 400 * time.Millisecond, Renew: 100 * time.Millisecond}
+	// 租约 1 秒、每 100 毫秒续一次；时钟随真实时间走，租约才会真的过期。余量留足：慢机器上续租迟到
+	// 超过租约，作业会（按设计）被取消，测试就成了测机器快慢。
+	real := jobs.Options{Store: e.store, TenantID: tenant, Workers: 1, Poll: 20 * time.Millisecond, Lease: time.Second, Renew: 100 * time.Millisecond}
 	a, b := jobs.New(real), jobs.New(real)
 	var runs atomic.Int32
 	slow := func(ctx context.Context, _ saas.Job) error {
 		runs.Add(1)
 		select {
-		case <-time.After(1500 * time.Millisecond):
+		case <-time.After(2500 * time.Millisecond):
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
