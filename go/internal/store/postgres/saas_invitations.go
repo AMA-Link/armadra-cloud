@@ -40,8 +40,20 @@ func (r reader) Invitation(ctx context.Context, tenantID, invitationID string) (
 
 func (r reader) ReceivedInvitations(ctx context.Context, tenantID, email string, nowMs int64) ([]saas.Invitation, error) {
 	return list(ctx, r.q, scanInvitation,
-		"SELECT "+invitationColumns+` FROM invitations WHERE tenant_id = $1 AND email = lower($2) AND state = 'pending'
-		 AND expires_at_ms > $3 ORDER BY created_at_ms DESC, invitation_id`, tenantID, email, nowMs)
+		"SELECT "+invitationColumns+` FROM invitations i WHERE i.tenant_id = $1 AND i.email = lower($2) AND i.state = 'pending'
+		 AND i.expires_at_ms > $3
+		 AND (i.kind = 'team' OR NOT EXISTS (SELECT 1 FROM sources s WHERE s.tenant_id = i.tenant_id AND s.source_id = i.source_id
+		   AND s.revoked_at_ms IS NOT NULL))
+		 ORDER BY i.created_at_ms DESC, i.invitation_id`, tenantID, email, nowMs)
+}
+
+func (r reader) HostInvitations(ctx context.Context, tenantID string, sourceIDs []string, limit int) ([]saas.Invitation, error) {
+	if len(sourceIDs) == 0 {
+		return nil, nil
+	}
+	return list(ctx, r.q, scanInvitation,
+		"SELECT "+invitationColumns+` FROM invitations WHERE tenant_id = $1 AND kind = 'host' AND source_id = ANY($2)
+		 ORDER BY created_at_ms DESC, invitation_id LIMIT $3`, tenantID, sourceIDs, limit)
 }
 
 type invitationRepo struct{ q querier }
@@ -120,6 +132,32 @@ func (r invitationRepo) SetToken(ctx context.Context, tenantID, invitationID, to
 	_, err := r.q.Exec(ctx, "UPDATE invitations SET token_hash = $1, sent_at_ms = $2 WHERE tenant_id = $3 AND invitation_id = $4",
 		tokenHash, nowMs, tenantID, invitationID)
 	return err
+}
+
+func (r invitationRepo) InsertHost(ctx context.Context, tenantID string, i saas.Invitation) error {
+	_, err := r.q.Exec(ctx,
+		`INSERT INTO invitations (tenant_id, invitation_id, kind, email, team_id, source_id, host_role, workspace_ids, state, invited_by,
+		   created_at_ms, expires_at_ms, grant_expires_at_ms)
+		 VALUES ($1, $2, 'host', lower($3), NULLIF($4, ''), $5, $6, $7, 'pending', $8, $9, $10, $11)`,
+		tenantID, i.InvitationID, i.Email, i.TeamID, i.SourceID, i.HostRole, store.NonNil(i.WorkspaceIDs), i.InvitedBy,
+		i.CreatedAtMs, i.ExpiresAtMs, i.GrantExpiresAtMs)
+	return err
+}
+
+func (r invitationRepo) ExpireStaleHost(ctx context.Context, tenantID, sourceID, email string, nowMs int64) error {
+	_, err := r.q.Exec(ctx,
+		`UPDATE invitations SET state = 'expired', decided_at_ms = $1
+		 WHERE tenant_id = $2 AND kind = 'host' AND source_id = $3 AND email = lower($4) AND state = 'pending' AND expires_at_ms <= $1`,
+		nowMs, tenantID, sourceID, email)
+	return err
+}
+
+func (r invitationRepo) HasPendingHost(ctx context.Context, tenantID, sourceID, email string, nowMs int64) (bool, error) {
+	var exists bool
+	err := r.q.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM invitations WHERE tenant_id = $1 AND source_id = $2 AND kind = 'host' AND email = lower($3)
+		   AND state = 'pending' AND expires_at_ms > $4)`, tenantID, sourceID, email, nowMs).Scan(&exists)
+	return exists, err
 }
 
 func (r invitationRepo) ExpireDue(ctx context.Context, tenantID string, nowMs int64) ([]saas.Invitation, error) {

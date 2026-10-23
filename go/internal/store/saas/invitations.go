@@ -50,8 +50,10 @@ func (i Invitation) Pending(nowMs int64) bool {
 type InvitationReader interface {
 	// Invitation 按 id 读邀请；没有答 nil。
 	Invitation(ctx context.Context, tenantID, invitationID string) (*Invitation, error)
-	// ReceivedInvitations 是发给邮箱的待处理邀请（没过期），按创建时间倒序。
+	// ReceivedInvitations 是发给邮箱的待处理邀请（没过期），按创建时间倒序；主机已撤销的主机邀请不列。
 	ReceivedInvitations(ctx context.Context, tenantID, email string, nowMs int64) ([]Invitation, error)
+	// HostInvitations 是这些主机发出的主机邀请，按创建时间倒序，最多 limit 条。
+	HostInvitations(ctx context.Context, tenantID string, sourceIDs []string, limit int) ([]Invitation, error)
 }
 
 // InvitationRepo 是邀请的仓储。
@@ -79,6 +81,12 @@ type InvitationRepo interface {
 	Reissue(ctx context.Context, tenantID, invitationID string, expiresAtMs int64) error
 	// SetToken 记发信作业生成的令牌哈希与发出时刻（旧令牌随之作废）。
 	SetToken(ctx context.Context, tenantID, invitationID, tokenHash string, nowMs int64) error
+	// InsertHost 插一条主机邀请（teamID 空 = 个人空间主机）；同主机同邮箱已有 pending 答 ErrConflict。
+	InsertHost(ctx context.Context, tenantID string, invitation Invitation) error
+	// ExpireStaleHost 把同一主机同一邮箱下已过期的 pending 改成 expired（插新 pending 前同事务先做）。
+	ExpireStaleHost(ctx context.Context, tenantID, sourceID, email string, nowMs int64) error
+	// HasPendingHost 报告同主机同邮箱是否已有待处理（没过期）的主机邀请。
+	HasPendingHost(ctx context.Context, tenantID, sourceID, email string, nowMs int64) (bool, error)
 	// ExpireDue 把到期的 pending 落库成 expired，答它们的 id 与团队（job 发 invitationChanged 用）。
 	ExpireDue(ctx context.Context, tenantID string, nowMs int64) ([]Invitation, error)
 }
