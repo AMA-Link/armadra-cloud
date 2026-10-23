@@ -60,8 +60,6 @@ func (r *rig) issuedCount(accountID, sourceID string) int {
 	return r.queryInt("SELECT count(*)::int FROM cloud_issued_tokens WHERE tenant_id = 'cloud' AND account_id = $1 AND source_id = $2", accountID, sourceID)
 }
 
-func (r *rig) revokedCount() int { return r.queryInt("SELECT count(*)::int FROM relay_revoked_tokens") }
-
 func (r *rig) grantRow(grantID string) (revokedAt *int64, revokedBy string) {
 	r.t.Helper()
 	var by *string
