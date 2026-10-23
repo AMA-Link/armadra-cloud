@@ -35,7 +35,7 @@
 ## 备份
 
 - **PostgreSQL**：按库备份，`docker compose exec postgres pg_dump -U armadra -Fc armadra_cloud > backup.dump`；恢复到空库后 `armadra-cloud migrate` 核对账本。签名私钥在库里，由 `secrets/master_key` 包裹，**主密钥必须另存**，丢了库里的签名钥与 TOTP 种子作废（所有会话与令牌失效，运营要重新登记 TOTP）。
-- **Redis 不备份**：它只放可重建的东西。撤销与签发索引另存 PostgreSQL（`relay_revoked_tokens`、`cloud_issued_tokens`），控制面 `serve` 启动与 Redis 重连时重放回 Redis；Redis 开着 AOF（`appendfsync everysec`）只为减少重启后的空窗。Redis 清空后，节点表 20 秒内由节点写回，撤销由控制面重放。
+- **Redis 不备份**：它只放可重建的东西。撤销与签发索引另存 PostgreSQL（`relay_revoked_tokens`、`cloud_issued_tokens`），控制面 `serve` 启动与 Redis 重连时重放回 Redis；Redis 开着 AOF（`appendfsync everysec`）只为减少重启后的空窗。Redis 清空后，节点表 20 秒内由节点写回，撤销由控制面重放（`pnpm e2e --mode saas` 场景 13 演练过）。
 
 ## 登录失败计数与 Redis 故障
 
@@ -47,3 +47,7 @@
 - 单个节点下线：控制台运营后台（`admin.relayNodeDrain`）或 `SIGTERM`；节点表标 `draining`、`/ready` 不就绪、隧道收 GOAWAY `rebalance`，源按 `heartbeatHint`（已去掉排空节点）重连到别的节点，经该节点转发的通道以 4404 结束，客户端重连。
 - 事故开关（`admin.incidentSet`）：`pauseAssertions`、`pauseRegistrations`、`rejectNewConnections`（节点拒绝新的隧道与端到端升级，在线连接保留）。
 - 停用团队（`admin.teamStatus`）：在线连接被踢，断言答 `403 team_suspended`，审计写 `actor.kind = operator` 与理由。
+
+## 端到端验收
+
+`pnpm e2e --mode saas`：真实控制面 + 两个节点 + 一次性 PostgreSQL / Redis / mailpit 容器，覆盖设计 §8.4 的 14 个场景（注册与验证邮件、团队与邀请、设备码登记、授予与断言、经节点转发、撤销、老版本 core、配额、运营停用、排空、Redis 清空后重放、泄密扫描）。`pnpm e2e --mode saas-nodes` 是只有节点的用例（测试签发者代替控制面：10 MB 双向转发、慢客户端、节点下线）。
