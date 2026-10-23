@@ -108,6 +108,26 @@ func WSCloseCode(code gen.ErrorCode) (protocol.CloseCode, bool) {
 	return c, ok
 }
 
+// InternodeOpen 是节点间连接上转一条端到端通道的 OPEN：e2e 的 OPEN 规定路径固定、不带头，没处放
+// 目标源，所以节点之间用 kind ws、路径寻址 `/s/<sourceId>/_relay/e2e`（与 personal 的源地址同一种写法）。
+// 持有节点用 ParseInternodeOpen 取回目标源，再以标准的 e2e OPEN 转给源。
+func InternodeOpen(sourceID string, base gen.OpenPayload) *gen.OpenPayload {
+	base.Kind, base.Method, base.Path, base.Headers = "ws", "GET", "/s/"+sourceID+gen.E2EPath, [][2]string{}
+	return &base
+}
+
+// ParseInternodeOpen 从节点间的 OPEN 里取目标源；不是 InternodeOpen 的形状答 false。
+func ParseInternodeOpen(open *gen.OpenPayload) (string, bool) {
+	if open == nil || open.Kind != "ws" || open.Method != "GET" || len(open.Headers) != 0 {
+		return "", false
+	}
+	target, ok := PathAddressing().Resolve(open.Path, "")
+	if !ok || target.Path != gen.E2EPath {
+		return "", false
+	}
+	return target.SourceID, true
+}
+
 // IsE2EPath 判断地址解析之后的路径是不是端到端通道（可以带 query）。
 func IsE2EPath(path string) bool {
 	return path == gen.E2EPath || strings.HasPrefix(path, gen.E2EPath+"?")
@@ -257,7 +277,9 @@ func (p *Policy) DecideUpgrade(ctx context.Context, r Request) (Decision, error)
 		p.o.Metrics.EdgeConnection(string(gen.ErrProtocolUnsupported))
 		return Decision{Code: gen.ErrProtocolUnsupported, SourceID: addressed.SourceID}, nil
 	}
-	if !adm.tunnel.HasCapability(gen.E2ECapability) {
+	// 节点间连接替不了远端的源声明能力：持有节点判，源没报 e2e 时答 RST refused，边缘照样以
+	// 4404 e2e_unsupported 关（见 edgeConn.Reset）。
+	if adm.tunnel.Link() == "" && !adm.tunnel.HasCapability(gen.E2ECapability) {
 		p.o.Metrics.EdgeConnection(string(gen.ErrSourceOffline))
 		return Decision{Code: gen.ErrSourceOffline, SourceID: addressed.SourceID, Reason: "e2e_unsupported"}, nil
 	}
@@ -402,11 +424,22 @@ func (p *Policy) admit(ctx context.Context, r Request, target Target, token stri
 // OPEN { kind: "e2e", method: "GET", path: "/_relay/e2e", headers: [] }
 // （子协议、令牌、头一概不转；地址里的 query 也不转）。给了 id 就按 e2e 类别统计。
 // 成功时 code 为空；失败时 code 是该关 WS 用的错误码。
+//
+// t 是节点间连接（t.Link() 非空，SaaS 的转发）时发 InternodeOpen（目标源在路径里），持有节点
+// 接到本地隧道、以标准的 e2e OPEN 转给源；流量照样记在入口节点（本节点）。
 func (p *Policy) OpenE2E(t *tunnel.Tunnel, r Request, remoteIP string, id *TrafficIdentity, sink tunnel.Sink) (*tunnel.Stream, gen.ErrorCode) {
+	sourceID := t.SourceID()
+	if t.Link() != "" {
+		target, ok := p.Resolve(r)
+		if !ok {
+			return nil, gen.ErrSourceOffline
+		}
+		sourceID = target.SourceID
+	}
 	var counter *traffic.Counter
 	if id != nil && p.o.Traffic != nil {
 		counter = p.o.Traffic.Counter(traffic.Key{
-			SourceID: t.SourceID(), Subject: id.Subject, DeviceID: id.DeviceID, Kind: traffic.KindE2E, TeamID: id.Team,
+			SourceID: sourceID, Subject: id.Subject, DeviceID: id.DeviceID, Kind: traffic.KindE2E, TeamID: id.Team,
 		})
 	}
 	open := &gen.OpenPayload{
@@ -415,6 +448,9 @@ func (p *Policy) OpenE2E(t *tunnel.Tunnel, r Request, remoteIP string, id *Traff
 	}
 	if origin, ok := originOf(r); ok {
 		open.ClientOrigin = &origin
+	}
+	if t.Link() != "" {
+		open = InternodeOpen(sourceID, *open)
 	}
 	s, err := t.OpenStream(open, sink, counter)
 	if err != nil {

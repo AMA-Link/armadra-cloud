@@ -130,9 +130,13 @@ const (
 )
 
 // Tunnel 是 ready 之后的一条隧道。只有中继发 OPEN；对端发来的 OPEN 答 RST protocol。
+//
+// 节点间转发（SaaS）的出向连接也是一条 Tunnel：本节点是开流方，对端是持有隧道的节点；
+// 它没有 sourceID，Link 答对端节点名。
 type Tunnel struct {
 	id          string
 	sourceID    string
+	link        string
 	coreVersion string
 	capsMu      sync.RWMutex
 	caps        map[string]struct{}
@@ -191,8 +195,14 @@ func New(id, sourceID, coreVersion string, tr Transport, cfg Config, hooks Hooks
 // ID 是隧道 ID。
 func (t *Tunnel) ID() string { return t.id }
 
-// SourceID 是隧道属于的源。
+// SourceID 是隧道属于的源（节点间连接为空串）。
 func (t *Tunnel) SourceID() string { return t.sourceID }
+
+// SetLink 标明这是到节点 peer 的节点间连接（Start 之前调）。
+func (t *Tunnel) SetLink(peer string) { t.link = peer }
+
+// Link 是节点间连接的对端节点名；源的隧道答空串。
+func (t *Tunnel) Link() string { return t.link }
 
 // CoreVersion 是源在 hello 里报的版本。
 func (t *Tunnel) CoreVersion() string { return t.coreVersion }

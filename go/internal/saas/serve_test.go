@@ -37,7 +37,8 @@ func TestNodeServesHostAddressedChannels(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := cluster.DecodeNode("a", []byte(raw))
-	if err != nil || info.URL != "ws://a.edge.example.test/t/v1" || info.InternodeURL != "ws://a.edge.example.test/x/v1" ||
+	addr := strings.TrimPrefix(n.URL, "http://")
+	if err != nil || info.URL != "ws://"+addr+"/t/v1" || info.InternodeURL != "ws://"+addr+"/x/v1" ||
 		info.Weight != 1 || info.Version != "9.9.9" || info.Draining {
 		t.Fatalf("节点表：%s %v", raw, err)
 	}
@@ -96,9 +97,9 @@ func TestSharedJWKSAcrossNodes(t *testing.T) {
 	if first != 1 {
 		t.Fatalf("第一个节点回源一次：%d", first)
 	}
-	// b 验一枚令牌（源不在 b 上：4404，但令牌已验过）。
-	if code := r.channel(b, r.relayToken(nil)).outcome(); code != int(protocol.CloseSourceOffline) {
-		t.Fatalf("b 上没有源的隧道：%d", code)
+	// b 验一枚令牌（源在 a 上，b 转发过去）。
+	if code := r.channel(b, r.relayToken(nil)).outcome(); code != 0 {
+		t.Fatalf("经 b 转发：%d", code)
 	}
 	if r.jwksHits.Load() != first {
 		t.Fatalf("b 应读共享副本：%d", r.jwksHits.Load())

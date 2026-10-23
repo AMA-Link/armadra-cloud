@@ -3,9 +3,12 @@ package saas
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +22,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
+	"github.com/AMA-Link/armadra-cloud/go/internal/testutil"
 	"github.com/AMA-Link/armadra-cloud/go/internal/testutil/relayenv"
 )
 
@@ -103,11 +107,13 @@ type running struct {
 
 func (r *rig) config(name string, over func(*Config)) Config {
 	r.t.Helper()
+	addr := freeAddr(r.t)
 	cfg, issues := LoadConfig(map[string]string{
-		"RELAY_LISTEN": "127.0.0.1:0", "RELAY_NODE_ID": name, "RELAY_DOMAIN": domain,
+		"RELAY_LISTEN": addr, "RELAY_NODE_ID": name, "RELAY_DOMAIN": domain,
 		"RELAY_CLOUD_ISSUER": r.env.Issuer.Issuer, "RELAY_REDIS_URL": r.redis,
-		"RELAY_TUNNEL_URL": "ws://" + name + ".edge.example.test/t/v1", "RELAY_ALLOW_INSECURE_TUNNEL": "1",
+		"RELAY_TUNNEL_URL": "ws://" + addr + "/t/v1", "RELAY_ALLOW_INSECURE_TUNNEL": "1",
 		"RELAY_JWKS_URL": r.jwks.URL + gen.PathJwksWellKnown, "RELAY_DRAIN_GRACE_MS": "1000",
+		"RELAY_NODE_TOKEN": r.nodeToken(name, nil),
 	}, func() (string, error) { return "h", nil })
 	if len(issues) > 0 {
 		r.t.Fatal(issues)
@@ -157,6 +163,44 @@ func (r *rig) start(name string, over func(*Config)) *running {
 	return nil
 }
 
+// freeAddr 找一个空闲的回环端口（节点表里要写真实的隧道与 /x/v1 地址）。
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().String()
+}
+
+// nodeToken 签一枚节点令牌（sub = 节点名）。
+func (r *rig) nodeToken(name string, over relayenv.Claims) string {
+	iat := time.Now().Unix()
+	claims := relayenv.Claims{
+		"iss": r.env.Issuer.Issuer, "sub": name, "aud": gen.TokenAudienceRelayNode,
+		"iat": iat, "exp": iat + 3600, "jti": "n." + name + "." + randomHex(6), "ver": 1,
+	}
+	for k, v := range over {
+		claims[k] = v
+	}
+	return r.env.Sign(r.t, gen.TokenTypeNode, claims)
+}
+
+// source 造另一个源（同一个测试签发者签它的令牌）。
+func (r *rig) source() *relayenv.Env {
+	r.t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	id := randomHex(16)
+	return &relayenv.Env{
+		Issuer: r.env.Issuer, Source: testutil.Key{Kid: id, Public: pub, Private: priv},
+		SourceID: id, Control: r.env.Control, Auth: r.env.Auth,
+	}
+}
+
 // relayToken 签一枚中继令牌（源是测试源）。
 func (r *rig) relayToken(over relayenv.Claims) string {
 	return r.env.RelayToken(r.t, over)
@@ -172,7 +216,13 @@ type client struct {
 // channel 经节点 n 开一条到测试源的端到端通道（Host 寻址）。
 func (r *rig) channel(n *running, token string) *client {
 	r.t.Helper()
-	header := http.Header{"Host": {r.env.SourceID + ".src." + domain}}
+	return r.channelTo(n, r.env.SourceID, token)
+}
+
+// channelTo 同 channel，源自选。
+func (r *rig) channelTo(n *running, sourceID, token string) *client {
+	r.t.Helper()
+	header := http.Header{"Host": {sourceID + ".src." + domain}}
 	d := websocket.Dialer{Subprotocols: []string{gen.E2ESubprotocol, gen.SubprotocolRelay + token}, HandshakeTimeout: 5 * time.Second}
 	c, _, err := d.Dial(strings.Replace(n.URL, "http://", "ws://", 1)+gen.E2EPath, header)
 	if err != nil {

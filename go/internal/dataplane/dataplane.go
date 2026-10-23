@@ -13,6 +13,7 @@
 package dataplane
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -56,6 +57,8 @@ type Options struct {
 	Gate edge.Gate
 	// ClientKick 为真时 kick 命令只踢客户端连接、不碰隧道（SaaS），由装配方接到 Edge.Disconnect。
 	ClientKick bool
+	// Lookup 换掉边缘找隧道的办法（SaaS：路由在别的节点时答到那个节点的节点间连接）；缺省是隧道表的 Lookup。
+	Lookup func(ctx context.Context, sourceID string) (*tunnel.Tunnel, error)
 }
 
 // Plane 是装配好的数据面。
@@ -87,9 +90,13 @@ func New(o Options) (*Plane, error) {
 		HandshakeTimeout: o.HandshakeTimeout, RouteTTL: o.RouteTTL, Log: o.Log, Metrics: p.Metrics,
 		ClientKick: o.ClientKick,
 	})
+	lookup := o.Lookup
+	if lookup == nil {
+		lookup = p.Hub.Lookup
+	}
 	e, err := edge.New(edge.Options{
 		NodeID: o.NodeID, Addressing: o.Addressing, Auth: p.Auth, Control: o.Control,
-		Lookup: p.Hub.Lookup, Log: o.Log, Metrics: p.Metrics, CORSOrigins: o.CORSOrigins,
+		Lookup: lookup, Log: o.Log, Metrics: p.Metrics, CORSOrigins: o.CORSOrigins,
 		WSPing: o.WSPing, WSIdle: o.WSIdle, ClientIP: o.ClientIP, Traffic: o.Traffic, Poller: o.Poller,
 		Gate: o.Gate,
 	})

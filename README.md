@@ -91,6 +91,7 @@ pnpm test:integration  # 集成测试，需要 pnpm dev:up；见下
 pnpm images:build      # 本地构建两个镜像（不推送）
 pnpm e2e --mode personal  # 跨仓端到端：个人中转 + Armadra 服务器壳 + Node 客户端，需要 Docker，见下
 pnpm e2e --mode personal-workers  # 本地 workerd 上的 Workers 中继对假 core 与 Node 客户端，不需要 Docker
+pnpm e2e --mode saas      # 三个 SaaS 中继节点 + 一次性 Redis 容器对假 core：节点间转发、撤销跨节点、下线再平衡
 pnpm db:migrate        # 执行数据库迁移（读 .env.dev）
 pnpm protocol:pack     # 协议包打成 tgz（.data/pack/），核对内容，不发布
 ```

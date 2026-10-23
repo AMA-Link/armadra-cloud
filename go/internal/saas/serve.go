@@ -28,6 +28,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/traffic"
+	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
 // Run 跑 `armadra-relay saas <args>`：只认 `serve`（与 `--help`）；收到 SIGINT / SIGTERM 后排空、停下并以 0 退出。
@@ -60,8 +61,12 @@ func Run(args []string, env map[string]string, version, usage string, stdout, st
 type Node struct {
 	URL   string
 	Plane *dataplane.Plane
+	// Metrics 是全部指标的文本（个人中转的指标加节点间转发的三项）。
+	Metrics func() string
 	// Drain 开始排空（与收到 drain 命令相同）。
 	Drain func()
+
+	internode *internodeServer
 }
 
 // Serve 起节点，ctx 结束时排空并关掉；ready 非空时在监听就绪后收到节点（测试用）。
@@ -151,14 +156,39 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 	if pool != nil {
 		probes["database"] = func(ctx context.Context) error { return pool.Ping(ctx) }
 	}
-	plane, err := dataplane.New(dataplane.Options{
+	// 节点间转发（/x/v1）：出向连接要本节点的节点令牌；入向只验对端的令牌。
+	var plane *dataplane.Plane
+	metrics := &internodeMetrics{}
+	local := func(sourceID string) *tunnel.Tunnel { return plane.Hub.Local(sourceID) }
+	var out *links
+	if cfg.NodeToken != "" {
+		out = newLinks(cfg.NodeID, cfg.NodeToken, cfg.AllowInsecureTunnel, client, prefix, log, metrics)
+	} else {
+		log.Warn("没配 RELAY_NODE_TOKEN，源在别的节点上时不转发")
+	}
+	var in *internodeServer
+	metrics.streams = func() int {
+		n := in.streams()
+		if out != nil {
+			n += out.streams()
+		}
+		return n
+	}
+	plane, err = dataplane.New(dataplane.Options{
 		Mode: "saas", NodeID: cfg.NodeID, Version: version, Control: ctl,
 		Addressing: edge.HostAddressing(cfg.Domain), Log: log, ClientIP: clientIP, Traffic: meter,
 		Probes: probes, Gate: g, ClientKick: true,
+		Lookup: lookup(ctl.Routes(), cfg.NodeID, local, out),
+		UpgradeExtra: func(w http.ResponseWriter, r *http.Request) bool {
+			return in.HandleUpgrade(w, r)
+		},
 	})
 	if err != nil {
 		return err
 	}
+	in = newInternodeServer(plane.Auth, local, log, metrics)
+	// 全部指标：个人中转原有的在前（逐字节不变），再接准入闸与节点间转发的。
+	render := func() string { return plane.Metrics.Render() + g.render() + metrics.render() }
 	var planeDown sync.Once
 	shutdownPlane := func(grace time.Duration) { planeDown.Do(func() { plane.Shutdown(grace) }) }
 	defer shutdownPlane(0)
@@ -242,7 +272,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 			bg.Wait()
 			return fmt.Errorf("指标监听失败：%w", err)
 		}
-		metricsSrv = &http.Server{Handler: obs.MetricsHandler(func() string { return plane.Metrics.Render() + g.render() }, cfg.MetricsToken), ReadHeaderTimeout: 10 * time.Second}
+		metricsSrv = &http.Server{Handler: obs.MetricsHandler(render, cfg.MetricsToken), ReadHeaderTimeout: 10 * time.Second}
 		go func() { _ = metricsSrv.Serve(mln) }()
 	}
 	addr := ln.Addr().(*net.TCPAddr)
@@ -251,7 +281,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	if ready != nil {
-		ready(&Node{URL: url, Plane: plane, Drain: drain})
+		ready(&Node{URL: url, Plane: plane, Drain: drain, Metrics: render, internode: in})
 	}
 
 	var serveErr error
@@ -273,6 +303,11 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 		time.Sleep(100 * time.Millisecond)
 	}
 	shutdownPlane(time.Second)
+	// 边缘连接都断了：出向连接上已经没有流；本地隧道都关了：入向连接上转来的流已经 RST。
+	if out != nil {
+		out.close()
+	}
+	in.close()
 	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(sctx)

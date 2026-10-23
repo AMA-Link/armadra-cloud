@@ -50,7 +50,7 @@
 - 怎么跑见 [README](README.md)；文档索引在 [docs/README.md](docs/README.md)，新增文档要登记。
 - 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表与 `cloud-openapi.json` 由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
 - 协议包的黄金夹具、schema 导出（`schema/`，JSON Schema、错误码表、常量与 OpenAPI）与身份向量是生成物：改了帧、声明、契约或身份常量，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`pnpm --filter @armadra/platform-protocol schema`、`pnpm contract:generate`、`node scripts/gen-vectors.mjs`），`pnpm protocol:check` 守住。
-- 验证：`pnpm check`、`pnpm repo:test`、`pnpm go:check`、`pnpm test`、`pnpm test:integration`（需 `pnpm dev:up`）、`pnpm images:build`；Workers 中继另有 `pnpm e2e --mode personal-workers`（本地 workerd）。
+- 验证：`pnpm check`、`pnpm repo:test`、`pnpm go:check`、`pnpm test`、`pnpm test:integration`（需 `pnpm dev:up`）、`pnpm images:build`；Workers 中继另有 `pnpm e2e --mode personal-workers`（本地 workerd）；SaaS 中继节点另有 `pnpm e2e --mode saas`（三个节点 + 一次性 Redis 容器）。
 - 发布（npm、GHCR）、域名、证书、密钥都是对外操作，由维护者执行；本地绝不手动 `npm publish` / `docker push`。Workers 中继同理：`wrangler deploy` / `rollback` / `secret put|delete`、改 DNS 与面板设置都由维护者执行，测试与端到端只用本地 workerd（vitest 的 Workers 插件、`wrangler dev --local`）。
 - 依赖写精确版本（无 `^`）；改生产依赖后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`（含 Go 模块）。
 - 不出现任何第三方参考项目的名字。
