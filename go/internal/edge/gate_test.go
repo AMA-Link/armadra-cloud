@@ -148,6 +148,8 @@ func TestTakeBySubjectAndDevice(t *testing.T) {
 	r.policy.TrackDevice(b, "s1", "acct_1", "dev_2")
 	r.policy.TrackDevice(c, "s1", "acct_2", "dev_1")
 	r.policy.TrackDevice(d, "s2", "acct_1", "dev_1")
+	legacy := &handle{"legacy"}
+	r.policy.TrackDevice(legacy, "s2", "acct_1", "") // 老令牌没带 dev
 	got := r.policy.Take(edge.ConnectionFilter{SourceID: "s1", Subject: "acct_1", DeviceID: "dev_1"})
 	if len(got) != 1 || got[0] != edge.Handle(a) {
 		t.Fatalf("%v", got)
@@ -161,6 +163,11 @@ func TestTakeBySubjectAndDevice(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 	if got := r.policy.Take(edge.ConnectionFilter{SourceID: "s1"}); len(got) != 1 || got[0] != edge.Handle(c) {
+		t.Fatalf("%v", got)
+	}
+	// 按设备踢时，没带 dev 的连接也踢（宁多踢不漏踢），带了别的 dev 的不踢。
+	got = r.policy.Take(edge.ConnectionFilter{SourceID: "s2", Subject: "acct_1", DeviceID: "dev_9"})
+	if len(got) != 1 || got[0] != edge.Handle(legacy) {
 		t.Fatalf("%v", got)
 	}
 }

@@ -61,14 +61,20 @@ type Config struct {
 	// DrainGrace 是排空（GOAWAY rebalance）的宽限，缺省协议值 30 秒。
 	DrainGrace time.Duration
 
+	// TeamConcurrent 与 TeamConnectPerMinute 是团队额度键缺失（或坏了）时节点用的缺省，取最严格的套餐
+	// （Free：并发 10）；控制面写的 relay:quota:team:* 覆盖并发上限。
+	TeamConcurrent       int
+	TeamConnectPerMinute int
+
 	// RedisPrefix 是键与频道的前缀，缺省 relay:（只给测试改）。
 	RedisPrefix string
 }
 
 var (
 	listenPattern = regexp.MustCompile(`^(?:\[([^\]]+)\]|([^:]+)):(\d{1,5})$`)
-	nodePattern   = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-	nodeUnsafe    = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+	// nodePattern 与契约的 relayNodeIdSchema 同一条（节点令牌的 sub、节点表的字段、命令频道的 id）。
+	nodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	nodeUnsafe  = regexp.MustCompile(`[^a-z0-9-]`)
 )
 
 // readFile 读 *_FILE 变量指向的文件（秘密），测试替换。
@@ -84,6 +90,7 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 	bad := func(key, why string) { issues = append(issues, key+"："+why) }
 	cfg := Config{
 		Host: "0.0.0.0", Port: 8443, LogLevel: obs.LevelInfo, Weight: 1,
+		TeamConcurrent: DefaultTeamConcurrent, TeamConnectPerMinute: DefaultTeamConnectPerMinute,
 		DrainGrace: time.Duration(protocol.GoawayGraceMs) * time.Millisecond,
 	}
 	if v, ok := get("RELAY_LISTEN"); ok {
@@ -100,16 +107,14 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 	}
 	if v, ok := get("RELAY_NODE_ID"); ok {
 		if !nodePattern.MatchString(v) {
-			bad("RELAY_NODE_ID", "只能是字母、数字与 . _ -，1–64 个字符")
+			bad("RELAY_NODE_ID", "只能是小写字母、数字与 -，以字母或数字开头，1–63 个字符")
 		}
 		cfg.NodeID = v
 	} else {
-		name, _ := hostname()
-		name = nodeUnsafe.ReplaceAllString(name, "-")
-		if len(name) > 64 {
-			name = name[:64]
+		cfg.NodeID = NodeIDFromHost(hostname)
+		if !nodePattern.MatchString(cfg.NodeID) {
+			bad("RELAY_NODE_ID", "没设，主机名也换不出合法的节点名，请显式设置")
 		}
-		cfg.NodeID = name
 	}
 	if v, ok := get("RELAY_DOMAIN"); ok {
 		cfg.Domain = strings.ToLower(v)
@@ -232,6 +237,19 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 			cfg.TrustedProxy = tp
 		}
 	}
+	for _, item := range []struct {
+		key  string
+		into *int
+	}{{"RELAY_TEAM_CONCURRENT", &cfg.TeamConcurrent}, {"RELAY_TEAM_CONNECT_PER_MINUTE", &cfg.TeamConnectPerMinute}} {
+		if v, ok := get(item.key); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 1_000_000 {
+				bad(item.key, "要是 1–1000000 的整数")
+			} else {
+				*item.into = n
+			}
+		}
+	}
 	if v, ok := get("RELAY_DRAIN_GRACE_MS"); ok {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 600_000 {
@@ -241,6 +259,17 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 		}
 	}
 	return cfg, issues
+}
+
+// NodeIDFromHost 把主机名换成节点名：转小写、[^a-z0-9-] 换成 -、去掉开头的 -、截到 63 个字符。
+func NodeIDFromHost(hostname func() (string, error)) string {
+	name, _ := hostname()
+	name = nodeUnsafe.ReplaceAllString(strings.ToLower(name), "-")
+	name = strings.TrimLeft(name, "-")
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
 }
 
 func isURL(v string) bool {

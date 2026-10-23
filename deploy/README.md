@@ -27,25 +27,26 @@
 
 中继（`armadra-relay saas serve`，SaaS 中继节点，Go 设计 §3.6；TLS 在前面的反向代理终止，明文监听）：
 
-| 变量                                                 | 必填 | 说明                                                                                                      |
-| ---------------------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------- |
-| `RELAY_LISTEN`                                       |      | 缺省 `0.0.0.0:8443`                                                                                       |
-| `RELAY_NODE_ID`                                      |      | 节点名（节点表与命令频道 `relay:node:<id>` 的 id），缺省取主机名；与节点令牌的 `sub` 一致                 |
-| `RELAY_DOMAIN`                                       | 是   | `<sourceId>.src.<域>` 的 `<域>`                                                                           |
-| `RELAY_CLOUD_ISSUER`                                 | 是   | 控制面 issuer（令牌的 `iss`）                                                                             |
-| `RELAY_JWKS_URL`                                     |      | 缺省 `<issuer>/.well-known/jwks.json`；各节点共用 Redis 里的副本，同一时刻只有一个节点回源                |
-| `RELAY_REDIS_URL`                                    | 是   | 与控制面共用的那一个 Redis（≥ 7.4，节点表用 `HPEXPIRE`）                                                  |
-| `RELAY_TUNNEL_URL`                                   | 是   | 本节点自己的隧道地址 `wss://<node>.edge.<域>/t/v1`，写进节点表，源按 `heartbeatHint` 连它                 |
-| `RELAY_INTERNODE_URL`                                |      | 别的节点连本节点 `/x/v1` 的地址，缺省由 `RELAY_TUNNEL_URL` 把路径换成 `/x/v1`                             |
-| `RELAY_NODE_WEIGHT`                                  |      | 节点表里的权重（rendezvous 加权），1–1000，缺省 1                                                         |
-| `RELAY_NODE_TOKEN` / `RELAY_NODE_TOKEN_FILE`         |      | 本节点的节点令牌（`armadra-cloud nodes token`），节点间转发时出示；没有就不向别的节点转发                 |
-| `RELAY_DATABASE_URL` / `RELAY_DATABASE_URL_FILE`     |      | 流量统计的 PostgreSQL（`armadra_relay_traffic` 角色）；账本要有 0009，没有就拒绝启动；不配就不记流量      |
-| `RELAY_METRICS_LISTEN`                               |      | 指标监听（`/metrics`）                                                                                    |
-| `RELAY_METRICS_TOKEN` / `RELAY_METRICS_TOKEN_FILE`   |      | 指标的 Bearer 令牌                                                                                        |
-| `RELAY_TRUSTED_PROXY` / `RELAY_TRUSTED_PROXY_PREFER` |      | 受信反向代理的 IP / CIDR（逗号分隔）与先读的头（`forwarded-for` 缺省 / `real-ip`），规则同 personal       |
-| `RELAY_DRAIN_GRACE_MS`                               |      | 排空（GOAWAY rebalance）的宽限，缺省 30000；容器的停止宽限要比它长（compose 的 `stop_grace_period: 40s`） |
-| `RELAY_ALLOW_INSECURE_TUNNEL`                        |      | `1` 允许 `ws://` 的隧道与 `/x/v1` 地址，只用于本地开发                                                    |
-| `RELAY_LOG_LEVEL`                                    |      | 缺省 `info`                                                                                               |
+| 变量                                                      | 必填 | 说明                                                                                                                                                   |
+| --------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RELAY_LISTEN`                                            |      | 缺省 `0.0.0.0:8443`                                                                                                                                    |
+| `RELAY_NODE_ID`                                           |      | 节点名（节点表与命令频道 `relay:node:<id>` 的 id），`^[a-z0-9][a-z0-9-]{0,62}$`；缺省由主机名换出（转小写、其余字符换成 `-`）；与节点令牌的 `sub` 一致 |
+| `RELAY_DOMAIN`                                            | 是   | `<sourceId>.src.<域>` 的 `<域>`                                                                                                                        |
+| `RELAY_CLOUD_ISSUER`                                      | 是   | 控制面 issuer（令牌的 `iss`）                                                                                                                          |
+| `RELAY_JWKS_URL`                                          |      | 缺省 `<issuer>/.well-known/jwks.json`；各节点共用 Redis 里的副本，同一时刻只有一个节点回源                                                             |
+| `RELAY_REDIS_URL`                                         | 是   | 与控制面共用的那一个 Redis（≥ 7.4，节点表用 `HPEXPIRE`）                                                                                               |
+| `RELAY_TUNNEL_URL`                                        | 是   | 本节点自己的隧道地址 `wss://<node>.edge.<域>/t/v1`，写进节点表，源按 `heartbeatHint` 连它                                                              |
+| `RELAY_INTERNODE_URL`                                     |      | 别的节点连本节点 `/x/v1` 的地址，缺省由 `RELAY_TUNNEL_URL` 把路径换成 `/x/v1`                                                                          |
+| `RELAY_NODE_WEIGHT`                                       |      | 节点表里的权重（rendezvous 加权），1–1000，缺省 1                                                                                                      |
+| `RELAY_NODE_TOKEN` / `RELAY_NODE_TOKEN_FILE`              |      | 本节点的节点令牌（`armadra-cloud nodes token`），节点间转发时出示；没有就不向别的节点转发                                                              |
+| `RELAY_DATABASE_URL` / `RELAY_DATABASE_URL_FILE`          |      | 流量统计的 PostgreSQL（`armadra_relay_traffic` 角色）；账本要有 0009，没有就拒绝启动；不配就不记流量                                                   |
+| `RELAY_METRICS_LISTEN`                                    |      | 指标监听（`/metrics`）                                                                                                                                 |
+| `RELAY_METRICS_TOKEN` / `RELAY_METRICS_TOKEN_FILE`        |      | 指标的 Bearer 令牌                                                                                                                                     |
+| `RELAY_TRUSTED_PROXY` / `RELAY_TRUSTED_PROXY_PREFER`      |      | 受信反向代理的 IP / CIDR（逗号分隔）与先读的头（`forwarded-for` 缺省 / `real-ip`），规则同 personal                                                    |
+| `RELAY_TEAM_CONCURRENT` / `RELAY_TEAM_CONNECT_PER_MINUTE` |      | 控制面没写额度（或额度坏了）时的团队并发与建连速率，缺省 10 与 600 / 分钟（最严格的套餐）                                                              |
+| `RELAY_DRAIN_GRACE_MS`                                    |      | 排空（GOAWAY rebalance）的宽限，缺省 30000；容器的停止宽限要比它长（compose 的 `stop_grace_period: 40s`）                                              |
+| `RELAY_ALLOW_INSECURE_TUNNEL`                             |      | `1` 允许 `ws://` 的隧道与 `/x/v1` 地址，只用于本地开发                                                                                                 |
+| `RELAY_LOG_LEVEL`                                         |      | 缺省 `info`                                                                                                                                            |
 
 - Redis 不可达时拒绝启动（退出 1）；`/ready` 报 `redis`、`node`（排空中不就绪）与配了流量库时的 `database`。
 - `SIGTERM` 与控制面的 `drain`：节点表标 `draining`、隧道 GOAWAY `rebalance`、不再收新隧道；`SIGTERM` 等隧道走完（或宽限到）再关。

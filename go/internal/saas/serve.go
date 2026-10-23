@@ -89,7 +89,8 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 
 	// 控制面：订阅本节点频道；quota / incident 交给准入闸。
 	var ctl *redis.Plane
-	g := newGate(client, prefix, cfg.NodeID, func() control.Limiter { return ctl.Limits() }, onError)
+	g := newGate(client, prefix, cfg.NodeID, cfg.TeamConcurrent, func() control.Limiter { return ctl.Limits() }, onError)
+	defer g.close()
 	origin := jose.HTTPFetch(&http.Client{Timeout: 10 * time.Second}, cfg.JWKSURL)
 	startCtx, cancelStart := context.WithTimeout(ctx, 10*time.Second)
 	defer cancelStart()
@@ -97,7 +98,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 		Options: cluster.Options{
 			Issuer: cfg.CloudIssuer, Mode: "saas", NodeID: cfg.NodeID,
 			JWKS:   sharedJWKS(client, prefix, cfg.CloudIssuer, origin),
-			Limits: TeamLimitRules, OnError: onError,
+			Limits: teamLimitRules(cfg), OnError: onError,
 		},
 		Client: client, Prefix: prefix, NodeChannel: true, OnSignal: g.signal, OnSubscribed: g.reload,
 	})
@@ -185,6 +186,8 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 		return err
 	}
 	in = newInternodeServer(plane.Auth, local, tcfg, log, metrics)
+	// 全部指标：个人中转原有的在前（逐字节不变），再接准入闸与节点间转发的。
+	render := func() string { return plane.Metrics.Render() + g.render() + metrics.render() }
 	var planeDown sync.Once
 	shutdownPlane := func(grace time.Duration) { planeDown.Do(func() { plane.Shutdown(grace) }) }
 	defer shutdownPlane(0)
@@ -268,7 +271,6 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 			bg.Wait()
 			return fmt.Errorf("指标监听失败：%w", err)
 		}
-		render := func() string { return plane.Metrics.Render() + metrics.render() }
 		metricsSrv = &http.Server{Handler: obs.MetricsHandler(render, cfg.MetricsToken), ReadHeaderTimeout: 10 * time.Second}
 		go func() { _ = metricsSrv.Serve(mln) }()
 	}
@@ -278,7 +280,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	if ready != nil {
-		ready(&Node{URL: url, Plane: plane, Drain: drain, Metrics: func() string { return plane.Metrics.Render() + metrics.render() }})
+		ready(&Node{URL: url, Plane: plane, Drain: drain, Metrics: render})
 	}
 
 	var serveErr error
