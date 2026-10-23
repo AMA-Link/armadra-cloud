@@ -8,7 +8,8 @@
     "0006_saas_hosts.sql": "6a6874e85f6ad542e3dd6ae02a727e241f34b12df14e22a25ac98b2e09694175",
     "0007_saas_grants.sql": "c78f2d922e3ab317ef55fa784de1e258cc84b222766ddbbd0d2e3f2918ce8d93",
     "0008_saas_audit.sql": "fd866ae8a52e61972557962020fc3e57108a700564043d042a234318d7c11d3f",
-    "0009_saas_ops.sql": "7103c07f860fc526392fbee4d94a09647c9a298fce45631cc8b95b852001ae99"
+    "0009_saas_ops.sql": "7103c07f860fc526392fbee4d94a09647c9a298fce45631cc8b95b852001ae99",
+    "0010_saas_audit_security_index.sql": "18715dd8455279d2d425764312555ef747d9d8e153e3c77ce2022b9bd3f18a22"
   },
   "packages/control-store-sql/migrations": {
     "0001_init.sql": "b72ee6d046fd94a97c62d0b187d1c4281fab922ad74eca498df2dd58afa8e64a",
