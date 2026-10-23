@@ -1,0 +1,3 @@
+Hi {{.DisplayName}},
+
+Your account email was changed to {{.NewEmail}}. If this was not you, reset your password right away and contact us.
