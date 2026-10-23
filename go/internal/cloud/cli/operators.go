@@ -68,7 +68,7 @@ func operators(sub string, args []string, env config.Env, stdout, stderr io.Writ
 		}
 		fmt.Fprintf(stdout, "已给 %s 加上运营范围；下一步运行 armadra-cloud operators totp --email %s\n", email, email)
 	case "totp":
-		uri, err := admin.EnrollTOTP(ctx, db.SaaS(), db.Wrapper(), server.TenantID, email, otpIssuer, reset, nowMs)
+		uri, err := admin.EnrollTOTP(ctx, db.SaaS(), db.Wrapper(), nil, server.TenantID, email, otpIssuer, reset, nowMs)
 		if err != nil {
 			return operatorFail(err, stderr)
 		}

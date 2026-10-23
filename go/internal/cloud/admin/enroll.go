@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
@@ -46,8 +47,9 @@ func AddOperator(ctx context.Context, db saas.Store, tenantID, email string, now
 }
 
 // EnrollTOTP 为运营账号登记两步验证：生成 20 字节种子，用主密钥包裹后落库，答 otpauth 地址（调用方只在终端打印一次）。
-// 已登记过的拒绝，除非 reset（换种子：旧的作废，之前的登录挑战也就验不过了）。
-func EnrollTOTP(ctx context.Context, db saas.Store, wrapper *store.Wrapper, tenantID, email, issuer string, reset bool, nowMs int64) (uri string, err error) {
+// 已登记过的拒绝，除非 reset（换种子：旧种子作废；同一个事务里撤销该账号全部运营会话，提交后经 sink 通知撤销钩子，
+// sink 为 nil（命令行没有中继连接）时只撤库里的设备——令牌随设备失效，运营会话不签中继令牌）。
+func EnrollTOTP(ctx context.Context, db saas.Store, wrapper *store.Wrapper, sink core.RevocationSink, tenantID, email, issuer string, reset bool, nowMs int64) (uri string, err error) {
 	account, err := db.Read().AccountByEmail(ctx, tenantID, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
 		return "", err
@@ -73,6 +75,18 @@ func EnrollTOTP(ctx context.Context, db saas.Store, wrapper *store.Wrapper, tena
 		}
 		if err := tx.Ops().PutTOTP(ctx, tenantID, account.AccountID, core.RandomToken(16), wrap, nowMs); err != nil {
 			return err
+		}
+		if existing != nil {
+			devices, err := tx.Ops().RevokeOperatorDevices(ctx, tenantID, account.AccountID, nowMs)
+			if err != nil {
+				return err
+			}
+			if sink != nil {
+				deferred := relayctl.Deferred(tx, sink)
+				for _, id := range devices {
+					deferred.DeviceRevoked(ctx, account.AccountID, id)
+				}
+			}
 		}
 		return audit.Write(ctx, tx, tenantID, nowMs, saas.AuditEntry{
 			ActorKind: saas.ActorSystem, Action: "operator.totp", TargetKind: "account", TargetID: account.AccountID,

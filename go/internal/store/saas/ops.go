@@ -128,6 +128,8 @@ type OpsRepo interface {
 	RevokeDevices(ctx context.Context, tenantID, accountID string, nowMs int64) (int, error)
 	// UpdateIncident 在行锁下读-改-写事故开关（platform_settings 键 incident；两位运营同时改不同的项不会互相覆盖），答改后的值。
 	UpdateIncident(ctx context.Context, tenantID string, patch IncidentPatch, updatedBy string, nowMs int64) (Incident, error)
+	// RevokeOperatorDevices 撤销账号的全部运营会话设备（scope = operator），答被撤销的设备 id。
+	RevokeOperatorDevices(ctx context.Context, tenantID, accountID string, nowMs int64) ([]string, error)
 	// AddScope 给账号加一个特殊范围（已有则不动），答账号存在与否。
 	AddScope(ctx context.Context, tenantID, accountID, scope string, nowMs int64) (found bool, err error)
 	// PutTOTP 登记（或换掉）账号的两步验证；种子已包裹。

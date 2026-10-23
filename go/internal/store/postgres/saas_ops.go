@@ -229,6 +229,14 @@ func (r opsRepo) RevokeDevices(ctx context.Context, tenantID, accountID string, 
 	return int(tag.RowsAffected()), err
 }
 
+func (r opsRepo) RevokeOperatorDevices(ctx context.Context, tenantID, accountID string, nowMs int64) ([]string, error) {
+	return list(ctx, r.q, func(s scanner) (string, error) {
+		var id string
+		return id, s.Scan(&id)
+	}, `UPDATE devices SET revoked_at_ms = $3 WHERE tenant_id = $1 AND subject = $2 AND scope = 'operator' AND revoked_at_ms IS NULL
+	    RETURNING device_id`, tenantID, accountID, nowMs)
+}
+
 func (r opsRepo) AddScope(ctx context.Context, tenantID, accountID, scope string, nowMs int64) (bool, error) {
 	tag, err := r.q.Exec(ctx,
 		`UPDATE accounts SET scopes = CASE WHEN $3 = ANY(scopes) THEN scopes ELSE array_append(scopes, $3) END, updated_at_ms = $4
