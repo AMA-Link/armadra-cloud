@@ -19,6 +19,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/invitations"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/links"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/platform"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
@@ -133,6 +134,9 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	})
 	grantService.Register(runner)
 	for name, handler := range grantService.Handlers() {
+		handlers[name] = handler
+	}
+	for name, handler := range links.New(links.Options{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger, Hook: deps.GrantsHook}).Handlers() {
 		handlers[name] = handler
 	}
 	trustService := trust.New(trust.Options{Core: coreCtx, Store: saasStore, Limits: limits, Log: logger})

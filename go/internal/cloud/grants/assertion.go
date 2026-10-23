@@ -39,9 +39,8 @@ func (s *Service) assertion(ctx context.Context, call *api.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if caller.AccountID == "" {
-		// 链接访客（guest:<linkId>:…）随分享一批（S6）走链接路径；S5b 的云端没有这类会话。
-		return nil, core.Fail(gen.ErrSourceAccessDenied)
+	if caller.AccountID == "" && caller.LinkID == "" {
+		return nil, core.Fail(gen.ErrSourceAccessDenied) // 既不是账号也不是链接访客
 	}
 	incident, err := s.store.Read().Incident(ctx, s.tenant())
 	if err != nil {
@@ -49,6 +48,13 @@ func (s *Service) assertion(ctx context.Context, call *api.Call) (any, error) {
 	}
 	if incident.AssertionsPaused {
 		return nil, core.Fail(gen.ErrUnavailable)
+	}
+	if caller.AccountID == "" {
+		// 链接访客（guest:<linkId>:…）走链接路径：每个访客主体各自限流，签→索引→复核同账号（guest.go）。
+		if err := s.limits.Check(ctx, httpx.LimitAssertAcct, caller.Subject); err != nil {
+			return nil, err
+		}
+		return s.guestAssertion(ctx, call.IP, caller, in.SourceID, in.Device)
 	}
 	if err := s.limits.Check(ctx, httpx.LimitAssertAcct, caller.AccountID); err != nil {
 		return nil, err

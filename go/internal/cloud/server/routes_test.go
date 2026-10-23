@@ -27,6 +27,7 @@ var enabledThroughS5b = map[string]bool{
 	"sources.get": true, "sources.update": true, "sources.revoke": true, "me.sources": true,
 	"sources.assertion": true, "sources.accessList": true, "sources.accessRevoke": true,
 	"grants.list": true, "grants.create": true, "grants.update": true, "grants.revoke": true, "grants.effective": true,
+	"links.create": true, "links.get": true, "links.accept": true, "links.list": true, "links.update": true, "links.revoke": true,
 	"sources.trustRequest": true, "sources.trustResolve": true, "trust.list": true, "trust.reject": true,
 }
 
