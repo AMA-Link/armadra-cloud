@@ -38,6 +38,8 @@ const (
 	MinAdmin
 	// MinOwner：仅 owner。
 	MinOwner
+	// MinBilling：owner、billing（计划与用量，契约 §26 的 team:billing）。
+	MinBilling
 )
 
 func (m Min) allows(role saas.TeamRole) bool {
@@ -52,6 +54,8 @@ func (m Min) allows(role saas.TeamRole) bool {
 		return role == teamscope.Owner || role == teamscope.Admin
 	case MinOwner:
 		return role == teamscope.Owner
+	case MinBilling:
+		return role == teamscope.Owner || role == teamscope.Billing
 	}
 	return false
 }

@@ -13,6 +13,9 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/accounts"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/admin"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/billing"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
@@ -30,6 +33,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
+	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
 
 // assembly 是装配好的控制核与路由。
@@ -40,6 +44,8 @@ type assembly struct {
 	relay   *relayctl.Memory
 	// lockouts 是未注册邮箱的 Redis 失败计数（回落次数进指标）。
 	lockouts *httpx.UnknownLockouts
+	// admin 是运营后台（serve 启动后按库同步事故开关）。
+	admin *admin.Service
 	// jobs 是作业运行器（serve 在监听前启动、关闭时停止领取）。
 	jobs *jobs.Runner
 }
@@ -102,7 +108,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	handlers := map[string]api.Handler{}
 	for name, handler := range accounts.New(accounts.Options{
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer,
-		Unknown: lockouts, AppOrigin: cfg.AppOrigin,
+		Unknown: lockouts, AppOrigin: cfg.AppOrigin, MFA: &admin.RedisChallenges{Client: redisClient}, Wrapper: db.Wrapper(),
 	}).Handlers() {
 		handlers[name] = handler
 	}
@@ -138,6 +144,25 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	trustService := trust.New(trust.Options{Core: coreCtx, Store: saasStore, Limits: limits, Log: logger})
 	trustService.Register(runner)
 	for name, handler := range trustService.Handlers() {
+		handlers[name] = handler
+	}
+	auditService := audit.New(audit.Options{
+		Core: coreCtx, Store: saasStore, Log: logger, Partitions: db,
+		TrafficRetention: time.Duration(cfg.TrafficRetentionDays) * 24 * time.Hour,
+		Authorize: func(ctx context.Context, r saas.Reader, tenantID, accountID, teamID string) (saas.TeamScope, error) {
+			access, err := teams.Require(ctx, r, tenantID, accountID, teamID, teams.MinAdmin)
+			return access.Scope, err
+		},
+	})
+	auditService.Register(runner)
+	for name, handler := range auditService.Handlers() {
+		handlers[name] = handler
+	}
+	adminService := admin.New(admin.Options{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger, IncidentEvery: deps.IncidentEvery})
+	for name, handler := range adminService.Handlers() {
+		handlers[name] = handler
+	}
+	for name, handler := range billing.New(billing.Options{Core: coreCtx, Store: saasStore}).Handlers() {
 		handlers[name] = handler
 	}
 	webApp := ""
@@ -179,7 +204,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		}
 		api.WriteError(w, gen.ErrNotFound, "", 0, nil)
 	})
-	return &assembly{handler: mux, core: coreCtx, auth: auth, relay: relay, lockouts: lockouts, jobs: runner}, nil
+	return &assembly{handler: mux, core: coreCtx, auth: auth, relay: relay, lockouts: lockouts, jobs: runner, admin: adminService}, nil
 }
 
 // challengeGate 按配置建人机挑战（Turnstile）；校验的主机名只认控制台自己的。

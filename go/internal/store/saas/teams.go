@@ -139,6 +139,8 @@ type TeamRepo interface {
 	CountMemberHosts(ctx context.Context, scope TeamScope, accountID string) (int, error)
 	// Usage 是团队的当前用量：未撤销主机数与本月 e2e 流量字节（relay_traffic_buckets.team_id）。
 	Usage(ctx context.Context, scope TeamScope, monthStartMs, monthEndMs int64) (hosts int, trafficBytes int64, err error)
+	// TrafficDays 是团队在 [startMs, endMs) 的 e2e 流量按 UTC 天汇总（只含有流量的天，升序）。
+	TrafficDays(ctx context.Context, scope TeamScope, startMs, endMs int64) ([]DayBytes, error)
 
 	// Purge 清除团队（恢复期已满，purge_at_ms <= nowMs）：撤销主机、删授予、邀请、链接、待信任、注册令牌、source_spaces、
 	// entitlements 与团队行（成员、分组级联），审计行保留。清除是系统作业，没有调用者，所以收裸 id；

@@ -78,10 +78,15 @@ export const adminRelayNodeSchema = z.object({
   lastSeenAtMs: z.number().int().nullable(),
 });
 
-/** 事故开关：一键停签断言、停注册；中继侧拒绝新连接、保留在线连接。 */
+/**
+ * 事故开关：一键停签断言、停注册；中继侧拒绝新连接、保留在线连接。
+ * `rejectNewConnections` 是协议 1.4 发布后的只加不改补充（0.11.0 起）：缺省 = 关；
+ * 旧控制面不带它，客户端按关处理。
+ */
 export const adminIncidentSchema = z.object({
   pauseAssertions: z.boolean(),
   pauseRegistrations: z.boolean(),
+  rejectNewConnections: z.boolean().optional(),
   updatedAtMs: z.number().int().nullable(),
 });
 
@@ -205,6 +210,8 @@ export const admin = {
       z.object({
         pauseAssertions: z.boolean().optional(),
         pauseRegistrations: z.boolean().optional(),
+        /** 0.11.0 起：中继节点拒绝新的隧道与端到端升级，在线连接保留。 */
+        rejectNewConnections: z.boolean().optional(),
         reason: statusReason,
       }),
     )

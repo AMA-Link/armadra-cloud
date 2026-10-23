@@ -1,5 +1,5 @@
 // Package audit 写审计与账号安全日志（设计 §4.1、§6.1，迁移 0008）。只追加，只记主体、动作、对象、时间、
-// jti、IP 前缀与运营理由；不记任何内容、口令与令牌。读取与保留期随 S7。
+// jti、IP 前缀与运营理由；不记任何内容、口令与令牌。读取（service.go）、保留期与分区作业（retention.go）。
 package audit
 
 import (
