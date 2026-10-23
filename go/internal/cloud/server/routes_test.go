@@ -30,9 +30,10 @@ var enabledThroughS5b = map[string]bool{
 	"grants.list": true, "grants.create": true, "grants.update": true, "grants.revoke": true, "grants.effective": true,
 }
 
-// enabledS6 是 S6 实现的过程（单独一张表，各批并行时少冲突）；链接随 S6 的第三个 PR 加进来。
+// enabledS6 是 S6 实现的过程（单独一张表，各批并行时少冲突）。
 var enabledS6 = map[string]bool{
 	"sources.trustRequest": true, "sources.trustResolve": true, "trust.list": true, "trust.reject": true,
+	"links.create": true, "links.get": true, "links.accept": true, "links.list": true, "links.update": true, "links.revoke": true,
 }
 
 // enabledS7 是 S7 实现的过程（单独一张表，各批并行时少冲突）。

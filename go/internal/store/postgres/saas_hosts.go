@@ -125,16 +125,31 @@ func (r hostRepo) LockSource(ctx context.Context, tenantID, sourceID string) err
 }
 
 func (r reader) SpaceOf(ctx context.Context, tenantID, sourceID string) (*saas.HostSpace, error) {
-	var space saas.HostSpace
+	var (
+		space        saas.HostSpace
+		settings     *string
+		teamSettings string
+	)
 	err := r.q.QueryRow(ctx,
-		`SELECT p.source_id, COALESCE(p.team_id, ''), p.owner_account_id, s.revoked_at_ms IS NOT NULL
+		`SELECT p.source_id, COALESCE(p.team_id, ''), p.owner_account_id, s.revoked_at_ms IS NOT NULL, p.settings::text,
+		        COALESCE(t.settings::text, ''), COALESCE(t.status, ''), COALESCE(t.deleted_at_ms IS NOT NULL, false)
 		 FROM source_spaces p LEFT JOIN sources s ON s.tenant_id = p.tenant_id AND s.source_id = p.source_id
+		 LEFT JOIN teams t ON t.tenant_id = p.tenant_id AND t.team_id = p.team_id
 		 WHERE p.tenant_id = $1 AND p.source_id = $2`, tenantID, sourceID).
-		Scan(&space.SourceID, &space.TeamID, &space.OwnerAccountID, &space.Revoked)
+		Scan(&space.SourceID, &space.TeamID, &space.OwnerAccountID, &space.Revoked, &settings, &teamSettings, &space.TeamStatus, &space.TeamDeleted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	return &space, err
+	if err != nil {
+		return nil, err
+	}
+	if settings != nil {
+		space.Settings = []byte(*settings)
+	}
+	if teamSettings != "" {
+		space.TeamSettings = []byte(teamSettings)
+	}
+	return &space, nil
 }
 
 func (r hostRepo) CountPersonal(ctx context.Context, tenantID, accountID, excludeSourceID string) (int, error) {

@@ -30,6 +30,11 @@ const LinkMaxTTL = RefreshTTL
 // LinkURL 是链接的页面地址：<issuer>/j/<linkId>。
 func LinkURL(issuer, linkID string) string { return issuer + "/j/" + linkID }
 
+// LinkSummaryOf 是链接的线上摘要（SaaS 按一批主机列链接时自己查库、自己转换）。
+func LinkSummaryOf(issuer string, link store.LinkRecord) LinkSummary {
+	return toLinkSummary(issuer, link)
+}
+
 func toLinkSummary(issuer string, link store.LinkRecord) LinkSummary {
 	return LinkSummary{
 		LinkID: link.LinkID, Kind: "source_invite", Label: link.Label, Role: link.Role, SourceID: link.SourceID,
@@ -86,22 +91,48 @@ type AcceptInput struct {
 	Secret    string
 	Device    *DeviceInput
 	Challenge *ChallengeToken
+	// AccountID 是带会话接受时的账号（SaaS）；匿名接受为空，personal 恒为空。
+	AccountID string
+}
+
+// LinkHooks 是 SaaS 对链接接受的补充（personal 不设，行为不变）。
+type LinkHooks struct {
+	// Admit 在核过秘密之后、消耗次数之前调用：团队设置（匿名链接开关、guest 开关）、团队与主机状态等。
+	// 返回错误则整个接受被拒、不消耗次数。
+	Admit func(ctx context.Context, link store.LinkRecord, source store.SourceRecord, accountID string) error
+	// Issued 在访客设备建好、断言与中继令牌签出之后调用：登记签发索引，再读库复核（链接、主机、团队仍有效），
+	// 与并发的撤销交错也不漏撤（设计 §4.5 的签发顺序）。返回错误则撤销刚建的访客设备并把错误原样答出。
+	// 设了它，断言的 jti 带 s.<deviceId>.<sourceId> 前缀（TrackJTI），索引才按设备与源找得到。
+	Issued func(ctx context.Context, link store.LinkRecord, source store.SourceRecord, device store.DeviceRecord, grant Grant) error
 }
 
 // Links 是链接服务。
 type Links struct {
 	c       *Context
 	sources *Sources
+	hooks   LinkHooks
 }
 
 // NewLinks 建链接服务。
 func NewLinks(c *Context, sources *Sources) *Links { return &Links{c: c, sources: sources} }
+
+// WithHooks 返回带补充钩子的链接服务副本。
+func (l *Links) WithHooks(hooks LinkHooks) *Links {
+	copied := *l
+	copied.hooks = hooks
+	return &copied
+}
 
 // Create 建链接。
 func (l *Links) Create(ctx context.Context, caller Caller, input CreateLinkInput) (LinkCreated, error) {
 	if err := l.c.access().CanManage(ctx, caller, ManageTarget{SourceID: input.SourceID}, ManageLinkCreate); err != nil {
 		return LinkCreated{}, err
 	}
+	return l.CreateAuthorized(ctx, input)
+}
+
+// CreateAuthorized 建链接，调用方已自行核过管理权（SaaS 另有「谁能签链接」的主机设置，在 Policy 之外判）。
+func (l *Links) CreateAuthorized(ctx context.Context, input CreateLinkInput) (LinkCreated, error) {
 	if input.OrgJoin {
 		return LinkCreated{}, Fail(gen.ErrBadRequest)
 	}
@@ -196,6 +227,11 @@ func (l *Links) Accept(ctx context.Context, input AcceptInput, ip string) (LinkA
 	if input.Secret == "" || !SameHex(SecretHash(SecretLink, input.Secret), found.SecretHash) {
 		return LinkAccepted{}, Fail(gen.ErrLinkSecretInvalid)
 	}
+	if l.hooks.Admit != nil {
+		if err := l.hooks.Admit(ctx, *found, *source, input.AccountID); err != nil {
+			return LinkAccepted{}, err
+		}
+	}
 	// 次数与期限在原子的读-改-写里再核一遍，并发的 accept 不会超额。
 	var link store.LinkRecord
 	err = l.c.Ports.Links.Update(ctx, l.c.TenantID, input.LinkID, func(draft *store.LinkRecord) error {
@@ -220,12 +256,27 @@ func (l *Links) Accept(ctx context.Context, input AcceptInput, ip string) (LinkA
 	}
 	granted, err := l.sources.Grant(ctx, *source, created, GrantExtra{
 		Name: link.Label, Link: &gen.AssertionClaimsLink{LinkID: link.LinkID, InvitationID: link.InvitationID}, Scope: link.Scope,
+		TrackJTI: l.hooks.Issued != nil,
 	})
 	if err != nil {
 		return LinkAccepted{}, err
 	}
-	guest := true
-	l.c.Emit(LinkUsed{Type: "linkUsed", LinkID: link.LinkID, SourceID: source.SourceID, By: LinkUsedBy{Guest: &guest}, AtMs: nowMs}, nil)
+	if l.hooks.Issued != nil {
+		if err := l.hooks.Issued(ctx, link, *source, created, granted); err != nil {
+			if _, revokeErr := RevokeDevice(context.WithoutCancel(ctx), l.c, created.DeviceID); revokeErr != nil {
+				return LinkAccepted{}, revokeErr
+			}
+			return LinkAccepted{}, err
+		}
+	}
+	by := LinkUsedBy{}
+	if input.AccountID != "" {
+		by.AccountID = &input.AccountID
+	} else {
+		guest := true
+		by.Guest = &guest
+	}
+	l.c.Emit(LinkUsed{Type: "linkUsed", LinkID: link.LinkID, SourceID: source.SourceID, By: by, AtMs: nowMs}, nil)
 	public, err := base64.RawURLEncoding.DecodeString(source.PublicJWK.X)
 	if err != nil {
 		return LinkAccepted{}, err

@@ -102,12 +102,18 @@ type HostReader interface {
 	SpaceOf(ctx context.Context, tenantID, sourceID string) (*HostSpace, error)
 }
 
-// HostSpace 是主机的空间行连同源的撤销状态。
+// HostSpace 是主机的空间行连同源的撤销状态，以及判定分享链接与访客所需的设置与团队状态。
 type HostSpace struct {
 	SourceID       string
 	TeamID         string
 	OwnerAccountID string
 	Revoked        bool
+	// Settings 是主机设置 JSON（hostSettings，只存写过的项）；nil = 缺省。
+	Settings json.RawMessage
+	// TeamSettings、TeamStatus、TeamDeleted 是团队主机所属团队的设置 JSON、状态与是否在恢复期内；个人空间为空。
+	TeamSettings json.RawMessage
+	TeamStatus   string
+	TeamDeleted  bool
 }
 
 // HostPatch 是对 source_spaces 的部分更新：非 nil 的字段才写。
