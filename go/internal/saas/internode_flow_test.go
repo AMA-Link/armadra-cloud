@@ -10,7 +10,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
+	"github.com/AMA-Link/armadra-cloud/go/internal/protocol"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/testutil/relayenv"
 )
@@ -60,61 +62,76 @@ func (r *rig) fullDownload(n *running, src *relayenv.Env, total int) {
 	}
 }
 
-// 回归（审查 P0）：客户端在下载途中断开很多次之后，源仍能给别的客户端出数据——持有节点丢掉挂着的
-// 下行字节时要把源的隧道级信用还回去，否则 8 MiB 窗口漏光、源对所有客户端停发。
-func TestMidDownloadDisconnectsDoNotLeakCredit(t *testing.T) {
-	r := newRig(t)
-	a := r.start("a", nil)
-	b := r.start("b", nil)
-	// 每条下载远大于内核缓冲：客户端不读时字节一路堆到持有节点。
-	r.env.StartCore(t, a.URL, relayenv.CoreOptions{Capabilities: []string{"e2e"}, E2ESend: 64 << 20})
-	r.online(a)
-	for i := 0; i < 64; i++ {
-		c := r.stalled(b)
-		// 等下行字节堆满内核缓冲与入口节点的流窗，挂到持有节点上，再掉线（入口节点 RST 这条流）。
-		eventually(t, "持有节点上有挂着的字节", func() bool { return a.internode.pendingBytes() >= 192<<10 })
-		_ = c.NetConn().Close()
-		eventually(t, "那条流收掉", func() bool { return a.internode.pendingBytes() == 0 })
+// rawLink 以节点 b 的身份直连 a 的 /x/v1（扮演入口节点，自己掌握给不给信用）。
+func (r *rig) rawLink(a *running) *websocket.Conn {
+	r.t.Helper()
+	conn, _, err := websocket.DefaultDialer.Dial(strings.Replace(a.URL, "http://", "ws://", 1)+gen.PathInternode,
+		http.Header{"Authorization": {"Bearer " + r.nodeToken("b", nil)}})
+	if err != nil {
+		r.t.Fatal(err)
 	}
-	// 新的客户端读一段：源还在出数据。
-	c := r.channel(b, r.relayToken(nil))
-	got := 0
-	deadline := time.After(10 * time.Second)
-	for got < download {
-		select {
-		case m := <-c.msgs:
-			got += len(m)
-		case <-deadline:
-			t.Fatalf("源停发了：收到 %d", got)
+	r.t.Cleanup(func() { _ = conn.Close() })
+	// 读走持有节点发来的帧（丢弃）：不读的话内核缓冲塞满，持有节点的写协程卡住，测的就不是信用了。
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
 		}
+	}()
+	return conn
+}
+
+func writeFrame(t *testing.T, c *websocket.Conn, f protocol.Frame) {
+	t.Helper()
+	b, err := protocol.Encode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WriteMessage(websocket.BinaryMessage, b); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// 回归（审查 P0）：节点间连接在下载途中断开很多次（持有节点那一侧丢掉全部挂着的下行字节），
-// 源仍能出数据。去掉「丢 pending 时还源的信用」的修复，这个测试在第 40 次左右就会卡住。
-func TestLinkDropsMidDownloadDoNotLeakCredit(t *testing.T) {
-	r := newRig(t)
-	a := r.start("a", nil)
-	b := r.start("b", nil)
-	r.env.StartCore(t, a.URL, relayenv.CoreOptions{Capabilities: []string{"e2e"}, E2ESend: 64 << 20})
-	r.online(a)
-	for i := 0; i < 64; i++ {
-		c := r.stalled(b)
-		eventually(t, "持有节点上有挂着的字节", func() bool { return a.internode.pendingBytes() >= 192<<10 })
-		a.internode.dropConns()
-		eventually(t, "那条流收掉", func() bool { return a.internode.pendingBytes() == 0 })
-		_ = c.Close()
-	}
-	c := r.channel(b, r.relayToken(nil))
-	got := 0
-	deadline := time.After(10 * time.Second)
-	for got < download {
-		select {
-		case m := <-c.msgs:
-			got += len(m)
-		case <-deadline:
-			t.Fatalf("源停发了：收到 %d", got)
-		}
+// 回归（审查 P0）：转来的流被丢掉时（对端 RST、链路断开），持有节点上挂着的下行字节要把信用还给源，
+// 否则源的 8 MiB 隧道窗口被一点点漏光，源对所有客户端停发。用直连 /x/v1、不给信用的「入口节点」
+// 让字节确定地挂在持有节点上（不受内核缓冲大小影响）；去掉修复，两种丢法各自在 32 次左右就会卡住。
+func TestDroppedForwardedStreamsReturnCredit(t *testing.T) {
+	for _, how := range []string{"rst", "link"} {
+		t.Run(how, func(t *testing.T) {
+			r := newRig(t)
+			a := r.start("a", nil)
+			b := r.start("b", nil)
+			r.env.StartCore(t, a.URL, relayenv.CoreOptions{Capabilities: []string{"e2e"}, E2ESend: 64 << 20})
+			r.online(a)
+			link := r.rawLink(a)
+			for i := 0; i < 64; i++ {
+				id := uint32(2*i + 1)
+				writeFrame(t, link, protocol.Frame{Type: protocol.FrameOpen, StreamID: id, Open: edge.InternodeOpen(r.env.SourceID, gen.OpenPayload{RelayNode: "b"})})
+				eventually(t, "持有节点上挂满一个流窗", func() bool { return a.internode.pendingBytes() >= protocol.StreamWindow })
+				if how == "rst" {
+					writeFrame(t, link, protocol.Frame{Type: protocol.FrameRst, StreamID: id, Code: protocol.RstClientGone})
+				} else {
+					_ = link.Close()
+				}
+				eventually(t, "那条流收掉", func() bool { return a.internode.pendingBytes() == 0 })
+				if how == "link" {
+					link = r.rawLink(a)
+				}
+			}
+			// 源照常出数据：经 b 的真客户端读一段。
+			c := r.channel(b, r.relayToken(nil))
+			got := 0
+			deadline := time.After(10 * time.Second)
+			for got < download {
+				select {
+				case m := <-c.msgs:
+					got += len(m)
+				case <-deadline:
+					t.Fatalf("源停发了：收到 %d", got)
+				}
+			}
+		})
 	}
 }
 
