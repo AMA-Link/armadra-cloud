@@ -25,6 +25,7 @@
 - 错误码只从 `gen` 取（`gen.Err*`），不在业务代码里写错误码字符串；线上形状与 TS 一致：`{ code, message, requestId?, details? }`。
 - 日志字段走白名单（`internal/obs`）：字段名固定，不记流正文、终端输出、画布内容、口令、令牌明文；日志 `msg` 是简体中文短句，变量进字段。
 - `internal/core` 不 import `internal/tunnel`、`internal/edge`（延续「控制核不碰中继内核」），由 `repo.rules.json` 的 `goModules.internalBoundaries` 守。
+- `TeamScope` 只能在 `internal/cloud/teams` 的 `Require` / `Lock` 里构造：`internal/store/saas/teamscope` 的生产代码只许 `cloud/teams` 与 `store/saas`（类型别名）import，由 `goModules.onlyImportedBy`（白名单写法，`_test.go` 不受限）守；团队范围的仓储方法只收 `TeamScope`，不收裸 teamId。
 - 依赖写精确版本，`go/` 只许 import 标准库、本模块与 `repo.rules.json` 的 `goModules.allow` 登记过的模块（`go.mod` 不用 `replace`）；测试专用的模块（JSON Schema 校验库）只许出现在 `_test.go` 与 `testutil/`。staticcheck 固定版本，经 `go run` 调用，不进 `go.mod`。改 `go.mod` 后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。
 - 代码注释与日志、CLI 文案是简体中文短句，标识符用英文；夹具（`packages/platform-protocol/fixtures/`）作表驱动测试，测试不迁就实现去改夹具。
 - 存储与兼容：迁移 SQL 以 TS 包里的为准（`packages/control-store-sql/migrations/`、`packages/control-store-postgres/migrations/`），`go generate` 拷到 `go/internal/store/{sqlite,postgres}/migrations/` 供 `go:embed`，`repo-check` 按 `migrations.lock` 校验两份逐字节一致；新迁移只在 TS 包里加。`go/testdata/compat/` 是 TS 存储写出来的固定夹具（SQLite 库、PostgreSQL 转储、`state.json`）和生成脚本（`state-schema.ts`、`snapshot.ts` 是它自带的最小结构，TS 版个人中转已删除），`internal/store/compat` 的测试让 Go 读这些夹具、再把 Go 写过的库交回 TS 的存储（`control-store-*`）读；合同或记录形状变了，同 PR 重新生成夹具（`node go/testdata/compat/make-fixtures.mjs`，用法见脚本头）。

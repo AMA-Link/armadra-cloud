@@ -251,7 +251,7 @@ func (r *rig) do(method, path string, body any, h headers) response {
 	if lookup == http.MethodHead {
 		lookup = http.MethodGet
 	}
-	stub := strings.HasPrefix(path, "/v1/admin/") || strings.HasPrefix(path, "/v1/teams") // 测试挂的假处理器，不按契约验形状
+	stub := strings.HasPrefix(path, "/v1/admin/") // 测试挂的假处理器，不按契约验形状
 	if match := r.router.Match(lookup, strings.SplitN(path, "?", 2)[0]); match != nil && !stub && res.StatusCode == http.StatusOK && method != http.MethodHead {
 		if err := r.oapi.ValidateOutput(match.Route.Procedure, data); err != nil {
 			r.t.Fatalf("%s %s 的答复不符合 %s 的输出 schema：%v\n%s", method, path, match.Route.Procedure, err, data)

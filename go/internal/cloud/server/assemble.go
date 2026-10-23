@@ -19,6 +19,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/platform"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	controlredis "github.com/AMA-Link/armadra-cloud/go/internal/control/redis"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
@@ -95,6 +96,13 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer,
 		Unknown: lockouts, AppOrigin: cfg.AppOrigin,
 	}).Handlers() {
+		handlers[name] = handler
+	}
+	teamService := teams.New(teams.Options{
+		Core: coreCtx, Store: saasStore, Relay: relay, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+	})
+	teamService.Register(runner)
+	for name, handler := range teamService.Handlers() {
 		handlers[name] = handler
 	}
 	webApp := ""

@@ -25,7 +25,7 @@ func stubHandlers() map[string]api.Handler {
 		}
 		return map[string]any{"ok": true}, nil
 	}
-	return map[string]api.Handler{"admin.tenants": h, "teams.list": h}
+	return map[string]api.Handler{"admin.tenants": h}
 }
 
 // expectedCSRF 按设计 §5.2 独立重算：HKDF-SHA256(主密钥, info "armadra-cloud/csrf") 派生钥，

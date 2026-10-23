@@ -98,6 +98,46 @@ func (s *Service) meUpdate(ctx context.Context, call *api.Call) (any, error) {
 	return s.meView(ctx, caller, account)
 }
 
+// spaceOut 是 me.spaces 的一项（协议包 meSpaceSchema）：个人空间只有计划，团队空间另有标识、名字与角色。
+type spaceOut struct {
+	Kind   string `json:"kind"`
+	TeamID string `json:"teamId,omitempty"`
+	Slug   string `json:"slug,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Role   string `json:"role,omitempty"`
+	Plan   string `json:"plan"`
+}
+
+// meSpaces 是 me.spaces：个人空间（计划取 entitlements，没有行 = free）加所属的每个团队、角色与计划
+// （恢复期内的团队不列）。控制台顶部的空间切换用。
+func (s *Service) meSpaces(ctx context.Context, call *api.Call) (any, error) {
+	caller, err := call.Caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	account, err := s.owner(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	reader := s.store.Read()
+	personal := saas.FreePlan
+	if e, err := reader.Entitlement(ctx, s.tenant(), saas.SpacePersonal, account.AccountID); err != nil {
+		return nil, err
+	} else if e != nil {
+		personal = e.Plan
+	}
+	memberships, err := reader.Memberships(ctx, s.tenant(), account.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	spaces := make([]spaceOut, 0, len(memberships)+1)
+	spaces = append(spaces, spaceOut{Kind: "personal", Plan: personal})
+	for _, m := range memberships {
+		spaces = append(spaces, spaceOut{Kind: "team", TeamID: m.TeamID, Slug: m.Slug, Name: m.Name, Role: string(m.Role), Plan: m.Plan})
+	}
+	return map[string]any{"spaces": spaces}, nil
+}
+
 type deviceSummary struct {
 	DeviceID     string `json:"deviceId"`
 	Platform     string `json:"platform"`
