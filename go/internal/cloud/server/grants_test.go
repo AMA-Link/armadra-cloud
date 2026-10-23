@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -875,37 +876,71 @@ func TestAssertionStormVersusGrantChurn(t *testing.T) {
 	grantID := r.mustGrant(owner, h.id, guestOf(friend.accountID), "driver", nil)
 
 	var (
-		mu     sync.Mutex
-		tokens []string
-		wg     sync.WaitGroup
+		mu       sync.Mutex
+		tokens   []string
+		wg       sync.WaitGroup
+		denied   atomic.Int64
+		busy     atomic.Int64
+		budget   atomic.Int64          // 循环期间还能发的请求数
+		churning = make(chan struct{}) // 撤销重建循环结束（授予稳定）后关闭
 	)
+	budget.Store(30)
+	// attempt 签一次；答 200 记下令牌并返回 true。
+	attempt := func() bool {
+		res := r.assertion(friend, h.id)
+		switch res.status {
+		case 200:
+			a, b := jtisOf(t, res)
+			mu.Lock()
+			tokens = append(tokens, a, b)
+			mu.Unlock()
+			return true
+		case 403:
+			denied.Add(1)
+		case 503:
+			busy.Add(1)
+		default:
+			t.Errorf("意外的答复 %d：%s", res.status, res.body)
+		}
+		return false
+	}
 	for w := 0; w < 6; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 8; i++ {
-				res := r.assertion(friend, h.id)
-				switch res.status {
-				case 200:
-					a, b := jtisOf(t, res)
-					mu.Lock()
-					tokens = append(tokens, a, b)
-					mu.Unlock()
-				case 403, 503:
+			// 签到循环结束：压力覆盖整个撤销重建过程，不依赖调度快慢。断言每账号每分钟 60 次（429），
+			// 所以循环期间共用一份预算，留出余量给循环结束后的必签。
+			for stop := false; !stop; {
+				select {
+				case <-churning:
+					stop = true
 				default:
-					t.Errorf("意外的答复 %d：%s", res.status, res.body)
+					if budget.Add(-1) >= 0 {
+						attempt()
+					}
+					time.Sleep(3 * time.Millisecond)
 				}
 			}
+			// 授予已稳定，此后必然能签出（503 只是瞬时繁忙，重试几次）。
+			for i := 0; i < 4; i++ {
+				if attempt() {
+					return
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			t.Errorf("授予稳定之后 4 次都没签出来")
 		}()
 	}
 	for round := 0; round < 4; round++ {
 		r.expect(r.do("DELETE", "/v1/grants/"+grantID, nil, owner.bearer()), 200, "")
 		grantID = r.mustGrant(owner, h.id, guestOf(friend.accountID), "driver", nil)
 	}
+	close(churning)
 	wg.Wait()
 	r.expect(r.do("DELETE", "/v1/grants/"+grantID, nil, owner.bearer()), 200, "")
-	if len(tokens) == 0 {
-		t.Fatal("一次都没签出来，压力没有意义")
+	t.Logf("签出 %d 枚令牌；403 %d 次，503 %d 次", len(tokens), denied.Load(), busy.Load())
+	if len(tokens) < 12 {
+		t.Fatalf("每个协程在授予稳定后至少签出一次，应不少于 12 枚：%d", len(tokens))
 	}
 	for _, jti := range tokens {
 		if !r.run.Relay.IsRevoked(jti) {

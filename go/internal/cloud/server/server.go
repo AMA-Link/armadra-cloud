@@ -115,6 +115,9 @@ func LogLevel(name string) obs.Level {
 	return obs.LevelInfo
 }
 
+// syncStartAttempts 是启动时显式重放遇到 ErrQuotaUnstable 的最多尝试次数。
+const syncStartAttempts = 5
+
 // Serve 做完启动检查、开监听，之后在后台跑；调 Close 停。
 func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error) {
 	now := deps.Now
@@ -188,7 +191,7 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	undo.push(assembly.close)
 	// 6. 撤销、签发索引与团队额度的重放（设计 §7.2）：完成之前不开监听，所以不会对外答就绪。
 	if assembly.sync != nil {
-		if err := assembly.sync.Run(ctx); err != nil {
+		if err := runSyncWithRetry(ctx, assembly.sync, logger, 200*time.Millisecond); err != nil {
 			return fail(fmt.Errorf("重放撤销与签发索引失败：%w", err))
 		}
 	}
@@ -196,7 +199,7 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	// 作业在监听之前启动、在 HTTP 停收请求之后停（undo 后进先出）：等当前作业最多 jobsGrace。
 	assembly.jobs.Start()
 	if assembly.sync != nil {
-		// 撤销每 10 分钟从 PostgreSQL 补进一次 Redis（SET NX）：Redis 只拒写而订阅正常时，没有重新就绪的重放可靠。
+		// 撤销每 10 分钟从 PostgreSQL 补进一次 Redis（先 EXISTS，缺的用 ReplayRevoke：SET PXAT + 广播）：Redis 只拒写而订阅正常时，没有重新就绪的重放可靠。
 		undo.push(assembly.sync.StartRevocationReplay(context.Background()))
 	}
 	undo.push(func() { assembly.jobs.Stop(jobsGrace) })
@@ -347,5 +350,24 @@ func watchKeys(ctx context.Context, db *postgres.DB, logger *obs.Logger, every t
 			continue
 		}
 		last = revision
+	}
+}
+
+// runSyncWithRetry 启动时显式重放一次。额度与重放交错（ErrQuotaUnstable）是瞬时的：原地退避重试，
+// 最多 syncStartAttempts 次（first 起翻倍，封顶 2 秒），再放弃，避免启动失败。其他错误立即返回。
+func runSyncWithRetry(ctx context.Context, sync interface{ Run(context.Context) error }, logger *obs.Logger, first time.Duration) error {
+	wait := first
+	for attempt := 1; ; attempt++ {
+		err := sync.Run(ctx)
+		if err == nil || !errors.Is(err, relayctl.ErrQuotaUnstable) || attempt >= syncStartAttempts {
+			return err
+		}
+		logger.Warn("额度重放与变更交错，退避后重试", obs.Operation("relayctl.sync"), obs.Count(attempt))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, 2*time.Second)
 	}
 }
