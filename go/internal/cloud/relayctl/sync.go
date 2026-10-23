@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/quota"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -12,6 +13,15 @@ import (
 
 // ErrSyncing 是重放进行中时 /ready 的答复（设计 §7.2：重放完成前不对外答就绪）。
 var ErrSyncing = errors.New("正在把撤销、签发索引与团队额度重放进 Redis")
+
+// ErrQuotaUnstable：额度重写的最后一轮写完之后，PostgreSQL 里的额度又变了（与重放交错的变更），这次重放作废重来。
+var ErrQuotaUnstable = errors.New("团队额度在重放期间持续变化，重放作废重来")
+
+// quotaWriteRounds 是额度重写最多写几轮；之后还有一次只比对的读。
+const quotaWriteRounds = 3
+
+// DefaultReplayEvery 是撤销定时重放的间隔。
+const DefaultReplayEvery = 10 * time.Minute
 
 // Sync 把 PostgreSQL 里不能丢的状态重写进 Redis（设计 §7.2）：
 //
@@ -27,6 +37,8 @@ type Sync struct {
 	Redis  *Redis
 	Now    Clock
 	Log    *obs.Logger
+	// ReplayEvery 是撤销定时重放的间隔；缺省 DefaultReplayEvery。
+	ReplayEvery time.Duration
 
 	syncing atomic.Int32
 }
@@ -80,15 +92,19 @@ func (s *Sync) Run(ctx context.Context) error {
 	if err := s.Redis.Restore(ctx, revoked, issued); err != nil {
 		return err
 	}
-	// 额度：写完再读 PostgreSQL 核对，不一致就再写（额度变更是提交之后才写 Redis 的，重放读 PostgreSQL 与写 Redis 之间
-	// 如果有人改了额度，重放会写回旧值；核对到的差异在下一轮修正，最多三轮）。
-	for attempt := 0; attempt < 3; attempt++ {
+	// 额度：写完再读 PostgreSQL 核对。额度变更是提交之后才写 Redis 的，重放读 PostgreSQL 与写 Redis 之间如果有人改了额度，
+	// 重放会把旧值写回；最多写三轮收敛，第四次读只比对——还不一致就报错（作为就绪回调则这次订阅作废、退避重连再来），
+	// 不再留着一个没人核对过的最后一次写。
+	for round := 0; round <= quotaWriteRounds; round++ {
 		fresh, err := s.readQuotas(ctx)
 		if err != nil {
 			return err
 		}
-		if attempt > 0 && sameQuotas(fresh, quotas) {
+		if round > 0 && sameQuotas(fresh, quotas) {
 			break
+		}
+		if round == quotaWriteRounds {
+			return ErrQuotaUnstable
 		}
 		if err := s.Redis.WriteQuotas(ctx, fresh); err != nil {
 			return err
@@ -128,4 +144,56 @@ func sameQuotas(a, b TeamQuotas) bool {
 		}
 	}
 	return true
+}
+
+// ReplayRevocations 把 PostgreSQL 里未到期而 Redis 里缺的撤销补回去（写键并广播；已有的键不动、不覆盖到期）。
+// 兜住「Redis 只拒写、订阅正常」超过兜底作业重试窗口的情形：订阅没有断，就绪回调不会触发全量重放。
+func (s *Sync) ReplayRevocations(ctx context.Context) error {
+	nowMs := s.nowMs()
+	var revoked []Revoked
+	err := s.Store.Tx(ctx, func(tx saas.Tx) error {
+		revoked = nil
+		rows, err := tx.Issued().Revoked(ctx, nowMs)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			revoked = append(revoked, Revoked{JTI: row.JTI, ExpMs: row.ExpMs})
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	replayed, err := s.Redis.ReplayMissing(ctx, revoked)
+	if replayed > 0 && s.Log != nil {
+		s.Log.Warn("定时重放把缺失的撤销补回 Redis", obs.Operation("relayctl.replay"), obs.Count(replayed))
+	}
+	return err
+}
+
+// StartRevocationReplay 起定时重放（每 ReplayEvery 一次），答停止函数（等协程退出）。失败只记警告，下一轮再来。
+func (s *Sync) StartRevocationReplay(parent context.Context) (stop func()) {
+	every := s.ReplayEvery
+	if every <= 0 {
+		every = DefaultReplayEvery
+	}
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.ReplayRevocations(ctx); err != nil && ctx.Err() == nil && s.Log != nil {
+					s.Log.Warn("定时重放撤销失败，下一轮再试", obs.Operation("relayctl.replay"), obs.Error(err))
+				}
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
 }

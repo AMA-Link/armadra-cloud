@@ -164,9 +164,12 @@ type attachment struct {
 	watcher Watcher
 	// ready 在 Watch 完成之前为假：这段时间到的事件先存进 pending，Watch 完成后按序补投
 	// （先登记、先订阅，再算可见集合，不让这个窗口里的授予变动漏掉）。
-	mu         sync.Mutex
-	ready      bool
-	pending    []queuedEvent
+	mu      sync.Mutex
+	ready   bool
+	pending []queuedEvent
+	// dirty：Watch 期间到过事件，或有重算请求因 watcher 还没好被跳过——解析完要补算一次（窗口里的授予变动
+	// 不只靠 30 秒心跳）。
+	dirty      bool
 	queue      chan queuedEvent
 	done       chan struct{}
 	send       func(Event)
@@ -185,6 +188,7 @@ type InternalEvent interface {
 func (a *attachment) offer(event Event, audience *Audience) {
 	a.mu.Lock()
 	if !a.ready {
+		a.dirty = true
 		if len(a.pending) < attachQueue {
 			a.pending = append(a.pending, queuedEvent{event, audience})
 		} else if a.onOverflow != nil {
@@ -253,22 +257,49 @@ func (m *MeStream) AttachResyncable(caller Caller, send func(Event), onOverflow 
 		caller: caller, queue: make(chan queuedEvent, attachQueue), done: make(chan struct{}),
 		send: send, onOverflow: onOverflow,
 	}
+	// 次序：订阅总线并登记进 attached（Prepare 据此找到本实例的连接）都在读库解析可见集合之前，
+	// 这样读库到登记之间的授予 / 成员变动不会既没被快照看到、又没人给这个连接发更新。
 	offBus := m.c.Subscribe(a.offer)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	watcher, watchErr := m.c.access().Watch(ctx, caller)
-	cancel()
-	if watchErr != nil {
-		offBus()
-		return nil, nil, watchErr
-	}
-	a.watcher = watcher
-	go a.run()
 	m.mu.Lock()
 	m.attached[a] = struct{}{}
 	if len(m.attached) == 1 && m.c.Presence != nil {
 		m.offPresence = m.c.Presence.Subscribe(m.onPresence)
 	}
 	m.mu.Unlock()
+	var once sync.Once
+	detach = func() {
+		once.Do(func() {
+			offBus()
+			m.mu.Lock()
+			delete(m.attached, a)
+			var stop func()
+			if len(m.attached) == 0 {
+				stop, m.offPresence = m.offPresence, nil
+			}
+			m.mu.Unlock()
+			if stop != nil {
+				stop()
+			}
+			close(a.done)
+			a.mu.Lock()
+			watcher := a.watcher
+			a.mu.Unlock()
+			if watcher != nil {
+				watcher.Close()
+			}
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	watcher, watchErr := m.c.access().Watch(ctx, caller)
+	cancel()
+	if watchErr != nil {
+		detach()
+		return nil, nil, watchErr
+	}
+	a.mu.Lock()
+	a.watcher = watcher
+	a.mu.Unlock()
+	go a.run()
 	// 补投 Watch 期间到的事件；补投期间新到的继续排在后面。
 	for {
 		a.mu.Lock()
@@ -284,29 +315,23 @@ func (m *MeStream) AttachResyncable(caller Caller, send func(Event), onOverflow 
 			a.deliver(item.event, item.audience)
 		}
 	}
-	var once sync.Once
-	return func() {
-			once.Do(func() {
-				offBus()
-				m.mu.Lock()
-				delete(m.attached, a)
-				var stop func()
-				if len(m.attached) == 0 {
-					stop, m.offPresence = m.offPresence, nil
-				}
-				m.mu.Unlock()
-				if stop != nil {
-					stop()
-				}
-				close(a.done)
-				a.watcher.Close()
-			})
-		}, func(ctx context.Context) error {
-			if r, ok := a.watcher.(Resyncer); ok {
-				return r.Resync(ctx)
-			}
-			return nil
-		}, nil
+	// 窗口里到过事件或被跳过重算请求：解析完补算一次（失败由 30 秒心跳兜底）。
+	a.mu.Lock()
+	needResync := a.dirty
+	a.mu.Unlock()
+	if needResync {
+		if r, ok := watcher.(Resyncer); ok {
+			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = r.Resync(rctx)
+			rcancel()
+		}
+	}
+	return detach, func(ctx context.Context) error {
+		if r, ok := watcher.(Resyncer); ok {
+			return r.Resync(ctx)
+		}
+		return nil
+	}, nil
 }
 
 // onPresence：一个在线事件查一次源（与 issuer），再分发给各连接。
@@ -370,7 +395,15 @@ func (m *MeStream) Resync(ctx context.Context, accountID string) (failed int) {
 	m.mu.Unlock()
 	for {
 		for _, a := range m.attachmentsOf(accountID) {
-			if r, ok := a.watcher.(Resyncer); ok {
+			a.mu.Lock()
+			if !a.ready {
+				a.dirty = true // Watch 还没完成：连接建立后会补算一次
+				a.mu.Unlock()
+				continue
+			}
+			watcher := a.watcher
+			a.mu.Unlock()
+			if r, ok := watcher.(Resyncer); ok {
 				if r.Resync(ctx) != nil {
 					failed++
 				}

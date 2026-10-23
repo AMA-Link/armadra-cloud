@@ -1,6 +1,7 @@
 package grants
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -81,5 +82,35 @@ func TestAccessChangedIsInternalOnly(t *testing.T) {
 	var event core.Event = AccessChanged{SourceID: "a", AccountID: "me", Visible: true}
 	if _, ok := event.(core.InternalEvent); !ok {
 		t.Fatal("AccessChanged 应实现 core.InternalEvent")
+	}
+}
+
+// 心跳 Resync 取快照期间到了更新的 AccessChanged(visible=false)：旧快照被丢弃重取，不盖掉撤销。
+func TestWatcherResyncDropsStaleSnapshot(t *testing.T) {
+	w := newTestWatcher("a")
+	calls := 0
+	w.snapshot = func(context.Context) (map[string]struct{}, error) {
+		calls++
+		if calls == 1 {
+			// 第一次取快照时读到了撤销之前的库状态；返回之前撤销事件抵达。
+			w.Refresh(AccessChanged{SourceID: "a", AccountID: "me", Visible: false})
+			return map[string]struct{}{"a": {}}, nil
+		}
+		return map[string]struct{}{}, nil // 重取时库里已是撤销之后
+	}
+	if err := w.Resync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.Sees("a") || calls != 2 {
+		t.Fatalf("旧快照不该覆盖撤销：Sees=%v 取快照 %d 次", w.Sees("a"), calls)
+	}
+	// 一直撞上并发更新：不覆盖，保留事件已有的结果。
+	w2 := newTestWatcher("a")
+	w2.snapshot = func(context.Context) (map[string]struct{}, error) {
+		w2.Refresh(AccessChanged{SourceID: "a", AccountID: "me", Visible: false})
+		return map[string]struct{}{"a": {}}, nil
+	}
+	if err := w2.Resync(context.Background()); err != nil || w2.Sees("a") {
+		t.Fatalf("反复撞上更新时不该应用旧快照：%v %v", err, w2.Sees("a"))
 	}
 }

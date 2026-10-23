@@ -195,6 +195,10 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	handler := assembly.handler
 	// 作业在监听之前启动、在 HTTP 停收请求之后停（undo 后进先出）：等当前作业最多 jobsGrace。
 	assembly.jobs.Start()
+	if assembly.sync != nil {
+		// 撤销每 10 分钟从 PostgreSQL 补进一次 Redis（SET NX）：Redis 只拒写而订阅正常时，没有重新就绪的重放可靠。
+		undo.push(assembly.sync.StartRevocationReplay(context.Background()))
+	}
 	undo.push(func() { assembly.jobs.Stop(jobsGrace) })
 	// 事故开关按库同步给节点（各实例各一份，不依赖 Redis 保活）：随作业一起启动、一起停。
 	undo.push(assembly.admin.Start())

@@ -37,7 +37,9 @@ func (w *resyncWatcher) Refresh(core.Event) {}
 func (w *resyncWatcher) Close()             {}
 func (w *resyncWatcher) Resync(context.Context) error {
 	w.calls.Add(1)
-	w.once.Do(func() { close(w.started) })
+	if w.started != nil {
+		w.once.Do(func() { close(w.started) })
+	}
 	if w.block != nil {
 		<-w.block
 	}
@@ -118,5 +120,56 @@ func TestResyncCoalescesPerAccount(t *testing.T) {
 	}
 	if err := resync(context.Background()); err != nil || w.calls.Load() != 3 {
 		t.Fatalf("连接自己的重算：%v %d", err, w.calls.Load())
+	}
+}
+
+// Watch 读库到登记之间的变动：登记先于读库，窗口里到的重算请求（成员变动）被记下，解析完补算一次，
+// 不只靠 30 秒心跳。
+func TestAttachResyncsOnceWhenChangeLandedDuringWatch(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	w := &resyncWatcher{}
+	policy := &slowPolicy{
+		AccessPolicy: core.NewPersonalPolicy(e.h.Context),
+		entered:      make(chan struct{}), release: make(chan struct{}), watcher: w,
+	}
+	e.h.Context.Policy = policy
+	stream := core.NewMeStream(e.h.Context)
+	owner := e.owner()
+	attached := make(chan struct{})
+	go func() {
+		defer close(attached)
+		if _, _, err := stream.AttachResyncable(owner, func(core.Event) {}, nil); err != nil {
+			t.Error(err)
+		}
+	}()
+	<-policy.entered
+	// 此刻连接已登记：Prepare 能找到它。
+	if accounts := stream.Accounts(); len(accounts) != 1 {
+		t.Fatalf("Watch 进行中连接就该已登记：%v", accounts)
+	}
+	stream.Resync(context.Background(), owner.AccountID) // watcher 还没好：被跳过并记下
+	if w.calls.Load() != 0 {
+		t.Fatal("watcher 还没解析完，不该重算")
+	}
+	close(policy.release)
+	<-attached
+	if n := w.calls.Load(); n != 1 {
+		t.Fatalf("解析完应补算恰好一次：%d", n)
+	}
+}
+
+// 窗口里没有任何变动：不多算。
+func TestAttachDoesNotResyncWithoutChange(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	w := &resyncWatcher{}
+	policy := &slowPolicy{AccessPolicy: core.NewPersonalPolicy(e.h.Context), entered: make(chan struct{}), release: make(chan struct{}), watcher: w}
+	close(policy.release)
+	e.h.Context.Policy = policy
+	stream := core.NewMeStream(e.h.Context)
+	if _, _, err := stream.AttachResyncable(e.owner(), func(core.Event) {}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.calls.Load(); n != 0 {
+		t.Fatalf("没有变动不该补算：%d", n)
 	}
 }
