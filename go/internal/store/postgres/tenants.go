@@ -141,7 +141,7 @@ func (d *DB) ImportTenant(ctx context.Context, tenantID string, snapshot store.T
 			}
 		}
 		for _, row := range snapshot.SigningKeys {
-			if err := insertSigningKey(ctx, tx, tenantID, row); err != nil {
+			if err := d.insertSigningKey(ctx, tx, tenantID, row); err != nil {
 				return err
 			}
 		}
@@ -184,7 +184,7 @@ func (d *DB) ExportTenant(ctx context.Context, tenantID string) (snap store.Tena
 			"SELECT "+accountColumns+" FROM accounts WHERE tenant_id = $1 ORDER BY seq", tenantID); err != nil {
 			return err
 		}
-		if snap.SigningKeys, err = readSigningKeys(ctx, tx, tenantID); err != nil {
+		if snap.SigningKeys, err = d.readSigningKeys(ctx, tx, tenantID); err != nil {
 			return err
 		}
 		if snap.Sources, err = list(ctx, tx, deref(toSource),

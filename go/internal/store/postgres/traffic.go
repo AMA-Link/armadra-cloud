@@ -17,9 +17,9 @@ import (
 // trafficChunk：每条 INSERT 最多这么多行（10 列，远低于 65 535 个参数的上限）。
 const trafficChunk = 1_000
 
-type traffic ports
+type traffic struct{ ports }
 
-func trafficStore(p ports) store.TrafficStore { return traffic(p) }
+func trafficStore(p ports) store.TrafficStore { return traffic{p} }
 
 func (t traffic) Upsert(ctx context.Context, tenantID string, rows []store.TrafficRow) error {
 	merged := store.MergeTraffic(rows)

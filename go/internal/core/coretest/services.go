@@ -375,7 +375,7 @@ func ServicesContract(t *testing.T, create func(t *testing.T) store.Backend) {
 				t.Fatal("撤销链接后中继令牌应失效")
 			}
 			disconnects := e.h.Disconnects()
-			eq(t, disconnects[len(disconnects)-1], core.ConnectionFilter{SubjectPrefix: "guest:" + created.LinkID + ":"}, "断开访客")
+			eq(t, disconnects[len(disconnects)-1], core.ConnectionFilter{SourceID: sourceID, SubjectPrefix: "guest:" + created.LinkID + ":"}, "断开访客（带 sourceId，节点命令必填）")
 			_, err = e.callerOf(guest.GuestSession.AccessToken)
 			eq(t, codeOf(err), "unauthenticated", "访客的访问令牌")
 		})

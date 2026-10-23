@@ -3,10 +3,13 @@ package postgres
 import (
 	"context"
 	"errors"
+	"slices"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
 
@@ -35,9 +38,9 @@ func (s *saasStore) Tx(ctx context.Context, fn func(tx saas.Tx) error) error {
 
 // once 跑一次事务；提交成功后才执行登记的回调。
 func (s *saasStore) once(ctx context.Context, fn func(tx saas.Tx) error) error {
-	t := &saasTx{reader: reader{}}
+	t := &saasTx{d: s.d}
 	err := s.d.tx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
-		t.q = tx
+		t.q, t.pgx = tx, tx
 		return fn(t)
 	})
 	if err != nil {
@@ -90,15 +93,26 @@ func (r reader) Ping(ctx context.Context) error {
 
 type saasTx struct {
 	reader
-	after []func(ctx context.Context)
+	d      *DB
+	pgx    pgx.Tx
+	after  []func(ctx context.Context)
+	locked lockState
+}
+
+// lockState 记本事务已拿过哪类锁、同类里最后锁的 id，用来强制统一的加锁顺序：
+// 团队 → 账号 → 其余；同类多行按 id 升序（批量用 LockTeams / LockAccounts，它们自己排序）。
+type lockState struct {
+	account     bool
+	lastAccount string
+	lastTeam    string
 }
 
 var _ saas.Tx = (*saasTx)(nil)
 
 func (t *saasTx) AfterCommit(fn func(ctx context.Context)) { t.after = append(t.after, fn) }
 
-func (t *saasTx) Accounts() saas.AccountRepo       { return accountRepo{t.q} }
-func (t *saasTx) Teams() saas.TeamRepo             { return teamRepo{t.q} }
+func (t *saasTx) Accounts() saas.AccountRepo       { return accountRepo{q: t.q, locked: &t.locked} }
+func (t *saasTx) Teams() saas.TeamRepo             { return teamRepo{q: t.q, locked: &t.locked} }
 func (t *saasTx) Invitations() saas.InvitationRepo { return struct{}{} }
 func (t *saasTx) Hosts() saas.HostRepo             { return struct{}{} }
 func (t *saasTx) Grants() saas.GrantRepo           { return struct{}{} }
@@ -108,16 +122,70 @@ func (t *saasTx) Jobs() saas.JobRepo               { return struct{}{} }
 func (t *saasTx) Settings() saas.SettingsRepo      { return struct{}{} }
 func (t *saasTx) Issued() saas.IssuedRepo          { return struct{}{} }
 
-type accountRepo struct{ q querier }
+// Ports 把核心端口绑到本事务（TxPorts）。
+func (t *saasTx) Ports() *store.Ports { return portsOf(ports{d: t.d, tx: t.pgx}) }
 
-func (r accountRepo) LockAccount(ctx context.Context, tenantID, accountID string) (bool, error) {
-	return lockRow(ctx, r.q, "SELECT 1 FROM accounts WHERE tenant_id = $1 AND account_id = $2 FOR UPDATE", tenantID, accountID)
+// TxPorts 是 tx.Ports() 的另一种写法：把核心端口绑到 SaaS 事务 tx 上。tx 必须来自本库的 SaaS().Tx。
+func (d *DB) TxPorts(tx saas.Tx) *store.Ports { return tx.Ports() }
+
+type accountRepo struct {
+	q      querier
+	locked *lockState
 }
 
-type teamRepo struct{ q querier }
+func (r accountRepo) LockAccount(ctx context.Context, tenantID, accountID string) (bool, error) {
+	if accountID < r.locked.lastAccount {
+		return false, saas.ErrLockOrder
+	}
+	found, err := lockRow(ctx, r.q, "SELECT 1 FROM accounts WHERE tenant_id = $1 AND account_id = $2 FOR UPDATE", tenantID, accountID)
+	if err != nil {
+		// 没锁上就不记：不能让失败的尝试改变后面的顺序判断。
+		return false, err
+	}
+	r.locked.account, r.locked.lastAccount = true, accountID
+	return found, nil
+}
+
+func (r accountRepo) LockAccounts(ctx context.Context, tenantID string, accountIDs ...string) error {
+	for _, id := range sortedUnique(accountIDs) {
+		if _, err := r.LockAccount(ctx, tenantID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type teamRepo struct {
+	q      querier
+	locked *lockState
+}
 
 func (r teamRepo) LockTeam(ctx context.Context, tenantID, teamID string) (bool, error) {
-	return lockRow(ctx, r.q, "SELECT 1 FROM teams WHERE tenant_id = $1 AND team_id = $2 FOR UPDATE", tenantID, teamID)
+	if r.locked.account || teamID < r.locked.lastTeam {
+		return false, saas.ErrLockOrder
+	}
+	found, err := lockRow(ctx, r.q, "SELECT 1 FROM teams WHERE tenant_id = $1 AND team_id = $2 FOR UPDATE", tenantID, teamID)
+	if err != nil {
+		return false, err
+	}
+	r.locked.lastTeam = teamID
+	return found, nil
+}
+
+func (r teamRepo) LockTeams(ctx context.Context, tenantID string, teamIDs ...string) error {
+	for _, id := range sortedUnique(teamIDs) {
+		if _, err := r.LockTeam(ctx, tenantID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sortedUnique 是升序去重的副本：批量加锁的固定顺序。
+func sortedUnique(ids []string) []string {
+	out := append([]string(nil), ids...)
+	sort.Strings(out)
+	return slices.Compact(out)
 }
 
 func lockRow(ctx context.Context, q querier, query string, args ...any) (bool, error) {

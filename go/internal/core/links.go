@@ -39,8 +39,15 @@ func toLinkSummary(issuer string, link store.LinkRecord) LinkSummary {
 }
 
 // RevokeLink 撤销链接与它的访客设备；答链接指向的源，没有这条有效链接 ok 为 false。
+//
+// 撤销钩子（Context.Revocations）在这里调，与 RevokeDevice 一致：低层函数调，高层方法不再重复调。
+// 在 SaaS 的绑定事务里调它时，钩子必须经 tx.AfterCommit 投递（见 Context.Bound）。
 func RevokeLink(ctx context.Context, c *Context, linkID string, nowMs int64) (sourceID string, ok bool, err error) {
-	return c.Ports.Links.Revoke(ctx, c.TenantID, linkID, nowMs)
+	sourceID, ok, err = c.Ports.Links.Revoke(ctx, c.TenantID, linkID, nowMs)
+	if err == nil && ok {
+		c.linkRevoked(ctx, sourceID, linkID)
+	}
+	return sourceID, ok, err
 }
 
 // ListLinks 是全部链接（可按源过滤），按创建顺序。
@@ -283,7 +290,8 @@ func (l *Links) Revoke(ctx context.Context, caller Caller, linkID string) error 
 		return Fail(gen.ErrNotFound)
 	}
 	if l.c.Relay != nil {
-		l.c.Relay.Disconnect(ConnectionFilter{SubjectPrefix: GuestPrefix(linkID)})
+		// 节点命令都必须带 sourceId（设计 §2.4）：不带的踢人命令节点会丢弃。
+		l.c.Relay.Disconnect(ConnectionFilter{SourceID: sourceID, SubjectPrefix: GuestPrefix(linkID)})
 	}
 	l.c.Emit(NewAccessRevoked(sourceID), &Audience{LinkID: linkID})
 	return nil

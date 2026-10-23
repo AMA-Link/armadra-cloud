@@ -53,6 +53,12 @@ type Options struct {
 	KeyRefreshGap time.Duration
 	// Now 缺省 time.Now；账本的 applied_at_ms 用它。
 	Now func() int64
+	// NoMigrate 为真时只对账不迁移（armadra-cloud serve）：账本落后答 store.KindBehind，
+	// 比程序新、对不上、损坏同样拒绝；也不建 schema。
+	NoMigrate bool
+	// MasterKey 是主密钥（32 字节）：给了就把新写的签名私钥用 aes256gcm-v1 包裹，并能读已包裹的；
+	// 没给则写 none，读到包裹过的拒绝（SaaS 实现方案 §2.2）。
+	MasterKey []byte
 }
 
 var schemaName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
@@ -65,8 +71,11 @@ type DB struct {
 	onError    func(string, error)
 	onCommit   func(string, int64)
 
-	keysMu sync.Mutex
-	keys   map[string]*keyCache
+	keysMu  sync.Mutex
+	keys    map[string]*keyCache
+	wrapper *store.Wrapper
+	// migrated 是 Open 时新跑的迁移数。
+	migrated int
 }
 
 var (
@@ -147,26 +156,38 @@ func Open(ctx context.Context, options Options) (*DB, error) {
 	if gap <= 0 {
 		gap = refreshOnMissGap
 	}
-	db := &DB{pool: pool, schema: options.Schema, refreshGap: gap, onError: sanitizedReport(options.OnError), onCommit: options.OnCommit, keys: map[string]*keyCache{}}
+	var wrapper *store.Wrapper
+	if options.MasterKey != nil {
+		if wrapper, err = store.NewWrapper(options.MasterKey); err != nil {
+			pool.Close()
+			return nil, store.Errorf(store.KindUnknown, "%v", err)
+		}
+	}
+	db := &DB{wrapper: wrapper, pool: pool, schema: options.Schema, refreshGap: gap, onError: sanitizedReport(options.OnError), onCommit: options.OnCommit, keys: map[string]*keyCache{}}
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
 		return nil, unreachable(err)
 	}
-	if options.Schema != "" {
+	if options.Schema != "" && !options.NoMigrate {
 		// 显式给了 schema 时先建它（空 schema，不动已有的任何东西）；之后的迁移照样对账。
 		if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", options.Schema)); err != nil {
 			pool.Close()
 			return nil, unreachable(err)
 		}
 	}
-	if _, err := db.migrate(ctx, migrations, now); err != nil {
+	applied, err := db.migrate(ctx, migrations, now, !options.NoMigrate)
+	if err != nil {
 		pool.Close()
 		return nil, err
 	}
+	db.migrated = applied
 	return db, nil
 }
+
+// Migrated 是 Open 时新跑的迁移条数（已是最新答 0）。
+func (d *DB) Migrated() int { return d.migrated }
 
 // Close 关连接池。
 func (d *DB) Close() error {
@@ -235,3 +256,6 @@ func sanitizedReport(fn func(string, error)) func(string, error) {
 	}
 	return func(op string, err error) { fn(op, unreachable(err)) }
 }
+
+// Wrapper 是主密钥包裹器；没给主密钥时为 nil。TOTP 种子等秘密用它包裹后才落库。
+func (d *DB) Wrapper() *store.Wrapper { return d.wrapper }
