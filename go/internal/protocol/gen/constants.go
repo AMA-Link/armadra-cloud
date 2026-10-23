@@ -17,7 +17,7 @@ const (
 	SubprotocolRelay                         = "armadra-relay."
 	SubprotocolTicket                        = "armadra-ticket."
 	MinCoreVersionTeamAssertion              = "0.10.0"
-	MinCoreVersionRoleOnlyAssertion          = "0.10.0"
+	MinCoreVersionRoleOnlyAssertion          = "0.11.0"
 	TokenTypeAccess                          = "armadra-access"
 	TokenTypeAssertion                       = "armadra-assertion"
 	TokenTypeRelay                           = "armadra-relay"

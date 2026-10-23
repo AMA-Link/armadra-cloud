@@ -19,7 +19,7 @@
   },
   "minCoreVersion": {
     "teamAssertion": "0.10.0",
-    "roleOnlyAssertion": "0.10.0"
+    "roleOnlyAssertion": "0.11.0"
   },
   "tokens": {
     "types": {
