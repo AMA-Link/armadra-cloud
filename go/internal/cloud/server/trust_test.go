@@ -196,7 +196,22 @@ func TestTrustRequestIdempotentCooldownAndSupersede(t *testing.T) {
 	if res.json["status"] != "pending" || res.json["requestId"] == id2 {
 		t.Fatalf("冷却结束后应建新请求：%s", res.body)
 	}
-	r.expect(x.report(x.host, x.member, "p2", time.Hour), 409, "conflict")
+	// 旧条目 id 冷却结束后可以重新开：同一个 p2 变回 pending（新的 requestId），p3 那条作废，库里只剩一个 pending。
+	res = x.report(x.host, x.member, "p2", time.Hour)
+	r.expect(res, 200, "")
+	reopened := res.json["requestId"].(string)
+	if res.json["status"] != "pending" || reopened == id2 {
+		t.Fatalf("冷却结束后同一条目 id 应重开成 pending（新 requestId）：%s", res.body)
+	}
+	if r.queryInt("SELECT count(*)::int FROM trust_requests WHERE request_id = $1", id2) != 0 ||
+		r.queryString("SELECT pending_id FROM trust_requests WHERE request_id = $1", reopened) != "p2" ||
+		r.queryInt("SELECT count(*)::int FROM trust_requests WHERE device_id = $1 AND state = 'pending'", x.member.deviceID) != 1 {
+		t.Fatal("重开后应只有 p2 一个 pending")
+	}
+	again2 := x.report(x.host, x.member, "p2", time.Hour)
+	if again2.json["requestId"] != reopened {
+		t.Fatalf("重开后重报仍是同一个 requestId：%s", again2.body)
+	}
 }
 
 // Cooldown 与服务端同值（1 小时）。
@@ -276,15 +291,17 @@ func TestTrustListNarrowsByEndorser(t *testing.T) {
 		t.Fatalf("请求的形状：%v", memberItem)
 	}
 	// admin（owner_admin）看到全部；请求者本人只看到自己的；没有关系的成员、billing、别的团队看不到。
-	if got := len(x.list(x.admin, "")); got != 2 {
-		t.Fatalf("admin：%d", got)
+	if got := requestIDs(x.list(x.admin, "")); !reflect.DeepEqual(got, []string{idMember}) {
+		t.Fatalf("admin 看不到 guest 的请求（guest 的请求只给主机所有者）：%v", got)
 	}
 	if got := requestIDs(x.list(x.member, "")); !reflect.DeepEqual(got, []string{idMember}) {
 		t.Fatalf("member 本人：%v", got)
 	}
-	if got := requestIDs(x.list(x.guest, "")); !reflect.DeepEqual(got, []string{idGuest}) {
-		t.Fatalf("guest 本人：%v", got)
+	if got := x.list(x.guest, ""); len(got) != 0 {
+		t.Fatalf("guest 本人也不是背书人：%v", got)
 	}
+	r.expect(x.reject(x.guest, idGuest), 403, "team_role_insufficient")
+	r.expect(x.reject(x.admin, idGuest), 403, "team_role_insufficient")
 	for _, s := range []session{x.other, x.billing, x.outsider} {
 		if got := x.list(s, ""); len(got) != 0 {
 			t.Fatalf("不相干的人看不到：%v", got)
@@ -346,7 +363,7 @@ func TestTrustRejectPermissionsAndExpiry(t *testing.T) {
 
 	// 请求者本人（memberSelfEndorse 开着）可以拒绝自己的。
 	id2 := x.must(x.host, x.guest, "g1")
-	r.expect(x.reject(x.guest, id2), 200, "")
+	r.expect(x.reject(x.owner, id2), 200, "") // guest 的请求只有主机所有者能拒绝
 
 	// 到期：时间一过就不再列出、拒绝 409；作业把它落库成 expired；同设备可以重新登记（过期的不挡）。
 	idExpiring := func() string {
@@ -376,4 +393,24 @@ func TestTrustRejectPermissionsAndExpiry(t *testing.T) {
 	})
 	r.expect(x.report(x.host, x.member, "m2", time.Hour), 409, "conflict") // 已过期的条目 id 不能再登记
 	x.must(x.host, x.member, "m3")
+}
+
+// 背书人条件写进 SQL 再 LIMIT：别人（背书人看不到的）有 500 多条更新的请求时，自己的请求仍然列得出来。
+func TestTrustListFiltersBeforeLimit(t *testing.T) {
+	t.Parallel()
+	x := newTrustRig(t)
+	r := x.r
+	mine := x.must(x.host, x.member, "m1")
+	for i := 0; i < 510; i++ {
+		r.exec(`INSERT INTO trust_requests (tenant_id, request_id, source_id, pending_id, team_id, account_id, device_id, device_name, platform,
+		  state, requested_at_ms, expires_at_ms) VALUES ('cloud', $1, $2, $3, $4, $5, $6, 'x', 'desktop', 'pending', $7, $8)`,
+			fmt.Sprintf("bulk-%d", i), x.host.id, fmt.Sprintf("bp-%d", i), x.team, x.other.accountID, fmt.Sprintf("bd-%d", i),
+			r.clock.Ms()+int64(i)+1000, r.clock.Ms()+3600*1000)
+	}
+	if got := requestIDs(x.list(x.member, "")); !reflect.DeepEqual(got, []string{mine}) {
+		t.Fatalf("member 应看到自己的那一条：%v", got)
+	}
+	if got := len(x.list(x.owner, "")); got != 500 {
+		t.Fatalf("主机所有者看到的是截断到 500 的全部：%d", got)
+	}
 }

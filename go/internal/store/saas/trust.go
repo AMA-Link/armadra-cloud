@@ -51,6 +51,8 @@ type TrustView struct {
 	SourceOwnerID string
 	MemberEmail   string
 	MemberName    string
+	// RequesterRole 是请求者在团队里的角色（guest 的请求只给主机所有者）。
+	RequesterRole TeamRole
 	// ViewerRole 是查询者在请求所属团队里的角色。
 	ViewerRole TeamRole
 	// TeamSettings 是团队设置 JSON（deviceEndorsers、memberSelfEndorse 在里面）。
@@ -63,7 +65,8 @@ type TrustReader interface {
 	// 主机已撤销或团队在恢复期内答 nil。
 	TrustView(ctx context.Context, tenantID, requestID, viewerID string) (*TrustView, error)
 	// PendingTrust 列 viewerID 所在团队里待处理（没过期）的请求，teamID 非空时只列那个团队，按请求时间倒序，最多 limit 条。
-	// 只含主机未撤销、团队未在恢复期、请求者仍是团队成员的；是不是背书人由调用方按团队设置再收窄。
+	// 只含主机未撤销、团队未在恢复期、请求者仍是团队成员、且 viewerID 是背书人的（按团队设置 deviceEndorsers / memberSelfEndorse 在 SQL 里收窄，
+	// 再 LIMIT，不会先截断再过滤）。
 	PendingTrust(ctx context.Context, tenantID, viewerID, teamID string, nowMs int64, limit int) ([]TrustView, error)
 }
 
@@ -81,6 +84,8 @@ type TrustRepo interface {
 	Supersede(ctx context.Context, tenantID, sourceID, deviceID string, nowMs int64) ([]string, error)
 	// Insert 插一条 pending；同 (源, 条目 id) 或同 (源, 设备) 已有 pending 答 ErrConflict。
 	Insert(ctx context.Context, tenantID string, request TrustRequest) error
+	// Reopen 把冷却已过的 rejected 请求重新开成 pending（新的 requestId、新的请求与过期时间），条目 id 不变。
+	Reopen(ctx context.Context, tenantID, requestID, newRequestID string, nowMs, expiresAtMs int64) (bool, error)
 	// Resolve 把 pending 改成终态；不是 pending 答 false。
 	Resolve(ctx context.Context, tenantID, requestID, state, resolvedBy string, nowMs int64) (bool, error)
 	// ExpireDue 把到期的 pending 落库成 expired，答它们（通知要用）。

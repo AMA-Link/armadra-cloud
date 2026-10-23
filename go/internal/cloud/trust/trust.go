@@ -201,11 +201,15 @@ func (s *Service) request(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return err
 		}
+		reopen := ""
 		if existing != nil {
-			out, err = s.again(*existing, in.AccountID, in.DeviceID, nowMs)
-			return err
-		}
-		if last, err := tx.Trust().LastRejected(ctx, s.tenant(), source.SourceID, in.DeviceID); err != nil {
+			var reopenable bool
+			out, reopenable, err = s.again(*existing, in.AccountID, in.DeviceID, nowMs)
+			if err != nil || !reopenable {
+				return err
+			}
+			reopen = existing.RequestID // 冷却已过的 rejected：同一个条目 id 重新开成 pending
+		} else if last, err := tx.Trust().LastRejected(ctx, s.tenant(), source.SourceID, in.DeviceID); err != nil {
 			return err
 		} else if last != nil && last.ResolvedAtMs != nil && nowMs-*last.ResolvedAtMs < Cooldown.Milliseconds() {
 			out = requestOut{RequestID: last.RequestID, Status: saas.TrustRejected}
@@ -217,14 +221,22 @@ func (s *Service) request(ctx context.Context, call *api.Call) (any, error) {
 		if _, err := tx.Trust().Supersede(ctx, s.tenant(), source.SourceID, in.DeviceID, nowMs); err != nil {
 			return err
 		}
-		request := saas.TrustRequest{
-			RequestID: core.NewUUID(), SourceID: source.SourceID, PendingID: in.PendingID, TeamID: space.TeamID, AccountID: in.AccountID,
+		requestID := core.NewUUID()
+		if reopen != "" {
+			ok, err := tx.Trust().Reopen(ctx, s.tenant(), reopen, requestID, nowMs, in.ExpiresAtMs)
+			if err == nil && !ok {
+				err = core.Fail(gen.ErrConflict)
+			}
+			if err != nil {
+				return err
+			}
+		} else if err := tx.Trust().Insert(ctx, s.tenant(), saas.TrustRequest{
+			RequestID: requestID, SourceID: source.SourceID, PendingID: in.PendingID, TeamID: space.TeamID, AccountID: in.AccountID,
 			DeviceID: in.DeviceID, DeviceName: device.Name, Platform: device.Platform, RequestedAtMs: nowMs, ExpiresAtMs: in.ExpiresAtMs,
-		}
-		if err := tx.Trust().Insert(ctx, s.tenant(), request); err != nil {
+		}); err != nil {
 			return err
 		}
-		out = requestOut{RequestID: request.RequestID, Status: saas.TrustPending}
+		out = requestOut{RequestID: requestID, Status: saas.TrustPending}
 		return nil
 	})
 	if err != nil {
@@ -234,21 +246,24 @@ func (s *Service) request(ctx context.Context, call *api.Call) (any, error) {
 }
 
 // again 是同 (源, pendingId) 重报的答复：同一个请求，账号与设备必须一致（否则是主机在复用条目 id，409）。
-func (s *Service) again(existing saas.TrustRequest, accountID, deviceID string, nowMs int64) (requestOut, error) {
+// pending 未过期答 pending；rejected 在冷却期内答 rejected，冷却结束后返回 reopen = true（同一个条目 id 重新开成 pending，新的 requestId）；
+// 其余已解决（批准、过期）的 409。
+func (s *Service) again(existing saas.TrustRequest, accountID, deviceID string, nowMs int64) (out requestOut, reopen bool, err error) {
 	if existing.AccountID != accountID || existing.DeviceID != deviceID {
-		return requestOut{}, core.Fail(gen.ErrConflict)
+		return requestOut{}, false, core.Fail(gen.ErrConflict)
 	}
 	switch existing.State {
 	case saas.TrustPending:
 		if existing.ExpiresAtMs > nowMs {
-			return requestOut{RequestID: existing.RequestID, Status: saas.TrustPending}, nil
+			return requestOut{RequestID: existing.RequestID, Status: saas.TrustPending}, false, nil
 		}
 	case saas.TrustRejected:
 		if existing.ResolvedAtMs != nil && nowMs-*existing.ResolvedAtMs < Cooldown.Milliseconds() {
-			return requestOut{RequestID: existing.RequestID, Status: saas.TrustRejected}, nil
+			return requestOut{RequestID: existing.RequestID, Status: saas.TrustRejected}, false, nil
 		}
+		return requestOut{}, true, nil
 	}
-	return requestOut{}, core.Fail(gen.ErrConflict) // 已解决（批准、过期、冷却结束后的拒绝）的不能再登记
+	return requestOut{}, false, core.Fail(gen.ErrConflict)
 }
 
 // resolve 是 sources.trustResolve（Source 认证）：core 回报条目已批准（trusted）或过期（expired）；按 (源, pendingId) 找请求，
@@ -302,22 +317,25 @@ func (s *Service) resolve(ctx context.Context, call *api.Call) (any, error) {
 
 // ---- 背书人 ----
 
-// isEndorser 按团队设置 deviceEndorsers / memberSelfEndorse 收窄谁是背书人（契约 §31）：
+// isEndorser 按团队设置 deviceEndorsers / memberSelfEndorse 收窄谁是背书人（契约 §31；与 PendingTrust 的 SQL 条件同义）：
 // 主机所有者（仍是 owner / admin / member）总是；团队 owner / admin 在 deviceEndorsers = owner_admin（缺省）时是；
-// 请求者本人在 memberSelfEndorse 开着时是。
+// 请求者本人在 memberSelfEndorse 开着时是。guest 的请求只给主机所有者（core 的 authorizeEndorsement 只认 owner / admin / member），
+// 所以后两条对 guest 请求不成立。
 func isEndorser(view saas.TrustView, viewerID string) bool {
 	role := view.ViewerRole
 	if role == "" {
 		return false
 	}
 	settings := teams.SettingsOf(saas.Team{Settings: view.TeamSettings})
-	staff := role == saas.RoleOwner || role == saas.RoleAdmin || role == saas.RoleMember
+	staff := func(r saas.TeamRole) bool { return r == saas.RoleOwner || r == saas.RoleAdmin || r == saas.RoleMember }
 	switch {
-	case viewerID == view.SourceOwnerID && staff:
+	case viewerID == view.SourceOwnerID && staff(role):
 		return true
+	case view.RequesterRole == saas.RoleGuest:
+		return false
 	case settings.DeviceEndorsers == "owner_admin" && (role == saas.RoleOwner || role == saas.RoleAdmin):
 		return true
-	case settings.MemberSelfEndorse && viewerID == view.AccountID:
+	case settings.MemberSelfEndorse && viewerID == view.AccountID && staff(view.RequesterRole):
 		return true
 	}
 	return false
