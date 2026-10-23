@@ -868,6 +868,16 @@ type Watcher interface {
 
 **主机设置缺省**：`linkCreators: "owner_admin"`、`allowGuests: true`、`defaultRole: "viewer"`。
 
+**S5a 实现注记**（与上表的差别与补充）：
+
+- **可见性在目录查询里，不经 `AccessPolicy`**：`grants.Policy` 随 S5b，S5a 的 `sources.list` / `get` / `me.sources` 直接用存储层的目录查询（`saas.HostFilter.ViewerID`）。可见 = 个人空间的所有者；团队主机给团队 owner / admin，以及登记它的成员（member 角色）；团队进入恢复期则团队主机全部不可见；billing / guest / 外人什么都看不到。S5b 把授予带来的可见性并进同一条查询，`core.AccessPolicy` 的 SaaS 实现包它。
+- **管理权**：主机所有者，或团队主机的团队 owner / admin；看不到的一律 `404 not_found`，看得到但管不了（S5b 起才会出现）答 `403 forbidden`。
+- **撤销后的令牌**：S5a 的签发索引只有隧道令牌（`heartbeatHint` 签出时记 jti，`RelayInfo.TunnelJTI`），撤销时 `RevokeWhere` 把它们写进撤销表；断言与中继令牌随 S5b 进索引。`cloud_issued_tokens` 的落盘与重放仍是 S5b / S8。
+- **注册令牌按账号计**：核心的 `Registrations.Add` 的上限（20）按整个租户计，SaaS 不能用；`HostRepo.AddRegistration` 按账号计，并只清这个账号过期的令牌。`team_id` 带在令牌上，`PeekRegistration` 先不加锁地读出空间，再按「团队 → 账号 → 源」加锁后才 `ConsumeRegistration`（先删令牌再等团队锁会和清除作业互等）。
+- **登记事务回滚不消耗令牌**：核心的个人中转「先消耗，拒绝也不能再用」；SaaS 按设计 §4.5 的单事务，失败整个回滚，令牌留到自己过期。
+- **同一 `sourceId` 的登记**：`LockSource`（事务级咨询锁）串行化；已登记未撤销的源只允许同一账号在同一空间用同一把钥重登记，其余 `409 source_taken`；撤销后任何持有同一把钥的账号都可以登记到自己的空间（空间行重置标签与设置）。
+- **主机设置只存写过的项**：缺省走 `defaultRole` ← 团队 `defaultHostRole` ← 主机自己写过的项；`trustedOrigins` 只收 `http(s)://主机[:端口]`，去重、至多 16 个。
+
 **`defaultRole` / `defaultHostRole` 在 M1 的语义**：只是控制台与客户端分享弹层里「角色」的**预选值**（主机设置优先，没设时取团队的 `defaultHostRole`）；`grants.create` 与 `invitations.create` 的 `role` 是必填，服务端不替调用方填角色，也不据它改已有授予。
 
 ### 4.6 授予、有效权限与断言合成（`cloud/grants`，S5b）
