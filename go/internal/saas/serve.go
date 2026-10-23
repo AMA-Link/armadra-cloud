@@ -86,7 +86,8 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 
 	// 控制面：订阅本节点频道；quota / incident 交给准入闸。
 	var ctl *redis.Plane
-	g := newGate(client, prefix, cfg.NodeID, func() control.Limiter { return ctl.Limits() }, onError)
+	g := newGate(client, prefix, cfg.NodeID, cfg.TeamConcurrent, func() control.Limiter { return ctl.Limits() }, onError)
+	defer g.close()
 	origin := jose.HTTPFetch(&http.Client{Timeout: 10 * time.Second}, cfg.JWKSURL)
 	startCtx, cancelStart := context.WithTimeout(ctx, 10*time.Second)
 	defer cancelStart()
@@ -94,7 +95,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 		Options: cluster.Options{
 			Issuer: cfg.CloudIssuer, Mode: "saas", NodeID: cfg.NodeID,
 			JWKS:   sharedJWKS(client, prefix, cfg.CloudIssuer, origin),
-			Limits: TeamLimitRules, OnError: onError,
+			Limits: teamLimitRules(cfg), OnError: onError,
 		},
 		Client: client, Prefix: prefix, NodeChannel: true, OnSignal: g.signal, OnSubscribed: g.reload,
 	})
@@ -241,7 +242,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 			bg.Wait()
 			return fmt.Errorf("指标监听失败：%w", err)
 		}
-		metricsSrv = &http.Server{Handler: obs.MetricsHandler(plane.Metrics.Render, cfg.MetricsToken), ReadHeaderTimeout: 10 * time.Second}
+		metricsSrv = &http.Server{Handler: obs.MetricsHandler(func() string { return plane.Metrics.Render() + g.render() }, cfg.MetricsToken), ReadHeaderTimeout: 10 * time.Second}
 		go func() { _ = metricsSrv.Serve(mln) }()
 	}
 	addr := ln.Addr().(*net.TCPAddr)

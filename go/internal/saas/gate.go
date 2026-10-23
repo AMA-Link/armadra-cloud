@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,11 +28,24 @@ const (
 	LimitEdgeConcurrentTeam control.LimitKind = "edge.concurrent.team"
 )
 
-// TeamLimitRules 是节点缺省的团队额度（控制面的 relay:quota:team:* 覆盖并发上限）。
-var TeamLimitRules = map[control.LimitKind]control.LimitRule{
-	LimitEdgeConnectTeam:    {Max: 6000, Window: time.Minute},
-	LimitEdgeConcurrentTeam: {Concurrent: true, Max: 256},
+// 团队额度键缺失（或坏了）时节点的缺省：取最严格的套餐（Free 的并发 10，SaaS 实施设计 §4.10），速率按它
+// 每条连接每分钟 60 次给；可用 RELAY_TEAM_CONCURRENT / RELAY_TEAM_CONNECT_PER_MINUTE 覆盖。控制面在启动与
+// 订阅重新就绪时全量重写 relay:quota:team:*（S8），正常运行时不会走到缺省。
+const (
+	DefaultTeamConcurrent       = 10
+	DefaultTeamConnectPerMinute = 600
+)
+
+// teamLimitRules 是团队维度的限流规则（并入控制面的规则表；并发的上限另由额度键覆盖）。
+func teamLimitRules(cfg Config) map[control.LimitKind]control.LimitRule {
+	return map[control.LimitKind]control.LimitRule{
+		LimitEdgeConnectTeam:    {Max: cfg.TeamConnectPerMinute, Window: time.Minute},
+		LimitEdgeConcurrentTeam: {Concurrent: true, Max: cfg.TeamConcurrent},
+	}
 }
+
+// failOpenLogEvery 是「Redis 出错、团队并发放行」这条日志的最短间隔（另有计数指标）。
+const failOpenLogEvery = 10 * time.Second
 
 // memberTTL 是并发计数里每个成员的有效期：节点每 memberRefresh 续一次，节点崩溃后成员最多留这么久。
 const (
@@ -49,11 +64,11 @@ redis.call('ZADD', KEYS[1], now + tonumber(ARGV[3]), ARGV[1])
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[3]) * 2)
 return 1`
 
-// concRefresh 给本节点还活着的成员续期（Redis 清空过也会补回来）。
+// concRefresh 给本节点还在的成员续期：只续已存在的（ZADD XX），不把刚释放的成员加回去。
 const concRefresh = `
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-for i = 2, #ARGV do redis.call('ZADD', KEYS[1], now + tonumber(ARGV[1]), ARGV[i]) end
+for i = 2, #ARGV do redis.call('ZADD', KEYS[1], 'XX', now + tonumber(ARGV[1]), ARGV[i]) end
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[1]) * 2)
 return 1`
 
@@ -65,8 +80,15 @@ type gate struct {
 	node    string
 	limits  func() control.Limiter
 	onError func(operation string, err error)
+	// fallback 是额度键缺失或坏了时的并发上限。
+	fallback int
+	// release 承接名额的 Redis 释放：自己的工作协程，不与边缘的账号并发释放共用队列；出错不重试。
+	release *control.Dispatcher
 
 	incident atomic.Bool
+	// failOpen 是 Redis 出错时团队并发放行的次数（指标）；lastFailLog 给日志限频。
+	failOpen    atomic.Int64
+	lastFailLog atomic.Int64
 
 	mu     sync.Mutex
 	quotas map[string]int
@@ -76,10 +98,11 @@ type gate struct {
 	admitScript, refreshScript *goredis.Script
 }
 
-func newGate(client goredis.UniversalClient, prefix, node string, limits func() control.Limiter, onError func(string, error)) *gate {
+func newGate(client goredis.UniversalClient, prefix, node string, fallback int, limits func() control.Limiter, onError func(string, error)) *gate {
 	return &gate{
-		client: client, prefix: prefix, node: node, limits: limits, onError: onError,
-		quotas: map[string]int{}, live: map[string]map[string]struct{}{},
+		client: client, prefix: prefix, node: node, limits: limits, onError: onError, fallback: fallback,
+		release: control.NewDispatcher(1, 0),
+		quotas:  map[string]int{}, live: map[string]map[string]struct{}{},
 		admitScript: goredis.NewScript(concAdmit), refreshScript: goredis.NewScript(concRefresh),
 	}
 }
@@ -106,7 +129,7 @@ func (g *gate) limit(team string) int {
 	if n, ok := g.quotas[team]; ok {
 		return n
 	}
-	return TeamLimitRules[LimitEdgeConcurrentTeam].Max
+	return g.fallback
 }
 
 // Admit 实现 edge.Gate：没有 team（个人空间）不限；有 team 先按团队速率，再占一个并发名额。
@@ -126,7 +149,11 @@ func (g *gate) Admit(ctx context.Context, in edge.GateInput) (func(), gen.ErrorC
 	key := g.concKey(in.Team)
 	ok, err := g.admitScript.Run(ctx, g.client, []string{key}, member, g.limit(in.Team), memberTTL.Milliseconds()).Int()
 	if err != nil {
-		g.onError("team concurrency", err)
+		g.failOpen.Add(1)
+		now := time.Now().UnixMilli()
+		if last := g.lastFailLog.Load(); now-last >= failOpenLogEvery.Milliseconds() && g.lastFailLog.CompareAndSwap(last, now) {
+			g.onError("team concurrency", err)
+		}
 		return func() {}, "", nil
 	}
 	if ok != 1 {
@@ -149,13 +176,29 @@ func (g *gate) Admit(ctx context.Context, in edge.GateInput) (func(), gen.ErrorC
 				delete(g.live, in.Team)
 			}
 			g.mu.Unlock()
-			rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := g.client.ZRem(rctx, key, member).Err(); err != nil {
-				g.onError("team concurrency release", err)
-			}
+			// 投递即返回（调用方可能在 epoll 循环上）；只试一次，失败由成员过期兜底。
+			g.release.Go(in.Team, func() {
+				rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := g.client.ZRem(rctx, key, member).Err(); err != nil {
+					g.onError("team concurrency release", err)
+				}
+			})
 		})
 	}, "", nil
+}
+
+// close 等已投递的释放做完（最多 5 秒），再停掉工作协程。
+func (g *gate) close() {
+	g.release.Flush(5 * time.Second)
+	g.release.Close()
+}
+
+// render 是准入闸的指标（接在原有指标之后）。
+func (g *gate) render() string {
+	return "# HELP relay_team_concurrency_fail_open_total Team concurrency checks let through because Redis failed.\n" +
+		"# TYPE relay_team_concurrency_fail_open_total counter\n" +
+		"relay_team_concurrency_fail_open_total " + strconv.FormatInt(g.failOpen.Load(), 10) + "\n"
 }
 
 // refresh 给本节点占着的全部成员续期。
@@ -171,11 +214,16 @@ func (g *gate) refresh(ctx context.Context) {
 		teams[team] = args
 	}
 	g.mu.Unlock()
+	failed := 0
+	var last error
 	for team, args := range teams {
 		if err := g.refreshScript.Run(ctx, g.client, []string{g.concKey(team)}, args...).Err(); err != nil {
-			g.onError("team concurrency refresh", err)
-			return
+			failed++
+			last = err
 		}
+	}
+	if failed > 0 {
+		g.onError(fmt.Sprintf("team concurrency refresh (%d/%d)", failed, len(teams)), last)
 	}
 }
 
@@ -228,9 +276,13 @@ func (g *gate) reload(ctx context.Context) error {
 					continue
 				}
 				team := strings.TrimPrefix(keys[i], prefix)
-				if q, err := cluster.DecodeQuotaValue(team, []byte(text)); err == nil {
-					quotas[team] = q.Concurrent
+				q, err := cluster.DecodeQuotaValue(team, []byte(text))
+				if err != nil {
+					// 坏了的额度按最严格的缺省（不进表），报出来让运维看到。
+					g.onError("team quota decode", err)
+					continue
 				}
+				quotas[team] = q.Concurrent
 			}
 		}
 		if next == 0 {
@@ -245,7 +297,11 @@ func (g *gate) reload(ctx context.Context) error {
 	case err != nil:
 		return err
 	default:
-		if in, err := cluster.DecodeIncidentValue(raw); err == nil {
+		in, err := cluster.DecodeIncidentValue(raw)
+		if err != nil {
+			// 坏了的开关值不改现状，报出来。
+			g.onError("incident decode", err)
+		} else {
 			g.incident.Store(in.RejectNewConnections)
 		}
 	}

@@ -29,7 +29,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if len(issues) > 0 {
 		t.Fatal(issues)
 	}
-	if cfg.Host != "0.0.0.0" || cfg.Port != 8443 || cfg.NodeID != "my-host.local" || cfg.LogLevel != obs.LevelInfo || cfg.AllowInsecureTunnel {
+	if cfg.Host != "0.0.0.0" || cfg.Port != 8443 || cfg.NodeID != "my-host-local" || cfg.LogLevel != obs.LevelInfo || cfg.AllowInsecureTunnel {
 		t.Fatalf("%+v", cfg)
 	}
 	if cfg.Domain != "example.test" || cfg.Weight != 1 || cfg.DrainGrace != 30*time.Second {
@@ -37,6 +37,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.InternodeURL != "wss://a.edge.example.test/x/v1" || cfg.JWKSURL != "https://app.example.test/.well-known/jwks.json" {
 		t.Fatalf("派生地址：%s %s", cfg.InternodeURL, cfg.JWKSURL)
+	}
+	if cfg.TeamConcurrent != DefaultTeamConcurrent || cfg.TeamConnectPerMinute != DefaultTeamConnectPerMinute || DefaultTeamConcurrent != 10 {
+		t.Fatalf("团队额度缺省取最严格的套餐：%+v", cfg)
 	}
 	if cfg.NodeToken != "" || cfg.DatabaseURL != "" || cfg.TrustedProxy != nil {
 		t.Fatalf("%+v", cfg)
@@ -54,7 +57,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	env["RELAY_TRUSTED_PROXY_PREFER"] = "real-ip"
 	env["RELAY_DRAIN_GRACE_MS"] = "500"
 	env["RELAY_METRICS_LISTEN"] = "127.0.0.1:9100"
+	env["RELAY_TEAM_CONCURRENT"] = "50"
+	env["RELAY_TEAM_CONNECT_PER_MINUTE"] = "3000"
 	cfg, issues = LoadConfig(env, host)
+	if cfg.TeamConcurrent != 50 || cfg.TeamConnectPerMinute != 3000 {
+		t.Fatalf("显式覆盖团队缺省：%+v", cfg)
+	}
 	if len(issues) > 0 {
 		t.Fatal(issues)
 	}
@@ -118,9 +126,41 @@ func TestLoadConfigIssues(t *testing.T) {
 	env["RELAY_TRUSTED_PROXY"] = "not-a-cidr"
 	env["RELAY_DRAIN_GRACE_MS"] = "-1"
 	env["RELAY_METRICS_LISTEN"] = "x"
+	env["RELAY_TEAM_CONCURRENT"] = "0"
 	_, issues = LoadConfig(env, host)
-	if len(issues) != 10 {
-		t.Fatalf("应有 10 个问题：%v", issues)
+	if len(issues) != 11 {
+		t.Fatalf("应有 11 个问题：%v", issues)
+	}
+}
+
+// 节点名与契约的 relayNodeIdSchema 同一条规则；缺省由主机名换出。
+func TestNodeID(t *testing.T) {
+	for in, want := range map[string]string{
+		"my host.local":         "my-host-local",
+		"Relay_A.Example":       "relay-a-example",
+		"--edge-1":              "edge-1",
+		strings.Repeat("a", 80): strings.Repeat("a", 63),
+		"..":                    "",
+		"node-7":                "node-7",
+	} {
+		if got := NodeIDFromHost(func() (string, error) { return in, nil }); got != want {
+			t.Errorf("%q → %q，应为 %q", in, got, want)
+		}
+	}
+	for id, ok := range map[string]bool{
+		"a": true, "relay-a": true, strings.Repeat("a", 63): true,
+		"Relay-A": false, "relay.a": false, "relay_a": false, "-a": false, strings.Repeat("a", 64): false,
+	} {
+		env := baseEnv()
+		env["RELAY_NODE_ID"] = id
+		_, issues := LoadConfig(env, host)
+		if (len(issues) == 0) != ok {
+			t.Errorf("%q：%v", id, issues)
+		}
+	}
+	// 主机名换不出合法节点名又没显式设置：配置错误。
+	if _, issues := LoadConfig(baseEnv(), func() (string, error) { return "...", nil }); len(issues) != 1 || !strings.Contains(issues[0], "RELAY_NODE_ID") {
+		t.Fatalf("%v", issues)
 	}
 }
 
