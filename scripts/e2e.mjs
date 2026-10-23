@@ -214,8 +214,7 @@ const project = `armadra-e2e-${randomBytes(4).toString("hex")}`;
 const composeFile = join(root, "deploy/e2e/compose.yml");
 const output = resolve(root, options.values.get("--output") ?? ".data/e2e");
 const relayImage = options.values.get("--relay-image") ?? "armadra-relay:e2e";
-const relayDockerfile =
-  process.env.E2E_RELAY_DOCKERFILE ?? "go/Dockerfile";
+const relayDockerfile = process.env.E2E_RELAY_DOCKERFILE ?? "go/Dockerfile";
 const relayCli = (process.env.E2E_RELAY_CLI ?? "armadra-relay")
   .split(" ")
   .filter(Boolean);
