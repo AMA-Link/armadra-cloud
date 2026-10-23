@@ -709,4 +709,30 @@ describe("platform.info 的挑战范围（cloud-api §16）", () => {
     });
     expect(parsed.scope).toEqual(["auth.login", "auth.register"]);
   });
+
+  it("scope 过滤后为空时整个 challenge 视为没有，platform.info 照常解析", async () => {
+    const { platformInfoSchema } = await import("../src/cloud-api/index.ts");
+    const base = {
+      mode: "saas",
+      issuer: "https://app.armadra.test",
+      protocol: { major: 1, minor: 4 },
+      capabilities: ["auth.password"],
+      relay: { addressing: "subdomain" },
+      webApp: "https://app.armadra.test",
+    };
+    const parsed = platformInfoSchema.parse({
+      ...base,
+      challenge: { provider: "turnstile", siteKey: "k", scope: ["x.future"] },
+    });
+    expect(parsed.challenge).toBeUndefined();
+    const kept = platformInfoSchema.parse({
+      ...base,
+      challenge: {
+        provider: "turnstile",
+        siteKey: "k",
+        scope: ["x.future", "auth.login"],
+      },
+    });
+    expect(kept.challenge?.scope).toEqual(["auth.login"]);
+  });
 });

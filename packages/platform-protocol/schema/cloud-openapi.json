@@ -106,14 +106,8 @@
                           "type": "array",
                           "minItems": 1,
                           "items": {
-                            "enum": [
-                              "auth.login",
-                              "links.accept",
-                              "auth.changePassword",
-                              "auth.register",
-                              "auth.passwordResetStart"
-                            ],
-                            "type": "string"
+                            "type": "string",
+                            "description": "已知值：auth.login、links.accept、auth.changePassword、auth.register、auth.passwordResetStart"
                           }
                         }
                       },
