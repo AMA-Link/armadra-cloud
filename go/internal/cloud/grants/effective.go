@@ -45,7 +45,7 @@ type Effective struct {
 	// Whole 为真是整台主机；否则 WorkspaceIDs 是允许的工作空间（升序去重）。
 	Whole        bool
 	WorkspaceIDs []string
-	// ExpiresAtMs 是各来源中最早的非空到期；nil = 不过期。
+	// ExpiresAtMs 是对范围与角色有贡献的来源中最早的非空到期；nil = 不过期。
 	ExpiresAtMs *int64
 	From        []Source
 }
@@ -74,7 +74,8 @@ func isStaff(role saas.TeamRole) bool {
 //  3. 团队主机：必须是该团队成员、团队未删除；team 授予只给 owner / admin / member，member 授予给本人，
 //     guest 授予给 guest 角色的本人；billing 什么都没有。个人空间只有所有者与 guest 授予。
 //  4. 忽略已撤销与 expires_at_ms ≤ now 的授予。
-//  5. 角色取最高；范围取并集（任一来源整台则整台）；到期取各来源中最早的非空到期。
+//  5. 合成：范围取并集（任一来源整台则整台）；角色取「使范围内每一处都被某个角色 ≥ 它的来路覆盖」的最大者，
+//     不放大（见 composeSources）；到期取对范围与角色有贡献的来路中最早的非空到期。
 func Compose(b saas.AccessBasis, accountID string, nowMs int64) Effective {
 	if !b.AccountActive || !b.SourceFound || b.SourceRevoked {
 		return Effective{}
@@ -115,29 +116,63 @@ func Compose(b saas.AccessBasis, accountID string, nowMs int64) Effective {
 	if len(from) == 0 {
 		return Effective{}
 	}
+	return composeSources(from)
+}
+
+// composeSources 把有效来路合成一个 (角色, 范围, 到期)：
+//
+//   - 范围 S = 所有来路范围的并集；任一来路整台则 S = 整台。
+//   - 角色 R = 最大的角色，使 S 中每一处都被某个角色 ≥ R 的来路覆盖：整台时是整台来路中的最高角色，
+//     只有限工作空间来路时是 min over w∈S 的（覆盖 w 的来路中的最高角色）。
+//   - 结果永不超出任一范围上实际授予的角色；限工作空间的更高角色无法与更宽范围同时表达时舍弃（不放大）。
+//   - 到期取对 S 与 R 有贡献的来路中最早的非空到期：整台时是角色恰为 R 的整台来路，限范围时是角色 ≥ R 的来路。
+func composeSources(from []Source) Effective {
 	out := Effective{From: from}
 	scope := map[string]bool{}
+	wholeRank := 0
 	for _, source := range from {
-		if roleRank[source.Role] > roleRank[out.Role] {
-			out.Role = source.Role
-		}
 		if len(source.WorkspaceIDs) == 0 {
 			out.Whole = true
+			wholeRank = max(wholeRank, roleRank[source.Role])
 		}
 		for _, id := range source.WorkspaceIDs {
 			scope[id] = true
 		}
-		if source.ExpiresAtMs != nil && (out.ExpiresAtMs == nil || *source.ExpiresAtMs < *out.ExpiresAtMs) {
-			exp := *source.ExpiresAtMs
-			out.ExpiresAtMs = &exp
-		}
 	}
 	out.WorkspaceIDs = []string{}
+	rank := wholeRank
 	if !out.Whole {
 		for id := range scope {
 			out.WorkspaceIDs = append(out.WorkspaceIDs, id)
 		}
 		sort.Strings(out.WorkspaceIDs)
+		rank = 0
+		for _, id := range out.WorkspaceIDs {
+			best := 0
+			for _, source := range from {
+				if slices.Contains(source.WorkspaceIDs, id) {
+					best = max(best, roleRank[source.Role])
+				}
+			}
+			if rank == 0 || best < rank {
+				rank = best
+			}
+		}
+	}
+	for role, r := range roleRank {
+		if r == rank {
+			out.Role = role
+		}
+	}
+	for _, source := range from {
+		contributes := roleRank[source.Role] >= rank
+		if out.Whole {
+			contributes = len(source.WorkspaceIDs) == 0 && roleRank[source.Role] == rank
+		}
+		if contributes && source.ExpiresAtMs != nil && (out.ExpiresAtMs == nil || *source.ExpiresAtMs < *out.ExpiresAtMs) {
+			exp := *source.ExpiresAtMs
+			out.ExpiresAtMs = &exp
+		}
 	}
 	return out
 }

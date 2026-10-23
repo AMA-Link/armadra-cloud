@@ -900,7 +900,7 @@ type Watcher interface {
 2. 是 `owner_account_id` → 来源 `owner`，角色 `driver`，整台。
 3. 团队主机：必须是该团队成员，团队未删除；`team` 授予只给角色 owner / admin / member（billing、guest 不受团队全员授予）；`member` / `guest` 授予给主体本人。
 4. 忽略已撤销（含到期后由 `grant.expire` 写了 `revoked_at_ms` 的）与 `expires_at_ms ≤ now` 的授予。
-5. 合成：角色取最高（`viewer < editor < operator < driver`）；范围取并集，任一来源为整台则整台（能力设计 §3.5 的规范语义：高角色窄范围 + 低角色整台 = 高角色整台）；`expiresAtMs` 取各来源中最早的非空到期。
+5. 合成（#111，不放大）：范围 S 取所有有效来路范围的并集，任一来路整台则 S = 整台；角色 R 取最大的角色，使 S 中每一处都被某个角色 ≥ R 的来路覆盖——整台时 R = 整台来路中的最高角色，只有限工作空间来路时 R = min over w∈S 的（覆盖 w 的来路中的最高角色）。结果永不超出任一范围上实际授予的角色：限工作空间的更高角色若无法与更宽范围同时表达则舍弃（`driver@w1` + 团队 `viewer` 整台 = `viewer` 整台，不是 `driver` 整台；`driver@w1` + `viewer@w2` = `viewer` {w1, w2}；`editor@w1` + `driver@w1` = `driver` {w1}；`driver` 整台 + `viewer@w1` = `driver` 整台）。`expiresAtMs` 取对 S 与 R 有贡献的来路中最早的非空到期（整台时是角色恰为 R 的整台来路；限范围时是角色 ≥ R 的来路），被舍弃的高角色来路的到期不拖短结果。断言的 `role` / `scp`、`Narrowed`（新合成结果角色更低、范围更小或到期更早即收窄）、访问清单、`grant.expire` 前后快照都用这同一个合成结果。将来如需「按工作空间分角色」，属协议扩展（断言 `scp` 带角色），M1 不做。
 6. `grants.effective` 答合成结果与 `from[]`。
 
 **断言合成**（`sources.assertion`，`grants.Policy.Intent`）：
@@ -945,7 +945,7 @@ type Watcher interface {
 - **主机邀请被接受**落成**云端授予**（契约 §22，#72：主机邀请 = 云端授予 + guest 成员关系，不在 core 里落一张邀请；分享链接仍落成 core 的邀请），一个事务：
   - 团队主机：接受者不是成员 → 先按团队 `allowGuests` 与 guest 配额加成 `guest` 成员；再建授予（主体 `guest`，若已是 owner / admin / member 则主体 `member`），`origin = invitation`，`role` / `workspace_ids` 取自邀请，授予的 `expires_at_ms` 取邀请的 `grant_expires_at_ms`（NULL = 不过期），**不取邀请自身的有效期 `expires_at_ms`**（那只管邀请多久内可接受）。同样，`sources.trustRequest` 插新 pending 前，同一事务先把同 `(源, 设备)` 已过期的 pending 改成 `expired`，否则 `trust_requests_pending` 会挡住重新上报。
   - 个人空间主机：建主体 `guest` 的授予；core 按 §10 Q2 准入。
-  - 已有同主体的有效授予 → 按「角色取高、范围并集」更新那一条，不建第二条。
+  - 已有同主体的有效授予 → 把新旧两条按 §4.6 的合成规则合成后更新那一条，不建第二条（不是各取最高角色与范围并集）。
 - **新设备信任**（契约 §31，§10 Q1）：
 
 | 步骤                   | 规则                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |

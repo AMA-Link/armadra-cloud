@@ -104,7 +104,7 @@ func TestComposeGates(t *testing.T) {
 	}
 }
 
-// 角色取最高、范围取并集、到期取最早的非空；已撤销与到期的忽略。
+// 范围取并集、角色不放大（使范围内每处都被 ≥ 它的来路覆盖的最大者）、到期取有贡献来路中最早的非空；已撤销与到期的忽略。
 func TestComposeMerge(t *testing.T) {
 	revoked := grant("rev", "member", "me", "driver", nil, nil)
 	revoked.RevokedAtMs = ptr(1)
@@ -119,10 +119,24 @@ func TestComposeMerge(t *testing.T) {
 	}{
 		{"单条整台", []saas.Grant{grant("a", "member", "me", "editor", nil, nil)}, "editor", true, []string{}, nil, 1},
 		{"单条限范围", []saas.Grant{grant("a", "member", "me", "editor", []string{"w2", "w1", "w1"}, nil)}, "editor", false, []string{"w1", "w2"}, nil, 1},
-		{"高角色窄范围 + 低角色整台 = 高角色整台", []saas.Grant{
-			grant("a", "member", "me", "driver", []string{"w1"}, nil), grant("b", "team", "t1", "viewer", nil, nil)}, "driver", true, []string{}, nil, 2},
-		{"范围取并集", []saas.Grant{
-			grant("a", "member", "me", "viewer", []string{"w1"}, nil), grant("b", "team", "t1", "operator", []string{"w3", "w2"}, nil)}, "operator", false, []string{"w1", "w2", "w3"}, nil, 2},
+		{"driver@w1 + viewer 整台 = viewer 整台（不放大）", []saas.Grant{
+			grant("a", "member", "me", "driver", []string{"w1"}, nil), grant("b", "team", "t1", "viewer", nil, nil)}, "viewer", true, []string{}, nil, 2},
+		{"driver@w1 + viewer@w2 = viewer {w1,w2}", []saas.Grant{
+			grant("a", "member", "me", "driver", []string{"w1"}, nil), grant("b", "team", "t1", "viewer", []string{"w2"}, nil)}, "viewer", false, []string{"w1", "w2"}, nil, 2},
+		{"editor@w1 + driver@w1 = driver {w1}", []saas.Grant{
+			grant("a", "member", "me", "editor", []string{"w1"}, nil), grant("b", "team", "t1", "driver", []string{"w1"}, nil)}, "driver", false, []string{"w1"}, nil, 2},
+		{"driver 整台 + viewer@w1 = driver 整台", []saas.Grant{
+			grant("a", "member", "me", "driver", nil, nil), grant("b", "team", "t1", "viewer", []string{"w1"}, nil)}, "driver", true, []string{}, nil, 2},
+		{"整台取整台来路中最高的", []saas.Grant{
+			grant("a", "member", "me", "operator", nil, nil), grant("b", "team", "t1", "viewer", nil, nil), grant("c", "team", "t1", "driver", []string{"w1"}, nil)}, "operator", true, []string{}, nil, 3},
+		{"重叠范围：editor{w1,w2} + driver{w2,w3} = editor {w1,w2,w3}", []saas.Grant{
+			grant("a", "member", "me", "editor", []string{"w1", "w2"}, nil), grant("b", "team", "t1", "driver", []string{"w2", "w3"}, nil)}, "editor", false, []string{"w1", "w2", "w3"}, nil, 2},
+		{"被舍弃的来路不拖短到期：driver@w1 早到期不影响 viewer 整台", []saas.Grant{
+			grant("a", "member", "me", "driver", []string{"w1"}, ptr(3000)), grant("b", "team", "t1", "viewer", nil, ptr(9000))}, "viewer", true, []string{}, ptr(9000), 2},
+		{"整台里较低的整台来路到期不参与", []saas.Grant{
+			grant("a", "member", "me", "editor", nil, ptr(9000)), grant("b", "team", "t1", "viewer", nil, ptr(3000))}, "editor", true, []string{}, ptr(9000), 2},
+		{"范围取并集，角色取各处最低的最高档", []saas.Grant{
+			grant("a", "member", "me", "viewer", []string{"w1"}, nil), grant("b", "team", "t1", "operator", []string{"w3", "w2"}, nil)}, "viewer", false, []string{"w1", "w2", "w3"}, nil, 2},
 		{"到期取最早的非空", []saas.Grant{
 			grant("a", "member", "me", "viewer", nil, ptr(5000)), grant("b", "team", "t1", "viewer", nil, ptr(3000)), grant("c", "team", "t1", "viewer", nil, nil)}, "viewer", true, []string{}, ptr(3000), 3},
 		{"到期（≤ now）与撤销的不算", []saas.Grant{
@@ -147,6 +161,11 @@ func TestComposePersonalGuest(t *testing.T) {
 	if got.Role != "operator" || got.Whole || !got.GuestOnly() || got.Owner() || !reflect.DeepEqual(got.ScopeClaims(), []string{"ws:w1"}) {
 		t.Fatalf("访客：%+v", got)
 	}
+	b.Grants = append(b.Grants, saas.Grant{GrantID: "g2", SourceID: "h", SubjectKind: "guest", SubjectID: "me", Role: "driver", WorkspaceIDs: []string{"w2"}})
+	if two := grants.Compose(b, "me", now); two.Role != "operator" || !reflect.DeepEqual(two.WorkspaceIDs, []string{"w1", "w2"}) {
+		t.Fatalf("访客两条限范围：%+v", two)
+	}
+	b.Grants = b.Grants[:2]
 	if !grants.Compose(b, "other", now).GuestOnly() {
 		t.Fatal("另一个访客")
 	}
@@ -189,6 +208,8 @@ func TestNarrowed(t *testing.T) {
 		{"不过期 → 有到期", eff("editor", true, nil, nil), eff("editor", true, nil, ptr(9)), true},
 		{"到期提前", eff("editor", true, nil, ptr(9)), eff("editor", true, nil, ptr(5)), true},
 		{"到期推后", eff("editor", true, nil, ptr(5)), eff("editor", true, nil, ptr(9)), false},
+		{"driver@w1 + viewer@w2 → 加上 viewer 整台后变 viewer 整台（角色降低）", eff("driver", false, []string{"w1"}, nil), eff("viewer", true, nil, nil), true},
+		{"viewer 整台 → driver 整台", eff("viewer", true, nil, nil), eff("driver", true, nil, nil), false},
 		{"有到期 → 不过期", eff("editor", true, nil, ptr(5)), eff("editor", true, nil, nil), false},
 	}
 	for _, c := range cases {
