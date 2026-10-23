@@ -14,6 +14,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/accounts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/billing"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
@@ -146,6 +147,9 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	})
 	auditService.Register(runner)
 	for name, handler := range auditService.Handlers() {
+		handlers[name] = handler
+	}
+	for name, handler := range billing.New(billing.Options{Core: coreCtx, Store: saasStore}).Handlers() {
 		handlers[name] = handler
 	}
 	webApp := ""

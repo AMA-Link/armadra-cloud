@@ -345,42 +345,37 @@ func (s *Service) settingsUpdate(ctx context.Context, call *api.Call) (any, erro
 	return out, nil
 }
 
-// usageEntry 是 teams.usage 的一项（协议包 usageEntrySchema）；limit 为 null 表示不限。
-type usageEntry struct {
+// UsageEntry 是 teams.usage 与 billing.usage 的一项（协议包 usageEntrySchema）；limit 为 null 表示不限。
+type UsageEntry struct {
 	Metric string `json:"metric"`
 	Value  int64  `json:"value"`
 	Limit  *int64 `json:"limit"`
 }
 
-func limitOf(limit int64) *int64 {
+// LimitOf 把额度换成线上的 limit：不限（负数）是 null。
+func LimitOf(limit int64) *int64 {
 	if limit < 0 {
 		return nil
 	}
 	return &limit
 }
 
-// usage 是 teams.usage（owner、admin、member、billing）：主机、成员、guest、同时连接、本月流量，对照当前额度。
-// 同时连接只有节点知道，控制面只展示额度（value 为 0）。
-func (s *Service) usage(ctx context.Context, call *api.Call) (any, error) {
-	account, err := s.me(ctx, call)
-	if err != nil {
-		return nil, err
-	}
-	reader := s.store.Read()
-	access, err := Require(ctx, reader, s.tenant(), account.AccountID, teamID(call), MinDirectory)
-	if err != nil {
-		return nil, err
-	}
-	now := time.UnixMilli(s.nowMs()).UTC()
-	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	if period, ok := call.Input["period"].(string); ok {
-		parsed, err := time.Parse("2006-01", period)
-		if err != nil {
-			return nil, core.Fail(gen.ErrBadRequest)
+// MonthOf 解 period（YYYY-MM，空 = now 所在月），答该月 UTC 的起止；不合格式答 400。
+func MonthOf(period string, now time.Time) (start, end time.Time, err error) {
+	now = now.UTC()
+	start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	if period != "" {
+		if start, err = time.Parse("2006-01", period); err != nil {
+			return start, end, core.Fail(gen.ErrBadRequest)
 		}
-		start = parsed
 	}
-	end := start.AddDate(0, 1, 0)
+	return start, start.AddDate(0, 1, 0), nil
+}
+
+// TeamUsage 是团队在 [start, end) 的用量，对照当前额度：主机、成员、guest、同时连接、流量。
+// teams.usage 与 billing.usage 用同一个统计函数；同时连接只有节点知道，控制面只展示额度（value 为 0）。
+// withDays 为真时另给流量的按天序列。
+func TeamUsage(ctx context.Context, store saas.Store, tenantID string, access Access, start, end time.Time, withDays bool) (entries []UsageEntry, days []saas.DayBytes, err error) {
 	var (
 		seats saas.Seats
 		hosts int
@@ -388,7 +383,7 @@ func (s *Service) usage(ctx context.Context, call *api.Call) (any, error) {
 		lim   quota.Limits
 	)
 	// 团队范围的统计方法在 TeamRepo 上，所以开一个事务来读。
-	err = s.store.Tx(ctx, func(tx saas.Tx) error {
+	err = store.Tx(ctx, func(tx saas.Tx) error {
 		var err error
 		if seats, err = tx.Teams().Seats(ctx, access.Scope); err != nil {
 			return err
@@ -396,20 +391,44 @@ func (s *Service) usage(ctx context.Context, call *api.Call) (any, error) {
 		if hosts, bytes, err = tx.Teams().Usage(ctx, access.Scope, start.UnixMilli(), end.UnixMilli()); err != nil {
 			return err
 		}
-		lim, err = limits(ctx, tx, s.tenant(), access)
+		if lim, err = limits(ctx, tx, tenantID, access); err != nil {
+			return err
+		}
+		if withDays {
+			days, err = tx.Teams().TrafficDays(ctx, access.Scope, start.UnixMilli(), end.UnixMilli())
+		}
 		return err
 	})
 	if err != nil {
+		return nil, nil, err
+	}
+	return []UsageEntry{
+		{quota.Hosts, int64(hosts), LimitOf(int64(lim.Hosts))},
+		{quota.Members, int64(seats.Members), LimitOf(int64(lim.Members))},
+		{quota.Guests, int64(seats.Guests), LimitOf(int64(lim.Guests))},
+		{quota.Concurrent, 0, LimitOf(int64(lim.Concurrent))},
+		{quota.Traffic, bytes, LimitOf(lim.TrafficBytes)},
+	}, days, nil
+}
+
+// usage 是 teams.usage（owner、admin、member、billing）：主机、成员、guest、同时连接、本月流量，对照当前额度。
+func (s *Service) usage(ctx context.Context, call *api.Call) (any, error) {
+	account, err := s.me(ctx, call)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"teamId": access.Scope.TeamID(), "period": start.Format("2006-01"),
-		"usage": []usageEntry{
-			{quota.Hosts, int64(hosts), limitOf(int64(lim.Hosts))},
-			{quota.Members, int64(seats.Members), limitOf(int64(lim.Members))},
-			{quota.Guests, int64(seats.Guests), limitOf(int64(lim.Guests))},
-			{quota.Concurrent, 0, limitOf(int64(lim.Concurrent))},
-			{quota.Traffic, bytes, limitOf(lim.TrafficBytes)},
-		},
-	}, nil
+	access, err := Require(ctx, s.store.Read(), s.tenant(), account.AccountID, teamID(call), MinDirectory)
+	if err != nil {
+		return nil, err
+	}
+	period, _ := call.Input["period"].(string)
+	start, end, err := MonthOf(period, time.UnixMilli(s.nowMs()))
+	if err != nil {
+		return nil, err
+	}
+	entries, _, err := TeamUsage(ctx, s.store, s.tenant(), access, start, end, false)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"teamId": access.Scope.TeamID(), "period": start.Format("2006-01"), "usage": entries}, nil
 }
