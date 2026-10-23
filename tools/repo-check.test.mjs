@@ -507,6 +507,9 @@ const goRule = {
   internalBoundaries: [
     { from: "internal/core", forbid: ["internal/tunnel", "internal/edge"] },
   ],
+  onlyImportedBy: [
+    { package: "internal/scope", allow: ["internal/teams", "internal/store"] },
+  ],
 };
 
 test("go-modules：解析 go.mod 的 require 块、单行 require 与 replace", () => {
@@ -653,6 +656,41 @@ import "example.test/m/internal/testutil"
     ),
     ["Go 模块规则指向的 go.mod 不存在：nope/go.mod"],
   );
+});
+
+test("go-modules：onlyImportedBy 是白名单——名单外的生产代码不许 import，名单内、包自己与测试不受限", () => {
+  const root = repo({
+    "go/go.mod": GO_MOD,
+    "go/internal/scope/s.go": `package scope\n`,
+    "go/internal/scope/s_test.go": `package scope\n`,
+    "go/internal/teams/t.go": `package teams
+
+import "example.test/m/internal/scope"
+`,
+    "go/internal/store/saas/s.go": `package saas
+
+import "example.test/m/internal/scope"
+`,
+    "go/internal/invitations/i.go": `package invitations
+
+import "example.test/m/internal/scope"
+`,
+    "go/internal/invitations/i_test.go": `package invitations
+
+import "example.test/m/internal/scope"
+`,
+  });
+  const files = [
+    "go/go.mod",
+    "go/internal/scope/s.go",
+    "go/internal/teams/t.go",
+    "go/internal/store/saas/s.go",
+    "go/internal/invitations/i.go",
+    "go/internal/invitations/i_test.go",
+  ];
+  assert.deepEqual(run(root, { goModules: [goRule] }, ["go-modules"], files), [
+    "go/internal/invitations/i.go 不得 import example.test/m/internal/scope（internal/scope 只许 internal/teams、internal/store import）",
+  ]);
 });
 
 test("go-modules：本仓库的规则在现状上通过", () => {

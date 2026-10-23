@@ -157,6 +157,13 @@
             "internal/personal"
           ]
         }
+      ],
+      "onlyImportedBy": [
+        {
+          "$comment": "TeamScope 只能在 teams.Require 里、核过成员与角色之后构造（SaaS 实施设计 §4.11）；store/saas 用类型别名转出，测试不受限。",
+          "package": "internal/store/saas/teamscope",
+          "allow": ["internal/cloud/teams", "internal/store/saas"]
+        }
       ]
     }
   ],
