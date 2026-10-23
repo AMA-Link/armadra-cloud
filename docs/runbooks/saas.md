@@ -45,7 +45,7 @@
 
 ## 备份与恢复
 
-- **备份 PostgreSQL**：`docker compose exec -T postgres pg_dump -U postgres -d armadra_cloud -Fc --no-owner -T outbox_emails > backup.dump`。`-T outbox_emails` 不备份发件箱（含收件地址等个人信息，只是发信中转，发出或失败满 30 天由作业清理）。签名私钥在库里，由 `secrets/master_key` 包裹，**主密钥必须另存**，丢了库里的签名钥与 TOTP 种子作废（所有会话与令牌失效，运营要重新登记 TOTP）。
+- **备份 PostgreSQL**：`docker compose exec -T postgres pg_dump -U postgres -d armadra_cloud -Fc --no-owner --exclude-table-data=outbox_emails > backup.dump`。`--exclude-table-data=outbox_emails` 保留发件箱的表结构、只不备份它的数据（含收件地址等个人信息，只是发信中转，发出或失败满 30 天由作业清理）。签名私钥在库里，由 `secrets/master_key` 包裹，**主密钥必须另存**，丢了库里的签名钥与 TOTP 种子作废（所有会话与令牌失效，运营要重新登记 TOTP）。
 - **恢复**（演练过一遍）：停控制面与节点（`docker compose stop cloud relay-a relay-b`）→ 重建空库：`docker compose exec -T postgres psql -U postgres -c 'DROP DATABASE armadra_cloud WITH (FORCE)' -c 'CREATE DATABASE armadra_cloud OWNER armadra_cloud'`（不要用 `pg_restore --clean`：它按依赖顺序删对象，会因分区表与外键报一串错）→ `docker compose exec -T postgres pg_restore -U postgres -d armadra_cloud --no-owner --role=armadra_cloud < backup.dump`（`--role` 让恢复出来的对象归库属主 `armadra_cloud`，不归超级用户）→ **重跑 `docker compose run --rm db-roles`**（新库没有对流量角色的授权）→ `docker compose run --rm migrate` 核对账本（备份比二进制旧会补迁移，比二进制新会拒绝，换匹配的版本）→ `docker compose up -d --no-deps relay-a relay-b cloud`。恢复后 Redis 里的撤销与签发索引由控制面 `serve` 启动时从库重放。
 - **Redis 不备份**：它只放可重建的东西。撤销与签发索引另存 PostgreSQL（`relay_revoked_tokens`、`cloud_issued_tokens`），控制面 `serve` 启动与 Redis 重连时重放回 Redis；Redis 开着 AOF（`appendfsync everysec`）只为减少重启后的空窗。Redis 清空后，节点表 20 秒内由节点写回，撤销由控制面重放。
 
