@@ -209,10 +209,11 @@ go/
   - 节点下线前给本地隧道发 GOAWAY `rebalance`（grace 30 秒）。
   - 源按 hint 重连到别的节点；客户端通道随旧隧道结束，由客户端重连。
 - **节点注册表与命令**（沿用 Armadra `docs/design/platform/relay.md` §5）：
-  - **节点表**：每个节点每 20 秒写一次 Redis 哈希 `relay:nodes`（node → `{url, weight, version, draining, connections, tunnels}`，每个字段 `HPEXPIRE` 60 秒，没续就过期）。`url` 是该节点自己的隧道地址（如 `wss://a.edge.<域>/t/v1`），不是共用入口。控制面的 `heartbeatHint` 从这里取节点列表，去掉 `draining` 的，按 rendezvous 排序（[SaaS M1 实施设计](saas-m1-implementation.md) §2.4、§7.3）。
+  - **节点表**：每个节点每 20 秒写一次 Redis 哈希 `relay:nodes`（node → `{url, weight, version, draining, connections, tunnels, internodeUrl?}`，每个字段 `HPEXPIRE` 60 秒，没续就过期；正常下线时 `HDEL`）。`url` 是该节点自己的隧道地址（如 `wss://a.edge.<域>/t/v1`，`RELAY_TUNNEL_URL`），不是共用入口；`internodeUrl` 是别的节点连它 `/x/v1` 的地址（`RELAY_INTERNODE_URL`，缺省由 `url` 把路径换成 `/x/v1`，可以缺）。控制面的 `heartbeatHint` 从这里取节点列表，去掉 `draining` 的，按 rendezvous 排序（[SaaS M1 实施设计](saas-m1-implementation.md) §2.4、§7.3；排序函数是 `internal/control` 的 `RankNodes`，两边共用）。编解码在 `control/cluster/wire.go`（`EncodeNode` / `DecodeNode`）。
   - **命令频道**：每个节点订阅自己的 `relay:node:<id>`（`closeTunnel`、`kick`），广播仍走 `relay:ctl`。
   - **共享 JWKS**：缓存在 Redis 的 `jwks:<issuer 哈希>` 里，所有节点共用，只有一个节点回源刷新。
-  - **跨节点并发**：用 `SADD` / `SREM` / `SCARD` 计数（每条连接一个成员，带过期），取代现在只在本节点计的做法。
+  - **跨节点并发**：`edge.concurrent.team` 用有序集合 `relay:conc:team:<teamId>` 计数：成员是 `<节点>:<随机>`（每条连接一个），分数是到期毫秒（Redis 的 `TIME` 加 60 秒），一个脚本里先清到期的、再 `ZCARD`、没满才 `ZADD`；节点每 20 秒给自己的成员续期，连接结束 `ZREM`，节点崩溃后成员最多留 60 秒。上限取 `relay:quota:team:<teamId>`，缺键用节点缺省。（原写法是 `SADD` / `SREM` / `SCARD`，集合的成员不能单独过期，改成分数即到期的有序集合，语义相同。）`edge.concurrent.acct` 仍只在本节点计。
+  - **kick 与 drain**：`kick` 只踢客户端连接（按 `sourceId`，再按可选的 `subject`、`subjectPrefix`、`deviceId` 收窄），隧道保留；`closeTunnel` 关隧道；`drain {node}` 只由该节点执行：节点表标 `draining`、`/ready` 不就绪、不再收新隧道、隧道 GOAWAY `rebalance`。
   - **Redis 配置**：`maxmemory-policy noeviction`，撤销记录不能被挤掉；`maxmemory` 128 MB；不备份，重启后路由与限流自然重建。
 - **节点间鉴权**（与 #51 对齐）：
   - #51 原来的写法是每次转发带 `X-Armadra-Internode: HMAC(secret, sourceId|ts)`。改为常驻连接 + 节点令牌：
