@@ -158,6 +158,18 @@ func (m *Memory) Nodes(context.Context) ([]Node, error) {
 	return out, nil
 }
 
+// AllNodes 实现 Control：含排空的，按 id 排序。
+func (m *Memory) AllNodes(context.Context) ([]Node, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Node, 0, len(m.nodes))
+	for _, node := range m.nodes {
+		out = append(out, node)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 // Drain 实现 Control：记命令，并把内存里的节点标成排空（真实节点自己把 draining 写回节点表）。
 func (m *Memory) Drain(_ context.Context, node string) error {
 	m.mu.Lock()
