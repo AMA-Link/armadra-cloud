@@ -96,8 +96,9 @@ type AccountRepo interface {
 	ChangeEmail(ctx context.Context, tenantID, accountID, newEmail string, nowMs int64) error
 	// InsertEmailToken 写一枚邮件令牌（只有哈希）。
 	InsertEmailToken(ctx context.Context, tenantID string, token EmailToken) error
-	// ConsumeEmailToken 消耗一枚未用、未过期的令牌；没消耗到（已用、过期、不存在）答 false。
-	ConsumeEmailToken(ctx context.Context, tenantID, tokenHash string, nowMs int64) (bool, error)
+	// ConsumeEmailToken 一步消耗一枚未用、未过期且目的相符的令牌，答它的记录（账号与地址以此为准）；
+	// 没消耗到（已用、过期、不存在、目的不符）答 nil。
+	ConsumeEmailToken(ctx context.Context, tenantID, tokenHash, purpose string, nowMs int64) (*EmailToken, error)
 	// InvalidateEmailTokens 作废账号某目的下所有未用的令牌（记已用）；答作废了几枚。
 	InvalidateEmailTokens(ctx context.Context, tenantID, accountID, purpose string, nowMs int64) (int, error)
 	// GCEmailTokens 删过期 24 小时以上的令牌（beforeMs = now − 24 小时）。
@@ -150,8 +151,14 @@ type JobRepo interface {
 
 // JobQueue 是作业队列的非事务操作（设计 §6.1）。
 type JobQueue interface {
-	// Claim 领取最多 limit 个到期、未被租用的作业：租约到 nowMs+leaseMs，attempts 加一。
-	Claim(ctx context.Context, tenantID, worker string, nowMs, leaseMs int64, limit int) ([]Job, error)
+	// Claim 领取最多 limit 个到期、未被租用、尝试次数未满且种类在 kinds 里（本实例登记过处理器）的作业：
+	// 租约到 nowMs+leaseMs，attempts 加一。
+	Claim(ctx context.Context, tenantID, worker string, kinds []string, nowMs, leaseMs int64, limit int) ([]Job, error)
+	// Release 把本实例持有的作业放回队列、不计这次尝试（关闭中被打断）：释放租约，attempts 减一。
+	Release(ctx context.Context, tenantID string, jobID int64, worker string) error
+	// SweepExhausted 把尝试次数已满、租约又过期的作业（最后一次执行时实例崩了）置 failed_at_ms、
+	// last_error = 'lease_expired'；答处理了几个。
+	SweepExhausted(ctx context.Context, tenantID string, nowMs int64) (int, error)
 	// Extend 续租；租约已丢（不是 worker 持有）答 false。
 	Extend(ctx context.Context, tenantID string, jobID int64, worker string, nowMs, leaseMs int64) (bool, error)
 	// Complete 置完成；租约已丢答 false。

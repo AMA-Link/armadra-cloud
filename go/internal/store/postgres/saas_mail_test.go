@@ -40,22 +40,32 @@ func TestSaaSEmailTokenLifecycle(t *testing.T) {
 		t.Fatal("别的租户读不到")
 	}
 
-	// 只消耗一次；过期的消耗不了。
-	var first, second, expired bool
+	// 只消耗一次；过期的、目的不符的消耗不了；消耗时一并答账号与地址。
+	var first, second, expired, wrongPurpose *saas.EmailToken
 	tx(func(tx saas.Tx) (err error) {
-		first, err = tx.Accounts().ConsumeEmailToken(ctx, saasTenant, "h-verify", 500)
+		wrongPurpose, err = tx.Accounts().ConsumeEmailToken(ctx, saasTenant, "h-reset", "verify", 500)
 		if err != nil {
 			return err
 		}
-		second, err = tx.Accounts().ConsumeEmailToken(ctx, saasTenant, "h-verify", 501)
+		first, err = tx.Accounts().ConsumeEmailToken(ctx, saasTenant, "h-verify", "verify", 500)
 		if err != nil {
 			return err
 		}
-		expired, err = tx.Accounts().ConsumeEmailToken(ctx, saasTenant, "h-old", 500)
+		second, err = tx.Accounts().ConsumeEmailToken(ctx, saasTenant, "h-verify", "verify", 501)
+		if err != nil {
+			return err
+		}
+		expired, err = tx.Accounts().ConsumeEmailToken(ctx, saasTenant, "h-old", "verify", 500)
 		return err
 	})
-	if !first || second || expired {
-		t.Fatalf("一次性与过期：%v %v %v", first, second, expired)
+	if first == nil || first.AccountID != "a1" || first.Email != "a1@example.com" || first.Purpose != "verify" || second != nil || expired != nil {
+		t.Fatalf("一次性与过期：%+v %v %v", first, second, expired)
+	}
+	if wrongPurpose != nil {
+		t.Fatal("目的不符的令牌不能被消耗")
+	}
+	if still, _ := s.Read().EmailToken(ctx, saasTenant, "h-reset"); still.ConsumedAtMs != nil {
+		t.Fatal("目的不符不改令牌")
 	}
 
 	// 作废同目的的未用令牌；别的目的不动。

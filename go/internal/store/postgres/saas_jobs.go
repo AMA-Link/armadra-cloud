@@ -111,7 +111,7 @@ func (r auditRepo) Append(ctx context.Context, tenantID string, e saas.AuditEntr
 // queue 是作业队列的非事务操作，直接走连接池。
 type queue struct{ d *DB }
 
-func (q queue) Claim(ctx context.Context, tenantID, worker string, nowMs, leaseMs int64, limit int) ([]saas.Job, error) {
+func (q queue) Claim(ctx context.Context, tenantID, worker string, kinds []string, nowMs, leaseMs int64, limit int) ([]saas.Job, error) {
 	return list(ctx, q.d.pool, func(s scanner) (saas.Job, error) {
 		var j saas.Job
 		err := s.Scan(&j.ID, &j.Kind, &j.Payload, &j.Attempts, &j.MaxAttempts)
@@ -121,9 +121,27 @@ func (q queue) Claim(ctx context.Context, tenantID, worker string, nowMs, leaseM
 	      SELECT job_id FROM jobs
 	      WHERE tenant_id = $4 AND done_at_ms IS NULL AND failed_at_ms IS NULL AND run_at_ms <= $2
 	        AND (locked_until_ms IS NULL OR locked_until_ms < $2)
+	        AND attempts < max_attempts AND kind = ANY($6::text[])
 	      ORDER BY run_at_ms LIMIT $5 FOR UPDATE SKIP LOCKED)
 	    RETURNING job_id, kind, payload, attempts, max_attempts`,
-		worker, nowMs, leaseMs, tenantID, limit)
+		worker, nowMs, leaseMs, tenantID, limit, kinds)
+}
+
+func (q queue) Release(ctx context.Context, tenantID string, jobID int64, worker string) error {
+	_, err := q.d.pool.Exec(ctx,
+		`UPDATE jobs SET locked_by = NULL, locked_until_ms = NULL, attempts = GREATEST(attempts - 1, 0)
+		 WHERE tenant_id = $1 AND job_id = $2 AND locked_by = $3 AND done_at_ms IS NULL AND failed_at_ms IS NULL`,
+		tenantID, jobID, worker)
+	return err
+}
+
+func (q queue) SweepExhausted(ctx context.Context, tenantID string, nowMs int64) (int, error) {
+	tag, err := q.d.pool.Exec(ctx,
+		`UPDATE jobs SET failed_at_ms = $1, last_error = 'lease_expired', locked_by = NULL, locked_until_ms = NULL
+		 WHERE tenant_id = $2 AND done_at_ms IS NULL AND failed_at_ms IS NULL AND attempts >= max_attempts
+		   AND (locked_until_ms IS NULL OR locked_until_ms < $1)`,
+		nowMs, tenantID)
+	return int(tag.RowsAffected()), err
 }
 
 func (q queue) Extend(ctx context.Context, tenantID string, jobID int64, worker string, nowMs, leaseMs int64) (bool, error) {
@@ -182,24 +200,34 @@ func (q queue) Listen(ctx context.Context, wake func()) {
 	}
 }
 
-// listenOnce 答是否至少连上过一次。
-func (q queue) listenOnce(ctx context.Context, wake func()) bool {
+// listenOnce 答是否至少连上过一次。退出时先 UNLISTEN * 再放回池；做不到（连接已坏）就关掉这条连接，
+// 不让一条还在监听的连接回到池里被别的查询借走。
+func (q queue) listenOnce(ctx context.Context, wake func()) (connected bool) {
 	conn, err := q.d.pool.Acquire(ctx)
 	if err != nil {
 		return false
 	}
-	defer conn.Release()
+	clean := false
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if clean {
+			if _, err := conn.Exec(cleanup, "UNLISTEN *"); err == nil {
+				conn.Release()
+				return
+			}
+		}
+		_ = conn.Hijack().Close(cleanup)
+	}()
 	if _, err := conn.Exec(ctx, "LISTEN "+NotifyChannel); err != nil {
 		return false
 	}
+	connected = true
 	wake()
 	for {
 		if _, err := conn.Conn().WaitForNotification(ctx); err != nil {
-			// 连接坏了就丢掉，不放回池里。
-			if ctx.Err() == nil {
-				_ = conn.Conn().Close(context.WithoutCancel(ctx))
-			}
-			return true
+			clean = ctx.Err() != nil // 只是被叫停：连接还好，UNLISTEN 后放回；其它错误一律关掉
+			return connected
 		}
 		wake()
 	}

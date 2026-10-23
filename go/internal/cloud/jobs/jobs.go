@@ -9,7 +9,6 @@ package jobs
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -63,12 +62,36 @@ type Options struct {
 	WorkerID string
 	// Lease、Renew、Poll 缺省 60 秒、20 秒、1 秒（测试可缩短）。
 	Lease, Renew, Poll time.Duration
+	// AbortWait 是 Stop 超时打断作业之后最多再等多久（处理器不理 ctx 时不能拖死关闭）；缺省 5 秒。
+	AbortWait time.Duration
+}
+
+// 记进 last_error 的固定名字（不含错误消息）。
+var (
+	ErrUnknownKind = NamedError("unknown_kind")
+	ErrPanic       = NamedError("panic")
+)
+
+// NamedError 是 last_error 里记的固定名字：处理器想让失败原因可辨时返回它。
+type NamedError string
+
+func (e NamedError) Error() string { return string(e) }
+
+// HandleOption 调整一种作业的处理方式。
+type HandleOption func(*handlerSpec)
+
+// WithTimeout 给这种作业的每次执行加上限（超时取消 ctx，按失败重试）。
+func WithTimeout(d time.Duration) HandleOption { return func(h *handlerSpec) { h.timeout = d } }
+
+type handlerSpec struct {
+	run     Handler
+	timeout time.Duration
 }
 
 // Runner 是作业运行器。
 type Runner struct {
 	o        Options
-	handlers map[string]Handler
+	handlers map[string]handlerSpec
 	periodic []periodic
 
 	mu      sync.Mutex
@@ -108,12 +131,28 @@ func New(options Options) *Runner {
 	if options.Poll <= 0 {
 		options.Poll = DefaultPoll
 	}
-	return &Runner{o: options, handlers: map[string]Handler{}}
+	if options.AbortWait <= 0 {
+		options.AbortWait = 5 * time.Second
+	}
+	return &Runner{o: options, handlers: map[string]handlerSpec{}}
 }
 
 // Handle 登记一种作业的处理器；必须在 Start 之前。
-func (r *Runner) Handle(kind string, handler Handler) {
-	r.handlers[kind] = handler
+func (r *Runner) Handle(kind string, handler Handler, options ...HandleOption) {
+	spec := handlerSpec{run: handler}
+	for _, option := range options {
+		option(&spec)
+	}
+	r.handlers[kind] = spec
+}
+
+// kinds 是登记过处理器的种类：只领这些，别的版本的实例登记的种类不被误领。
+func (r *Runner) kinds() []string {
+	kinds := make([]string, 0, len(r.handlers))
+	for kind := range r.handlers {
+		kinds = append(kinds, kind)
+	}
+	return kinds
 }
 
 // Every 登记一个定时作业：每个时间槽（小时或天）至多插一次（slot_key），多实例各插一次只成功一个。
@@ -180,7 +219,11 @@ func (r *Runner) Stop(timeout time.Duration) {
 	case <-done:
 	case <-time.After(timeout):
 		abort()
-		<-done
+		select {
+		case <-done:
+		case <-time.After(r.o.AbortWait):
+			r.o.Log.Error("作业不理会取消，放弃等待", obs.Operation("jobs.stop"))
+		}
 	}
 	abort()
 }
@@ -190,7 +233,8 @@ func (r *Runner) work(intake, run context.Context, wake chan struct{}) {
 	defer ticker.Stop()
 	for {
 		for intake.Err() == nil {
-			jobs, err := r.o.Store.Queue().Claim(intake, r.o.TenantID, r.o.WorkerID, r.nowMs(), r.o.Lease.Milliseconds(), 1)
+			claimedAt := r.nowMs()
+			jobs, err := r.o.Store.Queue().Claim(intake, r.o.TenantID, r.o.WorkerID, r.kinds(), claimedAt, r.o.Lease.Milliseconds(), 1)
 			if err != nil {
 				if intake.Err() == nil {
 					r.o.Log.Warn("领取作业失败", obs.Operation("jobs.claim"), obs.Error(err))
@@ -201,7 +245,7 @@ func (r *Runner) work(intake, run context.Context, wake chan struct{}) {
 				break
 			}
 			r.running.Add(1)
-			r.execute(run, jobs[0])
+			r.execute(run, jobs[0], claimedAt)
 			r.running.Done()
 		}
 		select {
@@ -214,13 +258,13 @@ func (r *Runner) work(intake, run context.Context, wake chan struct{}) {
 }
 
 // execute 跑一个作业：续租、分派、记结果。
-func (r *Runner) execute(parent context.Context, job saas.Job) {
+func (r *Runner) execute(parent context.Context, job saas.Job, claimedAt int64) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	renewed := make(chan struct{})
 	go func() {
 		defer close(renewed)
-		r.renew(ctx, cancel, job)
+		r.renew(ctx, cancel, job, claimedAt)
 	}()
 	err := r.call(ctx, job)
 	cancel()
@@ -239,6 +283,13 @@ func (r *Runner) execute(parent context.Context, job saas.Job) {
 		}
 		return
 	}
+	if parent.Err() != nil && errors.Is(err, context.Canceled) {
+		// 关闭时被打断：只释放租约，不计这次尝试、不退避，别的实例马上可以接手。
+		if rerr := r.o.Store.Queue().Release(final, r.o.TenantID, job.ID, r.o.WorkerID); rerr != nil {
+			r.o.Log.Warn("作业释放租约失败", obs.JobID(job.ID), obs.Kind(job.Kind), obs.Error(rerr))
+		}
+		return
+	}
 	dead, ferr := r.o.Store.Queue().Fail(final, r.o.TenantID, job, r.o.WorkerID, r.nowMs(), errorName(err))
 	if ferr != nil {
 		r.o.Log.Warn("作业失败没有记上", obs.JobID(job.ID), obs.Kind(job.Kind), obs.Error(ferr))
@@ -253,20 +304,27 @@ func (r *Runner) execute(parent context.Context, job saas.Job) {
 
 // call 分派给处理器；panic 当作失败，不带走整个进程。
 func (r *Runner) call(ctx context.Context, job saas.Job) (err error) {
-	handler, ok := r.handlers[job.Kind]
+	spec, ok := r.handlers[job.Kind]
 	if !ok {
-		return errors.New("unknown_kind")
+		return ErrUnknownKind
+	}
+	if spec.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, spec.timeout)
+		defer cancel()
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("panic")
+			err = ErrPanic
 		}
 	}()
-	return handler(ctx, job)
+	return spec.run(ctx, job)
 }
 
-// renew 每隔一段时间把租约往后推；推不动说明租约已丢，立即取消作业。
-func (r *Runner) renew(ctx context.Context, cancelJob context.CancelFunc, job saas.Job) {
+// renew 每隔一段时间把租约往后推；推不动（租约已丢）或到了上次续租记下的到期时刻还没续上，
+// 立即取消作业——别的实例随时可能已经接手，不能与它同时执行。
+func (r *Runner) renew(ctx context.Context, cancelJob context.CancelFunc, job saas.Job, claimedAt int64) {
+	leaseUntil := claimedAt + r.o.Lease.Milliseconds()
 	ticker := time.NewTicker(r.o.Renew)
 	defer ticker.Stop()
 	for {
@@ -275,7 +333,13 @@ func (r *Runner) renew(ctx context.Context, cancelJob context.CancelFunc, job sa
 			return
 		case <-ticker.C:
 		}
-		ok, err := r.o.Store.Queue().Extend(ctx, r.o.TenantID, job.ID, r.o.WorkerID, r.nowMs(), r.o.Lease.Milliseconds())
+		now := r.nowMs()
+		if now >= leaseUntil {
+			r.o.Log.Warn("作业租约已到期没能续上，停手", obs.JobID(job.ID), obs.Kind(job.Kind))
+			cancelJob()
+			return
+		}
+		ok, err := r.o.Store.Queue().Extend(ctx, r.o.TenantID, job.ID, r.o.WorkerID, now, r.o.Lease.Milliseconds())
 		if ctx.Err() != nil {
 			return // 作业已经结束，续租被一并取消
 		}
@@ -288,6 +352,7 @@ func (r *Runner) renew(ctx context.Context, cancelJob context.CancelFunc, job sa
 			cancelJob()
 			return
 		}
+		leaseUntil = now + r.o.Lease.Milliseconds()
 	}
 }
 
@@ -295,6 +360,7 @@ func (r *Runner) renew(ctx context.Context, cancelJob context.CancelFunc, job sa
 func (r *Runner) schedule(ctx context.Context) {
 	last := map[string]string{}
 	tick := func() {
+		r.sweep(ctx)
 		now := r.o.Now()
 		for _, p := range r.periodic {
 			slot := p.slot.key(p.kind, now)
@@ -329,8 +395,23 @@ func (r *Runner) schedule(ctx context.Context) {
 
 // errorName 是写进 last_error 的类名或错误码：不含错误消息（消息里可能带着地址等内容）。
 func errorName(err error) string {
+	var named NamedError
+	if errors.As(err, &named) {
+		return string(named)
+	}
 	if code, ok := core.CodeOf(err); ok {
 		return string(code)
 	}
 	return reflect.TypeOf(err).String()
+}
+
+// sweep 把尝试次数已满、租约又过期的作业（最后一次执行时实例崩了）置失败并记错误日志。
+func (r *Runner) sweep(ctx context.Context) {
+	n, err := r.o.Store.Queue().SweepExhausted(ctx, r.o.TenantID, r.nowMs())
+	switch {
+	case err != nil && ctx.Err() == nil:
+		r.o.Log.Warn("清扫用尽重试的作业失败", obs.Operation("jobs.sweep"), obs.Error(err))
+	case n > 0:
+		r.o.Log.Error("作业在最后一次尝试时租约过期，记为失败", obs.Operation("jobs.sweep"), obs.Count(n))
+	}
 }
