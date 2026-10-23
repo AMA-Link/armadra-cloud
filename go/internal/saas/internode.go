@@ -31,6 +31,20 @@ import (
 //   - B 这一侧（internodeConn）把每条转来的流当作本地边缘流接进本节点的隧道（不再验中继令牌、不计流量）。
 //   - 鉴权、限流、并发与流量只在入口节点：A 验过中继令牌，知道 sub、dev、team。
 
+// LinkMaxStreams 是一条节点间连接上的流数上限（入口节点上经这个对端转发的全部通道，跨租户共用）。
+const LinkMaxStreams = 4096
+
+// linkConfig 是节点间连接的限制（两端同一份）：流数上限 LinkMaxStreams；链路级窗口取「流数上限 × 流窗」
+// = 1 GiB，链路级信用永远不是瓶颈——慢客户端只占满自己那条流的 256 KiB 流窗，拖不住同一条链路上的别人。
+// 内存上界：每条链路每一端最多「在途的流数 × 256 KiB」（4096 条流全卡住时 1 GiB；实际受边缘的
+// 账号 / 团队并发上限约束，远小于此）。流窗、帧大小与心跳仍是协议值。
+func linkConfig() tunnel.Config {
+	c := tunnel.DefaultConfig()
+	c.MaxStreams = LinkMaxStreams
+	c.TunnelWindow = LinkMaxStreams * c.StreamWindow
+	return c
+}
+
 // linkDialTimeout 是连对端 /x/v1 的超时；linkRetry 是连不上之后多久内不再试（客户端直接 4404）。
 const (
 	linkDialTimeout = 5 * time.Second
@@ -77,14 +91,15 @@ type dialCall struct {
 
 // links 是本节点到各对端的常驻连接（每个对端一条，断了下次用到时重连）。
 type links struct {
-	self    string
-	token   string
-	client  goredis.UniversalClient
-	prefix  string
-	cfg     tunnel.Config
-	log     *obs.Logger
-	metrics *internodeMetrics
-	dialer  *websocket.Dialer
+	self     string
+	token    string
+	insecure bool
+	client   goredis.UniversalClient
+	prefix   string
+	cfg      tunnel.Config
+	log      *obs.Logger
+	metrics  *internodeMetrics
+	dialer   *websocket.Dialer
 
 	mu      sync.Mutex
 	byNode  map[string]*tunnel.Tunnel
@@ -93,9 +108,9 @@ type links struct {
 	closed  bool
 }
 
-func newLinks(self, token string, client goredis.UniversalClient, prefix string, cfg tunnel.Config, log *obs.Logger, m *internodeMetrics) *links {
+func newLinks(self, token string, insecure bool, client goredis.UniversalClient, prefix string, log *obs.Logger, m *internodeMetrics) *links {
 	return &links{
-		self: self, token: token, client: client, prefix: prefix, cfg: cfg, log: log, metrics: m,
+		self: self, token: token, insecure: insecure, client: client, prefix: prefix, cfg: linkConfig(), log: log, metrics: m,
 		dialer: &websocket.Dialer{HandshakeTimeout: linkDialTimeout, ReadBufferSize: 32 << 10, WriteBufferSize: 32 << 10},
 		byNode: map[string]*tunnel.Tunnel{}, dialing: map[string]*dialCall{}, failed: map[string]time.Time{},
 	}
@@ -190,6 +205,10 @@ func (l *links) connect(node string) (*tunnel.Tunnel, error) {
 		u.Path, u.RawQuery = gen.PathInternode, ""
 		target = u.String()
 	}
+	// 节点表里的地址同样要是 wss（开发时 RELAY_ALLOW_INSECURE_TUNNEL 才许 ws），不往明文或别的协议上送节点令牌。
+	if !wsURL(target, l.insecure) {
+		return nil, errors.New("对端的 /x/v1 地址不是 wss")
+	}
 	conn, resp, err := l.dialer.DialContext(ctx, target, http.Header{"Authorization": {"Bearer " + l.token}})
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
@@ -213,7 +232,8 @@ func (l *links) connect(node string) (*tunnel.Tunnel, error) {
 			l.log.Info("节点间连接已关闭", obs.Node(node), obs.Code(int(info.Code)), obs.Reason(info.Reason))
 		},
 	})
-	t.SetCapabilities([]string{gen.E2ECapability})
+	// 不替远端的源声明能力：源报没报 e2e 由持有节点判，没报时答 RST refused，入口节点照本地的规矩
+	// 以 4404 e2e_unsupported 关客户端。
 	t.SetLink(node)
 	t.Start()
 	go func() {

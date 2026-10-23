@@ -1,6 +1,7 @@
 package saas
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,6 +19,10 @@ import (
 )
 
 // ------------------------------------------------------------ 持有节点：/x/v1
+
+// internodeCheckEvery 是已建立的 /x/v1 连接多久复查一次对端的节点令牌有没有被撤销（查的是撤销表的内存副本）；
+// 到 exp 时另有定时器直接断开。变量只为测试能缩短。
+var internodeCheckEvery = 5 * time.Second
 
 // internodeIdle 是 /x/v1 连接多久没收到任何帧就当断了（对端每个心跳周期发一次 PING）。
 func internodeIdle(cfg tunnel.Config) time.Duration {
@@ -45,8 +50,8 @@ type internodeServer struct {
 	stopping bool
 }
 
-func newInternodeServer(a *auth.Context, local func(string) *tunnel.Tunnel, cfg tunnel.Config, log *obs.Logger, m *internodeMetrics) *internodeServer {
-	return &internodeServer{auth: a, local: local, cfg: cfg, log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
+func newInternodeServer(a *auth.Context, local func(string) *tunnel.Tunnel, log *obs.Logger, m *internodeMetrics) *internodeServer {
+	return &internodeServer{auth: a, local: local, cfg: linkConfig(), log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
 }
 
 // streams 是各入向连接上的流数。
@@ -60,6 +65,25 @@ func (s *internodeServer) streams() int {
 	n := 0
 	for _, c := range list {
 		n += c.count()
+	}
+	return n
+}
+
+// pendingBytes 是各入向连接上挂着、还没信用发给对端的下行字节（测试与观测用）。
+func (s *internodeServer) pendingBytes() int {
+	s.mu.Lock()
+	list := make([]*internodeConn, 0, len(s.conns))
+	for c := range s.conns {
+		list = append(list, c)
+	}
+	s.mu.Unlock()
+	n := 0
+	for _, c := range list {
+		c.mu.Lock()
+		for _, fs := range c.streams {
+			n += fs.pendingLen()
+		}
+		c.mu.Unlock()
 	}
 	return n
 }
@@ -88,6 +112,7 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 		return true
 	}
 	c := newInternodeConn(s, ws, res.Claims.Sub)
+	c.jti, c.exp = res.Claims.Jti, time.Unix(res.Claims.Exp, 0)
 	s.mu.Lock()
 	if s.stopping {
 		s.mu.Unlock()
@@ -103,6 +128,19 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 	s.mu.Unlock()
 	s.log.Info("对端节点已断开", obs.Node(c.peer))
 	return true
+}
+
+// dropConns 断开现有的入向连接（测试：模拟节点间连接中途断开），之后照常收新连接。
+func (s *internodeServer) dropConns() {
+	s.mu.Lock()
+	list := make([]*internodeConn, 0, len(s.conns))
+	for c := range s.conns {
+		list = append(list, c)
+	}
+	s.mu.Unlock()
+	for _, c := range list {
+		c.closeTransport()
+	}
 }
 
 // close 不再收新连接并断开现有的（转来的流已随本地隧道结束）。
@@ -132,6 +170,9 @@ type internodeConn struct {
 	s    *internodeServer
 	ws   *websocket.Conn
 	peer string
+	// jti 与 exp 是对端出示的节点令牌：到期或被撤销就断开（watch）。
+	jti string
+	exp time.Time
 
 	mu          sync.Mutex
 	streams     map[uint32]*fwdStream
@@ -180,6 +221,7 @@ func (c *internodeConn) count() int {
 // serve 读帧直到连接断开，然后重置全部转来的流。
 func (c *internodeConn) serve() {
 	go c.writer()
+	go c.watch()
 	idle := internodeIdle(c.s.cfg)
 	for {
 		_ = c.ws.SetReadDeadline(time.Now().Add(idle))
@@ -196,16 +238,50 @@ func (c *internodeConn) serve() {
 	}
 	c.closeTransport()
 	c.mu.Lock()
-	list := make([]*fwdStream, 0, len(c.streams))
+	type dropped struct {
+		s *tunnel.Stream
+		n int
+	}
+	list := make([]dropped, 0, len(c.streams))
 	for _, f := range c.streams {
-		f.gone = true
-		list = append(list, f)
+		list = append(list, dropped{f.s, f.dropLocked()})
 	}
 	clear(c.streams)
 	c.mu.Unlock()
-	for _, f := range list {
-		if f.s != nil {
-			f.s.Abort()
+	for _, d := range list {
+		if d.s != nil {
+			d.s.Consumed(d.n)
+			d.s.Abort()
+		}
+	}
+}
+
+// watch 在节点令牌到期时断开，并定期查撤销表（armadra-cloud nodes revoke 之后已建立的连接也断）。
+func (c *internodeConn) watch() {
+	if c.jti == "" {
+		return
+	}
+	expire := time.NewTimer(time.Until(c.exp))
+	defer expire.Stop()
+	check := time.NewTicker(internodeCheckEvery)
+	defer check.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-expire.C:
+			c.s.log.Warn("对端的节点令牌到期，断开", obs.Node(c.peer))
+			c.closeTransport()
+			return
+		case <-check.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			revoked, err := c.s.auth.Control.Tokens().IsRevoked(ctx, c.jti)
+			cancel()
+			if err == nil && revoked {
+				c.s.log.Warn("对端的节点令牌已撤销，断开", obs.Node(c.peer))
+				c.closeTransport()
+				return
+			}
 		}
 	}
 }
@@ -315,12 +391,14 @@ func (c *internodeConn) receive(msg []byte) bool {
 	case protocol.FrameRst:
 		c.mu.Lock()
 		fs := c.streams[f.StreamID]
+		dropped := 0
 		if fs != nil {
-			fs.gone = true
+			dropped = fs.dropLocked()
 			delete(c.streams, f.StreamID)
 		}
 		c.mu.Unlock()
 		if fs != nil && fs.s != nil {
+			fs.s.Consumed(dropped)
 			fs.s.Abort()
 		}
 	case protocol.FrameWindow:
@@ -344,11 +422,21 @@ func (c *internodeConn) open(id uint32, open *gen.OpenPayload) {
 		c.mu.Unlock()
 		return
 	}
+	if len(c.streams) >= c.s.cfg.MaxStreams {
+		c.sendLocked(encode(protocol.Frame{Type: protocol.FrameRst, StreamID: id, Code: protocol.RstInternal}), nil)
+		c.mu.Unlock()
+		return
+	}
 	fs := &fwdStream{c: c, id: id, credit: c.s.cfg.StreamWindow, recvLeft: c.s.cfg.StreamWindow}
 	c.streams[id] = fs
 	c.mu.Unlock()
 	t := c.s.local(sourceID)
 	var s *tunnel.Stream
+	code := protocol.RstSourceGone
+	if t != nil && !t.HasCapability(gen.E2ECapability) {
+		// 源没报 e2e：refused，入口节点以 4404 e2e_unsupported 关客户端（与本地判定同一结果）。
+		t, code = nil, protocol.RstRefused
+	}
 	if t != nil {
 		// 转给源的是标准的 e2e OPEN；remoteIp、clientOrigin、relayNode 是入口节点填的。
 		forward := gen.OpenPayload{
@@ -363,7 +451,7 @@ func (c *internodeConn) open(id uint32, open *gen.OpenPayload) {
 		if !fs.gone {
 			delete(c.streams, id)
 			fs.gone = true
-			c.sendLocked(encode(protocol.Frame{Type: protocol.FrameRst, StreamID: id, Code: protocol.RstSourceGone}), nil)
+			c.sendLocked(encode(protocol.Frame{Type: protocol.FrameRst, StreamID: id, Code: code}), nil)
 		}
 		return
 	}
@@ -467,6 +555,23 @@ func (c *internodeConn) flushLocked(fs *fwdStream) {
 	}
 }
 
+// dropLocked 作废这条流：丢掉挂着的下行字节，答丢了多少（调用方在锁外 s.Consumed 还给本地隧道）。
+func (fs *fwdStream) dropLocked() int {
+	n := fs.pendingLen()
+	fs.gone = true
+	fs.pending = nil
+	return n
+}
+
+// pendingLen 是挂着的下行字节数（持 c.mu 调用）。
+func (fs *fwdStream) pendingLen() int {
+	n := 0
+	for _, p := range fs.pending {
+		n += len(p)
+	}
+	return n
+}
+
 // releaseLocked 两头都结束了就从流表摘掉。
 func (c *internodeConn) releaseLocked(fs *fwdStream) {
 	if fs.peerEnded && fs.localEnded && c.streams[fs.id] == fs {
@@ -505,20 +610,22 @@ func (fs *fwdStream) End(s *tunnel.Stream) {
 	c.flushLocked(fs)
 }
 
-// Reset 是源 RST 或本地隧道没了：给对端发 RST，入口节点给客户端 4404。
-func (fs *fwdStream) Reset(_ *tunnel.Stream, code protocol.RstCode) {
+// Reset 是源 RST 或本地隧道没了：给对端发 RST，入口节点给客户端 4404。挂着的下行字节作废，
+// 信用还给本地隧道（隧道还在、只是这条流被源重置时，不还会永久漏掉隧道级窗口）。
+func (fs *fwdStream) Reset(s *tunnel.Stream, code protocol.RstCode) {
 	c := fs.c
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if fs.gone {
+		c.mu.Unlock()
 		return
 	}
-	fs.gone = true
-	fs.pending = nil
+	dropped := fs.dropLocked()
 	if c.streams[fs.id] == fs {
 		delete(c.streams, fs.id)
 	}
 	c.sendLocked(encode(protocol.Frame{Type: protocol.FrameRst, StreamID: fs.id, Code: code}), nil)
+	c.mu.Unlock()
+	s.Consumed(dropped)
 }
 
 // Resume 是本地隧道挂起的上行字节发完了：把扣着的信用补给对端。

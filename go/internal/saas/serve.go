@@ -65,6 +65,8 @@ type Node struct {
 	Metrics func() string
 	// Drain 开始排空（与收到 drain 命令相同）。
 	Drain func()
+
+	internode *internodeServer
 }
 
 // Serve 起节点，ctx 结束时排空并关掉；ready 非空时在监听就绪后收到节点（测试用）。
@@ -156,12 +158,11 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 	}
 	// 节点间转发（/x/v1）：出向连接要本节点的节点令牌；入向只验对端的令牌。
 	var plane *dataplane.Plane
-	tcfg := tunnel.DefaultConfig()
 	metrics := &internodeMetrics{}
 	local := func(sourceID string) *tunnel.Tunnel { return plane.Hub.Local(sourceID) }
 	var out *links
 	if cfg.NodeToken != "" {
-		out = newLinks(cfg.NodeID, cfg.NodeToken, client, prefix, tcfg, log, metrics)
+		out = newLinks(cfg.NodeID, cfg.NodeToken, cfg.AllowInsecureTunnel, client, prefix, log, metrics)
 	} else {
 		log.Warn("没配 RELAY_NODE_TOKEN，源在别的节点上时不转发")
 	}
@@ -174,7 +175,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 		return n
 	}
 	plane, err = dataplane.New(dataplane.Options{
-		Mode: "saas", NodeID: cfg.NodeID, Version: version, Control: ctl, Config: tcfg,
+		Mode: "saas", NodeID: cfg.NodeID, Version: version, Control: ctl,
 		Addressing: edge.HostAddressing(cfg.Domain), Log: log, ClientIP: clientIP, Traffic: meter,
 		Probes: probes, Gate: g, ClientKick: true,
 		Lookup: lookup(ctl.Routes(), cfg.NodeID, local, out),
@@ -185,7 +186,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 	if err != nil {
 		return err
 	}
-	in = newInternodeServer(plane.Auth, local, tcfg, log, metrics)
+	in = newInternodeServer(plane.Auth, local, log, metrics)
 	// 全部指标：个人中转原有的在前（逐字节不变），再接准入闸与节点间转发的。
 	render := func() string { return plane.Metrics.Render() + g.render() + metrics.render() }
 	var planeDown sync.Once
@@ -280,7 +281,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	if ready != nil {
-		ready(&Node{URL: url, Plane: plane, Drain: drain, Metrics: render})
+		ready(&Node{URL: url, Plane: plane, Drain: drain, Metrics: render, internode: in})
 	}
 
 	var serveErr error

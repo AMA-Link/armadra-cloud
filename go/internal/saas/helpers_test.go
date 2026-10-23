@@ -3,6 +3,8 @@ package saas
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,6 +22,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
+	"github.com/AMA-Link/armadra-cloud/go/internal/testutil"
 	"github.com/AMA-Link/armadra-cloud/go/internal/testutil/relayenv"
 )
 
@@ -184,6 +187,20 @@ func (r *rig) nodeToken(name string, over relayenv.Claims) string {
 	return r.env.Sign(r.t, gen.TokenTypeNode, claims)
 }
 
+// source 造另一个源（同一个测试签发者签它的令牌）。
+func (r *rig) source() *relayenv.Env {
+	r.t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	id := randomHex(16)
+	return &relayenv.Env{
+		Issuer: r.env.Issuer, Source: testutil.Key{Kid: id, Public: pub, Private: priv},
+		SourceID: id, Control: r.env.Control, Auth: r.env.Auth,
+	}
+}
+
 // relayToken 签一枚中继令牌（源是测试源）。
 func (r *rig) relayToken(over relayenv.Claims) string {
 	return r.env.RelayToken(r.t, over)
@@ -199,7 +216,13 @@ type client struct {
 // channel 经节点 n 开一条到测试源的端到端通道（Host 寻址）。
 func (r *rig) channel(n *running, token string) *client {
 	r.t.Helper()
-	header := http.Header{"Host": {r.env.SourceID + ".src." + domain}}
+	return r.channelTo(n, r.env.SourceID, token)
+}
+
+// channelTo 同 channel，源自选。
+func (r *rig) channelTo(n *running, sourceID, token string) *client {
+	r.t.Helper()
+	header := http.Header{"Host": {sourceID + ".src." + domain}}
 	d := websocket.Dialer{Subprotocols: []string{gen.E2ESubprotocol, gen.SubprotocolRelay + token}, HandshakeTimeout: 5 * time.Second}
 	c, _, err := d.Dial(strings.Replace(n.URL, "http://", "ws://", 1)+gen.E2EPath, header)
 	if err != nil {
