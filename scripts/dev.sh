@@ -63,7 +63,7 @@ case "$command" in
     done
     # shellcheck disable=SC2086
     compose $profiles up -d --wait ${profiles:+--build}
-    node --env-file="$ENV_FILE" apps/cloud/src/cli.ts migrate
+    node scripts/dev-cloud.mjs migrate
     echo "PostgreSQL 127.0.0.1:5440、Redis 127.0.0.1:6390、mailpit http://127.0.0.1:8026 已就绪"
     ;;
   down)

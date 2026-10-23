@@ -70,7 +70,7 @@ pnpm e2e --mode personal-workers                    # 本地 workerd 上的端�
 
 ```sh
 pnpm dev:up      # 首次生成 .env.dev；起 PostgreSQL 17(127.0.0.1:5440)、Redis 8(127.0.0.1:6390)、mailpit；等健康后执行迁移
-pnpm dev         # 从源码起 cloud(http://127.0.0.1:8100) 与 relay saas(http://127.0.0.1:8101)，改源码自动重启；/v1 业务路由预留，答 501
+pnpm dev         # 从源码起 cloud(http://127.0.0.1:8100) 与 relay saas(http://127.0.0.1:8101)，都是 Go 二进制（首次自动 go build 到 go/bin/，改 Go 代码要重启）；/.well-known/armadra-platform 报 platform.info
 curl http://127.0.0.1:8100/health
 curl http://127.0.0.1:8101/health
 curl http://127.0.0.1:8100/ready   # 依赖就绪：PostgreSQL 与 Redis

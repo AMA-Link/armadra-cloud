@@ -31,7 +31,7 @@
     "dev:up": "sh scripts/dev.sh up",
     "dev:down": "sh scripts/dev.sh down",
     "dev": "pnpm libs:build && node scripts/dev-run.mjs",
-    "db:migrate": "node --env-file-if-exists=.env.dev apps/cloud/src/cli.ts migrate",
+    "db:migrate": "node scripts/dev-cloud.mjs migrate",
     "relay:personal": "node scripts/relay-personal.mjs",
     "build": "pnpm -r --if-present build",
     "images:build": "docker build -f go/Dockerfile.cloud -t armadra-cloud:local . && docker build -f go/Dockerfile -t armadra-relay:local .",
