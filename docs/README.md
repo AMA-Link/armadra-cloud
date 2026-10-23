@@ -11,4 +11,5 @@
 | [design/multi-tenant-saas-design.md](design/multi-tenant-saas-design.md)     | 多端入口、多中继、多租户与 SaaS（已被取代，留作追溯）     |
 | [design/relay-e2e-only.md](design/relay-e2e-only.md)                         | 中继只转端到端通道（0.5.0）：删掉的明文路径与上线顺序     |
 | `runbooks/`                                                                  | 运维手册：部署、轮换密钥、故障处理                        |
+| [runbooks/saas.md](runbooks/saas.md)                                         | SaaS 控制面与节点：部署、节点令牌、升级回滚、备份、告警   |
 | [../deploy/README.md](../deploy/README.md)                                   | 部署：环境变量、compose、滚动升级顺序                     |

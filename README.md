@@ -87,7 +87,7 @@ pnpm repo:test         # tools/ 的自检
 pnpm go:check          # Go：gofmt + vet + staticcheck + race 测试 + 生成物新鲜度；PostgreSQL、Redis、mailpit 的测试读 ARMADRA_CLOUD_TEST_DATABASE_URL、REDIS_URL、MAILPIT_SMTP_ADDR + MAILPIT_API_URL（没有就跳过）
 pnpm test              # 全部单测
 pnpm test:integration  # 集成测试，需要 pnpm dev:up；见下
-pnpm images:build      # 本地构建两个镜像（不推送）
+pnpm images:build      # 本地构建两个 Go 镜像：armadra-cloud（go/Dockerfile.cloud）与 armadra-relay（go/Dockerfile），不推送
 pnpm e2e --mode personal  # 跨仓端到端：个人中转 + Armadra 服务器壳 + Node 客户端，需要 Docker，见下
 pnpm e2e --mode personal-workers  # 本地 workerd 上的 Workers 中继对假 core 与 Node 客户端，不需要 Docker
 pnpm e2e --mode saas      # 三个 SaaS 中继节点 + 一次性 Redis 容器对假 core：节点间转发、撤销跨节点、下线再平衡
