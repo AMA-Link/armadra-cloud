@@ -415,13 +415,11 @@ func smtpConfig(r reader) (*SMTP, error) {
 	return s, nil
 }
 
-// supportedChallenge 是本版本认识的挑战范围（核心与协议包的交集）；其余名字合法但暂不要求。
+// supportedChallenge 是控制面认识的挑战范围；不在表里的名字是配置错误。
 var supportedChallenge = map[string]core.ChallengeScope{
 	"auth.login": core.ScopeLogin, "links.accept": core.ScopeLinksAccept, "auth.changePassword": core.ScopeChangePassword,
+	"auth.register": core.ScopeRegister, "auth.passwordResetStart": core.ScopeResetStart,
 }
-
-// futureChallenge 是设计里有、协议包的入参还没有 challenge 字段的范围。
-var futureChallenge = map[string]bool{"auth.register": true, "auth.passwordResetStart": true}
 
 func turnstile(r reader, c *Config) (*Turnstile, error) {
 	siteKey, secretFile := r.get("TURNSTILE_SITE_KEY"), r.get("TURNSTILE_SECRET_FILE")
@@ -449,8 +447,6 @@ func turnstile(r reader, c *Config) (*Turnstile, error) {
 		switch scope, ok := supportedChallenge[item]; {
 		case ok:
 			t.Scope = append(t.Scope, scope)
-		case futureChallenge[item]:
-			c.Warnings = append(c.Warnings, "协议还没有该入口的挑战入参，暂不要求挑战："+item)
 		default:
 			return nil, errorf("%sCHALLENGE_SCOPE 里有不认识的项：%s", Prefix, item)
 		}
