@@ -150,33 +150,45 @@ func (p *Policy) CanManage(ctx context.Context, caller core.Caller, target core.
 	return nil
 }
 
+// signedView 是签断言时依据的事实：有效权限与团队角色。签发方登记索引后再算一遍，对不上（收窄了）就撤自己签的令牌。
+type signedView struct {
+	extra    core.GrantExtra
+	eff      Effective
+	teamRole saas.TeamRole
+}
+
 // Intent 实现 core.AccessPolicy：按有效权限合成断言要带的声明（设计 §4.6 步骤 2、4–6）。
 // 团队停用 team_suspended；没有有效权限 source_access_denied；core 版本不到门槛 source_access_denied（不签降级断言）。
 func (p *Policy) Intent(ctx context.Context, caller core.Caller, source store.SourceRecord) (core.GrantExtra, error) {
 	if caller.AccountID == "" {
 		return p.personal.Intent(ctx, caller, source)
 	}
+	view, err := p.intent(ctx, caller.AccountID, source)
+	return view.extra, err
+}
+
+func (p *Policy) intent(ctx context.Context, accountID string, source store.SourceRecord) (signedView, error) {
 	reader := p.store.Read()
-	account, err := reader.Account(ctx, p.tenant(), caller.AccountID)
+	account, err := reader.Account(ctx, p.tenant(), accountID)
 	if err != nil {
-		return core.GrantExtra{}, err
+		return signedView{}, err
 	}
 	if account == nil {
-		return core.GrantExtra{}, core.Fail(gen.ErrSourceAccessDenied)
+		return signedView{}, core.Fail(gen.ErrSourceAccessDenied)
 	}
-	basis, err := reader.AccessBasis(ctx, p.tenant(), caller.AccountID, source.SourceID)
+	basis, err := reader.AccessBasis(ctx, p.tenant(), accountID, source.SourceID)
 	if err != nil {
-		return core.GrantExtra{}, err
+		return signedView{}, err
 	}
 	if basis.SourceFound && !basis.SourceRevoked && basis.TeamID != "" && basis.TeamSuspended && !basis.TeamDeleted && basis.TeamRole != "" {
-		return core.GrantExtra{}, core.Fail(gen.ErrTeamSuspended)
+		return signedView{}, core.Fail(gen.ErrTeamSuspended)
 	}
-	eff := Compose(basis, caller.AccountID, p.c.NowMs())
+	eff := Compose(basis, accountID, p.c.NowMs())
 	if eff.None() {
-		return core.GrantExtra{}, core.Fail(gen.ErrSourceAccessDenied)
+		return signedView{}, core.Fail(gen.ErrSourceAccessDenied)
 	}
 	if err := p.versionGate(ctx, source, basis, eff); err != nil {
-		return core.GrantExtra{}, err
+		return signedView{}, err
 	}
 	extra := core.GrantExtra{
 		Name: account.DisplayName, Email: account.Email, EmailVerified: account.EmailVerifiedAtMs != nil,
@@ -190,7 +202,7 @@ func (p *Policy) Intent(ctx context.Context, caller core.Caller, source store.So
 	} else if eff.Owner() {
 		extra.Role = "" // 个人空间的所有者与个人中转同形：不带 role
 	}
-	return extra, nil
+	return signedView{extra: extra, eff: eff, teamRole: basis.TeamRole}, nil
 }
 
 // versionGate 是版本门（契约 §30、设计 §4.6 步骤 5）：取在线隧道上报的 coreVersion，不在线才用登记时的。

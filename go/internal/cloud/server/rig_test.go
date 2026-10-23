@@ -78,6 +78,8 @@ type rigOptions struct {
 	env       map[string]string
 	// mail 换掉发信方（缺省内存发信方 rig.mail）。
 	mail mail.Sender
+	// grantsHook 在断言签发的交错点停住。
+	grantsHook func(stage string)
 }
 
 // rig 是一套真实的控制面：PostgreSQL（随机 schema）+ Redis + 完整路由，经 HTTP 访问。
@@ -159,7 +161,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	}
 	run, err := server.Serve(ctx, cfg, server.Deps{
 		Log: obs.NewNamedLogger(logs, obs.LevelDebug, "cloud"), Now: clk.Now, Version: "test",
-		Challenge: options.verifier, ExtraHandlers: options.extra, Mail: sender,
+		Challenge: options.verifier, ExtraHandlers: options.extra, Mail: sender, GrantsHook: options.grantsHook,
 	})
 	if err != nil {
 		t.Fatal(err)

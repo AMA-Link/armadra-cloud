@@ -60,6 +60,8 @@ type Deps struct {
 	Limiter control.Limiter
 	// Mail 换掉发信方（缺省按配置用 SMTP）；测试注入内存发信方。
 	Mail mail.Sender
+	// GrantsHook 让测试在断言签发的交错点（"signed"、"indexed"）停住，验证与并发撤销交错也不漏撤；生产不设。
+	GrantsHook func(stage string)
 	// ExtraHandlers 给测试挂额外的过程处理器（例如用 admin.* 检查凭据闸）；生产装配不设。
 	ExtraHandlers map[string]api.Handler
 }

@@ -126,6 +126,14 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	for name, handler := range hostService.Handlers() {
 		handlers[name] = handler
 	}
+	grantService := grants.New(grants.Options{
+		Core: coreCtx, Store: saasStore, Limits: limits, Relay: durable, Policy: policy,
+		RequireEmailVerified: cfg.RequireEmailVerified, Log: logger, Hook: deps.GrantsHook,
+	})
+	grantService.Register(runner)
+	for name, handler := range grantService.Handlers() {
+		handlers[name] = handler
+	}
 	webApp := ""
 	if cfg.WebRoot != "" {
 		webApp = cfg.AppOrigin
