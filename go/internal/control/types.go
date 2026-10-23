@@ -45,13 +45,23 @@ type NodeCommandType string
 const (
 	CommandCloseTunnel NodeCommandType = "closeTunnel"
 	CommandKick        NodeCommandType = "kick"
+	// CommandDrain 让 Node 指定的节点排空（SaaS，G5）：不带 SourceID，老节点不认识、忽略。
+	CommandDrain NodeCommandType = "drain"
 )
 
 // NodeCommand 是发给本节点的命令。Reason 只在 kick 里有。
+//
+// kick 的过滤（G5，SaaS 实施设计 §2.4 的 N2）：Subject 是中继令牌 sub 的精确值，SubjectPrefix 是前缀
+// （访客 guest:<linkId>:），DeviceID 是 dev；给了的都要对上。老节点忽略这三项，按 SourceID 踢掉该源
+// 全部连接（多踢不漏踢）。Node 只在 drain 里有。
 type NodeCommand struct {
-	Type     NodeCommandType
-	SourceID string
-	Reason   string
+	Type          NodeCommandType
+	SourceID      string
+	Reason        string
+	Subject       string
+	SubjectPrefix string
+	DeviceID      string
+	Node          string
 }
 
 // LimitKind 是限流的种类。
@@ -168,4 +178,32 @@ type Cluster interface {
 	Command(c NodeCommand)
 	// Close 停掉后台协程与订阅连接（自己建的连接池一并关）。
 	Close() error
+}
+
+// TeamQuota 是团队的并发额度（SaaS 实施设计 §2.4：键 relay:quota:team:<teamId> 与 kind: quota 广播）。
+// Concurrent 是 edge.concurrent.team 的上限。
+type TeamQuota struct {
+	TeamID     string
+	Concurrent int
+}
+
+// Incident 是事故开关（键 relay:incident 与 kind: incident 广播）：开着时节点拒绝新的隧道与
+// 端到端通道升级（4429 limit_reached），在线连接保留。
+type Incident struct {
+	RejectNewConnections bool
+	AtMs                 int64
+}
+
+// NodeInfo 是节点表 relay:nodes 的一项（SaaS 实施设计 §2.4、Go 设计 §3.6）。URL 是该节点自己的隧道
+// 地址（wss://<node>.edge.<域>/t/v1），不是共用入口；InternodeURL 是别的节点转发通道时连的
+// /x/v1 地址（缺省由 URL 把路径换成 /x/v1 得出）。
+type NodeInfo struct {
+	ID           string
+	URL          string
+	Weight       int
+	Version      string
+	Draining     bool
+	Connections  int
+	Tunnels      int
+	InternodeURL string
 }

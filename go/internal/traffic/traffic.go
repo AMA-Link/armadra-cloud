@@ -47,6 +47,9 @@ type Key struct {
 	// DeviceID 是中继令牌的 dev；没带时为空串。
 	DeviceID string
 	Kind     Kind
+	// TeamID 是中继令牌的 team（SaaS，N5）；personal 与个人空间为空串。只有 SaaS 的落库写它
+	// （relay_traffic_buckets.team_id），不进主键。
+	TeamID string
 }
 
 // Row 是一行统计。
