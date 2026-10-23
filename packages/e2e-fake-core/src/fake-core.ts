@@ -56,6 +56,8 @@ export interface FakeCoreOptions {
   token?: () => string;
   /** 连 `wss://` 时信任的 CA（personal 的自签 CA）。 */
   ca?: string;
+  /** `hello.coreVersion`（缺省 `0.2.0-test`）；SaaS 的团队主机版本门看它。 */
+  coreVersion?: string;
   /** `hello.capabilities`（缺省空）。 */
   capabilities?: string[];
   /** 端到端流不回显，改为写这么多字节的确定序列后结束。 */
@@ -232,7 +234,7 @@ export class FakeCore {
         type: "hello",
         protocol: PROTOCOL_VERSION,
         sourceId,
-        coreVersion: "0.2.0-test",
+        coreVersion: this.options.coreVersion ?? "0.2.0-test",
         capabilities: this.options.capabilities ?? [],
         tunnelToken: (this.options.token ?? (() => tunnelToken()))(),
         nonce,
