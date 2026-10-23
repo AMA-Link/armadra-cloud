@@ -21,6 +21,8 @@ var enabledThroughS4 = map[string]bool{
 	"teams.create": true, "teams.list": true, "teams.get": true, "teams.update": true, "teams.delete": true,
 	"teams.restore": true, "teams.transferOwnership": true, "teams.members": true, "teams.memberRole": true,
 	"teams.memberRemove": true, "teams.leave": true, "teams.settings": true, "teams.settingsUpdate": true, "teams.usage": true,
+	"invitations.create": true, "invitations.list": true, "invitations.revoke": true, "invitations.resend": true,
+	"invitations.get": true, "invitations.accept": true, "invitations.decline": true,
 }
 
 func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {

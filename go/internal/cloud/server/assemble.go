@@ -15,6 +15,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/accounts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/invitations"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/platform"
@@ -103,6 +104,13 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	})
 	teamService.Register(runner)
 	for name, handler := range teamService.Handlers() {
+		handlers[name] = handler
+	}
+	inviteService := invitations.New(invitations.Options{
+		Core: coreCtx, Store: saasStore, Limits: limits, Mail: mailer, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+	})
+	inviteService.Register(runner)
+	for name, handler := range inviteService.Handlers() {
 		handlers[name] = handler
 	}
 	webApp := ""
