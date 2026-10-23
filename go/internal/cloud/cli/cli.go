@@ -33,6 +33,8 @@ type Options struct {
 	Now func() time.Time
 	// Signals 缺省监听 SIGINT / SIGTERM（测试里换成自己的通道）。
 	Signals <-chan os.Signal
+	// RelayPrefix 换掉 nodes revoke 用的 Redis 键前缀（测试用随机前缀隔离；生产不设）。
+	RelayPrefix string
 	// OnReady 在 serve 开始监听后调用（测试拿地址用）。
 	OnReady func(*server.Running)
 }
@@ -64,8 +66,15 @@ func Run(args []string, env config.Env, stdout, stderr io.Writer, options Option
 		if len(rest) > 0 && rest[0] == "rotate" {
 			return keysRotate(rest[1:], env, stdout, stderr, options)
 		}
-	case "nodes", "operators":
-		if len(rest) > 0 && (rest[0] == "token" || rest[0] == "revoke" || rest[0] == "add" || rest[0] == "totp") {
+	case "nodes":
+		if len(rest) > 0 && rest[0] == "token" {
+			return nodesToken(rest[1:], env, stdout, stderr, options)
+		}
+		if len(rest) > 0 && rest[0] == "revoke" {
+			return nodesRevoke(rest[1:], env, stdout, stderr, options)
+		}
+	case "operators":
+		if len(rest) > 0 && (rest[0] == "add" || rest[0] == "totp") {
 			fmt.Fprintf(stderr, "这个命令还没有提供：%s %s\n", command, rest[0])
 			return ExitUsage
 		}
