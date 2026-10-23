@@ -40,6 +40,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
+	"github.com/AMA-Link/armadra-cloud/go/internal/web"
 )
 
 // assembly 是装配好的控制核与路由。
@@ -245,9 +246,16 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	for name, handler := range billing.New(billing.Options{Core: coreCtx, Store: saasStore}).Handlers() {
 		handlers[name] = handler
 	}
+	// 控制台页面（WEB_ROOT，设计 §5.3）：目录里没有 index.html 就当没配（警告），platform.info 也不报 webApp。
+	var pages *web.Pages
 	webApp := ""
 	if cfg.WebRoot != "" {
-		webApp = cfg.AppOrigin
+		if root := web.UsableRoot(cfg.WebRoot); root != "" {
+			pages = web.New(web.Options{Root: root, CSP: func(string) string { return web.ConsoleCSP(cfg.RelayDomain) }})
+			webApp = cfg.AppOrigin
+		} else {
+			logger.Warn("WEB_ROOT 里没有 index.html，不托管页面", obs.Operation("web"))
+		}
 	}
 	for name, handler := range platform.Handlers(platform.Options{Core: coreCtx, Store: saasStore, Name: cfg.Name, WebApp: webApp}) {
 		handlers[name] = handler
@@ -281,6 +289,9 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if apiServer.Claims(r.URL.Path) {
 			apiServer.ServeHTTP(w, r)
+			return
+		}
+		if pages != nil && pages.HandleApp(w, r) {
 			return
 		}
 		api.WriteError(w, gen.ErrNotFound, "", 0, nil)
