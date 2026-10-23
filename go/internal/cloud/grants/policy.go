@@ -322,6 +322,11 @@ type watcher struct {
 	mu      sync.RWMutex
 	closed  bool
 	visible map[string]struct{}
+	// version 在每次 Refresh 改动可见集合时加一：Resync 取快照前记下它，应用前发现变了就丢弃这份旧快照
+	// （心跳的整份重算与事件分发并发时，旧快照不能盖掉更新的 AccessChanged / SourceRevoked）。
+	version uint64
+	// snapshot 取整份可见集合；缺省走 policy.visibleSet（测试注入）。
+	snapshot func(context.Context) (map[string]struct{}, error)
 }
 
 var _ core.Watcher = (*watcher)(nil)
@@ -344,9 +349,11 @@ func (w *watcher) Refresh(event core.Event) {
 	}
 	switch e := event.(type) {
 	case core.SourceRevoked:
+		w.version++
 		delete(w.visible, e.SourceID)
 	case *core.SourceRevoked:
 		if e != nil {
+			w.version++
 			delete(w.visible, e.SourceID)
 		}
 	case AccessChanged:
@@ -366,25 +373,48 @@ func (w *watcher) apply(e AccessChanged) {
 		if e.AccountID == "" {
 			return // 放宽必须点名账号
 		}
+		w.version++
 		w.visible[e.SourceID] = struct{}{}
 		return
 	}
+	w.version++
 	delete(w.visible, e.SourceID)
 }
+
+// resyncAttempts 是整份重算遇到并发 Refresh 时的重试次数。
+const resyncAttempts = 3
 
 // Resync 实现 core.Resyncer：团队成员变动之后整份重算（它能看到的主机一次变了很多）。在调用方的协程里做 I/O，
 // 算完一次性换掉可见集合；连接已关闭则什么也不做。
 func (w *watcher) Resync(ctx context.Context) error {
-	fresh, err := w.policy.visibleSet(ctx, w.caller)
-	if err != nil {
-		return err
+	for range resyncAttempts {
+		w.mu.RLock()
+		closed, version := w.closed, w.version
+		w.mu.RUnlock()
+		if closed {
+			return nil
+		}
+		fetch := w.snapshot
+		if fetch == nil {
+			fetch = func(ctx context.Context) (map[string]struct{}, error) { return w.policy.visibleSet(ctx, w.caller) }
+		}
+		fresh, err := fetch(ctx)
+		if err != nil {
+			return err
+		}
+		w.mu.Lock()
+		if w.closed {
+			w.mu.Unlock()
+			return nil
+		}
+		if w.version == version {
+			w.visible = fresh
+			w.mu.Unlock()
+			return nil
+		}
+		w.mu.Unlock() // 取快照期间有更新的 Refresh：这份快照可能是旧的，丢弃重取
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if !w.closed {
-		w.visible = fresh
-	}
-	return nil
+	return nil // 一直撞上并发更新：事件本身已是最新，留给下一次心跳
 }
 
 func (w *watcher) Close() {
