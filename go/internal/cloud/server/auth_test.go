@@ -571,8 +571,8 @@ func TestLogoutWithExpiredAccessCookieUsesRefreshCookie(t *testing.T) {
 	r.expect(r.do("POST", "/v1/auth/logout", map[string]any{}, hdr("Cookie", cookies, "X-Armadra-CSRF", c.csrf)), 403, "forbidden")
 	// Origin 对了之后，缺 / 错 CSRF：拒绝，设备不撤销，Cookie 照清。
 	for name, h := range map[string]headers{
-		"缺 CSRF":   hdr("Cookie", cookies, "Origin", appOrigin),
-		"错 CSRF":   hdr("Cookie", cookies, "Origin", appOrigin, "X-Armadra-CSRF", "wrong"),
+		"缺 CSRF": hdr("Cookie", cookies, "Origin", appOrigin),
+		"错 CSRF": hdr("Cookie", cookies, "Origin", appOrigin, "X-Armadra-CSRF", "wrong"),
 	} {
 		res := r.do("POST", "/v1/auth/logout", map[string]any{}, h)
 		r.expect(res, 403, "forbidden")
