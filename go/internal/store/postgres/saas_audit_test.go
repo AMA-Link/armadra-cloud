@@ -122,15 +122,21 @@ func TestRetentionPrunesOnlyTheNamedScope(t *testing.T) {
 	e := openSaaS(t)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 	auditSeed(t, e, base)
+	e.account("a1")
+	e.team("t1", "a1")
+	e.team("t2", "a1")
+	e.must(`INSERT INTO entitlements (tenant_id, space_kind, space_id, plan, status, updated_at_ms) VALUES ($1, 'team', 't2', 'pro', 'active', 1)`, saasTenant)
+	// 已清除的团队（teams 表里没有）的审计行不在扫描里：t3 的行留给整月分区 DROP。
+	e.must(`INSERT INTO audit_log (at_ms, event_id, tenant_id, team_id, actor_kind, action) VALUES ($1, 'gone', $2, 't3', 'system', 'x.y')`, base, saasTenant)
 	s := e.db.SaaS()
 	before := base + 4 // 删 e01–e04（T1 全部）、e05 在 base+4 不删
 	var n int
 	err := s.Tx(e.ctx, func(tx saas.Tx) (err error) {
 		teams, err := tx.Retention().TeamsWithAuditBefore(e.ctx, saasTenant, before+10, "", 10)
-		if err != nil || fmt.Sprint(teams) != "[t1 t2]" {
+		if err != nil || fmt.Sprint(teams) != "[{t1 free} {t2 pro}]" {
 			t.Fatalf("有旧行的团队：%v %v", teams, err)
 		}
-		if next, err := tx.Retention().TeamsWithAuditBefore(e.ctx, saasTenant, before+10, "t1", 10); err != nil || fmt.Sprint(next) != "[t2]" {
+		if next, err := tx.Retention().TeamsWithAuditBefore(e.ctx, saasTenant, before+10, "t1", 10); err != nil || fmt.Sprint(next) != "[{t2 pro}]" {
 			t.Fatalf("翻页从 t1 之后开始：%v %v", next, err)
 		}
 		n, err = tx.Retention().PruneTeamAudit(e.ctx, saasTenant, "t1", before, 2)
@@ -145,6 +151,9 @@ func TestRetentionPrunesOnlyTheNamedScope(t *testing.T) {
 	})
 	if err != nil || n != 2 {
 		t.Fatalf("T1 剩下的：%d %v", n, err)
+	}
+	if e.count("SELECT count(*)::int FROM audit_log WHERE team_id = 't3'") != 1 {
+		t.Fatal("已清除团队的审计行保留")
 	}
 	if e.count("SELECT count(*)::int FROM audit_log WHERE team_id = 't1'") != 0 || e.count("SELECT count(*)::int FROM audit_log WHERE team_id = 't2'") != 1 {
 		t.Fatal("只删 T1 的行，T2 的不动")

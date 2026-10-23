@@ -38,6 +38,7 @@ it("随包的迁移从 0001 起连续", () => {
     "0007_saas_grants.sql",
     "0008_saas_audit.sql",
     "0009_saas_ops.sql",
+    "0010_saas_audit_security_index.sql",
   ]);
 });
 

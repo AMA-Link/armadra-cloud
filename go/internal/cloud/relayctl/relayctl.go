@@ -120,6 +120,8 @@ type Control interface {
 	Route(ctx context.Context, sourceID string) (coreVersion string, ok bool, err error)
 	// Nodes 答节点表里没有在排空的节点。
 	Nodes(ctx context.Context) ([]Node, error)
+	// AllNodes 答节点表里的全部节点（含排空中的），按 id 排序；运营后台列节点用。
+	AllNodes(ctx context.Context) ([]Node, error)
 	// Drain 让节点排空。
 	Drain(ctx context.Context, node string) error
 	// SetTeamQuota 写团队的并发额度。
