@@ -134,6 +134,18 @@ func (r invitationRepo) SetToken(ctx context.Context, tenantID, invitationID, to
 	return err
 }
 
+func (r invitationRepo) RevokeHostByEmail(ctx context.Context, tenantID, email, teamID, sourceID, decidedBy string, nowMs int64) (int, error) {
+	if teamID == "" && sourceID == "" {
+		return 0, nil
+	}
+	tag, err := r.q.Exec(ctx,
+		`UPDATE invitations SET state = 'revoked', decided_by = NULLIF($1, ''), decided_at_ms = $2
+		 WHERE tenant_id = $3 AND kind = 'host' AND state = 'pending' AND email = lower($4)
+		   AND (($5 <> '' AND team_id = $5) OR ($6 <> '' AND source_id = $6))`,
+		decidedBy, nowMs, tenantID, email, teamID, sourceID)
+	return int(tag.RowsAffected()), err
+}
+
 func (r invitationRepo) InsertHost(ctx context.Context, tenantID string, i saas.Invitation) error {
 	_, err := r.q.Exec(ctx,
 		`INSERT INTO invitations (tenant_id, invitation_id, kind, email, team_id, source_id, host_role, workspace_ids, state, invited_by,
