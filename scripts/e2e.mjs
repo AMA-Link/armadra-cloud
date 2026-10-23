@@ -3,9 +3,11 @@
 //   pnpm e2e --mode personal [--skip-build] [--relay-image <镜像>] [--server-image <镜像>]
 //                            [--output <目录>] [--keep]
 //   pnpm e2e --mode personal-workers [--output <目录>]
+//   pnpm e2e --mode saas [--redis-url <专用 Redis>] [--output <目录>]
 //
 // `personal-workers` 是本地 workerd 上的 Workers 中继（`wrangler dev --local`，不连 Cloudflare
-// 账号）对假 core 与 Node 客户端，见 scripts/e2e/workers.mjs；下面的编排只属于 `personal`。
+// 账号）对假 core 与 Node 客户端，见 scripts/e2e/workers.mjs；`saas` 是三个 SaaS 中继节点 + Redis
+// （节点间转发、撤销跨节点、下线再平衡），见 scripts/e2e/saas.mjs；下面的编排只属于 `personal`。
 //
 // 编排（deploy/e2e/compose.yml，项目名 armadra-e2e-<随机>，跑完 down -v）：
 //   1. 本地构建个人中转镜像（本仓）与服务器壳镜像（Armadra 主仓，见下）；
@@ -64,8 +66,10 @@ import {
 const root = fileURLToPath(new URL("../", import.meta.url));
 const USAGE = `用法: pnpm e2e --mode personal [选项]
 
-  --mode personal        个人中转（saas 模式随控制面落地再加）
+  --mode personal        个人中转
   --mode personal-workers  本地 workerd 上的 Workers 中继（wrangler dev --local）对假 core
+  --mode saas            三个 SaaS 中继节点 + Redis（一次性容器）对假 core：节点间转发、撤销、再平衡
+  --redis-url URL        saas 用这个 Redis（必须是专用的空库），不起容器
   --skip-build           不构建镜像，用已有的 armadra-relay:e2e 与 armadra-server:e2e
   --relay-image IMAGE    用现成的中继镜像
   --server-image IMAGE   用现成的服务器壳镜像（如 ghcr.io/ama-link/armadra-server:<compat.min>）
@@ -94,6 +98,7 @@ function parseArgs(argv) {
         "--relay-data",
         "--relay-password-file",
         "--relay-port",
+        "--redis-url",
       ].includes(arg)
     ) {
       const value = argv[(index += 1)];
@@ -153,11 +158,54 @@ if (mode === "personal-workers") {
   );
   process.exit(workersFailure ? 1 : 0);
 }
+if (mode === "saas") {
+  const { runSaasE2e } = await import("./e2e/saas.mjs");
+  const saasReport = new Report();
+  const saasOutput = resolve(
+    root,
+    options.values.get("--output") ?? ".data/e2e",
+  );
+  log("armadra-cloud e2e（saas）");
+  let saasFailure;
+  try {
+    await runSaasE2e({
+      root,
+      report: saasReport,
+      redisUrl: options.values.get("--redis-url"),
+    });
+  } catch (error) {
+    saasFailure = error;
+  }
+  mkdirSync(saasOutput, { recursive: true });
+  const result = {
+    mode,
+    ok: saasFailure === undefined,
+    totalMs: Date.now() - saasReport.startedAt,
+    steps: saasReport.steps,
+    ...(saasFailure
+      ? {
+          error: redact(
+            saasFailure instanceof Error ? saasFailure.message : saasFailure,
+          ),
+        }
+      : {}),
+  };
+  writeFileSync(
+    join(saasOutput, "result.json"),
+    `${JSON.stringify(result, null, 2)}\n`,
+  );
+  log(
+    saasFailure
+      ? `失败：${result.error}（用时 ${result.totalMs} ms）`
+      : `全部通过（用时 ${result.totalMs} ms，${join(saasOutput, "result.json")}）`,
+  );
+  process.exit(saasFailure ? 1 : 0);
+}
 if (mode !== "personal") {
   console.error(
     mode === undefined
       ? `需要 --mode personal\n${USAGE}`
-      : `--mode ${mode}：现在只支持 personal 与 personal-workers`,
+      : `--mode ${mode}：只支持 personal、personal-workers 与 saas`,
   );
   process.exit(2);
 }
