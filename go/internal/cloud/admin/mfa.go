@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"strconv"
 	"time"
 
@@ -39,7 +38,7 @@ type ChallengeStore interface {
 	Create(ctx context.Context, id string, c Challenge) error
 	// Get 读挑战；没有（不存在、已用、已错满）答 nil。
 	Get(ctx context.Context, id string) (*Challenge, error)
-	// Fail 记一次错误，答累计错了几次；到 MFAMaxAttempts 时挑战被删。
+	// Fail 记一次错误，答累计错了几次（挑战已不存在答 -1，且不写任何东西）；到 MFAMaxAttempts 时挑战被删。
 	Fail(ctx context.Context, id string) (int, error)
 	// Consume 一次性取走挑战：只有一个并发调用拿到 true。
 	Consume(ctx context.Context, id string) (bool, error)
@@ -77,28 +76,33 @@ func (r *RedisChallenges) Get(ctx context.Context, id string) (*Challenge, error
 	if err != nil {
 		return nil, err
 	}
-	if len(values) == 0 {
+	// 缺字段的键（例如只剩 attempts）不是一个完整的挑战：当作不存在，不报错。
+	if values["accountId"] == "" || values["device"] == "" || values["expiresAtMs"] == "" {
 		return nil, nil
 	}
 	c := Challenge{AccountID: values["accountId"]}
-	if json.Unmarshal([]byte(values["device"]), &c.Device) != nil || c.AccountID == "" {
-		return nil, errors.New("mfa 挑战不合格式")
+	if json.Unmarshal([]byte(values["device"]), &c.Device) != nil {
+		return nil, nil
 	}
-	c.ExpiresAtMs, _ = strconv.ParseInt(values["expiresAtMs"], 10, 64)
+	var perr error
+	if c.ExpiresAtMs, perr = strconv.ParseInt(values["expiresAtMs"], 10, 64); perr != nil {
+		return nil, nil
+	}
 	return &c, nil
 }
 
+// failScript 记一次错误：键不存在（已用、已错满、已过期）就什么都不写——直接 HINCRBY 会凭空造出一个只有
+// attempts 字段、没有 TTL 的键；到次数就删。答累计次数，键不存在答 -1。
+var failScript = goredis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
+local n = redis.call('HINCRBY', KEYS[1], 'attempts', 1)
+if n >= tonumber(ARGV[1]) then redis.call('DEL', KEYS[1]) end
+return n`)
+
 // Fail 实现 ChallengeStore。
 func (r *RedisChallenges) Fail(ctx context.Context, id string) (int, error) {
-	key := mfaKey(id)
-	attempts, err := r.Client.HIncrBy(ctx, key, "attempts", 1).Result()
-	if err != nil {
-		return 0, err
-	}
-	if attempts >= MFAMaxAttempts {
-		return int(attempts), r.Client.Del(ctx, key).Err()
-	}
-	return int(attempts), nil
+	n, err := failScript.Run(ctx, r.Client, []string{mfaKey(id)}, MFAMaxAttempts).Int()
+	return n, err
 }
 
 // Consume 实现 ChallengeStore。
