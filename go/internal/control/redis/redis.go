@@ -51,6 +51,17 @@ type Options struct {
 	LivenessEvery time.Duration
 	// ReloadFault 是测试用的故障注入：返回错误时这一次重读当作失败。
 	ReloadFault func() error
+
+	// 以下只有 SaaS 节点（G5）用，personal 不设、行为不变。
+
+	// NodeChannel 为真时另订阅 <前缀>node:<NodeID>：控制面发给持有节点的命令，与 <前缀>ctl 同形。
+	// 控制面同时照样广播，所以同一条命令可能到两次（命令都是幂等的）。
+	NodeChannel bool
+	// OnSignal 收 Plane 自己不处理的广播（kind: quota / incident），在订阅协程里调用，不能阻塞。
+	OnSignal func(cluster.Message)
+	// OnSubscribed 在每次订阅就绪（撤销全量重读之后）调用：SaaS 节点据此全量读额度与事故开关。
+	// 答错误时这次就绪作废，退避重连后再来（第一次就失败则 New 报错）。
+	OnSubscribed func(ctx context.Context) error
 }
 
 // ErrTooOld 表示 Redis 版本低于 7.0。
@@ -86,6 +97,8 @@ type Plane struct {
 
 	reloadEvery, liveness time.Duration
 	fault                 func() error
+	onSignal              func(cluster.Message)
+	onSubscribed          func(ctx context.Context) error
 	stop                  context.CancelFunc
 	psMu                  sync.Mutex
 	ps                    *goredis.PubSub
@@ -97,7 +110,7 @@ type Plane struct {
 	closeErr              error
 }
 
-type channels struct{ presence, command, revoked string }
+type channels struct{ presence, command, revoked, node string }
 
 var _ control.Cluster = (*Plane)(nil)
 
@@ -139,7 +152,11 @@ func New(ctx context.Context, o Options) (*Plane, error) {
 		chans:        channels{presence: prefix + "presence", command: prefix + "ctl", revoked: prefix + "revoked"},
 		deleteScript: goredis.NewScript(deleteRoute), hitScript: goredis.NewScript(hit),
 		reloadEvery: o.ReloadEvery, liveness: o.LivenessEvery, fault: o.ReloadFault,
+		onSignal: o.OnSignal, onSubscribed: o.OnSubscribed,
 		stop: stop, loopDone: make(chan struct{}), ready: make(chan struct{}), readyErr: make(chan error, 1),
+	}
+	if o.NodeChannel && o.NodeID != "" {
+		p.chans.node = prefix + "node:" + o.NodeID
 	}
 	p.Classify = classify
 	go p.subscribeLoop(loopCtx, o.ReconnectMin, o.ReconnectMax)
@@ -159,6 +176,12 @@ func New(ctx context.Context, o Options) (*Plane, error) {
 func (p *Plane) routeKey(sourceID string) string { return p.prefix + "route:src:" + sourceID }
 func (p *Plane) revokedKey(jti string) string    { return p.prefix + "revoked:" + jti }
 func (p *Plane) limitKey(id string) string       { return p.prefix + "limit:" + id }
+
+// Client 是 Plane 用的 Redis 客户端（SaaS 节点在同一个连接池上读写节点表、额度、并发计数与 JWKS）。
+func (p *Plane) Client() goredis.UniversalClient { return p.client }
+
+// Prefix 是键与频道的前缀。
+func (p *Plane) Prefix() string { return p.prefix }
 
 // subscribeLoop 订阅三个频道并处理消息；断线就退避重连，每次订阅就绪都全量重读撤销。
 func (p *Plane) subscribeLoop(ctx context.Context, minWait, maxWait time.Duration) {
@@ -233,6 +256,9 @@ func (p *Plane) subscribeOnce(ctx context.Context, first bool) error {
 	p.ps = ps
 	p.psMu.Unlock()
 	chans := []string{p.chans.presence, p.chans.command, p.chans.revoked}
+	if p.chans.node != "" {
+		chans = append(chans, p.chans.node)
+	}
 	if err := ps.Subscribe(ctx, chans...); err != nil {
 		return err
 	}
@@ -249,6 +275,11 @@ func (p *Plane) subscribeOnce(ctx context.Context, first bool) error {
 	// 读不全就不能算订阅就绪（否则断线期间的撤销会被漏判）：返回错误，由外层退避、重连、重订阅、再读。
 	if err := p.reloadRevoked(ctx); err != nil {
 		return err
+	}
+	if p.onSubscribed != nil {
+		if err := p.onSubscribed(ctx); err != nil {
+			return err
+		}
 	}
 	if first {
 		close(p.ready)
@@ -308,6 +339,10 @@ func (p *Plane) receive(payload []byte) {
 		p.EmitCommand(m.Command)
 	case cluster.KindRevoked:
 		p.ReceiveRevoked(m.JTI, m.ExpMs)
+	case cluster.KindQuota, cluster.KindIncident:
+		if p.onSignal != nil {
+			p.onSignal(m)
+		}
 	}
 }
 

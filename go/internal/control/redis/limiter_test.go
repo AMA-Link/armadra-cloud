@@ -81,3 +81,36 @@ func TestStandaloneLimiterFallsBackToLocalWindowOnRedisError(t *testing.T) {
 		t.Fatalf("每次失败都报告：%d", reported)
 	}
 }
+
+func TestLimiterPeekDoesNotCount(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	opts, _ := goredis.ParseURL(e.url)
+	client := goredis.NewClient(opts)
+	defer func() { _ = client.Close() }()
+	l := cr.NewLimiter(client, e.prefix+"cloud:limit:", cloudRules, nil)
+	peek := func() control.LimitResult {
+		t.Helper()
+		result, err := l.Peek(ctx, "register.ip", "198.51.100.9")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	for i := 0; i < 5; i++ {
+		if !peek().Allowed {
+			t.Fatal("没计过数，只读不该被拒，也不该累加")
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := l.Hit(ctx, "register.ip", "198.51.100.9"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if denied := peek(); denied.Allowed || denied.RetryAfter <= 0 {
+		t.Fatalf("计满（Max=2）后只读被拒并带等待：%+v", denied)
+	}
+	if _, err := l.Peek(ctx, "nope.kind", "x"); err == nil {
+		t.Fatal("没登记的种类应报错")
+	}
+}

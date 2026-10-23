@@ -136,11 +136,12 @@
 | `relay:revoked:<jti>` + `relay:revoked`         | 控制面                 | 节点         | 现有：`Plane.Tokens().Revoke(jti, exp)`（`SET … PXAT` + `kind: revoked` 广播）；同时落 PostgreSQL（§7.2）                                                                                                                                                                      |
 | `relay:ctl`                                     | 控制面                 | 节点         | 现有 `kind: command`，`commandWire = {type, sourceId, reason}`，**`sourceId` 必填**（现有解析器拒绝没有它的命令）。G5（N2）给 `commandWire` 加可选的 `subject`、`subjectPrefix`、`deviceId` 与新种类 `drain`；老节点忽略这些字段、按 `sourceId` 踢掉该源全部连接（多踢不漏踢） |
 | `relay:node:<id>`                               | 控制面                 | 该节点       | **G5 之后才用**，与 `relay:ctl` 同形；发到持有节点时**同时**照样广播，不替代广播                                                                                                                                                                                               |
-| `relay:ctl` 的 `kind: quota` / `kind: incident` | 控制面                 | 节点         | G5（N4）新增的广播种类：`{teamId, concurrent}` 与 `{rejectNewConnections, atMs}`；与下两行的键一起写                                                                                                                                                                           |
-| `relay:quota:team:<teamId>`                     | 控制面                 | 节点         | `{concurrent}`：`edge.concurrent.team` 的上限。节点在订阅就绪时 `SCAN` 全量读、之后按 `kind: quota` 广播增量更新；缺键用节点缺省                                                                                                                                               |
+| `relay:ctl` 的 `kind: quota` / `kind: incident` | 控制面                 | 节点         | G5（N4）新增的广播种类，载荷放在外壳的 `event` 里：`{teamId, concurrent}` 与 `{rejectNewConnections, atMs}`（`cluster.EncodeQuota` / `EncodeIncident`）；与下两行的键一起写                                                                                                    |
+| `relay:quota:team:<teamId>`                     | 控制面                 | 节点         | `{concurrent}`：`edge.concurrent.team` 的上限。节点在订阅就绪时 `SCAN` 全量读、之后按 `kind: quota` 广播增量更新；缺键或坏了用节点缺省（最严格的套餐，§7.2）                                                                                                                   |
 | `relay:incident`                                | 控制面                 | 节点         | `{rejectNewConnections, atMs}`；节点在订阅就绪时读、之后按 `kind: incident` 更新；开着时拒绝新的隧道与 e2e 升级（4429 `limit_reached`），在线连接保留                                                                                                                          |
-| `relay:nodes`（哈希）                           | 节点（每 20 秒）       | 控制面       | 字段 = 节点 id，值 `{url, weight, version, draining, connections, tunnels}`，`url` 是该节点自己的隧道地址；每个字段 `HPEXPIRE 60000`；字段形状同时写回 Go 设计 §3.6                                                                                                            |
+| `relay:nodes`（哈希）                           | 节点（每 20 秒）       | 控制面       | 字段 = 节点 id，值 `{url, weight, version, draining, connections, tunnels, internodeUrl?}`，`url` 是该节点自己的隧道地址，`internodeUrl` 是节点间转发连的 `/x/v1`（可以缺）；每个字段 `HPEXPIRE 60000`；编解码 `cluster.EncodeNode` / `DecodeNode`（Go 设计 §3.6）             |
 | `relay:jwks:<sha256(issuer)>`                   | 控制面（轮换后）、节点 | 节点         | 共享 JWKS 缓存（Go 设计 §3.6）；`keys rotate` 后控制面直接覆盖                                                                                                                                                                                                                 |
+| `relay:conc:team:<teamId>`                      | 节点                   | 节点         | G5（N4）：`edge.concurrent.team` 的跨节点计数，有序集合，成员 `<节点>:<随机>`、分数是到期毫秒（Go 设计 §3.6）；控制面不读不写                                                                                                                                                  |
 | `cloud:issued:acct:<accountId>`                 | 控制面                 | 控制面       | 有序集合，成员 `<accountId>\|<sourceId>\|<deviceId>\|<jti>`，分数 = `exp` 毫秒；写前 `ZREMRANGEBYSCORE -inf <now>`，`PEXPIRE 3600000`（能力设计 §11.7）；PostgreSQL 里有同一份（§7.2）                                                                                         |
 | `cloud:issued:src:<sourceId>`                   | 控制面                 | 控制面       | 同上；隧道令牌也记在这里（`accountId = -`）                                                                                                                                                                                                                                    |
 | `cloud:events`                                  | 控制面各实例           | 控制面各实例 | 领域事件 `{origin, event, audience}`，见 §7.1                                                                                                                                                                                                                                  |
@@ -814,6 +815,13 @@ type Watcher interface {
 | `deviceGet`                    | 要会话；按 IP 每分钟 30 次（防猜码）；答发起设备的平台、名字与时间                                                                                                                                                                           |
 | `deviceApprove` / `deviceDeny` | 要会话；只对 `pending` 生效（否则 `410 device_code_expired` / `404 not_found`）；写安全日志 `security.deviceApprove`                                                                                                                         |
 
+**设备码的补充规则**（S3 审查定下）：
+
+- **批准要什么会话**：`deviceApprove(approve: true)` 只认 Cookie 会话（页面里的人点的，Origin 与 CSRF 由认证闸核过），或提权窗口内（`elevated_until_ms` 未过）的 Bearer 会话；其余答 `401 mfa_required`（同 Q7 的「未提权」码，客户端调 `auth.stepUp` 后重试）。拒绝（`deviceDeny`、`approve: false`）不要求。一个被盗的 Bearer 令牌因此不能静默地把别的设备登进来。
+- **猜码**：`deviceGet` / `deviceApprove` / `deviceDeny` 先判账号桶 `device.guess.acct`（只统计查无此码的 `404` 失败，每账号每小时 10 次，满了直接 `429`，换 IP 也逃不掉），再计 IP 桶 `device.get.ip`（三者共用）；`410` 与成功不计入账号桶。
+- **轮询**：`devicePoll` 先过 IP 桶 `device.poll.ip`（每分钟 120 次），再进事务；会话的访问令牌在兑换事务提交之前签好，提交失败则丢弃。
+- **加锁**：兑换先不加锁读 `account_id` → `LockAccount` → `FOR UPDATE` 重读设备码行并复核状态；批准 / 拒绝只锁设备码行。
+
 ### 4.4 团队与邀请（`cloud/teams`、`cloud/invitations`）
 
 **团队设置缺省**（`teams.create` 写入）：`membersCanRegisterHosts: true`、`defaultHostRole: "viewer"`、`allowGuests: true`、`allowAnonymousLinks: false`（能力设计 Q2）、`deviceEndorsers: "owner_admin"`、`memberSelfEndorse: true`、`requireMfa: false`、`sessionMaxAgeMs: null`、`allowedEmailDomains: []`。M2 的三项 M1 可读可写、不生效。
@@ -1034,21 +1042,23 @@ type Tx interface {
 
 速率桶在 Redis（`cloud:limit:`，§2.4 的独立限流器），窗口固定；`429` 带 `details.retryAfterMs` 与 `Retry-After`。键以 `.ip` 结尾的种类按客户端 IP 限流，**IPv6 截到所在的 /64**（只影响限流键）。
 
-| 种类                                | 键            | 额度                 | 过程                                                              |
-| ----------------------------------- | ------------- | -------------------- | ----------------------------------------------------------------- |
-| `login.ip`                          | IP            | 20 / 分钟            | `auth.login`、`auth.changePassword`、`sources.register`（沿用）   |
-| `login.acct`                        | 邮箱的哈希    | 20 / 分钟            | `auth.login`（另有逐账号锁定）                                    |
-| `register.ip`                       | IP            | 10 / 小时            | `auth.register`                                                   |
-| `reset.ip` / `reset.email`          | IP / 邮箱哈希 | 10 / 小时、3 / 小时  | `auth.passwordResetStart`                                         |
-| `verify.acct`                       | 账号          | 3 / 小时             | `auth.emailVerifyResend`、`me.emailChange`                        |
-| `token.ip`                          | IP            | 30 / 分钟            | `auth.emailVerify`、`auth.passwordResetFinish`、`invitations.get` |
-| `device.start.ip` / `device.get.ip` | IP            | 30 / 小时、30 / 分钟 | `auth.deviceStart`、`auth.deviceGet`                              |
-| `stepup.dev`                        | 设备          | 10 / 10 分钟         | `auth.stepUp`                                                     |
-| `mfa.acct`                          | 账号          | 10 / 10 分钟         | `auth.mfaVerify`（每挑战另限 5 次）                               |
-| `assert.acct`                       | 账号          | 60 / 分钟            | `sources.assertion`                                               |
-| `trust.src`                         | 源            | 30 / 分钟            | `sources.trustRequest`                                            |
-| `invite.acct` / `invite.resend`     | 账号 / 邀请   | 50 / 小时、5 / 小时  | `invitations.create` / `resend`                                   |
-| `link.accept.ip`                    | IP            | 20 / 分钟            | `links.accept`（沿用）                                            |
+| 种类                                | 键            | 额度                         | 过程                                                                    |
+| ----------------------------------- | ------------- | ---------------------------- | ----------------------------------------------------------------------- |
+| `login.ip`                          | IP            | 20 / 分钟                    | `auth.login`、`auth.changePassword`、`sources.register`（沿用）         |
+| `login.acct`                        | 邮箱的哈希    | 20 / 分钟                    | `auth.login`（另有逐账号锁定）                                          |
+| `register.ip`                       | IP            | 10 / 小时                    | `auth.register`                                                         |
+| `reset.ip` / `reset.email`          | IP / 邮箱哈希 | 10 / 小时、3 / 小时          | `auth.passwordResetStart`                                               |
+| `verify.acct`                       | 账号          | 3 / 小时                     | `auth.emailVerifyResend`、`me.emailChange`                              |
+| `token.ip`                          | IP            | 30 / 分钟                    | `auth.emailVerify`、`auth.passwordResetFinish`、`invitations.get`       |
+| `device.start.ip` / `device.get.ip` | IP            | 30 / 小时、30 / 分钟         | `auth.deviceStart`、`auth.deviceGet`（批准 / 拒绝共用 `device.get.ip`） |
+| `device.poll.ip`                    | IP            | 120 / 分钟                   | `auth.devicePoll`                                                       |
+| `device.guess.acct`                 | 账号          | 10 / 小时（只计 `404` 失败） | `auth.deviceGet`、`auth.deviceApprove`、`auth.deviceDeny`               |
+| `stepup.dev`                        | 设备          | 10 / 10 分钟                 | `auth.stepUp`                                                           |
+| `mfa.acct`                          | 账号          | 10 / 10 分钟                 | `auth.mfaVerify`（每挑战另限 5 次）                                     |
+| `assert.acct`                       | 账号          | 60 / 分钟                    | `sources.assertion`                                                     |
+| `trust.src`                         | 源            | 30 / 分钟                    | `sources.trustRequest`                                                  |
+| `invite.acct` / `invite.resend`     | 账号 / 邀请   | 50 / 小时、5 / 小时          | `invitations.create` / `resend`                                         |
+| `link.accept.ip`                    | IP            | 20 / 分钟                    | `links.accept`（沿用）                                                  |
 
 挑战（Turnstile，契约 §16）缺省范围：`auth.login`、`auth.register`、`auth.passwordResetStart`、`links.accept`；校验沿用 `core.ChallengeGate`，先于口令与锁定、晚于按 IP 限流。原生 App 与 core 经同源挑战页取令牌，规则不变。
 
@@ -1152,6 +1162,7 @@ type Tx interface {
   - 过滤（§4.8 的「acct ∩ src」等）以 PostgreSQL 为准，Redis 的有序集合只是快路径。
 - Redis 本身开 AOF（`appendfsync everysec`，§2.3），重启后多数状态直接在；落盘与重放兜住 AOF 丢的那一秒与整库丢失。
 - 命令：总是经 `relay:ctl` 广播；G5 之后对已知持有节点再额外发 `relay:node:<id>`（§2.4）。
+- **团队额度全量重写**：`serve` 启动时与 Redis 订阅每次重新就绪时，按 `quota.Plans` 加各团队的 overrides 把全部团队的 `relay:quota:team:<teamId>` 重写一遍（pipeline 分批），之后变化照常 `SET` + `kind: quota` 广播。节点在额度键缺失或坏了时按最严格的缺省（Free：并发 10，速率 600 次 / 分钟，可用 `RELAY_TEAM_CONCURRENT` / `RELAY_TEAM_CONNECT_PER_MINUTE` 覆盖），所以 Redis 丢数据之后要靠这次重写恢复各团队的真实额度。
 
 ### 7.3 节点表与 `heartbeatHint`
 
@@ -1231,22 +1242,22 @@ type Tx interface {
 | S5b | `grants`（五个过程、有效权限）、`sources.assertion` 的合成与版本门、签发索引（含 `cloud_issued_tokens`）、访问清单、撤销流程（§4.8 前三行）；`grants.Policy`                                                                                                                                                                                                                                                                                                                        | S5a；按人踢的验收依赖 **G5 N2**        | 有效权限表驱动（主体 × 角色 × 范围 × 到期）；版本门取在线隧道版本；收窄即撤销                                       | ~1400 |
 | S6  | 链接加 `space` 与团队设置、主机邀请（两种空间，落成授予）、`trust.list` / `trust.reject`、`sources.trustRequest` / `trustResolve`（#72）                                                                                                                                                                                                                                                                                                                                            | S5b、#72（P1d）                        | 链接并发 `max_uses`；匿名链接开关；主机邀请成 guest 授予；信任请求幂等、冷却、24 小时上限、按背书人收窄、不含校验码 | ~1200 |
 | S7  | `audit.list`、`me.securityLog`、保留期与分区作业；`teams.usage`、`billing.plan`、`billing.usage`（含按天）、`traffic.retention`；运营：`operators add/totp`、`auth.login{operator}`、`auth.mfaVerify`、`admin.*` M1、事故开关                                                                                                                                                                                                                                                       | S5a；停用即踢的验收依赖 **G5 N2**      | 运营隔离用例；事故开关三项；保留期删除只删本团队                                                                    | ~1500 |
-| S8  | `relayctl` 包装 `control/redis.Plane`（广播外壳与命令取 `cluster/wire.go`，新增字段与种类同 G5 一起加）、撤销与签发索引的落盘与重放、`relay:presence` 订阅与 `last_seen`、`cloud:events` 与 me-stream（票、受众、可见集合缓存）、节点表与 rendezvous、`nodes token` / `revoke`；**定登录失败计数在 Redis 故障时的回落策略（上多实例前，见 §4.3）**                                                                                                                                  | S5b（与 S6、S7 并行）                  | 两个控制面实例 + Redis 的事件互通；撤销最终到达假节点；Redis 清空后重放恢复；外壳与 `wire.go` 的往返测试            | ~1300 |
+| S8  | `relayctl` 包装 `control/redis.Plane`（广播外壳与命令取 `cluster/wire.go`，新增字段与种类同 G5 一起加）、撤销与签发索引的落盘与重放、`relay:presence` 订阅与 `last_seen`、`cloud:events` 与 me-stream（票、受众、可见集合缓存）、节点表与 rendezvous、`nodes token` / `revoke`、启动与订阅重新就绪时按 `quota.Plans` + overrides 全量重写 `relay:quota:team:*`（§7.2）；**定登录失败计数在 Redis 故障时的回落策略（上多实例前，见 §4.3）**                                          | S5b（与 S6、S7 并行）                  | 两个控制面实例 + Redis 的事件互通；撤销最终到达假节点；Redis 清空后重放恢复；外壳与 `wire.go` 的往返测试            | ~1300 |
 | S9  | `deploy/saas/compose.yml`（AOF、每节点隧道地址、流量角色）、`armadra-cloud` 镜像（distroless）、`WEB_ROOT` 托管与 CSP、`scripts/e2e.mjs --mode saas`、`deploy/README.md` 与 runbook；TS `apps/cloud` 的去留（§10 Q9）；**多实例上线前确认登录失败计数的回落策略（§4.3）**                                                                                                                                                                                                           | S6、S7、S8、**G5**（经 G3b → G4 → G5） | §8.4 全部场景；`pnpm images:build` 冒烟                                                                             | ~1200 |
 
 并行：S0a ∥ S0b；S2 ∥ S3；S6 ∥ S7 ∥ S8。关键路径：S0a → S1a → S1b → S2 → S4 → S5a → S5b → S8 → S9；另一条是中继侧的 G3b → G4 → G5 → S9，两条在 S9 汇合。
 
 ### 9.2 G5 依赖（`armadra-relay saas serve` 要提供的）
 
-| #   | 项                                                                                                                                                                                                                                                | 用在      |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| N1  | 按 §2.4 读写 `relay:route`、`relay:presence`、`relay:revoked`（G3a 的 `control/redis` 已实现）                                                                                                                                                    | S5、S8    |
-| N2  | `cluster/wire.go` 的 `commandWire` 加 `subject`、`subjectPrefix`、`deviceId`，新命令 `drain`；节点按过滤字段踢人                                                                                                                                  | S5b、S7   |
-| N3  | `relay:nodes` 心跳（`HPEXPIRE`）与字段 `{url, weight, version, draining, connections, tunnels}`，`url` 是本节点自己的隧道地址（字段写回 Go 设计 §3.6）                                                                                            | S7、S8    |
-| N4  | `edge.concurrent.team` 跨节点计数（`SADD` / `SREM` / `SCARD`，每条连接一个带过期的成员）与 `edge.connect.team` 速率；额度来自 `relay:quota:team:*`、开关来自 `relay:incident`：订阅就绪时全量读，之后按 `kind: quota` / `kind: incident` 广播更新 | S4、S7    |
-| N5  | 流量桶写 `team_id`（中继令牌的 `team`），只在入口节点计；用 `armadra_relay_traffic` 角色写 PG；SaaS 模式**关掉节点自己的保留期清理**（单独的开关，不借 `--traffic-retention-days 0`——那表示不记录）                                               | S7        |
-| N6  | 节点令牌验签：`typ = armadra-node`、`aud = relay-node`、撤销表（`n.` 前缀）                                                                                                                                                                       | S8        |
-| N7  | `/x/v1` 节点间转发、子域寻址、GOAWAY 再平衡                                                                                                                                                                                                       | S9（e2e） |
+| #   | 项                                                                                                                                                                                                                                                                                                                                                                       | 用在      |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| N1  | 按 §2.4 读写 `relay:route`、`relay:presence`、`relay:revoked`（G3a 的 `control/redis` 已实现）                                                                                                                                                                                                                                                                           | S5、S8    |
+| N2  | `cluster/wire.go` 的 `commandWire` 加 `subject`、`subjectPrefix`、`deviceId`，新命令 `drain`；节点按过滤字段踢人                                                                                                                                                                                                                                                         | S5b、S7   |
+| N3  | `relay:nodes` 心跳（`HPEXPIRE`）与字段 `{url, weight, version, draining, connections, tunnels}`，`url` 是本节点自己的隧道地址（字段写回 Go 设计 §3.6）                                                                                                                                                                                                                   | S7、S8    |
+| N4  | `edge.concurrent.team` 跨节点计数（有序集合 `relay:conc:team:<teamId>`，每条连接一个成员、分数即到期毫秒，脚本里清到期、`ZCARD`、没满才 `ZADD`，节点每 20 秒 `ZADD XX` 续期）与 `edge.connect.team` 速率；额度来自 `relay:quota:team:*`（缺键或坏了按最严格的缺省，§7.2）、开关来自 `relay:incident`：订阅就绪时全量读，之后按 `kind: quota` / `kind: incident` 广播更新 | S4、S7    |
+| N5  | 流量桶写 `team_id`（中继令牌的 `team`），只在入口节点计；用 `armadra_relay_traffic` 角色写 PG；SaaS 模式**关掉节点自己的保留期清理**（单独的开关，不借 `--traffic-retention-days 0`——那表示不记录）                                                                                                                                                                      | S7        |
+| N6  | 节点令牌验签：`typ = armadra-node`、`aud = relay-node`、撤销表（`n.` 前缀）                                                                                                                                                                                                                                                                                              | S8        |
+| N7  | `/x/v1` 节点间转发、子域寻址、GOAWAY 再平衡                                                                                                                                                                                                                                                                                                                              | S9（e2e） |
 
 ### 9.3 Armadra 侧对应（cloud-console §7）
 

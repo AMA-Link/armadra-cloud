@@ -13,6 +13,7 @@
 package dataplane
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -52,6 +53,12 @@ type Options struct {
 	UpgradeExtra func(w http.ResponseWriter, r *http.Request) bool
 	// Fallback 处理精确路由都没命中的请求，认领了返回 true，否则 404。
 	Fallback func(w http.ResponseWriter, r *http.Request) bool
+	// Gate 是模式自己的准入（SaaS：事故开关、团队名额）；personal 不给。
+	Gate edge.Gate
+	// ClientKick 为真时 kick 命令只踢客户端连接、不碰隧道（SaaS），由装配方接到 Edge.Disconnect。
+	ClientKick bool
+	// Lookup 换掉边缘找隧道的办法（SaaS：路由在别的节点时答到那个节点的节点间连接）；缺省是隧道表的 Lookup。
+	Lookup func(ctx context.Context, sourceID string) (*tunnel.Tunnel, error)
 }
 
 // Plane 是装配好的数据面。
@@ -81,11 +88,17 @@ func New(o Options) (*Plane, error) {
 	p.Hub = tunnel.NewHub(tunnel.HubOptions{
 		Control: o.Control, Auth: p.Auth, NodeID: o.NodeID, Config: o.Config,
 		HandshakeTimeout: o.HandshakeTimeout, RouteTTL: o.RouteTTL, Log: o.Log, Metrics: p.Metrics,
+		ClientKick: o.ClientKick,
 	})
+	lookup := o.Lookup
+	if lookup == nil {
+		lookup = p.Hub.Lookup
+	}
 	e, err := edge.New(edge.Options{
 		NodeID: o.NodeID, Addressing: o.Addressing, Auth: p.Auth, Control: o.Control,
-		Lookup: p.Hub.Lookup, Log: o.Log, Metrics: p.Metrics, CORSOrigins: o.CORSOrigins,
+		Lookup: lookup, Log: o.Log, Metrics: p.Metrics, CORSOrigins: o.CORSOrigins,
 		WSPing: o.WSPing, WSIdle: o.WSIdle, ClientIP: o.ClientIP, Traffic: o.Traffic, Poller: o.Poller,
+		Gate: o.Gate,
 	})
 	if err != nil {
 		return nil, err

@@ -35,6 +35,8 @@ type edgeConn struct {
 	c        netpoll.Conn
 	sourceID string
 	subject  string
+	// release 是 Gate 占的名额（SaaS）；连接结束时连同账号并发一起还。
+	release  func()
 	started  time.Time
 	lastSeen atomic.Int64
 	bucket   int
@@ -373,7 +375,7 @@ func (ec *edgeConn) OnClose(c netpoll.Conn, _ error) {
 	e.wheel.remove(ec)
 	e.policy.Untrack(ec)
 	// 还名额可能做网络 I/O：投递给工作协程，不占住 epoll 循环。
-	e.policy.ReleaseUpgradeAsync(ec.subject)
+	e.policy.ReleaseUpgradeAsync(ec.subject, ec.release)
 	var id uint32
 	if s != nil {
 		id = s.ID()
@@ -412,13 +414,18 @@ func (ec *edgeConn) End(s *tunnel.Stream) {
 	ec.closeGracefully(int(protocol.CloseNormal), "")
 }
 
-// Reset：源 RST 或隧道没了 → 4404。
-func (ec *edgeConn) Reset(s *tunnel.Stream, _ protocol.RstCode) {
+// Reset：源 RST 或隧道没了 → 4404。经节点间连接转发、持有节点答 refused（源没报 e2e）时，
+// 原因与本地判定一致：e2e_unsupported。
+func (ec *edgeConn) Reset(s *tunnel.Stream, code protocol.RstCode) {
 	ec.attach(s)
 	ec.mu.Lock()
 	ec.srcDone = true
 	ec.mu.Unlock()
-	ec.closeGracefully(int(protocol.CloseSourceOffline), "source_offline")
+	reason := "source_offline"
+	if code == protocol.RstRefused && s.Link() != "" {
+		reason = "e2e_unsupported"
+	}
+	ec.closeGracefully(int(protocol.CloseSourceOffline), reason)
 }
 
 // Resume：上行挂起的字节发完了，恢复读客户端。

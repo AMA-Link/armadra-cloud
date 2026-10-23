@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -64,6 +65,52 @@ func (l *Limiter) Hit(ctx context.Context, kind control.LimitKind, key string) (
 		return control.LimitResult{Allowed: true}, nil
 	}
 	return control.LimitResult{RetryAfter: max(0, ttl)}, nil
+}
+
+// Peek 只读桶：窗口内已计的次数达到 Max 就答被拒，不增加计数（给「只统计失败」的桶做事前检查）。
+// Redis 出错时读本进程的回落窗口。
+func (l *Limiter) Peek(ctx context.Context, kind control.LimitKind, key string) (control.LimitResult, error) {
+	rule, ok := l.rules[kind]
+	if !ok || rule.Concurrent || rule.Window <= 0 {
+		return control.LimitResult{}, errUnknownKind(kind)
+	}
+	id := cluster.LimitID(kind, key)
+	count, ttl, err := l.peek(ctx, l.prefix+id)
+	if err != nil {
+		if l.onError != nil {
+			l.onError(err)
+		}
+		count, ttl = l.localPeek(id)
+	}
+	if count < int64(rule.Max) {
+		return control.LimitResult{Allowed: true}, nil
+	}
+	return control.LimitResult{RetryAfter: max(0, ttl)}, nil
+}
+
+func (l *Limiter) peek(ctx context.Context, key string) (int64, time.Duration, error) {
+	count, err := l.client.Get(ctx, key).Int64()
+	if errors.Is(err, goredis.Nil) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	ttl, err := l.client.PTTL(ctx, key).Result()
+	if err != nil {
+		return 0, 0, err
+	}
+	return count, ttl, nil
+}
+
+func (l *Limiter) localPeek(id string) (int64, time.Duration) {
+	now := l.now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if w := l.local[id]; w != nil && w.resetAt.After(now) {
+		return w.count, w.resetAt.Sub(now)
+	}
+	return 0, 0
 }
 
 // Release 实现 control.Limiter：速率类什么也不做。
