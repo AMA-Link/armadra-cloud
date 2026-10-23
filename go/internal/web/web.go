@@ -19,6 +19,8 @@ type Options struct {
 	CAPEM func() []byte
 	// Challenge 开了 Turnstile 才给：页面 CSP 放行 Turnstile，并允许这些来源内嵌 /app/challenge。
 	Challenge func() *Challenge
+	// CSP 非空时替换 HTML 的 Content-Security-Policy（控制台页面用，HandleApp）；入参是请求路径。
+	CSP func(path string) string
 }
 
 // Challenge 是开了人机挑战时页面要的东西。
@@ -216,7 +218,11 @@ func (p *Pages) serveFile(w http.ResponseWriter, r *http.Request, file, path str
 	switch {
 	case isHTML:
 		h.Set("Cache-Control", "no-store")
-		h.Set("Content-Security-Policy", PageCSPFor(path, p.challenge()))
+		if p.opts.CSP != nil {
+			h.Set("Content-Security-Policy", p.opts.CSP(path))
+		} else {
+			h.Set("Content-Security-Policy", PageCSPFor(path, p.challenge()))
+		}
 	case HashedAsset(filepath.Base(file)):
 		h.Set("Cache-Control", "public, max-age=31536000, immutable")
 	default:

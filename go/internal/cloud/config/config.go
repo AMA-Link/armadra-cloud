@@ -144,7 +144,7 @@ func (c Config) GoString() string { return c.String() }
 
 // known 是认识的变量名（不带前缀）。
 var known = map[string]bool{
-	"ISSUER": true, "APP_ORIGIN": true, "LISTEN": true, "DATABASE_URL": true, "REDIS_URL": true,
+	"ISSUER": true, "APP_ORIGIN": true, "LISTEN": true, "DATABASE_URL": true, "DATABASE_URL_FILE": true, "REDIS_URL": true, "REDIS_URL_FILE": true,
 	"MASTER_KEY": true, "MASTER_KEY_FILE": true, "RELAY_DOMAIN": true, "REQUIRE_EMAIL_VERIFIED": true,
 	"NAME": true, "WEB_ROOT": true,
 	"SMTP_HOST": true, "SMTP_PORT": true, "SMTP_USERNAME": true, "SMTP_PASSWORD_FILE": true, "SMTP_FROM": true, "SMTP_TLS": true,
@@ -173,6 +173,46 @@ func (r reader) file(name string) (string, bool, error) {
 		return "", false, errorf("%s%s 指向的文件读不出来：%s", Prefix, name, path)
 	}
 	return strings.TrimSpace(string(data)), true, nil
+}
+
+// secretValue 读可以用 <name> 或 <name>_FILE 给的秘密（连接串里可能带口令）；两个都给是配错；都没给答空串。
+func (r reader) secretValue(name string) (string, error) {
+	inline := r.get(name)
+	fromFile, hasFile, err := r.file(name + "_FILE")
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case inline != "" && hasFile:
+		return "", errorf("%s%s 与 %s_FILE 只能给一个", Prefix, name, name)
+	case hasFile:
+		return fromFile, nil
+	}
+	return inline, nil
+}
+
+// redisURLOf 读并校验 REDIS_URL。
+func redisURLOf(r reader) (string, error) {
+	text, err := r.secretValue("REDIS_URL")
+	if err != nil {
+		return "", err
+	}
+	if text == "" {
+		return "", errorf("%sREDIS_URL 必填", Prefix)
+	}
+	if u, err := url.Parse(text); err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Host == "" {
+		return "", errorf("%sREDIS_URL 不合法，要 redis:// 或 rediss:// 地址", Prefix)
+	}
+	return text, nil
+}
+
+// databaseURLOf 读并校验 DATABASE_URL。
+func databaseURLOf(r reader) (string, error) {
+	text, err := r.secretValue("DATABASE_URL")
+	if err != nil {
+		return "", err
+	}
+	return databaseURL(text)
 }
 
 // Load 解析并校验全部配置。
@@ -204,14 +244,11 @@ func Load(env Env) (*Config, error) {
 	if err := checkListen("LISTEN", c.Listen); err != nil {
 		return nil, err
 	}
-	if c.DatabaseURL, err = databaseURL(r.get("DATABASE_URL")); err != nil {
+	if c.DatabaseURL, err = databaseURLOf(r); err != nil {
 		return nil, err
 	}
-	if c.RedisURL = r.get("REDIS_URL"); c.RedisURL == "" {
-		return nil, errorf("%sREDIS_URL 必填", Prefix)
-	}
-	if u, err := url.Parse(c.RedisURL); err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Host == "" {
-		return nil, errorf("%sREDIS_URL 不合法，要 redis:// 或 rediss:// 地址", Prefix)
+	if c.RedisURL, err = redisURLOf(r); err != nil {
+		return nil, err
 	}
 	if c.MasterKey, err = masterKeyOf(r); err != nil {
 		return nil, err
@@ -483,7 +520,7 @@ func trustedProxy(r reader) (*clientip.TrustedProxyConfig, error) {
 
 // LoadDatabaseURL 只读 DATABASE_URL（migrate 用）。
 func LoadDatabaseURL(env Env) (string, error) {
-	return databaseURL(reader{env}.get("DATABASE_URL"))
+	return databaseURLOf(reader{env})
 }
 
 // LoadKeys 读 DATABASE_URL 与主密钥（keys rotate 用）。
@@ -504,11 +541,8 @@ func LoadRedis(env Env) (databaseURL, redisURL string, err error) {
 	if databaseURL, err = LoadDatabaseURL(env); err != nil {
 		return "", "", err
 	}
-	if redisURL = r.get("REDIS_URL"); redisURL == "" {
-		return "", "", errorf("%sREDIS_URL 必填", Prefix)
-	}
-	if u, err := url.Parse(redisURL); err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Host == "" {
-		return "", "", errorf("%sREDIS_URL 不合法，要 redis:// 或 rediss:// 地址", Prefix)
+	if redisURL, err = redisURLOf(r); err != nil {
+		return "", "", err
 	}
 	return databaseURL, redisURL, nil
 }

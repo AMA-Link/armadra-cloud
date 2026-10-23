@@ -7,8 +7,40 @@
 name: armadra-cloud-dev
 
 services:
+  # 开发库也开 TLS（自签证书，首次启动生成）：stack 里的控制面连非回环地址必须 sslmode=require，
+  # 宿主上的测试连回环地址不受影响。
+  pg-tls:
+    image: alpine/openssl:3.5.4
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ ! -s /tls/server.key ]; then
+          openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=postgres" \
+            -keyout /tls/server.key -out /tls/server.crt
+        fi
+        chown 70:70 /tls/server.key /tls/server.crt
+        chmod 600 /tls/server.key
+        chmod 644 /tls/server.crt
+    volumes:
+      - pg-tls:/tls
+    restart: "no"
+
   postgres:
     image: postgres:17.11-alpine
+    command:
+      [
+        "postgres",
+        "-c",
+        "ssl=on",
+        "-c",
+        "ssl_cert_file=/tls/server.crt",
+        "-c",
+        "ssl_key_file=/tls/server.key",
+      ]
+    depends_on:
+      pg-tls:
+        condition: service_completed_successfully
     environment:
       POSTGRES_USER: armadra
       POSTGRES_PASSWORD: "${DEV_PG_PASSWORD:?run pnpm dev:up}"
@@ -17,6 +49,7 @@ services:
       - "127.0.0.1:5440:5432"
     volumes:
       - pg:/var/lib/postgresql/data
+      - pg-tls:/tls:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "armadra", "-d", "armadra_cloud"]
       interval: 5s
@@ -33,11 +66,14 @@ services:
       timeout: 5s
       retries: 20
 
+  # stack 的控制面与 mailpit 共用网络命名空间（SMTP_TLS=none 只许回环地址，所以控制面用 127.0.0.1:1025 发信），
+  # 它的端口因此要从这里发布（8110 只有起了 --profile stack 才有东西在听）。
   mailpit:
     image: axllent/mailpit:v1.31.4
     ports:
       - "127.0.0.1:1026:1025"
       - "127.0.0.1:8026:8025"
+      - "127.0.0.1:8110:8100"
 
   pebble:
     image: ghcr.io/letsencrypt/pebble:2.10.1
@@ -47,25 +83,40 @@ services:
     ports:
       - "127.0.0.1:14001:14000"
 
-  cloud:
+  # 镜像是 Go 实现（go/Dockerfile.cloud）；serve 不自动迁移，先由 cloud-migrate 跑一次 migrate。
+  cloud-migrate:
     profiles: ["stack"]
     build:
       context: ../..
-      dockerfile: apps/cloud/Dockerfile
+      dockerfile: go/Dockerfile.cloud
     image: armadra-cloud:local
-    environment:
+    command: ["migrate"]
+    environment: &cloud-env
       ARMADRA_CLOUD_ISSUER: http://127.0.0.1:8110
       ARMADRA_CLOUD_APP_ORIGIN: http://127.0.0.1:8110
       ARMADRA_CLOUD_LISTEN: 0.0.0.0:8100
-      ARMADRA_CLOUD_DATABASE_URL: "postgres://armadra:${DEV_PG_PASSWORD:?run pnpm dev:up}@postgres:5432/armadra_cloud"
+      ARMADRA_CLOUD_DATABASE_URL: "postgres://armadra:${DEV_PG_PASSWORD:?run pnpm dev:up}@postgres:5432/armadra_cloud?sslmode=require"
       ARMADRA_CLOUD_REDIS_URL: redis://redis:6379
       ARMADRA_CLOUD_MASTER_KEY: "${ARMADRA_CLOUD_MASTER_KEY:?run pnpm dev:up}"
       ARMADRA_CLOUD_RELAY_DOMAIN: src.localhost
-    ports:
-      - "127.0.0.1:8110:8100"
+      ARMADRA_CLOUD_SMTP_HOST: 127.0.0.1
+      ARMADRA_CLOUD_SMTP_PORT: "1025"
+      ARMADRA_CLOUD_SMTP_TLS: none
+      ARMADRA_CLOUD_SMTP_FROM: armadra@localhost
     depends_on:
       postgres:
         condition: service_healthy
+
+  cloud:
+    profiles: ["stack"]
+    image: armadra-cloud:local
+    environment: *cloud-env
+    network_mode: "service:mailpit"
+    depends_on:
+      mailpit:
+        condition: service_started
+      cloud-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -79,7 +130,9 @@ services:
     environment:
       RELAY_NODE_ID: dev-container-1
       RELAY_DOMAIN: src.localhost
-      RELAY_CLOUD_ISSUER: http://cloud:8100
+      RELAY_CLOUD_ISSUER: http://127.0.0.1:8110
+      # 控制面在 mailpit 的网络命名空间里，节点经 mailpit 的名字取 JWKS（issuer 仍是令牌里的 http://127.0.0.1:8110）。
+      RELAY_JWKS_URL: http://mailpit:8100/.well-known/jwks.json
       RELAY_REDIS_URL: redis://redis:6379
       RELAY_TUNNEL_URL: ws://localhost:8111/t/v1
       RELAY_ALLOW_INSECURE_TUNNEL: "1"
@@ -91,3 +144,4 @@ services:
 
 volumes:
   pg: {}
+  pg-tls: {}

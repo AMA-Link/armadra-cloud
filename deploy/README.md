@@ -1,29 +1,35 @@
 # 部署
 
-| 文件                                         | 用途                                                                                             |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [compose.yml](compose.yml)                   | 参考部署：cloud + relay + PostgreSQL 17 + Redis 8；`personal-cluster` profile 是两节点的个人中转 |
-| [personal/compose.yml](personal/compose.yml) | 单人中转，一个服务、不带数据库                                                                   |
-| [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                                                                    |
-| [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动）                                               |
-| [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本                                                        |
-| [cloudflare/README.md](cloudflare/README.md) | Cloudflare Workers 上的个人中转（wrangler 项目在 `apps/relay-workers`）                          |
+| 文件                                         | 用途                                                                                                                                          |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| [saas/compose.yml](saas/compose.yml)         | SaaS 单机 M1：控制面 + 两个中继节点 + PostgreSQL 17 + Redis 8（AOF）；`--profile proxy` 带参考反向代理，`compose.mailpit.yml` 给开发 / 端到端 |
+| [compose.yml](compose.yml)                   | 个人中转的多节点参考：`personal-cluster` profile（两节点，PostgreSQL 存储与控制面）                                                           |
+| [personal/compose.yml](personal/compose.yml) | 单人中转，一个服务、不带数据库                                                                                                                |
+| [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                                                                                                                 |
+| [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动）                                                                                            |
+| [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本                                                                                                     |
+| [cloudflare/README.md](cloudflare/README.md) | Cloudflare Workers 上的个人中转（wrangler 项目在 `apps/relay-workers`）                                                                       |
 
 ## 环境变量
 
-控制面（`armadra-cloud serve`）：
+控制面（`armadra-cloud serve`，Go；镜像由 `go/Dockerfile.cloud` 构建；命令 `serve`、`migrate`、`keys rotate`、`nodes token|revoke`、`operators add|totp`、`health`、`version`；完整说明见 [SaaS 实施设计](../docs/design/saas-m1-implementation.md) §2）。秘密用 `*_FILE` 或环境变量给，不进日志：
 
-| 变量                           | 必填 | 说明                                       |
-| ------------------------------ | ---- | ------------------------------------------ |
-| `ARMADRA_CLOUD_ISSUER`         | 是   | 对外 issuer URL（JWT `iss`）               |
-| `ARMADRA_CLOUD_APP_ORIGIN`     | 是   | 页面来源（Cookie 与 CSP）                  |
-| `ARMADRA_CLOUD_LISTEN`         |      | 缺省 `0.0.0.0:8100`                        |
-| `ARMADRA_CLOUD_DATABASE_URL`   | 是   | `postgres://…`                             |
-| `ARMADRA_CLOUD_REDIS_URL`      | 是   | `redis://…`                                |
-| `ARMADRA_CLOUD_MASTER_KEY`     |      | 32 字节 hex（账号功能落地后必填）          |
-| `ARMADRA_CLOUD_RELAY_DOMAIN`   |      | `<sourceId>.src.<域>` 的 `<域>`            |
-| `ARMADRA_CLOUD_MIGRATIONS_DIR` |      | 镜像里是 `/app/migrations`                 |
-| `ARMADRA_CLOUD_LOG_LEVEL`      |      | `debug` / `info`（缺省）/ `warn` / `error` |
+| 变量                                                                                       | 必填 | 说明                                                                                                 |
+| ------------------------------------------------------------------------------------------ | ---- | ---------------------------------------------------------------------------------------------------- |
+| `ARMADRA_CLOUD_ISSUER`                                                                     | 是   | 断言与令牌的 `iss`，`https` 来源（回环地址可用 `http`）                                              |
+| `ARMADRA_CLOUD_APP_ORIGIN`                                                                 | 是   | 控制台来源（Cookie 与 CSP）；M1 必须等于 `ISSUER`                                                    |
+| `ARMADRA_CLOUD_LISTEN`                                                                     |      | 缺省 `0.0.0.0:8100`，明文，TLS 由前面的反向代理终止                                                  |
+| `ARMADRA_CLOUD_DATABASE_URL`                                                               | 是   | `postgres://…`；非回环地址必须 `sslmode=verify-full` 或 `require`                                    |
+| `ARMADRA_CLOUD_REDIS_URL`                                                                  | 是   | 与中继节点共用的那一个 Redis，要求 ≥ 7.4                                                             |
+| `ARMADRA_CLOUD_MASTER_KEY` / `_FILE`                                                       | 是   | 32 字节 hex；包裹签名私钥与 TOTP 种子（**另存一份**）                                                |
+| `ARMADRA_CLOUD_RELAY_DOMAIN`                                                               | 是   | `<sourceId>.src.<域>` 的 `<域>`，与节点的 `RELAY_DOMAIN` 一致                                        |
+| `ARMADRA_CLOUD_WEB_ROOT`                                                                   |      | 控制台页面（Armadra `apps/web` 的构建产物）；镜像里缺省 `/app/web`；目录里没有 `index.html` 就不托管 |
+| `ARMADRA_CLOUD_SMTP_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD_FILE` / `_FROM` / `_TLS`    |      | 发信；`_TLS` 取 `starttls`（缺省）/ `tls` / `none`，`none` 只许回环（mailpit）                       |
+| `ARMADRA_CLOUD_REQUIRE_EMAIL_VERIFIED`                                                     |      | 缺省 `1`；只在开发环境设 `0`                                                                         |
+| `ARMADRA_CLOUD_TRUSTED_PROXY` / `_TRUSTED_PROXY_PREFER`                                    |      | 受信反向代理的 CIDR 与先读的头，规则同中继                                                           |
+| `ARMADRA_CLOUD_TURNSTILE_SITE_KEY` / `_TURNSTILE_SECRET_FILE` / `_CHALLENGE_SCOPE`         |      | 人机挑战；两个都配才要求，只配一个是配错                                                             |
+| `ARMADRA_CLOUD_METRICS_LISTEN` / `_METRICS_TOKEN_FILE`                                     |      | 指标监听（含 `armadra_cloud_lockout_unavailable_total`）                                             |
+| `ARMADRA_CLOUD_NAME`、`_JOB_WORKERS`、`_TRAFFIC_RETENTION_DAYS`、`_HIBP_URL`、`_LOG_LEVEL` |      | 见设计 §2.2                                                                                          |
 
 中继（`armadra-relay saas serve`，SaaS 中继节点，Go 设计 §3.6；TLS 在前面的反向代理终止，明文监听）：
 
@@ -34,7 +40,7 @@
 | `RELAY_DOMAIN`                                            | 是   | `<sourceId>.src.<域>` 的 `<域>`                                                                                                                        |
 | `RELAY_CLOUD_ISSUER`                                      | 是   | 控制面 issuer（令牌的 `iss`）                                                                                                                          |
 | `RELAY_JWKS_URL`                                          |      | 缺省 `<issuer>/.well-known/jwks.json`；各节点共用 Redis 里的副本，同一时刻只有一个节点回源                                                             |
-| `RELAY_REDIS_URL`                                         | 是   | 与控制面共用的那一个 Redis（≥ 7.4，节点表用 `HPEXPIRE`）                                                                                               |
+| `RELAY_REDIS_URL` / `RELAY_REDIS_URL_FILE`                | 是   | 与控制面共用的那一个 Redis（≥ 7.4，节点表用 `HPEXPIRE`）；可带口令                                                                                     |
 | `RELAY_TUNNEL_URL`                                        | 是   | 本节点自己的隧道地址 `wss://<node>.edge.<域>/t/v1`，写进节点表，源按 `heartbeatHint` 连它                                                              |
 | `RELAY_INTERNODE_URL`                                     |      | 别的节点连本节点 `/x/v1` 的地址，缺省由 `RELAY_TUNNEL_URL` 把路径换成 `/x/v1`                                                                          |
 | `RELAY_NODE_WEIGHT`                                       |      | 节点表里的权重（rendezvous 加权），1–1000，缺省 1                                                                                                      |
@@ -114,7 +120,7 @@
 
 - `GET /health`：进程存活，200 即活着（镜像的 `HEALTHCHECK` 经 `armadra-relay health` 打它，先 HTTPS 再明文）。
 - `GET /ready`：依赖就绪（cloud 报 PostgreSQL 与 Redis，saas relay 报 Redis 与排空状态（配了流量库另报 `database`），personal relay 报数据目录，多节点时另报 `database` 或 `redis`），任一不可达答 503。
-- 控制面的 `/v1/*` 与 `/.well-known/*` 业务路由现在是预留，答 501 `{ code: "not_implemented", message, requestId }`。
+- 控制面 `/v1/*` 与 `/.well-known/*`：SaaS M1 的账号、团队、主机、授予、审计、运营等过程已实现，M2 的过程仍答 501 `{ code: "not_implemented", message, requestId }`；`/health`、`/ready`；配了 `WEB_ROOT` 时托管控制台页面（`/`、`/login`、`/verify`、`/reset`、`/t/*`、`/h/*`、`/j/*`、`/device`、`/invite/*`、`/ops/*` 回落 `index.html`，带 `Referrer-Policy: no-referrer` 与 CSP）。
 - 个人中转另有 `/v1/*` 子集、`/.well-known/*`、`/ca.crt`、`/app/*` 与 `/j/<linkId>`（[契约](../docs/contracts/cloud-api.md) §10–§11）。
 
 ## 切换到 Go 版中继（0.10.0）与回滚
@@ -135,6 +141,12 @@
 变了的只有：下一个版本起运行镜像底座从 `debian:bookworm-slim` 换成 distroless static（约 23 MB，没有 shell、`tini` 与包管理器；Go 二进制直接当 PID 1，入口由 `tini -- armadra-relay` 变成 `armadra-relay`，覆盖 entrypoint 调 tini 或 `exec` 进 shell 的用法不再可用；`docker compose exec relay armadra-relay …` 照用，要 shell 排障见 `go/Dockerfile` 头注释）；容器里的命令行是 `armadra-relay`（不再是 `node /app/out/cli.js`）；Go 版不写 `state.json`；`--node-id` 同时作用于隧道层。`saas serve` 在切换版里仍是占位；之后的版本换成真正的 SaaS 中继节点（上面的变量表），新增必填的 `RELAY_TUNNEL_URL`。
 
 升级：备份（`personal backup` 或 `pg_dump`）→ 数据目录是 `state.json` 的先停服并 `run --rm relay personal migrate --data-dir /data --to sqlite` → 换成 0.10.0 镜像起服 → `exec relay armadra-relay personal status` 与 `doctor` 核对。回滚：停服，镜像换回上一版（如 `0.9.3`）再起，Go 版写过的库 Node 版照常读写。步骤与注意事项见[运维手册](../docs/runbooks/personal-storage.md#切换到-go-版中继0100与回滚)。
+
+## SaaS 单机 M1（`deploy/saas`）
+
+`saas/compose.yml`：口令与连接串全部是 `secrets/` 下的文件（`init-secrets.sh` 生成；PostgreSQL 用 `POSTGRES_PASSWORD_FILE`，控制面用 `DATABASE_URL_FILE` 与 `REDIS_URL_FILE`，节点用 `RELAY_DATABASE_URL_FILE` 与 `RELAY_REDIS_URL_FILE`）；网络分 `edge` 与 `backend`（internal），代理只进 `edge` 且 IP 固定，Redis 要口令；`postgres`（首次启动生成自签证书，超级用户只用于初始化，控制面用另建的库属主角色 `armadra_cloud` 以 `sslmode=require` 连；生产换托管库并用 `verify-full`）→ `migrate`（跑一次 `armadra-cloud migrate`）→ `db-roles`（节点的流量角色 `armadra_relay_traffic`，只有流量表读写与账本只读）→ `cloud` → `relay-a`、`relay-b`（每个节点有自己的隧道地址 `wss://<节点>.edge.<域>/t/v1`，各自一枚节点令牌）；`redis` 开 AOF（`appendfsync everysec`）、`maxmemory 128mb`、`noeviction`；`--profile proxy` 起参考 nginx（TLS 终止，WebSocket 设置与登录 / 链接接受限流，访问日志用 `$uri` 不记 query）；`compose.mailpit.yml` 把邮件送进 mailpit（开发 / 端到端，不要用在生产）。步骤、节点令牌的签发与撤销、升级与回滚、备份、Redis 故障时登录失败关闭与告警，见 [SaaS 运维手册](../docs/runbooks/saas.md)；变量在 `saas/.env.example`。
+
+- 登录失败计数共享在 Redis，Redis 不可用时登录一律答 `503 unavailable`（失败关闭，不回落到进程内计数）；控制面指标 `armadra_cloud_lockout_unavailable_total` 计这类拒绝，应当告警。
 
 ## 升级顺序
 

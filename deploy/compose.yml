@@ -1,58 +1,14 @@
-# 参考部署：cloud + relay + PostgreSQL + Redis（平台设计 §16.4）。
+# 个人中转的多节点参考（profile personal-cluster）。SaaS 的控制面与中继节点在 saas/compose.yml。
 #
-# 生产环境应把 postgres / redis 换成托管服务；证书与签名密钥由运维提供并挂载；
-# 滚动升级先升 relay、后升 cloud。配置写在同目录 .env（见 README.md 的变量表）。
-#
-# profile personal-cluster：两节点的个人中转（--store postgres --control postgres，schema relay_personal），
+# 两节点的个人中转（--store postgres --control postgres，schema relay_personal），
 # 前面要自己放负载均衡（同一个源的隧道与客户端要落在同一个节点，按 /s/<sourceId>/ 粘住）：
 #   printf '%s' '<口令>' > relay_password.txt && chmod 600 relay_password.txt
-#   PERSONAL_RELAY_HOST=relay.example.com docker compose --profile personal-cluster up -d
+#   PERSONAL_RELAY_HOST=relay.example.com POSTGRES_PASSWORD=… docker compose --profile personal-cluster up -d
 # 单节点的个人中转不需要这些，用 personal/compose.yml。
+# 生产环境应把 postgres 换成托管服务。
 name: armadra-cloud
 
 services:
-  cloud:
-    image: ghcr.io/ama-link/armadra-cloud:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
-    env_file: .env
-    environment:
-      ARMADRA_CLOUD_LISTEN: 0.0.0.0:8100
-      ARMADRA_CLOUD_DATABASE_URL: "postgres://armadra:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/armadra_cloud"
-      ARMADRA_CLOUD_REDIS_URL: redis://redis:6379
-      ARMADRA_CLOUD_SIGNING_KEY_FILE: /run/secrets/signing_keys
-      ARMADRA_CLOUD_REQUIRE_EMAIL_VERIFIED: "1"
-    secrets:
-      - signing_keys
-    ports:
-      - "8100:8100"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # SaaS 中继节点（Go 设计 §3.6）：RELAY_DOMAIN、RELAY_TUNNEL_URL（本节点自己的 wss://<node>.edge.<域>/t/v1）
-  # 与可选的 RELAY_NODE_TOKEN_FILE 在 .env 里。下线时先排空（GOAWAY rebalance，30 秒宽限），停止宽限要更长。
-  relay:
-    image: ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
-    command: ["saas", "serve"]
-    env_file: .env
-    stop_grace_period: 40s
-    environment:
-      RELAY_CLOUD_ISSUER: http://cloud:8100
-      RELAY_REDIS_URL: redis://redis:6379
-      RELAY_TLS_CERT: /run/secrets/relay_cert
-      RELAY_TLS_KEY: /run/secrets/relay_key
-    secrets:
-      - relay_cert
-      - relay_key
-    ports:
-      - "443:8443"
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-
   relay-personal-a: &relay-personal
     image: ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
     profiles: ["personal-cluster"]
@@ -111,22 +67,7 @@ services:
       retries: 20
     restart: unless-stopped
 
-  redis:
-    image: redis:8.8.3-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    restart: unless-stopped
-
 secrets:
-  signing_keys:
-    file: ./signing-keys.json
-  relay_cert:
-    file: ./tls/relay.crt
-  relay_key:
-    file: ./tls/relay.key
   relay_password:
     file: ./relay_password.txt
 

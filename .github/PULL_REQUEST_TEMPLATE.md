@@ -22,7 +22,7 @@ See .github/CONTRIBUTING.md. Write "无 / None" for sections that do not apply i
 - [ ] 中继 Workers 运行时 / relay Workers runtime（`packages/relay-runtime-workers`、`apps/relay-workers`）
 - [ ] 控制核 / control core（`packages/control-core`）
 - [ ] cloud-shared（`packages/cloud-shared`）
-- [ ] deploy / 镜像 / images（`deploy/`、`apps/cloud/Dockerfile`、`go/Dockerfile`）
+- [ ] deploy / 镜像 / images（`deploy/`、`go/Dockerfile`、`go/Dockerfile.cloud`）
 - [ ] docs
 - [ ] tools / scripts / CI
 
