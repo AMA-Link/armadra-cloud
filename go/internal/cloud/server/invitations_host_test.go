@@ -451,3 +451,53 @@ func TestHostInvitationListAndRateLimit(t *testing.T) {
 	}
 	r.expect(r.inviteHost(admin, personal.id, r.email(), "viewer", nil), 429, "rate_limited")
 }
+
+// 成员被移出团队、授予被撤销或收窄之后，发给他的待处理主机邀请随之作废，不能拿旧邀请接受回来；
+// 授予到期已过的主机邀请不能重发。
+func TestHostInvitationsDieWithAccessChanges(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner, member, guest, friend := r.verified(), r.verified(), r.verified(), r.verified()
+	team := r.seedTeam("hi-d", map[string]string{owner.accountID: "owner", member.accountID: "member", guest.accountID: "guest"})
+	th := r.addHost(owner, teamSpace(team), "0.11.0")
+	ph := r.addHost(owner, nil, "0.11.0")
+	emailOf := func(s session) string {
+		return r.queryString("SELECT email FROM accounts WHERE account_id = $1", s.accountID)
+	}
+
+	// 移出团队：member 的旧邀请作废。
+	idM, tokenM := r.mustInviteHost(owner, th.id, emailOf(member), "editor", nil)
+	r.expect(r.do("DELETE", teamPath(team, "members", member.accountID), nil, owner.bearer()), 200, "")
+	r.expect(r.acceptInvite(member, idM, tokenM), 410, "invitation_revoked")
+	if len(r.grantRows(th.id)) != 0 {
+		t.Fatal("作废的邀请不该建授予")
+	}
+	// 降为 guest：member 角色的邀请同样作废（先重新加回成员再降级）。
+	r.exec("INSERT INTO team_members (tenant_id, team_id, account_id, role, joined_at_ms) VALUES ('cloud', $1, $2, 'member', 50)", team, member.accountID)
+	idM2, tokenM2 := r.mustInviteHost(owner, th.id, emailOf(member), "editor", nil)
+	r.expect(r.do("PATCH", teamPath(team, "members", member.accountID), map[string]any{"role": "guest"}, owner.bearer()), 200, "")
+	r.expect(r.acceptInvite(member, idM2, tokenM2), 410, "invitation_revoked")
+
+	// 撤授予：旧邀请作废。
+	g := r.mustGrant(owner, ph.id, guestOf(friend.accountID), "viewer", nil)
+	idF, tokenF := r.mustInviteHost(owner, ph.id, emailOf(friend), "editor", nil)
+	r.expect(r.do("DELETE", "/v1/grants/"+g, nil, owner.bearer()), 200, "")
+	r.expect(r.acceptInvite(friend, idF, tokenF), 410, "invitation_revoked")
+
+	// 收窄（加到期）：旧邀请作废，到期不会被它清掉。
+	soon := r.clock.Ms() + 3_600_000
+	g2 := r.mustGrant(owner, ph.id, guestOf(friend.accountID), "viewer", nil)
+	idF2, tokenF2 := r.mustInviteHost(owner, ph.id, emailOf(friend), "viewer", nil)
+	r.expect(r.do("PATCH", "/v1/grants/"+g2, map[string]any{"expiresAtMs": soon}, owner.bearer()), 200, "")
+	r.expect(r.acceptInvite(friend, idF2, tokenF2), 410, "invitation_revoked")
+	if rows := r.grantRows(ph.id); len(rows) != 1 || rows[0][5] != strconv.FormatInt(soon, 10) {
+		t.Fatalf("到期应保留：%v", rows)
+	}
+
+	// 授予到期已过的邀请不能重发。
+	stranger := r.verified()
+	idX, _ := r.mustInviteHost(owner, ph.id, emailOf(stranger), "viewer", map[string]any{"expiresAtMs": r.clock.Ms() + 3_600_000})
+	r.clock.Advance(2 * time.Hour)
+	owner = r.relogin(owner, emailOf(owner))
+	r.expect(r.do("POST", invitePath(idX, "resend"), nil, owner.bearer()), 400, "bad_request")
+}

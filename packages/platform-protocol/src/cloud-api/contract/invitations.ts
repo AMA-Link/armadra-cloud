@@ -52,7 +52,13 @@ export const invitations = {
   list: base
     .route({ method: "GET", path: "/v1/invitations" })
     .meta(session)
-    .errors(errors.pick("team_role_insufficient", "source_access_denied"))
+    .errors(
+      errors.pick(
+        "team_role_insufficient",
+        "source_access_denied",
+        "not_found",
+      ),
+    )
     .input(
       z.object({
         box: z.enum(["sent", "received"]).default("sent"),
@@ -64,7 +70,13 @@ export const invitations = {
   revoke: base
     .route({ method: "DELETE", path: "/v1/invitations/{invitationId}" })
     .meta(inviter)
-    .errors(errors.pick("not_found", "team_role_insufficient"))
+    .errors(
+      errors.pick(
+        "not_found",
+        "team_role_insufficient",
+        "source_access_denied",
+      ),
+    )
     .input(z.object({ invitationId: z.string() }))
     .output(empty),
   /** 重发邀请邮件：换新令牌、重新计 7 天，旧链接作废；按邀请限流。 */
@@ -76,6 +88,8 @@ export const invitations = {
         "not_found",
         "team_role_insufficient",
         "invitation_revoked",
+        "source_access_denied",
+        "bad_request",
         "conflict",
         "rate_limited",
       ),
@@ -109,6 +123,7 @@ export const invitations = {
         "limit_reached",
         "team_policy_denied",
         "member_exists",
+        "guests_disabled",
         "team_deleted",
         "conflict",
         "rate_limited",

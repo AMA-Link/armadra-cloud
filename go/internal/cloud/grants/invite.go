@@ -47,6 +47,9 @@ func ApplyInvitation(ctx context.Context, tx saas.Tx, tenantID string, nowMs int
 			continue
 		}
 		if ok, err := tx.Grants().Revoke(ctx, tenantID, g.GrantID, saas.GrantRevokedBySystem, nowMs); err != nil || !ok {
+			if err == nil {
+				err = core.Fail(gen.ErrConflict) // 并发里已被别人撤销：整个接受回滚，让调用方重试
+			}
 			return saas.Grant{}, false, err
 		}
 		if err := tx.Jobs().Cancel(ctx, tenantID, JobExpire, g.GrantID); err != nil {

@@ -512,6 +512,9 @@ func (s *Service) resend(ctx context.Context, call *api.Call) (any, error) {
 		case saas.InvitationAccepted, saas.InvitationDeclined:
 			return core.Fail(gen.ErrConflict)
 		}
+		if inv.Kind == saas.InvitationHost && inv.GrantExpiresAtMs != nil && *inv.GrantExpiresAtMs <= nowMs {
+			return core.Fail(gen.ErrBadRequest) // 授予的到期已过，重发了也得不到访问
+		}
 		expired := state(*inv, nowMs) == saas.InvitationExpired
 		if expired {
 			if err := s.recheckBeforeReissue(ctx, tx, m, account.AccountID, nowMs); err != nil {

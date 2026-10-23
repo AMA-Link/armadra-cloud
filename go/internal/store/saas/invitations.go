@@ -81,6 +81,9 @@ type InvitationRepo interface {
 	Reissue(ctx context.Context, tenantID, invitationID string, expiresAtMs int64) error
 	// SetToken 记发信作业生成的令牌哈希与发出时刻（旧令牌随之作废）。
 	SetToken(ctx context.Context, tenantID, invitationID, tokenHash string, nowMs int64) error
+	// RevokeHostByEmail 把发给某邮箱、在团队 teamID 的主机上（teamID 非空）或在主机 sourceID 上（sourceID 非空）的待处理主机邀请改成
+	// revoked（成员被移除 / 离开 / 降级、授予被撤销或收窄时，否则旧邀请接受后能绕过），答撤销了几条。
+	RevokeHostByEmail(ctx context.Context, tenantID, email, teamID, sourceID, decidedBy string, nowMs int64) (int, error)
 	// InsertHost 插一条主机邀请（teamID 空 = 个人空间主机）；同主机同邮箱已有 pending 答 ErrConflict。
 	InsertHost(ctx context.Context, tenantID string, invitation Invitation) error
 	// ExpireStaleHost 把同一主机同一邮箱下已过期的 pending 改成 expired（插新 pending 前同事务先做）。
