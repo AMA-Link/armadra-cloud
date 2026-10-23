@@ -298,6 +298,18 @@ export async function runSaasE2e({ root, report }) {
         ).json();
         expectEqual(info.mode, "saas", "platform.info.mode");
         expectEqual(info.webApp, base, "platform.info.webApp");
+        // 发现入口：well-known 报的是 platform.info（不是 501），issuer 与签发的令牌一致，JWKS 同样可取。
+        const discovery = await fetch(`${base}/.well-known/armadra-platform`);
+        expectEqual(discovery.status, 200, "well-known 平台信息状态码");
+        expectEqual(info.issuer, base, "platform.info.issuer");
+        expect(
+          Array.isArray(info.capabilities) &&
+            info.capabilities.includes("teams"),
+          "platform.info.capabilities 含 teams",
+        );
+        const jwks = await fetch(`${base}/.well-known/jwks.json`);
+        expectEqual(jwks.status, 200, "well-known JWKS 状态码");
+        expect((await jwks.json()).keys?.length > 0, "JWKS 至少一把公钥");
       },
     );
 

@@ -1,11 +1,12 @@
-// pnpm dev：读 .env.dev，并行起 cloud(8100，`node --watch` 改源码自动重启) 与 relay saas(8101，
-// Go 二进制：ARMADRA_RELAY_BIN 或 go build 到 go/bin/armadra-relay，改 Go 代码要重启 pnpm dev)；
+// pnpm dev：读 .env.dev，并行起 cloud(8100) 与 relay saas(8101)，都是 Go 二进制：
+// ARMADRA_CLOUD_BIN / ARMADRA_RELAY_BIN 或 go build 到 go/bin/，改 Go 代码要重启 pnpm dev；
 // 日志加前缀；任一退出就都退出。先跑 pnpm dev:up。
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { resolveRelayBin } from "./relay-bin.mjs";
+import { cloudEnv, readEnvFile } from "./dev-env.mjs";
+import { resolveCloudBin, resolveRelayBin } from "./relay-bin.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const ENV_FILE = ".env.dev";
@@ -13,16 +14,6 @@ const ENV_FILE = ".env.dev";
 if (!existsSync(new URL(`../${ENV_FILE}`, import.meta.url))) {
   console.error(`缺少 ${ENV_FILE}：先运行 pnpm dev:up`);
   process.exit(1);
-}
-
-/** .env.dev（KEY=VALUE 行，不带引号）→ 对象；Go 中继不认 node 的 --env-file，自己读。 */
-function readEnvFile(file) {
-  const env = {};
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line.trim());
-    if (match) env[match[1]] = match[2];
-  }
-  return env;
 }
 
 /** Go 版 saas serve 必填 RELAY_TUNNEL_URL；早先生成的 .env.dev 没有它，补缺省并提示。 */
@@ -37,15 +28,9 @@ if (!relayEnv.RELAY_TUNNEL_URL) {
 const processes = [
   {
     name: "cloud",
-    command: process.execPath,
-    args: [
-      `--env-file=${ENV_FILE}`,
-      "--watch",
-      "--disable-warning=ExperimentalWarning",
-      "apps/cloud/src/cli.ts",
-      "serve",
-    ],
-    env: process.env,
+    command: resolveCloudBin(root),
+    args: ["serve"],
+    env: { ...process.env, ...cloudEnv(relayEnv) },
   },
   {
     name: "relay",

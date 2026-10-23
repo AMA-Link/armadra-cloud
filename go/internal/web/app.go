@@ -7,10 +7,10 @@ import (
 )
 
 // 控制台页面（armadra-cloud 的 WEB_ROOT，SaaS 实施设计 §5.3）：单页应用，这些路径回落 index.html。
-var appExact = map[string]bool{"/": true, "/login": true, "/verify": true, "/reset": true, "/device": true}
+var appExact = map[string]bool{"/": true, "/login": true, "/register": true, "/verify": true, "/reset": true, "/device": true}
 
 // 带子路径的前缀（含前缀本身）。
-var appPrefixes = []string{"/t/", "/h/", "/j/", "/invite/", "/ops/"}
+var appPrefixes = []string{"/me/", "/t/", "/h/", "/j/", "/invite/", "/ops/"}
 
 // IsAppRoute 判断路径是不是控制台的页面路由（回落 index.html）。
 func IsAppRoute(path string) bool {

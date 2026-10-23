@@ -78,3 +78,37 @@ func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 		t.Fatalf("启用表里有契约里没有的过程：%d / %d", seen, len(enabledThroughS5b))
 	}
 }
+
+// 发现入口 /.well-known/* 是启用的过程，不是预留路由：200、带协议头，且与 platform.info / platform.jwks 一致（#118）。
+func TestWellKnownPathsAreServed(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	for _, path := range []string{gen.PathPlatformWellKnown, gen.PathJwksWellKnown} {
+		res := r.do("GET", path, nil, nil)
+		if res.status == 501 || res.status == 404 {
+			t.Fatalf("%s 不该答 %d：%s", path, res.status, res.body)
+		}
+		r.expect(res, 200, "")
+		if res.header.Get(gen.HeaderProtocol) == "" {
+			t.Fatalf("%s 缺协议头", path)
+		}
+	}
+	if info := r.do("GET", gen.PathPlatformWellKnown, nil, nil); info.json["mode"] != "saas" {
+		t.Fatalf("mode：%s", info.body)
+	}
+	if jwks := r.do("GET", gen.PathJwksWellKnown, nil, nil); len(jwks.json["keys"].([]any)) == 0 {
+		t.Fatalf("JWKS：%s", jwks.body)
+	}
+	// 契约里的路径与过程一一对应。
+	want := map[string]string{"platform.info": gen.PathPlatformWellKnown, "platform.jwks": gen.PathJwksWellKnown}
+	for _, route := range gen.Routes {
+		if path, ok := want[route.Procedure]; ok {
+			if route.Path != path || route.Method != "GET" {
+				t.Fatalf("%s 的路由：%s %s", route.Procedure, route.Method, route.Path)
+			}
+			delete(want, route.Procedure)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("契约里缺：%v", want)
+	}
+}
