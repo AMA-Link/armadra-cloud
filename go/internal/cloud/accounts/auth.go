@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/admin"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
@@ -135,8 +136,8 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 		return nil, core.Fail(gen.ErrAccountDisabled)
 	}
 	if in.Scope == "operator" {
-		// 运营登录不在这里建会话：口令对了答两步验证挑战，auth.mfaVerify 通过才建运营会话（S7）。
-		return nil, s.operatorLogin(ctx, account)
+		// 运营登录不在这里建会话：口令对了答两步验证挑战，auth.mfaVerify 通过才建运营会话（mfa.go）。
+		return s.operatorLogin(ctx, account, in.Device)
 	}
 	nowMs := s.nowMs()
 	device, refresh := core.NewDevice(account.AccountID, in.Device, s.gate.TransportFor(call.Request), core.SessionScopeSession, nowMs, 0)
@@ -205,23 +206,6 @@ func isNewDevice(known []store.DeviceRecord, device store.DeviceRecord, nowMs in
 		}
 	}
 	return true
-}
-
-// operatorLogin 是 scope: "operator" 的登录（设计 §4.9）：非运营账号 403 forbidden；
-// 没有两步验证 403 operator_mfa_required；已登记两步验证的运营账号要走挑战（auth.mfaVerify），
-// 那一步随 S7 加入，本批答 501。总是返回错误。
-func (s *Service) operatorLogin(ctx context.Context, account *saas.Account) error {
-	if !account.HasScope(saas.ScopeOperator) {
-		return core.Fail(gen.ErrForbidden)
-	}
-	has, err := s.store.Read().HasCredential(ctx, s.tenant(), account.AccountID, "totp")
-	if err != nil {
-		return err
-	}
-	if !has {
-		return core.Fail(gen.ErrOperatorMfaRequired)
-	}
-	return core.Fail(gen.ErrNotImplemented)
 }
 
 // refresh 是 auth.refresh：刷新凭据来自请求体（Bearer）或刷新 Cookie（Cookie，要 Origin，免 CSRF）；
@@ -433,8 +417,17 @@ func (s *Service) stepUp(ctx context.Context, call *api.Call) (any, error) {
 			return nil, err
 		}
 	case in.TOTPCode != nil:
-		// 用户侧两步验证是 M2；运营账号的验证码在 S7。这里没有可验的凭据。
-		return nil, core.Fail(gen.ErrMfaInvalid)
+		// 用户侧两步验证是 M2；M1 只有运营账号登记了 TOTP，其余账号没有可验的凭据。同一个码不能第二次用。
+		ok, err := false, error(nil)
+		if account.HasScope(saas.ScopeOperator) && s.wrapper != nil {
+			ok, err = admin.VerifyAccountTOTP(ctx, s.store, s.wrapper, s.tenant(), account.AccountID, *in.TOTPCode, s.nowMs())
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, core.Fail(gen.ErrMfaInvalid)
+		}
 	default:
 		// 通行密钥是 M2。
 		return nil, core.Fail(gen.ErrNotImplemented)
