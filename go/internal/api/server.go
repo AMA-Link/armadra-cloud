@@ -46,6 +46,12 @@ type Call struct {
 	IP string
 	// Authorization 是 Authorization 头原文（sources.heartbeatHint 用 Source <jws>）。
 	Authorization string
+	// Procedure 是命中的过程名（"auth.login"）。
+	Procedure string
+	// Request 是原始请求：SaaS 装配方从中取 Cookie 与 Origin；处理器不读它的 body。
+	Request *http.Request
+	// Header 是答复要追加的头（成功与失败的答复都带）：SaaS 的 Set-Cookie 写在这里。
+	Header http.Header
 
 	authenticate  func(ctx context.Context) (core.Caller, error)
 	caller        *core.Caller
@@ -89,6 +95,12 @@ type Options struct {
 	Exclude []string
 	// Authenticator 认证 Bearer 访问令牌；nil 时需要认证的过程答 unauthenticated。
 	Authenticator *core.Authenticator
+	// Before 在入参校验之后、处理器之前对每个命中处理器的请求调用一次（SaaS：重复 Cookie、
+	// 凭据混用）。返回的错误按普通错误答复；call.Header 里已写的头照样带出。
+	Before func(call *Call) error
+	// Authenticate 取代缺省的 Bearer 认证（SaaS：按过程与传输选凭据、查 CSRF 与来源）。
+	// 它在处理器第一次调用 call.Caller 时才执行，同一次调用只执行一次。
+	Authenticate func(ctx context.Context, call *Call) (core.Caller, error)
 	// ClientIP 取客户端 IP；缺省直连对端地址。
 	ClientIP func(*http.Request) string
 	// OnError 在处理器意外出错时记一笔（只给错误，不含请求内容）。
@@ -183,6 +195,16 @@ type errorBody struct {
 // WriteError 按错误码写错误答复；details 非空时原样带出，retryAfter 非零时再加
 // details.retryAfterMs（覆盖同名键）与 Retry-After 头。
 func WriteError(w http.ResponseWriter, code gen.ErrorCode, requestID string, retryAfter time.Duration, details map[string]any) {
+	writeError(w, code, requestID, retryAfter, details, nil)
+}
+
+// writeError 同 WriteError，另把 headers 里的头（可有多个同名，例如 Set-Cookie）加进答复。
+func writeError(w http.ResponseWriter, code gen.ErrorCode, requestID string, retryAfter time.Duration, details map[string]any, headers http.Header) {
+	for name, values := range headers {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
 	status, ok := code.HTTPStatus()
 	if !ok {
 		status = http.StatusInternalServerError
@@ -205,16 +227,16 @@ func WriteError(w http.ResponseWriter, code gen.ErrorCode, requestID string, ret
 	writeJSON(w, status, body, extra, requestID)
 }
 
-func (a *API) fail(w http.ResponseWriter, err error, requestID string) {
+func (a *API) fail(w http.ResponseWriter, err error, requestID string, extra http.Header) {
 	var failure *core.Error
 	if errors.As(err, &failure) {
-		WriteError(w, failure.Code, requestID, failure.RetryAfter, failure.Details)
+		writeError(w, failure.Code, requestID, failure.RetryAfter, failure.Details, extra)
 		return
 	}
 	if a.opts.OnError != nil {
 		a.opts.OnError(err)
 	}
-	WriteError(w, gen.ErrInternal, requestID, 0, nil)
+	writeError(w, gen.ErrInternal, requestID, 0, nil, extra)
 }
 
 func readBody(r *http.Request) (map[string]any, error) {
@@ -269,13 +291,13 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if method == http.MethodGet || method == http.MethodDelete {
 		var err error
 		if raw, err = queryObject(r.URL.Query(), match.Route.Input); err != nil {
-			a.fail(w, err, requestID)
+			a.fail(w, err, requestID, nil)
 			return
 		}
 	} else {
 		var err error
 		if raw, err = readBody(r); err != nil {
-			a.fail(w, err, requestID)
+			a.fail(w, err, requestID, nil)
 			return
 		}
 	}
@@ -284,21 +306,38 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	input, err := decodeInput(match.Route.Input, raw)
 	if err != nil {
-		a.fail(w, core.Fail(gen.ErrBadRequest), requestID)
+		a.fail(w, core.Fail(gen.ErrBadRequest), requestID, nil)
 		return
 	}
 	authorization := r.Header.Get("Authorization")
-	call := &Call{Input: input, IP: a.opts.ClientIP(r), Authorization: authorization}
+	call := &Call{
+		Input: input, IP: a.opts.ClientIP(r), Authorization: authorization,
+		Procedure: match.Route.Procedure, Request: r, Header: http.Header{},
+	}
 	call.authenticate = func(ctx context.Context) (core.Caller, error) {
+		if a.opts.Authenticate != nil {
+			return a.opts.Authenticate(ctx, call)
+		}
 		if a.opts.Authenticator == nil {
 			return core.Caller{}, core.Fail(gen.ErrUnauthenticated)
 		}
 		return a.opts.Authenticator.Authenticate(ctx, authorization)
 	}
+	if a.opts.Before != nil {
+		if err := a.opts.Before(call); err != nil {
+			a.fail(w, err, requestID, call.Header)
+			return
+		}
+	}
 	output, err := match.Handler(r.Context(), call)
 	if err != nil {
-		a.fail(w, err, requestID)
+		a.fail(w, err, requestID, call.Header)
 		return
+	}
+	for name, values := range call.Header {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
 	}
 	writeJSON(w, http.StatusOK, output, nil, requestID)
 }

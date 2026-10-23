@@ -62,6 +62,14 @@ func (r reader) Memberships(ctx context.Context, tenantID, accountID string) ([]
 	    ORDER BY m.joined_at_ms, t.team_id`, tenantID, accountID)
 }
 
+func (r reader) HasCredential(ctx context.Context, tenantID, accountID, kind string) (bool, error) {
+	var exists bool
+	err := r.q.QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM account_credentials WHERE tenant_id = $1 AND account_id = $2 AND kind = $3)",
+		tenantID, accountID, kind).Scan(&exists)
+	return exists, err
+}
+
 func (r reader) Incident(ctx context.Context, tenantID string) (saas.Incident, error) {
 	var raw []byte
 	err := r.q.QueryRow(ctx, "SELECT value FROM platform_settings WHERE tenant_id = $1 AND key = 'incident'", tenantID).Scan(&raw)
