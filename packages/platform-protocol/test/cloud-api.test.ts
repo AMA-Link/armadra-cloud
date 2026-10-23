@@ -200,7 +200,8 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
           entry.key,
         )
       )
-        expect(entry.meta.since, entry.key).toBe("0.10.0");
+        // 1.4 随 0.10.0 发布；之后只加不改的补充（如 invitations.preview）从 0.11.0 起。
+        expect(["0.10.0", "0.11.0"], entry.key).toContain(entry.meta.since);
   });
 
   it("注册令牌带空间，缺省个人空间", () => {
