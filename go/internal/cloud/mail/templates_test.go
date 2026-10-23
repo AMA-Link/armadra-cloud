@@ -200,6 +200,11 @@ func TestSanitizeLabel(t *testing.T) {
 		"www.evil.test 办公室":                "办公室",
 		"bob@evil.test 的电脑":                "的电脑",
 		"login-now.evil.com/x":             "",
+		"evil . com 抽奖":                    "抽奖",
+		"evil。com 抽奖":                      "抽奖",
+		"evil．io":                          "",
+		"团队 a-b.net/x?y=1":                 "团队",
+		"v1.2 版":                           "v1.2 版",
 		"a<b>c\r\nd":                       "a b c d",
 		strings.Repeat("机", 100):           strings.Repeat("机", 64),
 	} {

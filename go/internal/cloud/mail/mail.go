@@ -403,11 +403,23 @@ func (s *Service) deferUnconfigured(ctx context.Context) error {
 
 const labelMax = 64
 
-var urlLike = regexp.MustCompile(`(?i)\S*://\S*|\bwww\.\S*|\S+@\S+|\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|net|org|io|cn|co|app|dev|xyz|top|info|me|ly|link|click|ru|tk)\b\S*`)
+// urlLike 抓网址、邮箱和任何「域名形态」（一串字母数字，点，再两个以上字母），点两侧允许空白——
+// 「evil . com」「evil。com」（全角点）这类混淆在 SanitizeLabel 里先归一再匹配。代价是「J. Smith」这类
+// 带句点的名字也会被去掉，但这些标签只是展示用的，宁可多删。
+var urlLike = regexp.MustCompile(`(?i)\S*://\S*|\bwww\.\S*|\S+@\S+|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.[a-z]{2,}\S*`)
 
-// SanitizeLabel 清理客户端报的设备名一类字符串：去网址、邮箱地址和控制字符，折叠空白，按码点截到 max。
+// dotLike 是常见的「点」的变体（全角句号、全角点、半角日文句号、中点、小圆点），归一成 ASCII 点。
+var dotLike = strings.NewReplacer("。", ".", "．", ".", "｡", ".", "․", ".", "·", ".", "﹒", ".")
+
+// spacedDot 是点两侧的空白（evil . com）。
+var spacedDot = regexp.MustCompile(`\s*\.\s*`)
+
+// SanitizeLabel 清理客户端或用户填的展示字符串（设备名、团队名、显示名）：去网址、邮箱、域名形态和控制字符，折叠空白，按码点截到 max。
 func SanitizeLabel(s string, max int) string {
-	s = urlLike.ReplaceAllString(s, "")
+	// 归一后的字符串只用来判断；没有命中就保留原文（别把名字里的间隔号改成点）。
+	if normalized := spacedDot.ReplaceAllString(dotLike.Replace(s), "."); urlLike.MatchString(normalized) {
+		s = urlLike.ReplaceAllString(normalized, "")
+	}
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || r == '<' || r == '>' {
 			return ' '
