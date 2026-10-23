@@ -261,7 +261,12 @@ func (s *Service) incidentSet(ctx context.Context, call *api.Call) (any, error) 
 		if err != nil {
 			return err
 		}
-		tx.AfterCommit(func(ctx context.Context) { s.pushIncident(ctx, incident, nowMs) })
+		// 写节点失败只记日志：各实例每 5 秒按库重试（syncIncident 不更新「已写」的记录）。
+		tx.AfterCommit(func(ctx context.Context) {
+			if err := s.pushIncident(ctx, incident, nowMs); err != nil {
+				s.log.Warn("写中继事故开关失败，下一轮同步再写", obs.Operation("admin.incident"), obs.Error(err))
+			}
+		})
 		return s.record(ctx, tx, call, operator.AccountID, "", ActionIncidentSet, "incident", "incident", in.Reason)
 	})
 	if err != nil {
@@ -270,11 +275,9 @@ func (s *Service) incidentSet(ctx context.Context, call *api.Call) (any, error) 
 	return incidentView(incident, &nowMs), nil
 }
 
-// pushIncident 把库里的事故开关写给节点（relay:incident 与广播）。
-func (s *Service) pushIncident(ctx context.Context, incident saas.Incident, atMs int64) {
-	if err := s.relay.SetIncident(ctx, relayctl.Incident{RejectNewConnections: incident.RejectNewConnections, AtMs: atMs}); err != nil {
-		s.log.Warn("写中继事故开关失败，下一轮同步再写", obs.Operation("admin.incident"), obs.Error(err))
-	}
+// pushIncident 把库里的事故开关写给节点（relay:incident 与广播）；失败答错误，由调用方决定怎么重试。
+func (s *Service) pushIncident(ctx context.Context, incident saas.Incident, atMs int64) error {
+	return s.relay.SetIncident(ctx, relayctl.Incident{RejectNewConnections: incident.RejectNewConnections, AtMs: atMs})
 }
 
 // Start 开始每 5 秒按库同步事故开关（控制面各实例各一个，不依赖 Redis 保活）：启动时先写一遍（清掉过期的键），
@@ -316,7 +319,13 @@ func (s *Service) syncIncident(ctx context.Context) {
 		if applied && incident == last && atMs == lastAt && sinceAck < incidentRepushTicks {
 			return
 		}
-		s.pushIncident(ctx, incident, atMs)
+		if err := s.pushIncident(ctx, incident, atMs); err != nil {
+			// 没写成：不记「已写」，下一轮（5 秒后）照库再写。
+			if ctx.Err() == nil {
+				s.log.Warn("写中继事故开关失败，下一轮同步再写", obs.Operation("admin.incident"), obs.Error(err))
+			}
+			return
+		}
 		last, lastAt, applied, sinceAck = incident, atMs, true, 0
 	}
 	tick()
