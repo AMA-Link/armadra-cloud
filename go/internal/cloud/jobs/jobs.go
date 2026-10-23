@@ -77,6 +77,14 @@ type NamedError string
 
 func (e NamedError) Error() string { return string(e) }
 
+// DeferError 让运行器把作业放回队列、过 After 之后再跑，不计尝试、不退避（例如发信方还没配置）。
+type DeferError struct{ After time.Duration }
+
+func (e DeferError) Error() string { return "deferred" }
+
+// Defer 造一个延后错误。
+func Defer(after time.Duration) error { return DeferError{After: after} }
+
 // HandleOption 调整一种作业的处理方式。
 type HandleOption func(*handlerSpec)
 
@@ -283,9 +291,16 @@ func (r *Runner) execute(parent context.Context, job saas.Job, claimedAt int64) 
 		}
 		return
 	}
+	var deferred DeferError
+	if errors.As(err, &deferred) {
+		if rerr := r.o.Store.Queue().Release(final, r.o.TenantID, job.ID, r.o.WorkerID, r.nowMs()+deferred.After.Milliseconds()); rerr != nil {
+			r.o.Log.Warn("作业延后没有记上", obs.JobID(job.ID), obs.Kind(job.Kind), obs.Error(rerr))
+		}
+		return
+	}
 	if parent.Err() != nil && errors.Is(err, context.Canceled) {
 		// 关闭时被打断：只释放租约，不计这次尝试、不退避，别的实例马上可以接手。
-		if rerr := r.o.Store.Queue().Release(final, r.o.TenantID, job.ID, r.o.WorkerID); rerr != nil {
+		if rerr := r.o.Store.Queue().Release(final, r.o.TenantID, job.ID, r.o.WorkerID, 0); rerr != nil {
 			r.o.Log.Warn("作业释放租约失败", obs.JobID(job.ID), obs.Kind(job.Kind), obs.Error(rerr))
 		}
 		return

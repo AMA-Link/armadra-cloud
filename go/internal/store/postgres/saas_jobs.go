@@ -81,6 +81,40 @@ func (r jobRepo) DeleteOutbox(ctx context.Context, tenantID, emailID string) err
 	return err
 }
 
+func (r jobRepo) TrimOutbox(ctx context.Context, tenantID string, keep int) (int, error) {
+	rows, err := r.q.Query(ctx,
+		`DELETE FROM outbox_emails WHERE tenant_id = $1 AND email_id IN (
+		   SELECT email_id FROM outbox_emails WHERE tenant_id = $1 AND sent_at_ms IS NULL AND failed_at_ms IS NULL
+		   ORDER BY created_at_ms DESC, email_id DESC OFFSET $2)
+		 RETURNING job_id`, tenantID, keep)
+	if err != nil {
+		return 0, err
+	}
+	var jobIDs []int64
+	for rows.Next() {
+		var id *int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if id != nil {
+			jobIDs = append(jobIDs, *id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	dropped := len(jobIDs)
+	if dropped > 0 {
+		if _, err := r.q.Exec(ctx,
+			"DELETE FROM jobs WHERE tenant_id = $1 AND job_id = ANY($2) AND done_at_ms IS NULL AND locked_by IS NULL", tenantID, jobIDs); err != nil {
+			return 0, err
+		}
+	}
+	return dropped, nil
+}
+
 func (r jobRepo) GCOutbox(ctx context.Context, tenantID string, beforeMs int64) (int, error) {
 	tag, err := r.q.Exec(ctx,
 		`DELETE FROM outbox_emails WHERE tenant_id = $1
@@ -127,11 +161,12 @@ func (q queue) Claim(ctx context.Context, tenantID, worker string, kinds []strin
 		worker, nowMs, leaseMs, tenantID, limit, kinds)
 }
 
-func (q queue) Release(ctx context.Context, tenantID string, jobID int64, worker string) error {
+func (q queue) Release(ctx context.Context, tenantID string, jobID int64, worker string, retryAtMs int64) error {
 	_, err := q.d.pool.Exec(ctx,
-		`UPDATE jobs SET locked_by = NULL, locked_until_ms = NULL, attempts = GREATEST(attempts - 1, 0)
+		`UPDATE jobs SET locked_by = NULL, locked_until_ms = NULL, attempts = GREATEST(attempts - 1, 0),
+		   run_at_ms = GREATEST(run_at_ms, $4::bigint)
 		 WHERE tenant_id = $1 AND job_id = $2 AND locked_by = $3 AND done_at_ms IS NULL AND failed_at_ms IS NULL`,
-		tenantID, jobID, worker)
+		tenantID, jobID, worker, retryAtMs)
 	return err
 }
 
