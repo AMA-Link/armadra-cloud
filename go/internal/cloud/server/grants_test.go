@@ -544,6 +544,42 @@ func TestGrantNarrowingRevokesIssuedTokens(t *testing.T) {
 	r.expect(r.assertion(bystander, h.id), 403, "source_access_denied")
 }
 
+// 合成不放大（#111）：driver@w1（member 授予）+ 团队 viewer 整台 → viewer 整台，断言不带 scp；撤团队授予后回到 driver {w1}；
+// 再加 viewer@w2 → viewer {w1,w2}。
+func TestAssertionComposeDoesNotEscalate(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner, m := r.verified(), r.verified()
+	team := r.seedTeam("esc", map[string]string{owner.accountID: "owner", m.accountID: "member"})
+	h := r.addHost(owner, teamSpace(team), "0.10.0")
+	r.mustGrant(owner, h.id, memberOf(m.accountID), "driver", map[string]any{"workspaceIds": []string{"w1"}})
+	gTeam := r.mustGrant(owner, h.id, teamOf(team), "viewer", nil)
+	res := r.assertion(m, h.id)
+	r.expect(res, 200, "")
+	a, _ := claimsOf(t, res)
+	if _, has := a["scp"]; a["role"] != "viewer" || has {
+		t.Fatalf("driver@w1 + viewer 整台应为 viewer 整台：%v", a)
+	}
+	r.expect(r.do("DELETE", "/v1/grants/"+gTeam, nil, owner.bearer()), 200, "")
+	if !r.bothRevoked(res) {
+		t.Fatal("viewer 整台 → driver {w1} 的令牌应撤")
+	}
+	res = r.assertion(m, h.id)
+	r.expect(res, 200, "")
+	if a, _ = claimsOf(t, res); a["role"] != "driver" || fmt.Sprint(a["scp"]) != "[ws:w1]" {
+		t.Fatalf("剩 driver@w1：%v", a)
+	}
+	r.mustGrant(owner, h.id, teamOf(team), "viewer", map[string]any{"workspaceIds": []string{"w2"}})
+	if !r.bothRevoked(res) {
+		t.Fatal("角色降为 viewer 的令牌应撤")
+	}
+	res = r.assertion(m, h.id)
+	r.expect(res, 200, "")
+	if a, _ = claimsOf(t, res); a["role"] != "viewer" || fmt.Sprint(a["scp"]) != "[ws:w1 ws:w2]" {
+		t.Fatalf("driver@w1 + viewer@w2：%v", a)
+	}
+}
+
 // 团队授予收窄：撤销团队授予撤掉每个成员的令牌；成员被降为 guest 的令牌撤销走 S4 的流程，这里确认索引也在。
 func TestTeamGrantRevokeRevokesEveryMembersTokens(t *testing.T) {
 	t.Parallel()
@@ -968,7 +1004,7 @@ func TestAccessListAndRevokeByAccount(t *testing.T) {
 	team := r.seedTeam("al", map[string]string{owner.accountID: "owner", admin.accountID: "admin", member.accountID: "member", guest.accountID: "guest"})
 	h := r.addHost(owner, teamSpace(team), "0.10.0")
 	gTeam := r.mustGrant(owner, h.id, teamOf(team), "viewer", nil)
-	gMember := r.mustGrant(owner, h.id, memberOf(member.accountID), "operator", map[string]any{"workspaceIds": []string{"w1"}})
+	r.mustGrant(owner, h.id, memberOf(member.accountID), "operator", map[string]any{"workspaceIds": []string{"w1"}})
 	r.mustGrant(owner, h.id, guestOf(guest.accountID), "editor", map[string]any{"workspaceIds": []string{"w1"}})
 
 	res := r.do("GET", "/v1/sources/"+h.id+"/access", nil, owner.bearer())
@@ -984,11 +1020,11 @@ func TestAccessListAndRevokeByAccount(t *testing.T) {
 	if rows[owner.accountID]["via"] != "owner" || rows[owner.accountID]["role"] != "driver" || rows[owner.accountID]["grantId"] != nil {
 		t.Fatalf("所有者：%v", rows[owner.accountID])
 	}
-	// 团队授予展开到 owner / admin / member；member 另有更高的 member 授予（operator，限 w1）——角色取最高、范围并集 = 整台。
+	// 团队授予展开到 owner / admin / member；member 另有更高的 member 授予（operator，限 w1）——不放大：团队 viewer 整台 = viewer 整台。
 	if rows[admin.accountID]["role"] != "viewer" || rows[admin.accountID]["grantId"] != gTeam || rows[admin.accountID]["via"] != "team" {
 		t.Fatalf("admin：%v", rows[admin.accountID])
 	}
-	if rows[member.accountID]["role"] != "operator" || rows[member.accountID]["grantId"] != gMember || len(rows[member.accountID]["workspaceIds"].([]any)) != 0 {
+	if rows[member.accountID]["role"] != "viewer" || rows[member.accountID]["grantId"] != gTeam || len(rows[member.accountID]["workspaceIds"].([]any)) != 0 {
 		t.Fatalf("member：%v", rows[member.accountID])
 	}
 	if rows[guest.accountID]["role"] != "editor" || rows[guest.accountID]["email"] == nil {
@@ -999,12 +1035,13 @@ func TestAccessListAndRevokeByAccount(t *testing.T) {
 	r.expect(r.do("GET", "/v1/sources/"+h.id+"/access", nil, member.bearer()), 403, "team_role_insufficient")
 	r.expect(r.do("GET", "/v1/sources/"+h.id+"/access", nil, r.verified().bearer()), 404, "not_found")
 
-	// accessRevoke 只撤本人的授予，团队授予撤不掉单个人：member 撤后还有团队授予的 viewer，令牌因降级被撤。
+	// accessRevoke 只撤本人的授予，团队授予撤不掉单个人：member 撤后还有团队授予的 viewer；合成结果本来就是 viewer 整台
+	//（operator@w1 被舍弃），所以没有收窄，令牌不撤。
 	tok := r.assertion(member, h.id)
 	r.expect(tok, 200, "")
 	r.expect(r.do("DELETE", "/v1/sources/"+h.id+"/access/"+member.accountID, nil, admin.bearer()), 200, "")
-	if !r.bothRevoked(tok) {
-		t.Fatal("降级应撤令牌")
+	if !r.neitherRevoked(tok) {
+		t.Fatal("合成结果没变，不该撤令牌")
 	}
 	res = r.assertion(member, h.id)
 	r.expect(res, 200, "")

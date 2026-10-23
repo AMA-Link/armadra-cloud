@@ -67,16 +67,15 @@ func (s *Service) accessList(ctx context.Context, call *api.Call) (any, error) {
 		if eff.Owner() {
 			row.Via = ViaOwner
 		}
-		best := -1
+		// grantId 取贡献合成角色的那条授予（整台时要是整台来路）；所有者的行不挂授予（他本来就是 driver 整台）。
 		for _, source := range eff.From {
-			if source.GrantID == "" || eff.Owner() { // 所有者的行不挂授予（他本来就是 driver 整台）
+			if source.GrantID == "" || eff.Owner() || source.Role != eff.Role || (eff.Whole && len(source.WorkspaceIDs) != 0) {
 				continue
 			}
-			if roleRank[source.Role] > best {
-				best, row.GrantedAtMs = roleRank[source.Role], source.CreatedAtMs
-				grantID := source.GrantID
-				row.GrantID = &grantID
-			}
+			row.GrantedAtMs = source.CreatedAtMs
+			grantID := source.GrantID
+			row.GrantID = &grantID
+			break
 		}
 		rows = append(rows, row)
 	}
