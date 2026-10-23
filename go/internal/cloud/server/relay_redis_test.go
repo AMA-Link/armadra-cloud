@@ -7,7 +7,6 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/server"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
@@ -17,7 +16,6 @@ import (
 // fakeNode 是一个假的中继节点：用同一份 Redis 前缀建一个 Plane，订阅命令与撤销。
 type fakeNode struct {
 	plane *controlredis.Plane
-	mu    chan struct{}
 	cmds  chan control.NodeCommand
 }
 
@@ -232,5 +230,3 @@ func TestRedisRelayPresenceRecordsLastSeen(t *testing.T) {
 		t.Fatal("最近在线只往后推")
 	}
 }
-
-var _ = relayctl.NoAccount
