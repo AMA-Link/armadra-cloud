@@ -31,6 +31,8 @@ type assembly struct {
 	core    *core.Context
 	auth    *core.Authenticator
 	relay   *relayctl.Memory
+	// lockouts 是未注册邮箱的 Redis 失败计数（回落次数进指标）。
+	lockouts *httpx.UnknownLockouts
 }
 
 // assemble 把存储、Redis、控制核服务、闸与各批的过程接成一个 http.Handler：/health、/ready，
@@ -66,12 +68,13 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	}
 	saasStore := db.SaaS()
 
+	lockouts := httpx.NewUnknownLockouts(redisClient, func(err error) {
+		logger.Warn("登录失败计数回落到进程内计数，已注册与未注册邮箱的锁定可能不一致", obs.Operation("lockout"), obs.Error(err))
+	})
 	handlers := map[string]api.Handler{}
 	for name, handler := range accounts.New(accounts.Options{
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits,
-		Unknown: httpx.NewUnknownLockouts(redisClient, func(err error) {
-			logger.Warn("登录失败计数后台操作失败", obs.Operation("lockout"), obs.Error(err))
-		}),
+		Unknown: lockouts,
 	}).Handlers() {
 		handlers[name] = handler
 	}
@@ -114,7 +117,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		}
 		api.WriteError(w, gen.ErrNotFound, "", 0, nil)
 	})
-	return &assembly{handler: mux, core: coreCtx, auth: auth, relay: relay}, nil
+	return &assembly{handler: mux, core: coreCtx, auth: auth, relay: relay, lockouts: lockouts}, nil
 }
 
 // challengeGate 按配置建人机挑战（Turnstile）；校验的主机名只认控制台自己的。

@@ -2,6 +2,8 @@ package server_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"reflect"
 	"strings"
@@ -565,9 +567,10 @@ func TestLogoutWithExpiredAccessCookieUsesRefreshCookie(t *testing.T) {
 		}
 		return len(names) == 2 && names["__Host-armadra-cloud"] && names["__Host-armadra-cloud-refresh"]
 	}
-	// 缺 Origin、缺 / 错 CSRF：拒绝，设备不撤销，Cookie 照清。
+	// 缺 Origin：拒绝，不清 Cookie（见 TestLogoutWithWrongOriginDoesNotClearCookies）。
+	r.expect(r.do("POST", "/v1/auth/logout", map[string]any{}, hdr("Cookie", cookies, "X-Armadra-CSRF", c.csrf)), 403, "forbidden")
+	// Origin 对了之后，缺 / 错 CSRF：拒绝，设备不撤销，Cookie 照清。
 	for name, h := range map[string]headers{
-		"缺 Origin": hdr("Cookie", cookies, "X-Armadra-CSRF", c.csrf),
 		"缺 CSRF":   hdr("Cookie", cookies, "Origin", appOrigin),
 		"错 CSRF":   hdr("Cookie", cookies, "Origin", appOrigin, "X-Armadra-CSRF", "wrong"),
 	} {
@@ -589,4 +592,39 @@ func TestLogoutWithExpiredAccessCookieUsesRefreshCookie(t *testing.T) {
 	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{}, hdr("Origin", appOrigin, "Cookie", cookies)), 401, "session_revoked")
 	// 什么凭据都没有的登出：401，同样不留 Cookie。
 	r.expect(r.do("POST", "/v1/auth/logout", map[string]any{}, hdr("Origin", appOrigin)), 401, "unauthenticated")
+}
+
+// 登出先过 Origin 再清 Cookie：错的 Origin（兄弟子域、缺失、重复）只答 403，不清 Cookie，不撤设备。
+func TestLogoutWithWrongOriginDoesNotClearCookies(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	c := r.registerCookie(r.email())
+	for name, h := range map[string]headers{
+		"兄弟子域": hdr("Origin", "https://abc.src.localhost", "X-Armadra-CSRF", c.csrf, "Cookie", c.cookieHeader("__Host-armadra-cloud", "__Host-armadra-cloud-refresh")),
+		"缺失":   hdr("X-Armadra-CSRF", c.csrf, "Cookie", c.cookieHeader("__Host-armadra-cloud", "__Host-armadra-cloud-refresh")),
+		"重复":   hdr("Origin", appOrigin, "X-Armadra-CSRF", c.csrf, "Cookie", c.cookieHeader("__Host-armadra-cloud", "__Host-armadra-cloud-refresh")).add("Origin", appOrigin),
+	} {
+		res := r.do("POST", "/v1/auth/logout", map[string]any{}, h)
+		r.expect(res, 403, "forbidden")
+		if len(res.header.Values("Set-Cookie")) != 0 {
+			t.Fatalf("%s：错 Origin 不该清 Cookie：%v", name, res.header.Values("Set-Cookie"))
+		}
+	}
+	r.expect(r.do("GET", "/v1/me", nil, hdr("Cookie", c.cookieHeader("__Host-armadra-cloud"))), 200, "")
+}
+
+// SaaS 装配用 Redis 版未知邮箱计数（不是进程内存缺省）：失败的计数落在 cloud:lockout: 键下，邮箱不以明文出现。
+func TestUnregisteredFailuresAreCountedInRedis(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	ghost := "ghost-" + r.email()
+	r.expect(r.login(ghost, "wrong-password-123", nil), 401, "credentials_invalid")
+	sum := sha256.Sum256([]byte(ghost))
+	key := "cloud:lockout:" + hex.EncodeToString(sum[:])
+	got, err := r.run.Redis.HGet(context.Background(), key, "failures").Int()
+	if err != nil || got != 1 {
+		t.Fatalf("Redis 里应有 1 次失败：%d %v", got, err)
+	}
+	t.Cleanup(func() { r.run.Redis.Del(context.Background(), key) })
+	if strings.Contains(key, ghost) {
+		t.Fatal("键里不该有明文邮箱")
+	}
 }

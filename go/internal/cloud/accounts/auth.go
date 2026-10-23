@@ -194,7 +194,7 @@ func (s *Service) refresh(ctx context.Context, call *api.Call) (any, error) {
 	return s.respond(ctx, call, *refreshed, session.RefreshToken, account)
 }
 
-// logout 是 auth.logout：撤销本设备（经撤销钩子撤已签令牌、踢人）。Cookie 会话无论成败都清掉该范围的
+// logout 是 auth.logout：撤销本设备（经撤销钩子撤已签令牌、踢人）。Cookie 会话在 Origin 通过之后无论成败都清掉该范围的
 // 两枚 Cookie；访问 Cookie 缺失或过期时，改用同范围的刷新 Cookie 找到设备再撤销（仍要求 Origin 等于控制台
 // 来源、CSRF 用这台设备的值），这样令牌过期的浏览器也能登出。
 func (s *Service) logout(ctx context.Context, call *api.Call) (any, error) {
@@ -206,6 +206,11 @@ func (s *Service) logout(ctx context.Context, call *api.Call) (any, error) {
 	cookies := httpx.ParseCookies(call.Request)
 	viaCookie := call.Request.Header.Get("Authorization") == "" && (cookies.Has(access) || cookies.Has(refresh))
 	if viaCookie {
+		// 先过 Origin 再清 Cookie：兄弟子域（*.src.<域>）的页面没法借一个 POST 强制登出受害者。
+		// 过了 Origin 之后无论认证、CSRF 成败都清（CSRF 失败时清是可接受的）。
+		if err := s.gate.CheckOrigin(call.Request); err != nil {
+			return nil, err
+		}
 		s.gate.ClearSession(call.Header, scope)
 	}
 	caller, err := call.Caller(ctx)

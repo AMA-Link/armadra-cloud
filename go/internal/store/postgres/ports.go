@@ -78,15 +78,10 @@ func deref[R any](scan func(scanner) (*R, error)) func(scanner) (R, error) {
 	}
 }
 
-// lockFor 是读行时的锁子句：在事务里读（读-改-写要用的）一律 FOR UPDATE，并发的读-改-写按行排队，
-// 不丢更新（读已提交下不加锁会让两个事务读到同一份旧行、各写各的）。在连接池上读不加。
-// 独立模式的写已经被 tenants 行锁串行化，多这一道行锁无害。
-func lockFor(q querier) string {
-	if _, inTx := q.(pgx.Tx); inTx {
-		return " FOR UPDATE"
-	}
-	return ""
-}
+// forUpdate 是读-改-写路径读行时的锁子句：updateRow 的读、Put、Insert 的失效设备清理加它，并发的读-改-写
+// 按行排队，不丢更新（读已提交下不加锁会让两个事务读到同一份旧行、各写各的）。Get / List 这类普通读不加：
+// 否则读也隐式拿行锁，既挡住别人的写，又绕过 saas.Tx 的加锁顺序检查。
+const forUpdate = " FOR UPDATE"
 
 // txWriter 跑一个租户的写：独立模式是 DB.write（自己开事务、锁租户行、改了就加修订号），
 // 绑定模式（TxPorts）是直接在调用方的事务里跑 fn。
@@ -148,22 +143,22 @@ func portsOf(p ports) *store.Ports {
 
 type accounts struct{ ports }
 
-func (a accounts) selectOne(ctx context.Context, q querier, where string, args ...any) (*store.AccountRecord, error) {
-	return one(toAccount(q.QueryRow(ctx, "SELECT "+accountColumns+" FROM accounts WHERE "+where+lockFor(q), args...)))
+func (a accounts) selectOne(ctx context.Context, q querier, lock, where string, args ...any) (*store.AccountRecord, error) {
+	return one(toAccount(q.QueryRow(ctx, "SELECT "+accountColumns+" FROM accounts WHERE "+where+lock, args...)))
 }
 
 func (a accounts) FindByName(ctx context.Context, tenantID, name string) (*store.AccountRecord, error) {
-	return a.selectOne(ctx, a.q(), "tenant_id = $1 AND name = $2", tenantID, name)
+	return a.selectOne(ctx, a.q(), "", "tenant_id = $1 AND name = $2", tenantID, name)
 }
 
 func (a accounts) Get(ctx context.Context, tenantID, accountID string) (*store.AccountRecord, error) {
-	return a.selectOne(ctx, a.q(), "tenant_id = $1 AND account_id = $2", tenantID, accountID)
+	return a.selectOne(ctx, a.q(), "", "tenant_id = $1 AND account_id = $2", tenantID, accountID)
 }
 
 func (a accounts) Update(ctx context.Context, tenantID, accountID string, fn func(draft *store.AccountRecord) error) error {
 	return updateRow(ctx, a.write, tenantID,
 		func(tx pgx.Tx) (*store.AccountRecord, error) {
-			return a.selectOne(ctx, tx, "tenant_id = $1 AND account_id = $2", tenantID, accountID)
+			return a.selectOne(ctx, tx, forUpdate, "tenant_id = $1 AND account_id = $2", tenantID, accountID)
 		},
 		func(tx pgx.Tx, draft store.AccountRecord) error {
 			return writeAccount(ctx, tx, tenantID, accountID, draft)
@@ -173,7 +168,7 @@ func (a accounts) Update(ctx context.Context, tenantID, accountID string, fn fun
 
 func (a accounts) ResetPassword(ctx context.Context, tenantID, accountID string, password identity.PasswordRecord, nowMs int64, keepDeviceID string) (found bool, err error) {
 	err = a.write(ctx, tenantID, func(tx pgx.Tx) (bool, error) {
-		row, err := a.selectOne(ctx, tx, "tenant_id = $1 AND account_id = $2", tenantID, accountID)
+		row, err := a.selectOne(ctx, tx, forUpdate, "tenant_id = $1 AND account_id = $2", tenantID, accountID)
 		if err != nil || row == nil {
 			return false, err
 		}
@@ -197,13 +192,13 @@ func (a accounts) ResetPassword(ctx context.Context, tenantID, accountID string,
 
 type devices struct{ ports }
 
-func (v devices) selectOne(ctx context.Context, q querier, tenantID, deviceID string) (*store.DeviceRecord, error) {
+func (v devices) selectOne(ctx context.Context, q querier, lock, tenantID, deviceID string) (*store.DeviceRecord, error) {
 	return one(toDevice(q.QueryRow(ctx,
-		"SELECT "+deviceColumns+" FROM devices WHERE tenant_id = $1 AND device_id = $2"+lockFor(q), tenantID, deviceID)))
+		"SELECT "+deviceColumns+" FROM devices WHERE tenant_id = $1 AND device_id = $2"+lock, tenantID, deviceID)))
 }
 
 func (v devices) Get(ctx context.Context, tenantID, deviceID string) (*store.DeviceRecord, error) {
-	return v.selectOne(ctx, v.q(), tenantID, deviceID)
+	return v.selectOne(ctx, v.q(), "", tenantID, deviceID)
 }
 
 func (v devices) ListBySubject(ctx context.Context, tenantID, subject string) ([]store.DeviceRecord, error) {
@@ -222,7 +217,7 @@ func (v devices) Insert(ctx context.Context, tenantID string, device store.Devic
 			query += " AND subject = $3"
 			args = append(args, device.Subject)
 		}
-		candidates, err := list(ctx, tx, deref(toDevice), query+lockFor(tx), args...)
+		candidates, err := list(ctx, tx, deref(toDevice), query+forUpdate, args...)
 		if err != nil {
 			return false, err
 		}
@@ -240,7 +235,9 @@ func (v devices) Insert(ctx context.Context, tenantID string, device store.Devic
 
 func (v devices) Update(ctx context.Context, tenantID, deviceID string, fn func(draft *store.DeviceRecord) error) error {
 	return updateRow(ctx, v.write, tenantID,
-		func(tx pgx.Tx) (*store.DeviceRecord, error) { return v.selectOne(ctx, tx, tenantID, deviceID) },
+		func(tx pgx.Tx) (*store.DeviceRecord, error) {
+			return v.selectOne(ctx, tx, forUpdate, tenantID, deviceID)
+		},
 		func(tx pgx.Tx, draft store.DeviceRecord) error {
 			return writeDevice(ctx, tx, tenantID, deviceID, draft)
 		},
@@ -271,13 +268,13 @@ func (v devices) Touch(ctx context.Context, tenantID string, seen map[string]int
 
 type sources struct{ ports }
 
-func (s sources) selectOne(ctx context.Context, q querier, tenantID, sourceID string) (*store.SourceRecord, error) {
+func (s sources) selectOne(ctx context.Context, q querier, lock, tenantID, sourceID string) (*store.SourceRecord, error) {
 	return one(toSource(q.QueryRow(ctx,
-		"SELECT "+sourceColumns+" FROM sources WHERE tenant_id = $1 AND source_id = $2"+lockFor(q), tenantID, sourceID)))
+		"SELECT "+sourceColumns+" FROM sources WHERE tenant_id = $1 AND source_id = $2"+lock, tenantID, sourceID)))
 }
 
 func (s sources) Get(ctx context.Context, tenantID, sourceID string) (*store.SourceRecord, error) {
-	return s.selectOne(ctx, s.q(), tenantID, sourceID)
+	return s.selectOne(ctx, s.q(), "", tenantID, sourceID)
 }
 
 func (s sources) List(ctx context.Context, tenantID string) ([]store.SourceRecord, error) {
@@ -287,7 +284,7 @@ func (s sources) List(ctx context.Context, tenantID string) ([]store.SourceRecor
 
 func (s sources) Put(ctx context.Context, tenantID, sourceID string, fn func(existing *store.SourceRecord) (store.SourceRecord, error)) (out store.SourceRecord, err error) {
 	err = s.write(ctx, tenantID, func(tx pgx.Tx) (bool, error) {
-		existing, err := s.selectOne(ctx, tx, tenantID, sourceID)
+		existing, err := s.selectOne(ctx, tx, forUpdate, tenantID, sourceID)
 		if err != nil {
 			return false, err
 		}
@@ -307,7 +304,9 @@ func (s sources) Put(ctx context.Context, tenantID, sourceID string, fn func(exi
 
 func (s sources) Update(ctx context.Context, tenantID, sourceID string, fn func(draft *store.SourceRecord) error) error {
 	return updateRow(ctx, s.write, tenantID,
-		func(tx pgx.Tx) (*store.SourceRecord, error) { return s.selectOne(ctx, tx, tenantID, sourceID) },
+		func(tx pgx.Tx) (*store.SourceRecord, error) {
+			return s.selectOne(ctx, tx, forUpdate, tenantID, sourceID)
+		},
 		func(tx pgx.Tx, draft store.SourceRecord) error {
 			return writeSource(ctx, tx, tenantID, sourceID, draft)
 		},
@@ -341,9 +340,11 @@ func (r registrations) Add(ctx context.Context, tenantID string, token store.Reg
 
 func (r registrations) Consume(ctx context.Context, tenantID, tokenHash string, nowMs int64) (accountID string, ok bool, err error) {
 	err = r.write(ctx, tenantID, func(tx pgx.Tx) (bool, error) {
-		// 逐条定时安全地比较（与内存参照一样不按哈希直接查）。
+		// 逐条定时安全地比较（与内存参照一样不按哈希直接查）。这里不加 FOR UPDATE：否则会锁住租户下全部
+		// 未过期的注册令牌，把所有主机登记串行化；单次消耗靠下面 DELETE 的 RowsAffected()==1（并发的另一个
+		// 事务先删了，这一条的 DELETE 等它提交后影响 0 行，当作已用）。
 		rows, err := list(ctx, tx, toRegistration,
-			"SELECT "+registrationColumns+" FROM registration_tokens WHERE tenant_id = $1 AND expires_at_ms > $2 ORDER BY seq"+lockFor(tx),
+			"SELECT "+registrationColumns+" FROM registration_tokens WHERE tenant_id = $1 AND expires_at_ms > $2 ORDER BY seq",
 			tenantID, nowMs)
 		if err != nil {
 			return false, err
@@ -376,13 +377,13 @@ func (r registrations) Consume(ctx context.Context, tenantID, tokenHash string, 
 
 type links struct{ ports }
 
-func (l links) selectOne(ctx context.Context, q querier, tenantID, linkID string) (*store.LinkRecord, error) {
+func (l links) selectOne(ctx context.Context, q querier, lock, tenantID, linkID string) (*store.LinkRecord, error) {
 	return one(toLink(q.QueryRow(ctx,
-		"SELECT "+linkColumns+" FROM links WHERE tenant_id = $1 AND link_id = $2"+lockFor(q), tenantID, linkID)))
+		"SELECT "+linkColumns+" FROM links WHERE tenant_id = $1 AND link_id = $2"+lock, tenantID, linkID)))
 }
 
 func (l links) Get(ctx context.Context, tenantID, linkID string) (*store.LinkRecord, error) {
-	return l.selectOne(ctx, l.q(), tenantID, linkID)
+	return l.selectOne(ctx, l.q(), "", tenantID, linkID)
 }
 
 func (l links) List(ctx context.Context, tenantID, sourceID string) ([]store.LinkRecord, error) {
@@ -402,7 +403,7 @@ func (l links) Insert(ctx context.Context, tenantID string, link store.LinkRecor
 
 func (l links) Update(ctx context.Context, tenantID, linkID string, fn func(draft *store.LinkRecord) error) error {
 	return updateRow(ctx, l.write, tenantID,
-		func(tx pgx.Tx) (*store.LinkRecord, error) { return l.selectOne(ctx, tx, tenantID, linkID) },
+		func(tx pgx.Tx) (*store.LinkRecord, error) { return l.selectOne(ctx, tx, forUpdate, tenantID, linkID) },
 		func(tx pgx.Tx, draft store.LinkRecord) error { return writeLink(ctx, tx, tenantID, linkID, draft) },
 		fn)
 }

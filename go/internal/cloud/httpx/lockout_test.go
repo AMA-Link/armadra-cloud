@@ -98,7 +98,7 @@ func TestUnknownLockoutsFallBackWhenRedisIsDown(t *testing.T) {
 	if code, _ := core.CodeOf(guard.Login(context.Background(), now, "x@example.com", "pw")); code != "account_locked" {
 		t.Fatalf("退路也要锁：%v", code)
 	}
-	if reported == 0 {
-		t.Fatal("Redis 失败要报告")
+	if reported == 0 || u.Fallbacks() != int64(reported) || u.Fallbacks() != 6 {
+		t.Fatalf("每次回落都报告并计数：报告 %d 次，计数 %d", reported, u.Fallbacks())
 	}
 }
