@@ -360,7 +360,12 @@ func TestTrustRejectPermissionsAndExpiry(t *testing.T) {
 	if len(x.list(owner, "")) != 1 {
 		t.Fatal("新请求应列出")
 	}
-	r.clock.Advance(31 * time.Minute)
+	// trust.expire 是每小时一个时间槽的定时作业：要越过下一个整点，作业才会再插一次。
+	target := r.clock.Now().Add(31 * time.Minute)
+	if target.Truncate(time.Hour).Equal(r.clock.Now().Truncate(time.Hour)) {
+		target = r.clock.Now().Truncate(time.Hour).Add(time.Hour + time.Minute)
+	}
+	r.clock.Advance(target.Sub(r.clock.Now()))
 	owner = r.relogin(owner, r.queryString("SELECT email FROM accounts WHERE account_id = $1", owner.accountID))
 	if got := x.list(owner, ""); len(got) != 0 {
 		t.Fatalf("到期的请求不再列出：%v", got)
