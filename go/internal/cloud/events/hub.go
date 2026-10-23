@@ -160,7 +160,7 @@ func (h *Hub) publishLoop(ctx context.Context) {
 		case payload := <-h.out:
 			pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			if err := h.o.Client.Publish(pctx, h.channel, payload).Err(); err != nil && ctx.Err() == nil {
-				h.o.Log.Warn("领域事件发布失败", obs.Operation("events.publish"), obs.Error(errors.New("Redis 操作失败")))
+				h.o.Log.Warn("领域事件发布失败", obs.Operation("events.publish"), obs.Error(errors.New("操作失败（Redis）")))
 			}
 			cancel()
 		}
@@ -202,7 +202,7 @@ func (h *Hub) subscribeLoop(ctx context.Context, failed chan<- error) {
 			return
 		}
 		first = false
-		h.o.Log.Warn("领域事件订阅断开，重连", obs.Operation("events.subscribe"), obs.Error(errors.New("Redis 连接出错")))
+		h.o.Log.Warn("领域事件订阅断开，重连", obs.Operation("events.subscribe"), obs.Error(errors.New("连接出错（Redis）")))
 		_ = err
 		select {
 		case <-ctx.Done():

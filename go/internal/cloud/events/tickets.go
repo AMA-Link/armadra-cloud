@@ -63,5 +63,5 @@ func redisError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return errors.New("Redis 操作失败")
+	return errors.New("操作失败（Redis）")
 }
