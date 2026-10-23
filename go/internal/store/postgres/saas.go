@@ -124,6 +124,7 @@ func (t *saasTx) Audit() saas.AuditRepo            { return auditRepo{q: t.q} }
 func (t *saasTx) Jobs() saas.JobRepo               { return jobRepo{q: t.q} }
 func (t *saasTx) Settings() saas.SettingsRepo      { return struct{}{} }
 func (t *saasTx) Issued() saas.IssuedRepo          { return issuedRepo{q: t.q} }
+func (t *saasTx) Retention() saas.RetentionRepo    { return retentionRepo{q: t.q} }
 
 // Ports 把核心端口绑到本事务（TxPorts）。
 func (t *saasTx) Ports() *store.Ports { return portsOf(ports{d: t.d, tx: t.pgx}) }
