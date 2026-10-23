@@ -23,8 +23,7 @@ const FORBIDDEN = [
   imports("node:(?!(?:crypto|buffer)[\"'])[^\"']+"),
   imports("@armadra/cloud-shared/(?:db|redis|http|config)"),
   imports("@armadra/control-store-sqlite/(?:open|migrate)"),
-  imports("@armadra/relay-runtime-node(?:/[^\"']*)?"),
-  imports("@armadra/(?:cloud|relay|relay-workers)(?:/[^\"']*)?"),
+  imports("@armadra/(?:cloud|relay-workers)(?:/[^\"']*)?"),
   imports("(?:\\.\\./)+apps/[^\"']*"),
 ];
 
@@ -46,13 +45,7 @@ it("清单不依赖 ws、PostgreSQL / Redis 与 Node 运行时", () => {
   });
   expect(
     names.filter((name) =>
-      [
-        "ws",
-        "@types/ws",
-        "postgres",
-        "redis",
-        "@armadra/relay-runtime-node",
-      ].includes(name),
+      ["ws", "@types/ws", "postgres", "redis"].includes(name),
     ),
   ).toEqual([]);
 });

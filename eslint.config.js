@@ -50,47 +50,22 @@ const armadraSourcePattern = {
     "不得 import Armadra 仓的源码；只经 @armadra/platform-protocol 与容器镜像往来。",
 };
 
-/** relay 不得 import apps/cloud，也不直接碰数据库驱动（`--store postgres` 经 control-store-postgres，按需动态 import）。 */
+/** 中继的 TS 包（relay-kernel、relay-runtime-workers）不得 import apps/cloud，也不直接碰数据库驱动。 */
 const relayPatterns = [
   {
     group: ["@armadra/cloud", "@armadra/cloud/*"],
-    message: "apps/relay 不得 import apps/cloud；两者只共享 packages/*。",
+    message: "中继的包不得 import apps/cloud；两者只共享 packages/*。",
   },
   {
     regex: "^(\\.\\./)+cloud/",
-    message: "apps/relay 不得 import apps/cloud；两者只共享 packages/*。",
+    message: "中继的包不得 import apps/cloud；两者只共享 packages/*。",
   },
   {
     group: ["postgres", "@armadra/cloud-shared/db"],
     message:
-      "relay 不直接碰数据库驱动：--store postgres 经 @armadra/control-store-postgres，--control postgres 在 relay-runtime-node 的 control/postgres.ts。",
+      "中继的 TS 包不直接碰数据库驱动：PostgreSQL 只经 @armadra/control-store-postgres。",
   },
 ];
-
-/** 多节点控制面的两个实现：只有它们碰存储客户端（装配方按需动态 import）。 */
-const clusterControlPatterns = (allow) =>
-  [
-    ...relayPatterns.filter((pattern) => !pattern.group?.includes("postgres")),
-    {
-      regex: "^(postgres|redis)$",
-      message: "存储驱动只经 @armadra/cloud-shared 的封装。",
-    },
-    ...kernelPatterns.filter((pattern) => !pattern.group?.includes("redis")),
-  ].concat(
-    allow === "db"
-      ? [
-          {
-            group: ["@armadra/cloud-shared/redis"],
-            message: "control/postgres.ts 不带 Redis。",
-          },
-        ]
-      : [
-          {
-            group: ["@armadra/cloud-shared/db"],
-            message: "control/redis.ts 不带 PostgreSQL。",
-          },
-        ],
-  );
 
 /** PostgreSQL 存储只实现控制核的端口。 */
 const controlStorePostgresPatterns = [
@@ -104,12 +79,8 @@ const controlStorePostgresPatterns = [
       "@armadra/control-store-sqlite/*",
       "@armadra/relay-kernel",
       "@armadra/relay-kernel/*",
-      "@armadra/relay-runtime-node",
-      "@armadra/relay-runtime-node/*",
       "@armadra/relay-runtime-workers",
       "@armadra/relay-runtime-workers/*",
-      "@armadra/relay",
-      "@armadra/relay/*",
       "@armadra/cloud",
       "@armadra/cloud/*",
     ],
@@ -126,36 +97,26 @@ const kernelPatterns = [
       "relay-kernel 不得 import control-core；控制面经 ControlPlane 接口接进来。",
   },
   {
-    group: ["@armadra/relay", "@armadra/relay/*"],
-    message: "包不得 import app。",
-  },
-  {
     group: ["redis", "@armadra/cloud-shared/redis"],
     message:
-      "relay-kernel 不带 SaaS 专有依赖：Redis 实现在 relay-runtime-node 的 control/redis.ts。",
+      "relay-kernel 不带 SaaS 专有依赖：Redis 实现在 Go 中继（go/internal/control/redis）。",
   },
 ];
 
 /**
- * 内核运行时无关（Node 与 Workers 共用）：只许 `node:crypto` / `node:buffer`；`ws`、
- * `node:http` / `net` / `stream` / `fs` 与 HTTP 外壳在 `@armadra/relay-runtime-node`。
+ * 内核运行时无关（Workers 版用）：只许 `node:crypto` / `node:buffer`；`ws`、
+ * `node:http` / `net` / `stream` / `fs` 与 HTTP 外壳不进内核。
  * 只管源码，测试照常可以用 Node 起服务器。
  */
 const kernelPortablePatterns = [
   {
     regex: "^node:(?!(crypto|buffer)$)",
     message:
-      "relay-kernel 运行时无关：只许 node:crypto / node:buffer，其余 Node 专有部分放 @armadra/relay-runtime-node。",
+      "relay-kernel 运行时无关：只许 node:crypto / node:buffer，其余 Node 专有部分不进内核。",
   },
   {
-    group: [
-      "ws",
-      "@armadra/cloud-shared/http",
-      "@armadra/relay-runtime-node",
-      "@armadra/relay-runtime-node/*",
-    ],
-    message:
-      "relay-kernel 运行时无关：WebSocket 与 HTTP 外壳放 @armadra/relay-runtime-node。",
+    group: ["ws", "@armadra/cloud-shared/http"],
+    message: "relay-kernel 运行时无关：WebSocket 与 HTTP 外壳不进内核。",
   },
 ];
 
@@ -181,12 +142,8 @@ const workersRuntimePatterns = [
       "@armadra/cloud-shared/redis",
       "@armadra/cloud-shared/http",
       "@armadra/cloud-shared/config",
-      "@armadra/relay-runtime-node",
-      "@armadra/relay-runtime-node/*",
       "@armadra/control-store-sqlite/open",
       "@armadra/control-store-sqlite/migrate",
-      "@armadra/relay",
-      "@armadra/relay/*",
       "@armadra/cloud",
       "@armadra/cloud/*",
     ],
@@ -225,10 +182,6 @@ const controlCorePatterns = [
     group: [
       "@armadra/relay-kernel",
       "@armadra/relay-kernel/*",
-      "@armadra/relay-runtime-node",
-      "@armadra/relay-runtime-node/*",
-      "@armadra/relay",
-      "@armadra/relay/*",
       "@armadra/cloud",
       "@armadra/cloud/*",
     ],
@@ -284,41 +237,13 @@ export default tseslint.config(
     },
   },
   {
-    files: ["apps/relay/**/*.ts"],
-    rules: restrictImports(orpcPattern, armadraSourcePattern, ...relayPatterns),
-  },
-  {
-    files: [
-      "packages/relay-kernel/**/*.ts",
-      "packages/relay-runtime-node/**/*.ts",
-    ],
+    files: ["packages/relay-kernel/**/*.ts"],
     rules: restrictImports(
       orpcPattern,
       armadraSourcePattern,
       ...relayPatterns,
       ...kernelPatterns,
     ),
-  },
-  {
-    files: ["packages/relay-runtime-node/src/control/postgres.ts"],
-    rules: restrictImports(
-      orpcPattern,
-      armadraSourcePattern,
-      ...clusterControlPatterns("db"),
-    ),
-  },
-  {
-    files: ["packages/relay-runtime-node/src/control/redis.ts"],
-    rules: restrictImports(
-      orpcPattern,
-      armadraSourcePattern,
-      ...clusterControlPatterns("redis"),
-    ),
-  },
-  {
-    // 多节点控制面的集成测试：真连 PostgreSQL 与 Redis。
-    files: ["packages/relay-runtime-node/test/external/**/*.ts"],
-    rules: restrictImports(orpcPattern, armadraSourcePattern),
   },
   {
     files: ["packages/control-store-postgres/src/**/*.ts"],

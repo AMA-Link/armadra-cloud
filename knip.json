@@ -9,10 +9,6 @@
       "entry": ["src/cli.ts", "scripts/build.mjs"],
       "project": ["src/**/*.ts"]
     },
-    "apps/relay": {
-      "entry": ["src/cli.ts", "scripts/build.mjs"],
-      "project": ["src/**/*.ts"]
-    },
     "apps/relay-workers": {
       "project": ["src/**/*.ts", "test/**/*.ts"],
       "ignoreDependencies": ["cloudflare"]
@@ -39,13 +35,13 @@
     "packages/relay-kernel": {
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
-    "packages/relay-runtime-node": {
-      "project": ["src/**/*.ts", "test/**/*.ts"]
-    },
     "packages/relay-runtime-workers": {
       "entry": ["test/**/*.test.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts"],
       "ignoreDependencies": ["cloudflare", "wrangler"]
+    },
+    "packages/e2e-fake-core": {
+      "project": ["src/**/*.ts"]
     }
   }
 }

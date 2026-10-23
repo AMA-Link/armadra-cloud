@@ -1,6 +1,6 @@
 /**
  * `/v1/me/stream`（契约 §6，协议包 §5.7）的控制面一侧：票据与事件扇出。WebSocket 本身由装配方
- * 托管（personal：`apps/relay/src/personal/stream.ts`）。
+ * 托管（Go 中继在 `go/internal/personal`，Workers 中继在 `ControlDO`）。
  *
  * - 票据：`POST /v1/me/stream/ticket`（会话）→ 30 秒、一次性，只在内存，存哈希；
  * - 事件：owner 收全部源的；访客只收链接指向的那个源的，以及发给它那条链接的 `accessRevoked`；

@@ -1,5 +1,5 @@
 // Package postgres 是控制面的 PostgreSQL 实现（多节点；对应
-// packages/relay-runtime-node/src/control/postgres.ts，表与频道逐项一致）。
+// 已删除的 TypeScript 版 packages/relay-runtime-node/src/control/postgres.ts，表与频道逐项一致）。
 //
 //	| 功能     | 实现                                                                                       |
 //	| 路由     | relay_routes（UNLOGGED）：Get 每次读表，Set upsert，Touch 续期，Delete 按 tunnel_id CAS      |

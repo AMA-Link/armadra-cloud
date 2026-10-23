@@ -12,7 +12,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
-// 对应 packages/relay-runtime-node/src/tunnel.test.ts。
+// 对应 已删除的 TypeScript 版 packages/relay-runtime-node/src/tunnel.test.ts。
 
 func TestHeartbeat(t *testing.T) {
 	t.Run("心跳/每 heartbeatMs 发 PING；连续两次未答关闭隧道", func(t *testing.T) {

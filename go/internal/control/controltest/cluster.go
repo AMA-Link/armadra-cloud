@@ -1,5 +1,5 @@
 // Package controltest 是多节点控制面（redis / postgres）共用的合同测试：两个节点共用一个存储，
-// 对应 packages/relay-runtime-node/test/external/cluster.ts。只在 _test.go 里用。
+// 对应 已删除的 TypeScript 版 packages/relay-runtime-node/test/external/cluster.ts。只在 _test.go 里用。
 package controltest
 
 import (

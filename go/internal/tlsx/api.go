@@ -1,5 +1,5 @@
 // Package tlsx 是个人中转的 TLS 材料：自签 CA 与叶证书、文件证书热换、ACME http-01，
-// 以及可热换证书的 tls.Config（对应 apps/relay/src/personal 的 tls.ts、acme.ts、der.ts）。
+// 以及可热换证书的 tls.Config（对应 已删除的 TypeScript 版 apps/relay/src/personal 的 tls.ts、acme.ts、der.ts）。
 package tlsx
 
 import (

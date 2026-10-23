@@ -5,7 +5,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/schema"
 )
 
-// stateSchema 是 state.json 的校验规则，逐条对应 apps/relay/src/personal/state.ts 的 zod schema。
+// stateSchema 是 state.json 的校验规则，逐条对应 已删除的 TypeScript 版 apps/relay/src/personal/state.ts 的 zod schema。
 
 func str() *schema.Schema { return &schema.Schema{Type: "string"} }
 

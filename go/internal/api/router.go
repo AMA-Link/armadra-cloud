@@ -1,6 +1,6 @@
 // Package api 是 /v1 路由与 HTTP 外壳：路由表取自协议包的生成物 gen.Routes（方法、路径）与
 // gen.RouteInputs（入参 schema），个人中转给处理器的过程接上控制核服务，其余答 404（personal）
-// 或 501（cloud）。形状与 apps/relay/src/personal/api.ts 一致：
+// 或 501（cloud）。形状与 已删除的 TypeScript 版 apps/relay/src/personal/api.ts 一致：
 //
 //   - 输入：路径参数 + （GET / DELETE 的 query | 其余的 JSON 体），按入参 schema 校验，不过答
 //     400 bad_request；JSON 体上限 64 KiB；

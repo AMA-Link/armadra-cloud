@@ -1,7 +1,7 @@
 /**
  * 中继内核装配（中继设计 §1）中与运行时无关的一段：控制面 → 令牌校验 → 指标 → 隧道表。
- * 运行时在外面接监听、WebSocket 与边缘的字节进出（Node：`@armadra/relay-runtime-node`
- * 的 `startRelay`）。两种模式都走这里，差别只在调用方给的 `control`。
+ * 运行时在外面接监听、WebSocket 与边缘的字节进出（Workers：`@armadra/relay-runtime-workers`）。
+ * 两种模式都走这里，差别只在调用方给的 `control`。
  */
 import type { Logger } from "@armadra/cloud-shared/log";
 import { LIMITS } from "@armadra/platform-protocol/tunnel";

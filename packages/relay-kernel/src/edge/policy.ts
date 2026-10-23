@@ -1,7 +1,6 @@
 /**
  * 客户端边缘的判定（中继设计 §4），与运行时无关：解析源 → 限流 → 校验中继令牌 → 找隧道
- * → 决定开通道还是拒绝。字节怎么进出由运行时负责（Node 在 `@armadra/relay-runtime-node`
- * 的 `edge.ts`），这里只看 {@link EdgeRequest}，答一个「下一步做什么」。对模式零分支：地址
+ * → 决定开通道还是拒绝。字节怎么进出由运行时负责（Workers 在 `@armadra/relay-runtime-workers`），这里只看 {@link EdgeRequest}，答一个「下一步做什么」。对模式零分支：地址
  * 写法由 {@link Addressing} 决定，控制面由 `ControlPlane` 决定。
  *
  * 只转端到端通道（0.5.0 起，cloud-api §20）：源地址上唯一的入口是 `_relay/e2e` 的 WS

@@ -1,6 +1,6 @@
 // Package httperr 是中继错误答复：`{ code, message, requestId? }`，状态码查协议注册表。
 //
-// 对应 TS 的 relay-kernel/http/errors.ts、relay-runtime-node/errors.ts 与
+// 对应 TS 的 relay-kernel/http/errors.ts、已删除的 TypeScript 版 relay-runtime-node/errors.ts 与
 // cloud-shared 的 sendError。code 只能是 gen 里登记的码；message 是固定英文短句。
 package httperr
 

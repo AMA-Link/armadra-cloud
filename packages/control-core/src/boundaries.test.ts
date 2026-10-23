@@ -63,7 +63,6 @@ it("控制核清单不依赖中继内核与存储客户端", () => {
       [
         "@armadra/relay-kernel",
         "@armadra/cloud",
-        "@armadra/relay",
         "postgres",
         "redis",
         "ws",

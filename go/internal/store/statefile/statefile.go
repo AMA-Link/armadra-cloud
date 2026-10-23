@@ -1,4 +1,4 @@
-// Package statefile 只读导入个人中转的 state.json（schema v1，apps/relay/src/personal/state.ts）。
+// Package statefile 只读导入个人中转的 state.json（schema v1，已删除的 TypeScript 版 apps/relay/src/personal/state.ts）。
 //
 // Go 版不再写状态文件：serve 遇到 state.json 就拒绝，提示用 personal migrate --to sqlite；
 // migrate 用这里把文件读成 store.TenantSnapshot，再交给 SQLite 或 PostgreSQL 的 ImportTenant。
@@ -185,7 +185,7 @@ func Read(dataDir string) (State, error) {
 }
 
 // Snapshot 把状态文件换成一个租户的快照：账号 id 与注册令牌的签发人都是 acct:<账号名>，
-// 租户修订号照文件。与 apps/relay/src/personal/snapshot.ts 的 stateToSnapshot 逐字段对应。
+// 租户修订号照文件。与 已删除的 TypeScript 版 apps/relay/src/personal/snapshot.ts 的 stateToSnapshot 逐字段对应。
 func (s State) Snapshot() (store.TenantSnapshot, error) {
 	accountID := store.OwnerSubject(s.Account.Name)
 	tenant := store.Tenant{

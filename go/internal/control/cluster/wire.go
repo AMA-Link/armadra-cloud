@@ -1,7 +1,7 @@
 // Package cluster 是多节点控制面（redis / postgres）共用的部分：广播消息的线上形状、
 // 撤销表的内存副本、限流的「远端计数 + 本节点兜底」逻辑与后台任务跟踪。
 //
-// 线上形状与 TypeScript 的 relay-runtime-node/src/control 逐字段一致（JSON camelCase），
+// 线上形状与已删除的 TypeScript 版 relay-runtime-node/src/control 逐字段一致（JSON camelCase），
 // 所以 Go 节点与 Node 节点可以共用同一个 Redis / 库，滚动切换。
 package cluster
 

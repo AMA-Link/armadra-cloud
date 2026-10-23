@@ -2,8 +2,8 @@
  * 中继的错误答复：`{ code, message, requestId? }`，状态码查协议包注册表；code 只能是
  * 注册表里的码。message 是固定的英文短句——界面按 code 取 i18n 文案，不展示 message。
  *
- * 这里只有与运行时无关的部分（文案、状态行、裸 HTTP/1.1 字节）；写进 Node
- * `ServerResponse` / 裸 socket 的在 `@armadra/relay-runtime-node` 的 `errors.ts`。
+ * 这里只有与运行时无关的部分（文案、状态行、裸 HTTP/1.1 字节）；写进响应对象
+ * 的部分由各运行时自己做。
  */
 import { errorStatus, type ErrorCode } from "@armadra/platform-protocol/errors";
 

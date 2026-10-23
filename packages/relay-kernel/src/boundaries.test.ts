@@ -57,13 +57,9 @@ it("内核清单不依赖控制核与 SaaS 专有的包", () => {
     .sort();
   expect(
     names.filter((name) =>
-      [
-        "@armadra/control-core",
-        "@armadra/cloud",
-        "@armadra/relay",
-        "postgres",
-        "redis",
-      ].includes(name),
+      ["@armadra/control-core", "@armadra/cloud", "postgres", "redis"].includes(
+        name,
+      ),
     ),
   ).toEqual([]);
 });
@@ -71,7 +67,7 @@ it("内核清单不依赖控制核与 SaaS 专有的包", () => {
 /**
  * 运行时无关（CF 设计 §2.9、§2.10）：Workers 上也要能跑，所以只许 `node:crypto` /
  * `node:buffer`（`nodejs_compat` 原生支持）；`ws`、`node:http` / `net` / `stream` / `fs` 等
- * 与 cloud-shared 的 HTTP 外壳都在 `@armadra/relay-runtime-node`。
+ * 与 cloud-shared 的 HTTP 外壳都不进内核。
  */
 const NODE_ONLY = [
   imports("node:(?!crypto[\"']|buffer[\"'])[^\"']+"),
@@ -80,7 +76,6 @@ const NODE_ONLY = [
   ),
   imports("ws"),
   imports("@armadra/cloud-shared/http"),
-  imports("@armadra/relay-runtime-node(?:/[^\"']*)?"),
 ];
 
 it("内核源码与运行时无关：除 node:crypto / node:buffer 外不 import node:*，不 import ws 与 HTTP 外壳", () => {
@@ -116,7 +111,7 @@ it("内核源码与运行时无关：除 node:crypto / node:buffer 外不 import
     ).toBe(false);
 });
 
-it("内核清单不依赖 ws 与 Node 运行时包", () => {
+it("内核清单不依赖 ws", () => {
   const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")) as Record<
     string,
     Record<string, string> | undefined
@@ -124,9 +119,7 @@ it("内核清单不依赖 ws 与 Node 运行时包", () => {
   const names = ["dependencies", "devDependencies", "peerDependencies"].flatMap(
     (field) => Object.keys(manifest[field] ?? {}),
   );
-  expect(
-    names.filter((name) =>
-      ["ws", "@types/ws", "@armadra/relay-runtime-node"].includes(name),
-    ),
-  ).toEqual([]);
+  expect(names.filter((name) => ["ws", "@types/ws"].includes(name))).toEqual(
+    [],
+  );
 });
