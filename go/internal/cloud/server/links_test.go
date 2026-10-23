@@ -392,6 +392,17 @@ func TestLinksCreatorsManageAndSpaces(t *testing.T) {
 	r.expect(r.createLink(scoped, h.id, nil), 403, "team_role_insufficient")                                                          // 限在工作空间的 driver 不能签整台
 	r.expect(r.createLink(scoped, h.id, map[string]any{"scope": map[string]any{"workspaceId": "w2"}}), 403, "team_role_insufficient") // 也不能签别的工作空间
 	r.mustLink(scoped, h.id, map[string]any{"scope": map[string]any{"workspaceId": "w1"}})
+	// driver@w1 加团队 viewer 整台：合成出来是 driver + 整台，但没有来路真给了整台 driver，整台与 w2 的链接都不能签。
+	r.mustGrant(owner, h.id, teamOf(team), "viewer", nil)
+	r.expect(r.createLink(scoped, h.id, nil), 403, "team_role_insufficient")
+	r.expect(r.createLink(scoped, h.id, map[string]any{"scope": map[string]any{"workspaceId": "w2"}}), 403, "team_role_insufficient")
+	r.mustLink(scoped, h.id, map[string]any{"scope": map[string]any{"workspaceId": "w1"}})
+	// 链接的到期不能超过 driver 来路的授予到期。
+	capped := r.verified()
+	r.exec("INSERT INTO team_members (tenant_id, team_id, account_id, role, joined_at_ms) VALUES ('cloud', $1, $2, 'member', 99)", team, capped.accountID)
+	r.mustGrant(owner, h.id, memberOf(capped.accountID), "driver", map[string]any{"expiresAtMs": r.clock.Ms() + 2*3600*1000})
+	r.expect(r.createLink(capped, h.id, nil), 400, "bad_request")
+	r.mustLink(capped, h.id, map[string]any{"expiresAtMs": r.clock.Ms() + 3600*1000})
 	// 签链接的人自己没有管理权：不能撤销（要主机管理者来）。
 	r.expect(r.do("DELETE", linkPathOf(driverLink.id), nil, driver.bearer()), 403, "team_role_insufficient")
 	// owner 档：主机所有者可以，团队 admin 看得到也管得了，但设置不许（team_policy_denied）。
@@ -415,13 +426,13 @@ func TestLinksCreatorsManageAndSpaces(t *testing.T) {
 		return out
 	}
 	all := ids(r.do("GET", "/v1/links", nil, owner.bearer()))
-	if !all[lnPersonal.id] || !all[adminLink.id] || len(all) != 6 {
+	if !all[lnPersonal.id] || !all[adminLink.id] || len(all) != 8 {
 		t.Fatalf("owner 的全部链接（含 driver 签的）：%v", all)
 	}
 	if got := ids(r.do("GET", "/v1/links?space[kind]=personal", nil, owner.bearer())); !got[lnPersonal.id] || len(got) != 1 {
 		t.Fatalf("个人空间：%v", got)
 	}
-	if got := ids(r.do("GET", "/v1/links?space[kind]=team&space[teamId]="+team, nil, owner.bearer())); got[lnPersonal.id] || len(got) != 5 {
+	if got := ids(r.do("GET", "/v1/links?space[kind]=team&space[teamId]="+team, nil, owner.bearer())); got[lnPersonal.id] || len(got) != 7 {
 		t.Fatalf("团队空间：%v", got)
 	}
 	if got := ids(r.do("GET", "/v1/links?space[kind]=team&space[teamId]="+team, nil, member.bearer())); len(got) != 1 {

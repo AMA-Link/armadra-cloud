@@ -182,7 +182,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		if err := s.mayCreate(ctx, tx, h, account.AccountID, in.Scope, nowMs); err != nil {
+		if err := s.mayCreate(ctx, tx, h, account.AccountID, in.Scope, in.ExpiresAtMs, nowMs); err != nil {
 			return err
 		}
 		if !hosts.GuestsAllowed(h) || (h.TeamID != "" && !teams.SettingsOf(team).AllowGuests) {
@@ -206,7 +206,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 }
 
 // mayCreate 判定 accountID 能不能给这台主机签链接（主机设置 linkCreators）。
-func (s *Service) mayCreate(ctx context.Context, tx saas.Tx, h saas.Host, accountID string, scope *store.LinkScope, nowMs int64) error {
+func (s *Service) mayCreate(ctx context.Context, tx saas.Tx, h saas.Host, accountID string, scope *store.LinkScope, expiresAtMs, nowMs int64) error {
 	manager := h.CanManage(accountID)
 	mode := hosts.LinkCreatorsOf(h)
 	switch {
@@ -223,12 +223,29 @@ func (s *Service) mayCreate(ctx context.Context, tx saas.Tx, h saas.Host, accoun
 	if err != nil {
 		return err
 	}
+	// 逐来路判断，不用合成结果：driver@w1 加团队 viewer 整台，合成出来是「driver + 整台」，但没有哪个来路真给了整台 driver。
 	eff := grants.Compose(basis, accountID, nowMs)
-	if eff.Role != "driver" {
+	var matched, fits bool
+	for _, src := range eff.From {
+		if src.Role != "driver" {
+			continue
+		}
+		covers := len(src.WorkspaceIDs) == 0 ||
+			(scope != nil && scope.WorkspaceID != nil && slices.Contains(src.WorkspaceIDs, *scope.WorkspaceID))
+		if !covers {
+			continue
+		}
+		matched = true
+		// 链接的到期不能超过这个来路的授予到期（移除成员 / 撤授予不连带撤销其签的链接，要管理者另撤）。
+		if src.ExpiresAtMs == nil || expiresAtMs <= *src.ExpiresAtMs {
+			fits = true
+		}
+	}
+	if !matched {
 		return grants.DenyManage(h)
 	}
-	if !eff.Whole && (scope == nil || scope.WorkspaceID == nil || !slices.Contains(eff.WorkspaceIDs, *scope.WorkspaceID)) {
-		return grants.DenyManage(h)
+	if !fits {
+		return core.Fail(gen.ErrBadRequest)
 	}
 	return nil
 }
