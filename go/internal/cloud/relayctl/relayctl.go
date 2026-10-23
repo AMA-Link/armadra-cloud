@@ -10,6 +10,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 )
 
@@ -86,8 +87,14 @@ type Node struct {
 	Tunnels     int
 }
 
-// Quota 是团队的并发额度（relay:quota:team:*）。
+// Quota 是团队的并发额度（relay:quota:team:*）。键的值是 {concurrent}，节点按
+// cluster.DecodeQuotaValue 解；缺键或坏了节点取最严格的缺省（Free：并发 10，设计 §7.2）。
 type Quota struct{ Concurrent int }
+
+// Wire 是这份额度在线上的形状（control.TeamQuota，cluster.EncodeQuotaValue / EncodeQuota 的入参）。
+func (q Quota) Wire(teamID string) control.TeamQuota {
+	return control.TeamQuota{TeamID: teamID, Concurrent: q.Concurrent}
+}
 
 // Incident 是 relay:incident：开着时节点拒绝新的隧道与 e2e 升级。
 type Incident struct {
@@ -113,6 +120,8 @@ type Control interface {
 	Drain(ctx context.Context, node string) error
 	// SetTeamQuota 写团队的并发额度。
 	SetTeamQuota(ctx context.Context, teamID string, quota Quota) error
+	// ClearTeamQuota 删团队的并发额度（团队清除之后；节点缺键时取最严格的缺省）。
+	ClearTeamQuota(ctx context.Context, teamID string) error
 	// SetIncident 写事故开关。
 	SetIncident(ctx context.Context, incident Incident) error
 	// Relay 是 core 要的中继端口（查在线、关隧道、断开客户端）。

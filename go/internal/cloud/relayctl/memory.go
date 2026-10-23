@@ -168,6 +168,14 @@ func (m *Memory) SetTeamQuota(_ context.Context, teamID string, quota Quota) err
 	return nil
 }
 
+// ClearTeamQuota 实现 Control。
+func (m *Memory) ClearTeamQuota(_ context.Context, teamID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.quotas, teamID)
+	return nil
+}
+
 // SetIncident 实现 Control。
 func (m *Memory) SetIncident(_ context.Context, incident Incident) error {
 	m.mu.Lock()

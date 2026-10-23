@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
+	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 )
 
@@ -189,3 +190,35 @@ func TestNodesDrainQuotaIncident(t *testing.T) {
 
 // 作为 core 的撤销钩子端到端：撤销设备之后按索引撤令牌（用 core.RevokeDevice 触发）。
 var _ core.RevocationSink = relayctl.NewMemory(nil).Revocations()
+
+// 团队并发额度的线上形状与 G5 节点读的一致：值 {concurrent}，节点按 cluster.DecodeQuotaValue 解；
+// 额度写入、清除都经 Control。
+func TestTeamQuotaWireShapeMatchesNodes(t *testing.T) {
+	m, _ := newMemory()
+	if err := m.SetTeamQuota(ctx, "team-1", relayctl.Quota{Concurrent: 10}); err != nil {
+		t.Fatal(err)
+	}
+	quota, ok := m.Quota("team-1")
+	if !ok || quota.Concurrent != 10 {
+		t.Fatalf("额度：%+v %v", quota, ok)
+	}
+	wire := cluster.EncodeQuotaValue(quota.Wire("team-1"))
+	if string(wire) != `{"concurrent":10}` {
+		t.Fatalf("键 relay:quota:team:<id> 的值：%s", wire)
+	}
+	decoded, err := cluster.DecodeQuotaValue("team-1", wire)
+	if err != nil || decoded.Concurrent != 10 || decoded.TeamID != "team-1" {
+		t.Fatalf("节点读到的：%+v %v", decoded, err)
+	}
+	// 广播增量的外壳也能被节点解开。
+	msg, err := cluster.ParseBroadcast(cluster.EncodeQuota("cloud/1", quota.Wire("team-1")))
+	if err != nil || msg.Quota.TeamID != "team-1" || msg.Quota.Concurrent != 10 {
+		t.Fatalf("quota 广播：%+v %v", msg, err)
+	}
+	if err := m.ClearTeamQuota(ctx, "team-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Quota("team-1"); ok {
+		t.Fatal("清除后不应再有额度")
+	}
+}
