@@ -1,24 +1,34 @@
 # 参考反向代理（compose 的 proxy 服务；官方镜像在启动时只替换 ${DOMAIN}）。一张证书要覆盖
 #   app.<域>、a.edge.<域>、b.edge.<域> 与 *.src.<域>（二级通配：DNS-01 签发，或经 Cloudflare 代理时用高级证书）。
 # 证书文件放在 TLS_DIR（缺省 ./tls）：fullchain.pem、privkey.pem。证书先于登记：真证书签好之前不要给客户端登记主机。
+#
+# 放在 Cloudflare 后面时（可选）：取消下面三段注释，让 $remote_addr 变成访问者的真实 IP（控制面与节点只信本代理
+# 转发的 X-Forwarded-For，值就是这个 $remote_addr）；网段表以 https://www.cloudflare.com/ips/ 为准，要定期更新。
+#   set_real_ip_from 173.245.48.0/20;
+#   set_real_ip_from 103.21.244.0/22;   # …其余网段同理
+#   real_ip_header CF-Connecting-IP;
+
+# 容器内的 DNS：服务重建后 IP 会变，所以 proxy_pass 用变量、按 10 秒缓存重新解析（静态 upstream 只在启动时解析一次）。
+resolver 127.0.0.11 valid=10s ipv6=off;
 
 # 访问日志用 $uri（不含 query 串）：令牌、一次性票据可能出现在 query 里，不能进日志。
 log_format armadra '$remote_addr [$time_local] "$request_method $uri" $status $body_bytes_sent';
 # 每个 server 里各写一行 access_log（server 级会盖掉主配置里记 $request 的那一行）。
 
+# 只在客户端要升级时才给上游发 Connection: upgrade；普通请求发空值，不带 Connection: close。
 map $http_upgrade $connection_upgrade {
   default upgrade;
-  ''      close;
+  ''      '';
 }
 
 # 登录与链接接受的限流（应用层另有按账号 / IP 的限流，这里挡暴力枚举与廉价的洪水）。
 limit_req_zone $binary_remote_addr zone=auth:10m rate=30r/m;
 
-upstream cloud { server cloud:8100; keepalive 16; }
-upstream relay_a { server relay-a:8443; keepalive 16; }
-upstream relay_b { server relay-b:8443; keepalive 16; }
-# 源地址 *.src.<域> 可以落在任一节点（节点间转发）。
-upstream relay_any { server relay-a:8443; server relay-b:8443; keepalive 16; }
+# 源地址 *.src.<域> 可以落在任一节点（节点间转发）：按请求在两个节点间分。
+split_clients "${remote_addr}${request_id}" $relay_any {
+  50%     relay-a:8443;
+  *       relay-b:8443;
+}
 
 ssl_certificate     /etc/nginx/tls/fullchain.pem;
 ssl_certificate_key /etc/nginx/tls/privkey.pem;
@@ -37,6 +47,7 @@ server {
   server_name app.${DOMAIN};
 
   access_log /var/log/nginx/access.log armadra;
+  add_header Strict-Transport-Security "max-age=31536000" always;
   client_max_body_size 1m;
   keepalive_timeout 75s;
   proxy_http_version 1.1;
@@ -46,19 +57,21 @@ server {
   proxy_set_header Upgrade $http_upgrade;
   proxy_set_header Connection $connection_upgrade;
 
-  location = /v1/auth/login    { limit_req zone=auth burst=20 nodelay; proxy_pass http://cloud; }
-  location = /v1/auth/register { limit_req zone=auth burst=20 nodelay; proxy_pass http://cloud; }
-  location ~ ^/v1/links/[^/]+/accept$ { limit_req zone=auth burst=20 nodelay; proxy_pass http://cloud; }
+  set $cloud cloud:8100;
+
+  location = /v1/auth/login    { limit_req zone=auth burst=20 nodelay; proxy_pass http://$cloud; }
+  location = /v1/auth/register { limit_req zone=auth burst=20 nodelay; proxy_pass http://$cloud; }
+  location ~ ^/v1/links/[^/]+/accept$ { limit_req zone=auth burst=20 nodelay; proxy_pass http://$cloud; }
 
   # me-stream 是长连接 WebSocket。
   location = /v1/me/stream {
-    proxy_pass http://cloud;
+    proxy_pass http://$cloud;
     proxy_read_timeout 3600s;
     proxy_buffering off;
     proxy_request_buffering off;
   }
 
-  location / { proxy_pass http://cloud; }
+  location / { proxy_pass http://$cloud; }
 }
 
 # 节点的隧道入口 /t/v1 与节点间转发 /x/v1（每个节点自己的地址，写进节点表）。
@@ -66,9 +79,11 @@ server {
   listen 443 ssl;
   http2 on;
   server_name a.edge.${DOMAIN};
+
   access_log /var/log/nginx/access.log armadra;
-  keepalive_timeout 75s;
+  add_header Strict-Transport-Security "max-age=31536000" always;
   client_max_body_size 1m;
+  keepalive_timeout 75s;
   proxy_http_version 1.1;
   proxy_set_header Host $host;
   proxy_set_header X-Forwarded-For $remote_addr;
@@ -78,7 +93,9 @@ server {
   proxy_read_timeout 3600s;
   proxy_buffering off;
   proxy_request_buffering off;
-  location ~ ^/(t|x)/v1$ { proxy_pass http://relay_a; }
+
+  set $node relay-a:8443;
+  location ~ ^/(t|x)/v1$ { proxy_pass http://$node; }
   location / { return 404; }
 }
 
@@ -86,9 +103,11 @@ server {
   listen 443 ssl;
   http2 on;
   server_name b.edge.${DOMAIN};
+
   access_log /var/log/nginx/access.log armadra;
-  keepalive_timeout 75s;
+  add_header Strict-Transport-Security "max-age=31536000" always;
   client_max_body_size 1m;
+  keepalive_timeout 75s;
   proxy_http_version 1.1;
   proxy_set_header Host $host;
   proxy_set_header X-Forwarded-For $remote_addr;
@@ -98,7 +117,9 @@ server {
   proxy_read_timeout 3600s;
   proxy_buffering off;
   proxy_request_buffering off;
-  location ~ ^/(t|x)/v1$ { proxy_pass http://relay_b; }
+
+  set $node relay-b:8443;
+  location ~ ^/(t|x)/v1$ { proxy_pass http://$node; }
   location / { return 404; }
 }
 
@@ -107,9 +128,11 @@ server {
   listen 443 ssl;
   http2 on;
   server_name *.src.${DOMAIN};
+
   access_log /var/log/nginx/access.log armadra;
-  keepalive_timeout 75s;
+  add_header Strict-Transport-Security "max-age=31536000" always;
   client_max_body_size 1m;
+  keepalive_timeout 75s;
   proxy_http_version 1.1;
   proxy_set_header Host $host;
   proxy_set_header X-Forwarded-For $remote_addr;
@@ -119,5 +142,6 @@ server {
   proxy_read_timeout 3600s;
   proxy_buffering off;
   proxy_request_buffering off;
-  location / { proxy_pass http://relay_any; }
+
+  location / { proxy_pass http://$relay_any; }
 }
