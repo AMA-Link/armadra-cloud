@@ -68,6 +68,10 @@ type Params struct {
 	NewEmail    string `json:"newEmail,omitempty"`
 	DeviceName  string `json:"deviceName,omitempty"`
 	Platform    string `json:"platform,omitempty"`
+	// TeamName、InviterName、Role 是团队邀请的：团队名、邀请人显示名与被邀请的角色码。
+	TeamName    string `json:"teamName,omitempty"`
+	InviterName string `json:"inviterName,omitempty"`
+	Role        string `json:"role,omitempty"`
 	// Decoy：找回口令对没注册的邮箱插的占位行，与真发件走同样的库写入，作业里直接丢弃（防枚举，不留地址）。
 	Decoy bool `json:"decoy,omitempty"`
 }
@@ -80,7 +84,9 @@ type Mail struct {
 	To     string
 	// AccountID：带令牌的模板必填（令牌属于哪个账号）。
 	AccountID string
-	Params    Params
+	// InvitationID：团队邀请必填（发信时生成令牌、写进这条邀请）。
+	InvitationID string
+	Params       Params
 }
 
 // Options 是邮件服务的装配。
@@ -140,6 +146,9 @@ func (s *Service) Enqueue(ctx context.Context, tx saas.Tx, mail Mail) error {
 	if _, token := tokenKinds[mail.Template]; token && mail.AccountID == "" && !mail.Params.Decoy {
 		return errors.New("带令牌的模板必须给账号")
 	}
+	if mail.Template == TeamInvitation && mail.InvitationID == "" {
+		return errors.New("团队邀请邮件必须给邀请 id")
+	}
 	if mail.Params.Decoy {
 		mail.To = "" // 占位行不存被试探的地址
 	}
@@ -148,7 +157,7 @@ func (s *Service) Enqueue(ctx context.Context, tx saas.Tx, mail Mail) error {
 		return err
 	}
 	emailID := core.RandomToken(16)
-	payload, err := json.Marshal(sendPayload{EmailID: emailID, AccountID: mail.AccountID})
+	payload, err := json.Marshal(sendPayload{EmailID: emailID, AccountID: mail.AccountID, InvitationID: mail.InvitationID})
 	if err != nil {
 		return err
 	}
@@ -172,8 +181,9 @@ func normalizeLocale(locale string) string {
 }
 
 type sendPayload struct {
-	EmailID   string `json:"emailId"`
-	AccountID string `json:"accountId,omitempty"`
+	EmailID      string `json:"emailId"`
+	AccountID    string `json:"accountId,omitempty"`
+	InvitationID string `json:"invitationId,omitempty"`
 }
 
 // HashToken 是库里存的令牌哈希：SHA-256 的十六进制。
@@ -284,6 +294,18 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 	data := Data{
 		DisplayName: SanitizeLabel(params.DisplayName, labelMax), NewEmail: params.NewEmail,
 		DeviceName: SanitizeLabel(params.DeviceName, labelMax), Platform: SanitizeLabel(params.Platform, labelMax),
+		TeamName: SanitizeLabel(params.TeamName, labelMax), InviterName: SanitizeLabel(params.InviterName, labelMax),
+		RoleLabel: RoleLabel(email.Locale, params.Role),
+	}
+	if email.Template == TeamInvitation {
+		link, ok, err := s.inviteLink(ctx, tx, payload.InvitationID, email.To)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return tx.Jobs().DeleteOutbox(ctx, tenant, email.EmailID)
+		}
+		data.Link = link
 	}
 	if kind, ok := tokenKinds[email.Template]; ok {
 		account, err := tx.Account(ctx, tenant, payload.AccountID)
@@ -316,6 +338,24 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 		MessageID: attemptMessageID(email.MessageID, attempt), To: email.To, Subject: subject, Text: text, HTML: html,
 	}}
 	return nil
+}
+
+// inviteLink 在发信时给团队邀请生成令牌：只把哈希写进邀请行（旧令牌随之作废，重试会换新的），明文只进邮件的
+// 链接片段。邀请已不是待处理（撤销、接受、过期）或收件地址对不上，这封信没有意义，答 ok = false。
+func (s *Service) inviteLink(ctx context.Context, tx saas.Tx, invitationID, to string) (string, bool, error) {
+	inv, err := tx.Invitations().Lock(ctx, s.o.TenantID, invitationID)
+	if err != nil {
+		return "", false, err
+	}
+	nowMs := s.nowMs()
+	if inv == nil || !inv.Pending(nowMs) || inv.Email != strings.ToLower(to) {
+		return "", false, nil
+	}
+	token := core.RandomToken(32)
+	if err := tx.Invitations().SetToken(ctx, s.o.TenantID, invitationID, HashToken(token), nowMs); err != nil {
+		return "", false, err
+	}
+	return s.o.AppOrigin + "/invite/" + invitationID + "#" + token, true, nil
 }
 
 // deliverable：令牌邮件发信时账号还要满足条件，否则这封信没有意义，丢掉。

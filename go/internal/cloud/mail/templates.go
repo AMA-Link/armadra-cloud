@@ -34,6 +34,8 @@ const (
 	PasswordReset   = "password_reset"
 	PasswordChanged = "password_changed"
 	NewDevice       = "new_device"
+	// TeamInvitation 是团队邀请邮件：链接带邀请 id 与一次性令牌（令牌在 # 片段里，S4）。
+	TeamInvitation = "team_invitation"
 )
 
 // Data 是渲染模板的数据。令牌只出现在 Link 的 # 片段里，且只在内存中。
@@ -44,6 +46,26 @@ type Data struct {
 	NewEmail   string
 	DeviceName string
 	Platform   string
+	// TeamName、InviterName、RoleLabel 是团队邀请的：团队名与邀请人的显示名（都是用户填的字符串，
+	// 渲染前已 SanitizeLabel），角色名按收件语言取（RoleLabel）。
+	TeamName    string
+	InviterName string
+	RoleLabel   string
+}
+
+// roleLabels 是团队角色在邮件里的叫法。
+var roleLabels = map[string]map[string]string{
+	LocaleZH: {"admin": "管理员", "member": "成员", "billing": "账单管理员", "guest": "访客"},
+	LocaleEN: {"admin": "an admin", "member": "a member", "billing": "a billing manager", "guest": "a guest"},
+}
+
+// RoleLabel 是团队角色在某种语言里的叫法；不认识的角色答空串，语言不认识时退回中文。
+func RoleLabel(locale, role string) string {
+	labels, ok := roleLabels[locale]
+	if !ok {
+		labels = roleLabels[LocaleZH]
+	}
+	return labels[role]
 }
 
 type compiled struct {

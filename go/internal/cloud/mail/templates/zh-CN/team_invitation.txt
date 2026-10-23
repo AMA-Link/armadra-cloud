@@ -1,0 +1,6 @@
+你好。
+
+{{if .InviterName}}{{.InviterName}} {{end}}邀请你以{{.RoleLabel}}身份加入团队「{{.TeamName}}」。打开下面的链接查看并接受，7 天内有效：
+{{.Link}}
+
+如果你不认识邀请人，或不打算加入，请忽略这封邮件。
