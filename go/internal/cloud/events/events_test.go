@@ -226,3 +226,29 @@ func TestHubResubscribesAfterConnectionLoss(t *testing.T) {
 	busB.Emit(events.NewGrantChanged("s1", "after", "", 1), &core.Audience{AccountIDs: []string{"a1"}})
 	eventually(t, "重连之后的事件到达", func() bool { return len(a.list()) == 1 })
 }
+
+// 慢事件的 Prepare 超出总预算：被取消、计入 PrepareTimeouts，后面的事件照常分发，不被卡住。
+func TestHubPrepareBudgetDoesNotStallDelivery(t *testing.T) {
+	options := redisOptions(t)
+	channel := "cloud-test-events:" + randomID()
+	rec := &recorder{}
+	hub, bus := newHub(t, channel, "cloud/a", rec, options, func(o *events.HubOptions) {
+		o.PrepareBudget = 100 * time.Millisecond
+		o.Prepare = func(ctx context.Context, event core.Event, _ *core.Audience) {
+			if g, ok := event.(events.GrantChanged); ok && g.GrantID == "slow" {
+				<-ctx.Done() // 慢事件：一直等到预算用完
+			}
+		}
+	})
+	aud := &core.Audience{AccountIDs: []string{"a1"}}
+	start := time.Now()
+	bus.Emit(events.NewGrantChanged("s1", "slow", "", 1), aud)
+	bus.Emit(events.NewGrantChanged("s1", "fast", "", 1), aud)
+	eventually(t, "两个事件都分发", func() bool { return len(rec.list()) >= 2 })
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("慢事件卡住了分发：%v", time.Since(start))
+	}
+	if hub.PrepareTimeouts() != 1 {
+		t.Fatalf("应记一次准备超时：%d", hub.PrepareTimeouts())
+	}
+}

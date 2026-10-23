@@ -35,6 +35,9 @@ type HubOptions struct {
 	Buffer int
 	// ReconnectMin 与 ReconnectMax 是订阅断线后的重连退避；缺省 200ms 到 5s。
 	ReconnectMin, ReconnectMax time.Duration
+	// PrepareBudget 是每个事件 Prepare 的总预算；缺省 5 秒。超时未处理完的账号转由 me-stream 的 30 秒心跳兜底
+	// （可见集合最多过期一个心跳），并计入 PrepareTimeouts，不让慢事件卡住后面的分发。
+	PrepareBudget time.Duration
 }
 
 // Hub 把领域事件分发给所有实例：Publish 先在本机排队分发、再异步发到 Redis；订阅别的实例的消息，按序本机分发。
@@ -46,14 +49,15 @@ type Hub struct {
 	local chan item
 	out   chan []byte
 
-	stop    context.CancelFunc
-	wg      sync.WaitGroup
-	ready   chan struct{}
-	psMu    sync.Mutex
-	ps      *goredis.PubSub
-	dropped atomic.Int64
-	closed  atomic.Bool
-	once    sync.Once
+	stop            context.CancelFunc
+	wg              sync.WaitGroup
+	ready           chan struct{}
+	psMu            sync.Mutex
+	ps              *goredis.PubSub
+	dropped         atomic.Int64
+	prepareTimeouts atomic.Int64
+	closed          atomic.Bool
+	once            sync.Once
 }
 
 type item struct {
@@ -74,6 +78,9 @@ func NewHub(o HubOptions) *Hub {
 	if o.ReconnectMax <= 0 {
 		o.ReconnectMax = 5 * time.Second
 	}
+	if o.PrepareBudget <= 0 {
+		o.PrepareBudget = 5 * time.Second
+	}
 	if o.Log == nil {
 		o.Log = obs.Nop()
 	}
@@ -86,6 +93,9 @@ func NewHub(o HubOptions) *Hub {
 
 // Dropped 是因队列满而丢掉的事件数。
 func (h *Hub) Dropped() int64 { return h.dropped.Load() }
+
+// PrepareTimeouts 是 Prepare 超出总预算的次数（指标）：这些事件的可见集合更新转由心跳兜底。
+func (h *Hub) PrepareTimeouts() int64 { return h.prepareTimeouts.Load() }
 
 // Start 起三个协程（订阅、本机分发、出站发布），等订阅就绪后返回；订阅不上报错。
 func (h *Hub) Start(ctx context.Context) error {
@@ -176,8 +186,13 @@ func (h *Hub) deliverLoop(ctx context.Context) {
 			func() {
 				defer func() { _ = recover() }()
 				if h.o.Prepare != nil {
-					pctx, cancel := context.WithTimeout(ctx, 30*time.Second) // 每个账号另有自己的超时
+					pctx, cancel := context.WithTimeout(ctx, h.o.PrepareBudget) // 每个账号另有自己的超时
 					h.o.Prepare(pctx, it.event, it.audience)
+					if pctx.Err() != nil && ctx.Err() == nil {
+						if h.prepareTimeouts.Add(1)%100 == 1 {
+							h.o.Log.Warn("事件准备超出总预算，未处理的账号转由心跳兜底", obs.Operation("events.prepare"))
+						}
+					}
 					cancel()
 				}
 				h.o.Bus.Deliver(it.event, it.audience)
