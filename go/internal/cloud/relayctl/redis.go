@@ -526,3 +526,12 @@ func sanitize(err error) error {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// ReplayRevoke 重新写一枚撤销（单次尝试，不再交给作业）：relay.revoke 作业用它，失败由作业运行器退避重试。
+// 重新走 Plane.Tokens().Revoke，所以撤销键与广播都补上。
+func (r *Redis) ReplayRevoke(ctx context.Context, jti string, expMs int64) error {
+	return sanitize(r.plane.Tokens().Revoke(ctx, jti, time.UnixMilli(expMs)))
+}
+
+// Plane 是包装的控制面（装配方订阅在线事件用）。
+func (r *Redis) Plane() *controlredis.Plane { return r.plane }

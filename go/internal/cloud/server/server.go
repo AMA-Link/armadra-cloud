@@ -62,6 +62,13 @@ type Deps struct {
 	Mail mail.Sender
 	// GrantsHook 让测试在断言签发的交错点（"signed"、"indexed"）停住，验证与并发撤销交错也不漏撤；生产不设。
 	GrantsHook func(stage string)
+	// FlushEvery 缩短设备最近使用与主机最近在线的落盘间隔（缺省 5 分钟；测试用）。
+	FlushEvery time.Duration
+	// Relay 用内存实现代替 Redis 实现（测试断言发出的撤销与节点命令）；生产不设。
+	Relay *relayctl.Memory
+	// RelayPrefix 与 IssuedPrefix 换掉 Redis 的键前缀（缺省 relay: 与 cloud:issued:）；测试用随机前缀隔离，生产不设。
+	RelayPrefix  string
+	IssuedPrefix string
 	// ExtraHandlers 给测试挂额外的过程处理器（例如用 admin.* 检查凭据闸）；生产装配不设。
 	ExtraHandlers map[string]api.Handler
 }
@@ -74,8 +81,10 @@ type Running struct {
 	Redis   goredis.UniversalClient
 	Handler http.Handler
 	// Core 与 Relay 给装配后的检查与测试用。
-	Core  *core.Context
-	Relay *relayctl.Memory
+	Core *core.Context
+	// Relay 是注入的内存实现（Deps.Relay）；缺省的 Redis 实现下为 nil。Control 是落盘包装之后的约定，两种实现都有。
+	Relay   *relayctl.Memory
+	Control relayctl.Control
 
 	closeOnce sync.Once
 	closeFn   func()
@@ -159,12 +168,17 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	}
 	undo.push(func() { _ = redisClient.Close() })
 
-	// 5. 撤销与签发索引的重放：随 relayctl 的 Redis 实现在 S8 加入。
-
-	// 6. 装配、路由与监听。
-	assembly, err := assemble(cfg, db, redisClient, logger, now, deps)
+	// 5. 装配：对节点的约定（Plane）、核心、路由。
+	assembly, err := assemble(ctx, cfg, db, redisClient, logger, now, deps)
 	if err != nil {
 		return fail(err)
+	}
+	undo.push(assembly.close)
+	// 6. 撤销、签发索引与团队额度的重放（设计 §7.2）：完成之前不开监听，所以不会对外答就绪。
+	if assembly.sync != nil {
+		if err := assembly.sync.Run(ctx); err != nil {
+			return fail(fmt.Errorf("重放撤销与签发索引失败：%w", err))
+		}
 	}
 	handler := assembly.handler
 	// 作业在监听之前启动、在 HTTP 停收请求之后停（undo 后进先出）：等当前作业最多 jobsGrace。
@@ -238,7 +252,11 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	flushDone := make(chan struct{})
 	go func() {
 		defer close(flushDone)
-		ticker := time.NewTicker(core.LastSeenFlushEach)
+		flushEvery := deps.FlushEvery
+		if flushEvery <= 0 {
+			flushEvery = core.LastSeenFlushEach
+		}
+		ticker := time.NewTicker(flushEvery)
 		defer ticker.Stop()
 		for {
 			select {
@@ -248,6 +266,7 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 				if err := assembly.auth.Flush(flushCtx); err != nil {
 					logger.Warn("最近使用时间落盘失败", obs.Error(err))
 				}
+				assembly.flushPresence(flushCtx)
 			}
 		}
 	}()
@@ -259,9 +278,10 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 		if err := assembly.auth.Flush(ctx); err != nil {
 			logger.Warn("最近使用时间落盘失败", obs.Error(err))
 		}
+		assembly.flushPresence(ctx)
 	})
 
-	running := &Running{URL: url, DB: db, Redis: redisClient, Handler: handler, Core: assembly.core, Relay: assembly.relay}
+	running := &Running{URL: url, DB: db, Redis: redisClient, Handler: handler, Core: assembly.core, Relay: assembly.relay, Control: assembly.control}
 	running.closeFn = func() {
 		logger.Info("控制面正在关闭")
 		undo.unwind()
