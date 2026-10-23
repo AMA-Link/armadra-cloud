@@ -27,9 +27,11 @@ func IsAppRoute(path string) bool {
 
 // ConsoleCSP 是控制台页面的 CSP（SaaS 实施设计 §5.3）；relayDomain 是源地址 `<sourceId>.src.<域>` 的域。
 func ConsoleCSP(relayDomain string) string {
-	return "default-src 'self'; connect-src 'self' wss://*.src." + relayDomain + " " + TurnstileOrigin +
+	// style-src 'unsafe-inline'：0.10.0 的控制台页面（开屏）有内联样式，实测不放行会被拦；图片、字体与 worker 没发现
+	// 要放行的来源（构建产物里没有 data: 字体与图片、控制台代码里没有 worker），沿用 default-src 'self'。
+	return "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://*.src." + relayDomain + " " + TurnstileOrigin +
 		"; script-src 'self' " + TurnstileOrigin + "; frame-src " + TurnstileOrigin +
-		"; frame-ancestors 'none'; base-uri 'none'"
+		"; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
 }
 
 // HandleApp 只认 GET / HEAD：页面路由回落 index.html，根目录里真实存在的文件（资源）原样给，

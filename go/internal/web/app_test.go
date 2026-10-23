@@ -17,8 +17,8 @@ func TestIsAppRoute(t *testing.T) {
 
 func TestConsoleCSP(t *testing.T) {
 	t.Parallel()
-	want := "default-src 'self'; connect-src 'self' wss://*.src.example.com https://challenges.cloudflare.com; " +
-		"script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'"
+	want := "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://*.src.example.com https://challenges.cloudflare.com; " +
+		"script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
 	if got := ConsoleCSP("example.com"); got != want {
 		t.Fatalf("ConsoleCSP = %q", got)
 	}

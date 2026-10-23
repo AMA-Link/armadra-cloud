@@ -21,8 +21,8 @@ func TestWebRootHostsConsole(t *testing.T) {
 		}
 	}
 	r := newRig(t, rigOptions{env: map[string]string{"WEB_ROOT": root}})
-	const csp = "default-src 'self'; connect-src 'self' wss://*.src.src.localhost https://challenges.cloudflare.com; " +
-		"script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'"
+	const csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://*.src.src.localhost https://challenges.cloudflare.com; " +
+		"script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
 	for _, path := range []string{"/", "/login", "/verify", "/reset", "/device", "/t/abc", "/h/abc/x", "/j/abc", "/invite/i1", "/ops/teams", "/ops"} {
 		res := r.do("GET", path, nil, nil)
 		r.expect(res, 200, "")

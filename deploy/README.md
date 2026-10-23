@@ -40,7 +40,7 @@
 | `RELAY_DOMAIN`                                            | 是   | `<sourceId>.src.<域>` 的 `<域>`                                                                                                                        |
 | `RELAY_CLOUD_ISSUER`                                      | 是   | 控制面 issuer（令牌的 `iss`）                                                                                                                          |
 | `RELAY_JWKS_URL`                                          |      | 缺省 `<issuer>/.well-known/jwks.json`；各节点共用 Redis 里的副本，同一时刻只有一个节点回源                                                             |
-| `RELAY_REDIS_URL`                                         | 是   | 与控制面共用的那一个 Redis（≥ 7.4，节点表用 `HPEXPIRE`）                                                                                               |
+| `RELAY_REDIS_URL` / `RELAY_REDIS_URL_FILE`                | 是   | 与控制面共用的那一个 Redis（≥ 7.4，节点表用 `HPEXPIRE`）；可带口令                                                                                     |
 | `RELAY_TUNNEL_URL`                                        | 是   | 本节点自己的隧道地址 `wss://<node>.edge.<域>/t/v1`，写进节点表，源按 `heartbeatHint` 连它                                                              |
 | `RELAY_INTERNODE_URL`                                     |      | 别的节点连本节点 `/x/v1` 的地址，缺省由 `RELAY_TUNNEL_URL` 把路径换成 `/x/v1`                                                                          |
 | `RELAY_NODE_WEIGHT`                                       |      | 节点表里的权重（rendezvous 加权），1–1000，缺省 1                                                                                                      |
@@ -144,7 +144,7 @@
 
 ## SaaS 单机 M1（`deploy/saas`）
 
-`saas/compose.yml`：`postgres`（首次启动生成自签证书，控制面用 `sslmode=require` 连；生产换托管库并用 `verify-full`）→ `migrate`（跑一次 `armadra-cloud migrate`）→ `db-roles`（节点的流量角色 `armadra_relay_traffic`，只有流量表读写与账本只读）→ `cloud` → `relay-a`、`relay-b`（每个节点有自己的隧道地址 `wss://<节点>.edge.<域>/t/v1`，各自一枚节点令牌）；`redis` 开 AOF（`appendfsync everysec`）、`maxmemory 128mb`、`noeviction`；`--profile proxy` 起参考 nginx（TLS 终止，WebSocket 设置与登录 / 链接接受限流，访问日志用 `$uri` 不记 query）；`compose.mailpit.yml` 把邮件送进 mailpit（开发 / 端到端，不要用在生产）。步骤、节点令牌的签发与撤销、升级与回滚、备份、Redis 故障时登录失败关闭与告警，见 [SaaS 运维手册](../docs/runbooks/saas.md)；变量在 `saas/.env.example`。
+`saas/compose.yml`：口令与连接串全部是 `secrets/` 下的文件（`init-secrets.sh` 生成；PostgreSQL 用 `POSTGRES_PASSWORD_FILE`，控制面用 `DATABASE_URL_FILE` 与 `REDIS_URL_FILE`，节点用 `RELAY_DATABASE_URL_FILE` 与 `RELAY_REDIS_URL_FILE`）；网络分 `edge` 与 `backend`（internal），代理只进 `edge` 且 IP 固定，Redis 要口令；`postgres`（首次启动生成自签证书，超级用户只用于初始化，控制面用另建的库属主角色 `armadra_cloud` 以 `sslmode=require` 连；生产换托管库并用 `verify-full`）→ `migrate`（跑一次 `armadra-cloud migrate`）→ `db-roles`（节点的流量角色 `armadra_relay_traffic`，只有流量表读写与账本只读）→ `cloud` → `relay-a`、`relay-b`（每个节点有自己的隧道地址 `wss://<节点>.edge.<域>/t/v1`，各自一枚节点令牌）；`redis` 开 AOF（`appendfsync everysec`）、`maxmemory 128mb`、`noeviction`；`--profile proxy` 起参考 nginx（TLS 终止，WebSocket 设置与登录 / 链接接受限流，访问日志用 `$uri` 不记 query）；`compose.mailpit.yml` 把邮件送进 mailpit（开发 / 端到端，不要用在生产）。步骤、节点令牌的签发与撤销、升级与回滚、备份、Redis 故障时登录失败关闭与告警，见 [SaaS 运维手册](../docs/runbooks/saas.md)；变量在 `saas/.env.example`。
 
 - 登录失败计数共享在 Redis，Redis 不可用时登录一律答 `503 unavailable`（失败关闭，不回落到进程内计数）；控制面指标 `armadra_cloud_lockout_unavailable_total` 计这类拒绝，应当告警。
 - 验收：`pnpm e2e --mode saas`（真实控制面 + 两个节点 + 一次性 PostgreSQL / Redis / mailpit，设计 §8.4 的 14 个场景）。

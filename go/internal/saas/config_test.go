@@ -207,3 +207,32 @@ func TestServeFailsWithoutRedis(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// Redis 地址带口令时用 RELAY_REDIS_URL_FILE 给；与 RELAY_REDIS_URL 同给是配错，问题不回显取值。
+func TestLoadConfigRedisURLFile(t *testing.T) {
+	orig := readFile
+	defer func() { readFile = orig }()
+	readFile = func(name string) ([]byte, error) {
+		if name == "/run/redis" {
+			return []byte("redis://:redis-pass@redis:6379\n"), nil
+		}
+		return nil, errors.New("no such file")
+	}
+	env := baseEnv()
+	delete(env, "RELAY_REDIS_URL")
+	env["RELAY_REDIS_URL_FILE"] = "/run/redis"
+	cfg, issues := LoadConfig(env, host)
+	if len(issues) > 0 || cfg.RedisURL != "redis://:redis-pass@redis:6379" {
+		t.Fatalf("%+v %v", cfg, issues)
+	}
+	env["RELAY_REDIS_URL"] = "redis://inline:6379"
+	_, issues = LoadConfig(env, host)
+	if len(issues) != 1 || !strings.Contains(issues[0], "RELAY_REDIS_URL") || strings.Contains(strings.Join(issues, ""), "redis-pass") {
+		t.Fatalf("%v", issues)
+	}
+	delete(env, "RELAY_REDIS_URL")
+	delete(env, "RELAY_REDIS_URL_FILE")
+	if _, issues = LoadConfig(env, host); len(issues) != 1 || !strings.Contains(issues[0], "必填") {
+		t.Fatalf("%v", issues)
+	}
+}

@@ -1114,7 +1114,7 @@ type Tx interface {
 ### 5.3 CORS、页面与能力
 
 - `/v1/*` 与 `/.well-known/*`：对任意来源答 `Access-Control-Allow-Origin: *`、`Allow-Headers: authorization, content-type`，**从不**发 `Allow-Credentials`——浏览器跨源请求带不上 Cookie，跨源只能用 Bearer。控制台同源，不走 CORS。
-- 托管页面（`WEB_ROOT`，S9）：复用 `internal/web`；`/`、`/login`、`/verify`、`/reset`、`/t/*`、`/h/*`、`/j/*`、`/device`、`/invite/*`、`/ops/*` 回落 `index.html`；所有 HTML 带 `Referrer-Policy: no-referrer` 与 CSP：`default-src 'self'; connect-src 'self' wss://*.src.<域> https://challenges.cloudflare.com; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'`。
+- 托管页面（`WEB_ROOT`，S9）：复用 `internal/web`；`/`、`/login`、`/verify`、`/reset`、`/t/*`、`/h/*`、`/j/*`、`/device`、`/invite/*`、`/ops/*` 回落 `index.html`；所有 HTML 带 `Referrer-Policy: no-referrer` 与 CSP：`default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://*.src.<域> https://challenges.cloudflare.com; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'`（S9 补：`style-src 'unsafe-inline'` 经 Armadra 0.10.0 的 web 产物在浏览器里实测是必需的——开屏有内联样式，不放行会被拦；`object-src` 与 `form-action` 收紧；`img-src data:`、`font-src data:`、`worker-src blob:` 查构建产物没有用到，不放行）。
 - `platform.info.capabilities`（SaaS M1）：`auth.password`、`auth.password-change`、`auth.device-code`、`links.source-invite`、`links.update`、`links.scope`、`me.stream`、`teams`、`invitations`、`grants`、`audit`、`billing`（只有 `plan` / `usage`，其余过程 501），配了挑战时加 `challenge.turnstile`。不报 `auth.passkey`、`auth.totp`、`auth.oauth`、`groups`、`access-requests`、`api-tokens`、`links.team-join`、`me.traffic`、`sources.hosted`、`orgs`。
 
 ### 5.4 限流与挑战

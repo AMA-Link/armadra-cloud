@@ -124,19 +124,44 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 	} else {
 		bad("RELAY_DOMAIN", "必填")
 	}
-	for _, item := range []struct {
-		key  string
-		into *string
-	}{{"RELAY_CLOUD_ISSUER", &cfg.CloudIssuer}, {"RELAY_REDIS_URL", &cfg.RedisURL}} {
-		v, ok := get(item.key)
+	secret := func(key string) string {
+		value, has := get(key)
+		file, hasFile := get(key + "_FILE")
 		switch {
-		case !ok:
-			bad(item.key, "必填")
-		case !isURL(v):
-			bad(item.key, "不是合法的 URL")
-		default:
-			*item.into = v
+		case has && hasFile:
+			bad(key, "与 "+key+"_FILE 只能给一个")
+			return ""
+		case hasFile:
+			b, err := readFile(file)
+			if err != nil {
+				bad(key+"_FILE", "读不出来")
+				return ""
+			}
+			return strings.TrimSpace(string(b))
 		}
+		return strings.TrimSpace(value)
+	}
+	if v, ok := get("RELAY_CLOUD_ISSUER"); !ok {
+		bad("RELAY_CLOUD_ISSUER", "必填")
+	} else if !isURL(v) {
+		bad("RELAY_CLOUD_ISSUER", "不是合法的 URL")
+	} else {
+		cfg.CloudIssuer = v
+	}
+	// Redis 地址可能带口令：和别的秘密一样，可以用 RELAY_REDIS_URL_FILE 给。
+	_, hasRedis := get("RELAY_REDIS_URL")
+	_, hasRedisFile := get("RELAY_REDIS_URL_FILE")
+	switch v := secret("RELAY_REDIS_URL"); {
+	case !hasRedis && !hasRedisFile:
+		bad("RELAY_REDIS_URL", "必填")
+	case v == "":
+		if !(hasRedis && hasRedisFile) { // 两个都给时 secret 已经报过
+			bad("RELAY_REDIS_URL", "是空的")
+		}
+	case !isURL(v):
+		bad("RELAY_REDIS_URL", "不是合法的 URL")
+	default:
+		cfg.RedisURL = v
 	}
 	if v, ok := get("RELAY_ALLOW_INSECURE_TUNNEL"); ok {
 		switch v {
@@ -182,23 +207,6 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 		} else {
 			cfg.Weight = n
 		}
-	}
-	secret := func(key string) string {
-		value, has := get(key)
-		file, hasFile := get(key + "_FILE")
-		switch {
-		case has && hasFile:
-			bad(key, "与 "+key+"_FILE 只能给一个")
-			return ""
-		case hasFile:
-			b, err := readFile(file)
-			if err != nil {
-				bad(key+"_FILE", "读不出来")
-				return ""
-			}
-			return strings.TrimSpace(string(b))
-		}
-		return strings.TrimSpace(value)
 	}
 	cfg.NodeToken = secret("RELAY_NODE_TOKEN")
 	if v := secret("RELAY_DATABASE_URL"); v != "" {
