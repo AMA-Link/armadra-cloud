@@ -3,11 +3,14 @@
 //   pnpm e2e --mode personal [--skip-build] [--relay-image <镜像>] [--server-image <镜像>]
 //                            [--output <目录>] [--keep]
 //   pnpm e2e --mode personal-workers [--output <目录>]
-//   pnpm e2e --mode saas [--redis-url <专用 Redis>] [--output <目录>]
+//   pnpm e2e --mode saas [--output <目录>]
+//   pnpm e2e --mode saas-nodes [--redis-url <专用 Redis>] [--output <目录>]
 //
 // `personal-workers` 是本地 workerd 上的 Workers 中继（`wrangler dev --local`，不连 Cloudflare
-// 账号）对假 core 与 Node 客户端，见 scripts/e2e/workers.mjs；`saas` 是三个 SaaS 中继节点 + Redis
-// （节点间转发、撤销跨节点、下线再平衡），见 scripts/e2e/saas.mjs；下面的编排只属于 `personal`。
+// 账号）对假 core 与 Node 客户端，见 scripts/e2e/workers.mjs；`saas` 是真实控制面 + 两个 SaaS 中继节点
+// + PostgreSQL / Redis / mailpit 的账号、团队、授予、撤销与再平衡（SaaS 实施设计 §8.4），见 scripts/e2e/saas.mjs；
+// `saas-nodes` 是三个节点 + Redis、测试签发者代替控制面的节点用例（转发、慢客户端、再平衡），见
+// scripts/e2e/saas-nodes.mjs；下面的编排只属于 `personal`。
 //
 // 编排（deploy/e2e/compose.yml，项目名 armadra-e2e-<随机>，跑完 down -v）：
 //   1. 本地构建个人中转镜像（本仓）与服务器壳镜像（Armadra 主仓，见下）；
@@ -68,8 +71,11 @@ const USAGE = `用法: pnpm e2e --mode personal [选项]
 
   --mode personal        个人中转
   --mode personal-workers  本地 workerd 上的 Workers 中继（wrangler dev --local）对假 core
-  --mode saas            三个 SaaS 中继节点 + Redis（一次性容器）对假 core：节点间转发、撤销、再平衡
-  --redis-url URL        saas 用这个 Redis（必须是专用的空库），不起容器
+  --mode saas            真实控制面 armadra-cloud + 两个 SaaS 中继节点 + PostgreSQL / Redis / mailpit（一次性容器）
+                         对假 core：注册与验证邮件、团队与邀请、设备码登记主机、授予与断言、经节点转发、撤销、停用、再平衡
+  --mode saas-nodes      三个 SaaS 中继节点 + Redis（一次性容器）对假 core，测试签发者代替控制面：
+                         节点间转发、慢客户端、撤销、再平衡
+  --redis-url URL        saas-nodes 用这个 Redis（必须是专用的空库），不起容器
   --skip-build           不构建镜像，用已有的 armadra-relay:e2e 与 armadra-server:e2e
   --relay-image IMAGE    用现成的中继镜像
   --server-image IMAGE   用现成的服务器壳镜像（如 ghcr.io/ama-link/armadra-server:<compat.min>）
@@ -158,14 +164,17 @@ if (mode === "personal-workers") {
   );
   process.exit(workersFailure ? 1 : 0);
 }
-if (mode === "saas") {
-  const { runSaasE2e } = await import("./e2e/saas.mjs");
+if (mode === "saas" || mode === "saas-nodes") {
+  const { runSaasE2e } =
+    mode === "saas"
+      ? await import("./e2e/saas.mjs")
+      : { runSaasE2e: (await import("./e2e/saas-nodes.mjs")).runSaasNodesE2e };
   const saasReport = new Report();
   const saasOutput = resolve(
     root,
     options.values.get("--output") ?? ".data/e2e",
   );
-  log("armadra-cloud e2e（saas）");
+  log(`armadra-cloud e2e（${mode}）`);
   let saasFailure;
   try {
     await runSaasE2e({
@@ -205,7 +214,7 @@ if (mode !== "personal") {
   console.error(
     mode === undefined
       ? `需要 --mode personal\n${USAGE}`
-      : `--mode ${mode}：只支持 personal、personal-workers 与 saas`,
+      : `--mode ${mode}：只支持 personal、personal-workers、saas 与 saas-nodes`,
   );
   process.exit(2);
 }

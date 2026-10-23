@@ -1,38 +1,28 @@
-// 跨进程端到端的 SaaS 版（`pnpm e2e --mode saas`）：三个 `armadra-relay saas serve` 节点 + 一个 Redis。
+// 跨进程端到端的 SaaS 版（`pnpm e2e --mode saas`，SaaS 实施设计 §8.4）：真实控制面 `armadra-cloud` + 两个
+// `armadra-relay saas serve` 节点（a、b，各自的隧道地址）+ PostgreSQL + Redis + mailpit（都是一次性容器、临时数据）
+// + 假 core（packages/e2e-fake-core，报 e2e 能力与 1.4 的 coreVersion）。
 //
-//   1. `go build` 出中继（或用 ARMADRA_RELAY_BIN）；Redis 缺省起一个一次性容器（跑完 `docker stop`），
-//      给了 `--redis-url` 就用它（必须是专用的空库：节点的键前缀固定是 relay:）；
-//   2. 测试签发者：本进程里的 Ed25519 钥，`/.well-known/jwks.json` 走 HTTP；节点令牌、隧道令牌、
-//      中继令牌都由它签（控制面落地之前代替 armadra-cloud）；
-//   3. 假 core（packages/e2e-fake-core）连节点 a 的隧道，客户端连节点 b（`<sourceId>.src.<域>`）：
-//      通道经 `/x/v1` 转到 a，10 MB 随机字节双向原样；`/x/v1` 没有有效节点令牌一律 401；
-//      慢客户端（不读的下载）不拖住同一条节点间连接上别的源；下载中途掉线 64 次之后源照常出数据；
-//   4. 撤销跨节点生效：照控制面的写法写 `relay:revoked:<jti>` 并广播、发 `kick`，在线通道被踢，
-//      旧令牌在每个节点上都 4401；
-//   5. 持有节点下线再平衡：给 a 发 SIGTERM → 隧道收到 GOAWAY rebalance、节点表里 a 先标 draining 再删掉、
-//      经 b 转发的通道 4404 → 源按节点表重连到 c → 客户端重连经 b 落到 c；
-//      持有节点 c 被 SIGKILL → 经 b 的通道立即 4404（节点间连接断了）；
-//   6. 指标里有 relay_routes_remote_total 等；全部节点日志里查不到任何秘密。
+// 账号、团队、邀请、设备码、主机登记、授予、断言、撤销、运营停用都走真实接口；验证邮件与邀请邮件从 mailpit 取。
+// 客户端两种形态各一遍：原生（Bearer，A）与控制台（Cookie + CSRF，B 与运营账号）。断言一律是「在超时内最终成立」
+// （轮询直到满足或超时失败），不写具体毫秒数。场景编号对应设计 §8.4 的表；执行顺序按因果关系排（9、10 在 6 之前，
+// 12 在 11 之前，13 在最后）。
 //
-// 没有控制面，所以 heartbeatHint、按团队踢与额度由 Go 的包测试覆盖（internal/saas），这里只走线上行为。
-import { spawn } from "node:child_process";
+//   1. `go build` 出控制面与中继（ARMADRA_CLOUD_BIN / ARMADRA_RELAY_BIN 可指定现成的二进制）；
+//   2. 起 PostgreSQL / Redis / mailpit 容器（随机端口、随机口令），只停自己起的；
+//   3. `armadra-cloud migrate`，用 deploy/saas/db-roles.sh 建节点的流量角色（与 compose 同一份脚本），起控制面，
+//      用 `nodes token` 给两个节点签节点令牌，再起两个节点；
+//   4. 场景 1–14；全部日志、库转储与 Redis 转储里查不到任何登记过的秘密。
+import { randomBytes } from "node:crypto";
 import {
-  createHash,
-  generateKeyPairSync,
-  randomBytes,
-  sign,
-} from "node:crypto";
-import { createServer as createHttpServer } from "node:http";
-import { connect, createServer } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  buildSigningInput,
-  joinCompactJws,
-  TOKEN_TYPES,
-} from "@armadra/platform-protocol/assertion";
 import { WebSocket } from "ws";
 
 import {
@@ -46,422 +36,347 @@ import {
   sleep,
   until,
 } from "./lib.mjs";
+import {
+  Client,
+  decodePart,
+  mailpit,
+  newHost,
+  runCli,
+  sourceAuth,
+  startContainer,
+  startProcess,
+  totp,
+} from "./saas-lib.mjs";
+import {
+  channel,
+  closeOf,
+  DOMAIN,
+  echo,
+  freePort,
+  metric,
+  redisClient,
+} from "./saas-nodes.mjs";
 
-const DOMAIN = "e2e.test";
-const REDIS_IMAGE = "redis:8.8.3-alpine";
-
-const freePort = () =>
-  new Promise((done, failed) => {
-    const probe = createServer();
-    probe.once("error", failed);
-    probe.listen(0, "127.0.0.1", () => {
-      const { port } = probe.address();
-      probe.close(() => done(port));
-    });
-  });
-
-/* ------------------------------ Redis（最小 RESP 客户端） ------------------------------ */
-
-/** 连 Redis，答 `{ command(...args), close() }`；只用来扮演控制面写键、发广播、读节点表。 */
-function redisClient(url) {
-  const target = new URL(url);
-  const socket = connect(Number(target.port || 6379), target.hostname);
-  let buffer = Buffer.alloc(0);
-  const waiting = [];
-  const parse = (buf, at) => {
-    const end = buf.indexOf("\r\n", at);
-    if (end < 0) return undefined;
-    const kind = String.fromCharCode(buf[at]);
-    const line = buf.toString("utf8", at + 1, end);
-    const next = end + 2;
-    if (kind === "+") return { value: line, next };
-    if (kind === "-") return { value: new Error(line), next };
-    if (kind === ":") return { value: Number(line), next };
-    if (kind === "$") {
-      const len = Number(line);
-      if (len < 0) return { value: null, next };
-      if (buf.length < next + len + 2) return undefined;
-      return {
-        value: buf.toString("utf8", next, next + len),
-        next: next + len + 2,
-      };
-    }
-    if (kind === "*") {
-      const count = Number(line);
-      if (count < 0) return { value: null, next };
-      const items = [];
-      let cursor = next;
-      for (let i = 0; i < count; i += 1) {
-        const item = parse(buf, cursor);
-        if (!item) return undefined;
-        items.push(item.value);
-        cursor = item.next;
-      }
-      return { value: items, next: cursor };
-    }
-    throw new Error(`不认识的 RESP 答复：${kind}`);
-  };
-  socket.on("data", (chunk) => {
-    buffer = Buffer.concat([buffer, chunk]);
-    for (;;) {
-      const reply = parse(buffer, 0);
-      if (!reply) return;
-      buffer = buffer.subarray(reply.next);
-      const pending = waiting.shift();
-      if (reply.value instanceof Error) pending?.failed(reply.value);
-      else pending?.done(reply.value);
-    }
-  });
-  let broken;
-  const fail = (error) => {
-    broken ??= error ?? new Error("Redis 连接断开");
-    for (const pending of waiting.splice(0)) pending.failed(broken);
-  };
-  socket.on("error", fail);
-  socket.on("close", () => fail());
-  const ready = new Promise((done, failed) => {
-    socket.once("connect", done);
-    socket.once("error", failed);
-  });
-  ready.catch(() => {});
-  return {
-    async command(...args) {
-      await ready;
-      if (broken) throw broken;
-      const parts = [`*${args.length}\r\n`];
-      for (const arg of args.map(String))
-        parts.push(`$${Buffer.byteLength(arg)}\r\n${arg}\r\n`);
-      return new Promise((done, failed) => {
-        waiting.push({ done, failed });
-        socket.write(parts.join(""));
-      });
-    },
-    close() {
-      socket.destroy();
-    },
-  };
-}
-
-/** 起一次性的 Redis 容器（只停自己起的这一个）。 */
-async function startRedis() {
-  const name = `armadra-e2e-saas-${randomBytes(4).toString("hex")}`;
-  await exec("docker", [
-    "run",
-    "-d",
-    "--rm",
-    "--name",
-    name,
-    "-p",
-    "127.0.0.1::6379",
-    REDIS_IMAGE,
-  ]);
-  const { stdout } = await exec("docker", ["port", name, "6379/tcp"]);
-  const port = stdout.trim().split("\n")[0].split(":").pop();
-  const url = `redis://127.0.0.1:${port}`;
-  await until(
-    "Redis 就绪",
-    async () => {
-      const probe = redisClient(url);
-      try {
-        return (await probe.command("PING")) === "PONG";
-      } catch {
-        return false;
-      } finally {
-        probe.close();
-      }
-    },
-    30_000,
-    300,
-  );
-  return {
-    url,
-    stop: () => exec("docker", ["stop", name], { allowFail: true }),
-  };
-}
-
-/* ------------------------------ 签发者 ------------------------------ */
-
-async function startIssuer() {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const kid = `k-${randomBytes(4).toString("hex")}`;
-  const jwk = { ...publicKey.export({ format: "jwk" }), kid };
-  const server = createHttpServer((request, response) => {
-    if (request.url === "/.well-known/jwks.json") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ keys: [jwk] }));
-      return;
-    }
-    response.writeHead(404).end();
-  });
-  await new Promise((done) => server.listen(0, "127.0.0.1", done));
-  const issuer = `http://127.0.0.1:${server.address().port}`;
-  const signToken = (typ, claims) => {
-    const iat = Math.floor(Date.now() / 1000);
-    const { signingInput, encodedHeader, encodedPayload } = buildSigningInput(
-      { alg: "EdDSA", typ, kid },
-      { iss: issuer, iat, exp: iat + 3600, ver: 1, ...claims },
-    );
-    return secret(
-      joinCompactJws(
-        encodedHeader,
-        encodedPayload,
-        new Uint8Array(sign(null, signingInput, privateKey)),
-      ),
-      `${typ} 令牌`,
-    );
-  };
-  return {
-    issuer,
-    nodeToken: (node) =>
-      signToken(TOKEN_TYPES.node, {
-        sub: node,
-        aud: "relay-node",
-        jti: `n.${node}.${randomBytes(6).toString("hex")}`,
-      }),
-    tunnelToken: (sourceId, sourcePublic) =>
-      signToken(TOKEN_TYPES.tunnel, {
-        sub: sourceId,
-        aud: "relay-tunnel",
-        jti: randomBytes(8).toString("hex"),
-        cnf: {
-          jwk: {
-            kty: "OKP",
-            crv: "Ed25519",
-            x: sourcePublic.export({ format: "jwk" }).x,
-          },
-        },
-      }),
-    relayToken: (sourceId, over = {}) =>
-      signToken(TOKEN_TYPES.relay, {
-        sub: "acct_e2e",
-        aud: "relay",
-        src: sourceId,
-        jti: randomBytes(8).toString("hex"),
-        ...over,
-      }),
-    close: () => new Promise((done) => server.close(done)),
-  };
-}
-
-/* ------------------------------ 节点 ------------------------------ */
-
-async function startNode({
-  bin,
-  name,
-  issuer,
-  redisUrl,
-  nodeToken,
-  metricsToken,
-}) {
-  const port = await freePort();
-  const metricsPort = await freePort();
-  const origin = `http://127.0.0.1:${port}`;
-  const logs = [];
-  const child = spawn(bin, ["saas", "serve"], {
-    env: {
-      PATH: process.env.PATH,
-      RELAY_LISTEN: `127.0.0.1:${port}`,
-      RELAY_NODE_ID: name,
-      RELAY_DOMAIN: DOMAIN,
-      RELAY_CLOUD_ISSUER: issuer,
-      RELAY_REDIS_URL: redisUrl,
-      RELAY_TUNNEL_URL: `ws://127.0.0.1:${port}/t/v1`,
-      RELAY_ALLOW_INSECURE_TUNNEL: "1",
-      RELAY_NODE_TOKEN: nodeToken,
-      RELAY_METRICS_LISTEN: `127.0.0.1:${metricsPort}`,
-      RELAY_METRICS_TOKEN: metricsToken,
-      RELAY_DRAIN_GRACE_MS: "3000",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (chunk) => logs.push(chunk.toString("utf8")));
-  child.stderr.on("data", (chunk) => logs.push(chunk.toString("utf8")));
-  const exited = new Promise((done) =>
-    child.once("exit", (code, signal) => done({ code, signal })),
-  );
-  await until(
-    `节点 ${name} 就绪`,
-    async () => {
-      if (child.exitCode !== null)
-        throw new Error(
-          `节点 ${name} 提前退出：${redact(logs.join("").slice(-800))}`,
-        );
-      try {
-        return (await fetch(`${origin}/ready`)).ok;
-      } catch {
-        return false;
-      }
-    },
-    30_000,
-    200,
-  );
-  return {
-    name,
-    origin,
-    tunnelUrl: `ws://127.0.0.1:${port}/t/v1`,
-    metrics: async () => {
-      const response = await fetch(`http://127.0.0.1:${metricsPort}/metrics`, {
-        headers: { authorization: `Bearer ${metricsToken}` },
-      });
-      expectEqual(response.status, 200, `${name} 的 /metrics`);
-      return response.text();
-    },
-    logs,
-    exited,
-    signal: (sig) => child.kill(sig),
-    stop: async () => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
-        const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
-        await exited;
-        clearTimeout(timer);
-      }
-    },
-  };
-}
-
-/* ------------------------------ 客户端 ------------------------------ */
-
-/** 经节点 node 开一条到源的端到端通道（Host 寻址）；答 ws 或被拒的关闭码。 */
-function channel(node, sourceId, relayToken) {
-  return new Promise((done, failed) => {
-    const ws = new WebSocket(
-      `${node.origin.replace(/^http/, "ws")}/_relay/e2e`,
-      ["armadra-e2e.1", `armadra-relay.${relayToken}`],
-      {
-        perMessageDeflate: false,
-        headers: { host: `${sourceId}.src.${DOMAIN}` },
-      },
-    );
-    let opened = false;
-    ws.once("open", () => {
-      opened = true;
-      // 被拒的升级也先完成再以关闭码结束：等一小会儿看它是不是马上被关。
-      const timer = setTimeout(() => done({ ws }), 300);
-      ws.once("close", (code) => {
-        clearTimeout(timer);
-        done({ code });
-      });
-    });
-    ws.once("unexpected-response", (_request, response) =>
-      done({ status: response.statusCode }),
-    );
-    ws.once("error", (error) => {
-      if (!opened) failed(error);
-    });
-  });
-}
-
-/** 开一条通道就答（不等看会不会被关）；paused 为真时一开就停读（慢客户端：下行字节堆在内核与中继里）。 */
-function rawChannel(node, sourceId, relayToken, paused = false) {
-  return new Promise((done, failed) => {
-    const ws = new WebSocket(
-      `${node.origin.replace(/^http/, "ws")}/_relay/e2e`,
-      ["armadra-e2e.1", `armadra-relay.${relayToken}`],
-      {
-        perMessageDeflate: false,
-        headers: { host: `${sourceId}.src.${DOMAIN}` },
-      },
-    );
-    ws.once("open", () => {
-      if (paused) ws.pause();
-      done(ws);
-    });
-    ws.once("error", failed);
-  });
-}
-
-const closeOf = (ws) =>
-  ws.readyState === WebSocket.CLOSED
-    ? Promise.resolve(-1)
-    : new Promise((done) => ws.once("close", (code) => done(code)));
-
-async function echo(ws, total) {
-  const sent = createHash("sha256");
-  const got = createHash("sha256");
-  let received = 0;
-  const onMessage = (data) => {
-    got.update(data);
-    received += data.length;
-  };
-  ws.on("message", onMessage);
-  for (let offset = 0; offset < total; ) {
-    const size = Math.min(total - offset, 48 * 1024);
-    const chunk = randomBytes(size);
-    sent.update(chunk);
-    ws.send(chunk);
-    offset += size;
-    if (ws.bufferedAmount > 4 * 1024 * 1024)
-      await until("客户端缓冲排空", () => ws.bufferedAmount < 1024 * 1024);
-  }
-  await until("回显收全", () => received >= total, 60_000, 50);
-  ws.off("message", onMessage);
-  expectEqual(received, total, "回显字节数");
-  expectEqual(got.digest("hex"), sent.digest("hex"), "回显内容");
-}
-
-function metric(text, name) {
-  const line = text.split("\n").find((l) => l.startsWith(`${name} `));
-  return line === undefined ? undefined : Number(line.slice(name.length + 1));
-}
+const IMAGES = {
+  postgres: "postgres:17.11-alpine",
+  redis: "redis:8.8.3-alpine",
+  mailpit: "axllent/mailpit:v1.31.4",
+};
+const HOST_VERSION = "0.10.0"; // 满足 MIN_CORE_VERSION_TEAM_ASSERTION 的 core
+const OLD_HOST_VERSION = "0.9.0"; // 低于团队断言的最低版本
 
 /* ------------------------------ 编排 ------------------------------ */
 
-/** 跑完全部步骤；`report` 是 e2e.mjs 的步骤记录。 */
-export async function runSaasE2e({ root, report, redisUrl: givenRedis }) {
+export async function runSaasE2e({ root, report }) {
   const { FakeCore } = await import(
     "../../packages/e2e-fake-core/src/fake-core.ts"
   );
+  const tag = randomBytes(4).toString("hex");
+  const containers = [];
   const nodes = {};
   const cores = [];
   const sockets = [];
+  const containerNames = [];
+  let cloud;
   let redis;
-  let issuer;
-  let admin;
-  let buildDir;
+  let adminRedis;
+  let pgName;
+  let work;
   try {
-    let bin = process.env.ARMADRA_RELAY_BIN;
-    await report.step("构建中继、起 Redis 与测试签发者", async () => {
-      if (!bin) {
-        buildDir = mkdtempSync(join(tmpdir(), "armadra-e2e-saas-"));
-        bin = join(buildDir, "armadra-relay");
-        await exec("go", ["build", "-o", bin, "./cmd/armadra-relay"], {
-          cwd: join(root, "go"),
-        });
-      }
-      redis = givenRedis
-        ? { url: givenRedis, stop: async () => {} }
-        : await startRedis();
-      admin = redisClient(redis.url);
-      if (givenRedis) {
-        const existing = await admin.command("KEYS", "relay:*");
-        expect(
-          existing.length === 0,
-          "--redis-url 要是专用的空库（已有 relay: 前缀的键）",
-        );
-      }
-      issuer = await startIssuer();
-      return redis.url.replace(/\/\/[^@]*@/, "//…@");
-    });
-
+    work = mkdtempSync(join(tmpdir(), "armadra-e2e-saas-"));
+    const ports = {
+      pg: await freePort(),
+      redis: await freePort(),
+      smtp: await freePort(),
+      mail: await freePort(),
+      cloud: await freePort(),
+    };
+    const pgPassword = secret(
+      randomBytes(12).toString("hex"),
+      "PostgreSQL 口令",
+    );
+    const trafficPassword = secret(
+      randomBytes(12).toString("hex"),
+      "流量角色口令",
+    );
+    const masterKey = secret(randomBytes(32).toString("hex"), "主密钥");
     const metricsToken = secret(randomBytes(18).toString("hex"), "指标令牌");
+    const base = `http://127.0.0.1:${ports.cloud}`;
+    pgName = `armadra-e2e-saas-pg-${tag}`;
+    const redisName = `armadra-e2e-saas-redis-${tag}`;
+    const psql = async (sql) => {
+      const { stdout } = await exec("docker", [
+        "exec",
+        pgName,
+        "psql",
+        "-h",
+        "127.0.0.1",
+        "-U",
+        "armadra",
+        "-d",
+        "armadra_cloud",
+        "-At",
+        "-F",
+        "|",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        sql,
+      ]);
+      return stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split("|"));
+    };
+    let cloudBin = process.env.ARMADRA_CLOUD_BIN;
+    let relayBin = process.env.ARMADRA_RELAY_BIN;
+    const cloudEnv = {
+      ARMADRA_CLOUD_ISSUER: base,
+      ARMADRA_CLOUD_APP_ORIGIN: base,
+      ARMADRA_CLOUD_LISTEN: `127.0.0.1:${ports.cloud}`,
+      ARMADRA_CLOUD_DATABASE_URL: `postgres://armadra:${pgPassword}@127.0.0.1:${ports.pg}/armadra_cloud`,
+      ARMADRA_CLOUD_REDIS_URL: `redis://127.0.0.1:${ports.redis}`,
+      ARMADRA_CLOUD_MASTER_KEY: masterKey,
+      ARMADRA_CLOUD_RELAY_DOMAIN: DOMAIN,
+      ARMADRA_CLOUD_TRUSTED_PROXY: "127.0.0.1/32,::1/128",
+      ARMADRA_CLOUD_SMTP_HOST: "127.0.0.1",
+      ARMADRA_CLOUD_SMTP_PORT: String(ports.smtp),
+      ARMADRA_CLOUD_SMTP_TLS: "none",
+      ARMADRA_CLOUD_SMTP_FROM: "armadra@e2e.test",
+      ARMADRA_CLOUD_WEB_ROOT: join(work, "web"),
+      ARMADRA_CLOUD_LOG_LEVEL: "debug",
+    };
+
     await report.step(
-      "起三个节点：节点表各一项，url 是各自的隧道地址",
+      "构建控制面与中继，起 PostgreSQL / Redis / mailpit 一次性容器",
       async () => {
-        for (const name of ["a", "b", "c"])
-          nodes[name] = await startNode({
-            bin,
-            name,
-            issuer: issuer.issuer,
-            redisUrl: redis.url,
-            nodeToken: issuer.nodeToken(name),
-            metricsToken,
+        mkdirSync(join(work, "web"));
+        writeFileSync(
+          join(work, "web", "index.html"),
+          "<!doctype html><title>armadra console</title>",
+        );
+        if (!cloudBin) {
+          cloudBin = join(work, "armadra-cloud");
+          await exec("go", ["build", "-o", cloudBin, "./cmd/armadra-cloud"], {
+            cwd: join(root, "go"),
           });
-        const table = await admin.command("HGETALL", "relay:nodes");
+        }
+        if (!relayBin) {
+          relayBin = join(work, "armadra-relay");
+          await exec("go", ["build", "-o", relayBin, "./cmd/armadra-relay"], {
+            cwd: join(root, "go"),
+          });
+        }
+        const launch = async (name, image, portMap, env, args) => {
+          containerNames.push(name);
+          containers.push(
+            await startContainer(name, image, portMap, env, args),
+          );
+        };
+        await launch(pgName, IMAGES.postgres, [[ports.pg, 5432]], {
+          POSTGRES_USER: "armadra",
+          POSTGRES_PASSWORD: pgPassword,
+          POSTGRES_DB: "armadra_cloud",
+        });
+        await launch(redisName, IMAGES.redis, [[ports.redis, 6379]], {}, [
+          "redis-server",
+          "--save",
+          "",
+          "--appendonly",
+          "no",
+        ]);
+        await launch(
+          `armadra-e2e-saas-mail-${tag}`,
+          IMAGES.mailpit,
+          [
+            [ports.smtp, 1025],
+            [ports.mail, 8025],
+          ],
+          {},
+        );
+        redis = { url: `redis://127.0.0.1:${ports.redis}` };
+        await until(
+          "PostgreSQL 就绪（TCP）",
+          async () => {
+            try {
+              return (await psql("SELECT 1")).length === 1;
+            } catch {
+              return false;
+            }
+          },
+          60_000,
+          500,
+        );
+        adminRedis = redisClient(redis.url);
+        await until(
+          "Redis 就绪",
+          async () =>
+            (await adminRedis.command("PING").catch(() => "")) === "PONG",
+          30_000,
+          200,
+        );
+        await until(
+          "mailpit 就绪",
+          async () =>
+            (
+              await fetch(`http://127.0.0.1:${ports.mail}/api/v1/info`).catch(
+                () => ({ ok: false }),
+              )
+            ).ok,
+          30_000,
+          200,
+        );
+      },
+    );
+    const mail = mailpit(`http://127.0.0.1:${ports.mail}`);
+
+    await report.step(
+      "迁移、建节点的流量角色（deploy/saas/db-roles.sh）、起控制面",
+      async () => {
+        await runCli(cloudBin, ["migrate"], cloudEnv);
+        const script = readFileSync(
+          join(root, "deploy/saas/db-roles.sh"),
+          "utf8",
+        );
+        await exec(
+          "docker",
+          [
+            "exec",
+            "-i",
+            "-e",
+            "PGUSER=armadra",
+            "-e",
+            "PGDATABASE=armadra_cloud",
+            "-e",
+            `RELAY_TRAFFIC_PASSWORD=${trafficPassword}`,
+            pgName,
+            "sh",
+            "-s",
+          ],
+          { input: script },
+        );
+        cloud = startProcess("cloud", cloudBin, ["serve"], cloudEnv);
+        await until(
+          "控制面就绪",
+          async () => {
+            if (!cloud.running)
+              throw new Error(
+                `控制面提前退出：${redact(cloud.logs.join("").slice(-1200))}`,
+              );
+            try {
+              return (await fetch(`${base}/ready`)).ok;
+            } catch {
+              return false;
+            }
+          },
+          40_000,
+          200,
+        );
+        // 托管的页面：页面路由回落 index.html，CSP 与 Referrer-Policy 固定（设计 §5.3）。
+        const page = await fetch(`${base}/login`);
+        expectEqual(page.status, 200, "/login");
+        expect(
+          (await page.text()).includes("armadra console"),
+          "/login 是 index.html",
+        );
+        expectEqual(
+          page.headers.get("referrer-policy"),
+          "no-referrer",
+          "Referrer-Policy",
+        );
+        expect(
+          (page.headers.get("content-security-policy") ?? "").includes(
+            `wss://*.src.${DOMAIN}`,
+          ) &&
+            page.headers
+              .get("content-security-policy")
+              .includes("frame-ancestors 'none'"),
+          "页面 CSP",
+        );
+        const info = await (
+          await fetch(`${base}/.well-known/armadra-platform`)
+        ).json();
+        expectEqual(info.mode, "saas", "platform.info.mode");
+        expectEqual(info.webApp, base, "platform.info.webApp");
+      },
+    );
+
+    // 起一个节点（节点令牌由控制面签）；场景 13 还要再起一个新节点 c 接同一个 Redis。
+    const startRelay = async (name) => {
+      const { stdout } = await runCli(
+        cloudBin,
+        ["nodes", "token", "--node", name],
+        cloudEnv,
+      );
+      const token = secret(stdout.trim(), `节点 ${name} 的节点令牌`);
+      const port = await freePort();
+      const metricsPort = await freePort();
+      const proc = startProcess(`relay-${name}`, relayBin, ["saas", "serve"], {
+        RELAY_LISTEN: `127.0.0.1:${port}`,
+        RELAY_NODE_ID: name,
+        RELAY_DOMAIN: DOMAIN,
+        RELAY_CLOUD_ISSUER: base,
+        RELAY_REDIS_URL: redis.url,
+        RELAY_TUNNEL_URL: `ws://127.0.0.1:${port}/t/v1`,
+        RELAY_ALLOW_INSECURE_TUNNEL: "1",
+        RELAY_NODE_TOKEN: token,
+        RELAY_DATABASE_URL: `postgres://armadra_relay_traffic:${trafficPassword}@127.0.0.1:${ports.pg}/armadra_cloud`,
+        RELAY_METRICS_LISTEN: `127.0.0.1:${metricsPort}`,
+        RELAY_METRICS_TOKEN: metricsToken,
+        RELAY_DRAIN_GRACE_MS: "3000",
+        RELAY_LOG_LEVEL: "debug",
+      });
+      const node = {
+        ...proc,
+        name,
+        origin: `http://127.0.0.1:${port}`,
+        tunnelUrl: `ws://127.0.0.1:${port}/t/v1`,
+        metrics: async () => {
+          const response = await fetch(
+            `http://127.0.0.1:${metricsPort}/metrics`,
+            {
+              headers: { authorization: `Bearer ${metricsToken}` },
+            },
+          );
+          expectEqual(response.status, 200, `${name} 的 /metrics`);
+          return response.text();
+        },
+      };
+      nodes[name] = node;
+      await until(
+        `节点 ${name} 就绪`,
+        async () => {
+          if (!node.running)
+            throw new Error(
+              `节点 ${name} 提前退出：${redact(node.logs.join("").slice(-1200))}`,
+            );
+          try {
+            return (await fetch(`${node.origin}/ready`)).ok;
+          } catch {
+            return false;
+          }
+        },
+        30_000,
+        200,
+      );
+      return node;
+    };
+
+    await report.step(
+      "节点令牌（nodes token）与两个节点：节点表各一项，url 是各自的隧道地址",
+      async () => {
+        for (const name of ["a", "b"]) await startRelay(name);
+        await until(
+          "节点表有 a、b",
+          async () => (await adminRedis.command("HLEN", "relay:nodes")) === 2,
+          30_000,
+          300,
+        );
+        const table = await adminRedis.command("HGETALL", "relay:nodes");
         const entries = {};
         for (let i = 0; i < table.length; i += 2)
           entries[table[i]] = JSON.parse(table[i + 1]);
-        for (const name of ["a", "b", "c"]) {
+        for (const name of ["a", "b"]) {
           expectEqual(
             entries[name]?.url,
             nodes[name].tunnelUrl,
@@ -473,313 +388,1099 @@ export async function runSaasE2e({ root, report, redisUrl: givenRedis }) {
             `节点表 ${name}.draining`,
           );
         }
-        const health = await (await fetch(`${nodes.a.origin}/health`)).json();
-        expectEqual(health.mode, "saas", "/health.mode");
       },
     );
 
-    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-    const sourceId = randomBytes(16).toString("hex");
-    const connectCore = async (node) => {
+    /* ---------- 公用动作 ---------- */
+
+    const verifyEmail = async (client) => {
+      const { match } = await mail.link(client.email, /\/verify#(\S+)/);
+      const token = secret(match[1], `${client.label} 邮箱验证令牌`);
+      const res = await client.call("POST", "/v1/auth/email/verify", {
+        body: { token },
+        anonymous: true,
+      });
+      expectEqual(
+        res.status,
+        200,
+        `${client.label} 邮箱验证（${res.text.slice(0, 160)}）`,
+      );
+      return token;
+    };
+
+    const openStream = async (client) => {
+      const ticket = (
+        await client.expectCall(
+          "me-stream 票",
+          200,
+          "",
+          "POST",
+          "/v1/me/stream/ticket",
+          { body: {} },
+        )
+      ).body.ticket;
+      secret(ticket, `${client.label} me-stream 票`);
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${ports.cloud}/v1/me/stream`,
+        [`armadra-ticket.${ticket}`],
+        {
+          perMessageDeflate: false,
+        },
+      );
+      sockets.push(ws);
+      const events = [];
+      ws.on("message", (data) => {
+        try {
+          events.push(JSON.parse(data.toString("utf8")));
+        } catch {
+          /* 忽略非 JSON */
+        }
+      });
+      await new Promise((done, failed) => {
+        ws.once("open", done);
+        ws.once("error", failed);
+        ws.once("unexpected-response", (_r, response) =>
+          failed(new Error(`me-stream 升级被拒：${response.statusCode}`)),
+        );
+      });
+      return {
+        events,
+        ws,
+        has: (predicate) => events.some(predicate),
+      };
+    };
+
+    /** 经 registrationToken + register 登记一台主机；答 { host, res }（res 是登记答复）。 */
+    const registerHost = async (
+      client,
+      label,
+      space,
+      coreVersion = HOST_VERSION,
+    ) => {
+      const host = newHost(label);
+      const tokenRes = await client.call(
+        "POST",
+        "/v1/sources/registration-tokens",
+        {
+          body: space ? { space } : {},
+        },
+      );
+      if (tokenRes.status !== 200)
+        return { host, res: tokenRes, stage: "token" };
+      const registrationToken = secret(
+        tokenRes.body.registrationToken,
+        `${label} 注册令牌`,
+      );
+      const res = await client.call("POST", "/v1/sources/register", {
+        anonymous: true,
+        body: {
+          registrationToken,
+          sourceId: host.id,
+          publicKey: { kty: "OKP", crv: "Ed25519", x: host.x },
+          name: label,
+          kind: "desktop",
+          coreVersion,
+          capabilities: ["e2e"],
+          protocol: { major: 1, minor: 4 },
+        },
+      });
+      return { host, res, stage: "register" };
+    };
+
+    /** 用主机认证头取 heartbeatHint（隧道令牌 + 节点列表）。 */
+    const hint = async (host) => {
+      const response = await fetch(`${base}/v1/sources/me/relay`, {
+        headers: sourceAuth(host, base),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (body.tunnelToken) secret(body.tunnelToken, `${host.label} 隧道令牌`);
+      return { status: response.status, body };
+    };
+
+    /** 假 core 连上指定节点的隧道（token 取自当次 heartbeatHint）。 */
+    const connectCore = async (host, node, coreVersion = HOST_VERSION) => {
+      const { status, body } = await hint(host);
+      expectEqual(status, 200, `${host.label} 的 heartbeatHint`);
       const core = new FakeCore({
         tunnelUrl: node.tunnelUrl,
-        sourceId,
-        sourceKey: privateKey,
-        token: () => issuer.tunnelToken(sourceId, publicKey),
+        sourceId: host.id,
+        sourceKey: host.privateKey,
+        token: () => body.tunnelToken,
         capabilities: ["e2e"],
+        coreVersion,
       });
       cores.push(core);
       const outcome = await core.connect();
-      expect(outcome.ready, `握手被拒：${JSON.stringify(outcome)}`);
+      expect(
+        outcome.ready,
+        `${host.label} 握手被拒：${JSON.stringify(outcome)}`,
+      );
       await until(`路由指向 ${node.name}`, async () => {
-        const route = await admin.command("GET", `relay:route:src:${sourceId}`);
+        const route = await adminRedis.command(
+          "GET",
+          `relay:route:src:${host.id}`,
+        );
         return route && JSON.parse(route).node === node.name;
       });
       return core;
     };
 
-    let core;
+    const tokensOf = (res) => ({
+      assertion: decodePart(res.body.assertion),
+      relayToken: secret(res.body.relayToken, "中继令牌"),
+      relay: decodePart(res.body.relayToken),
+    });
+    const closedWithin = (ws, what, ms = 20_000) => {
+      const waiting = Promise.race([
+        closeOf(ws),
+        sleep(ms).then(() =>
+          Promise.reject(new Error(`${what}：通道没被关掉`)),
+        ),
+      ]);
+      waiting.catch(() => {}); // 先挂空处理，避免没走到 await 时 unhandledRejection 打崩清理
+      return waiting;
+    };
+    const events = { a: undefined };
+
+    /* ---------- 场景 1 ---------- */
+    const A = new Client(base, "A", "bearer");
+    const B = new Client(base, "B", "cookie");
+    const C = new Client(base, "C", "cookie"); // 运营账号
+    let teamId;
     await report.step(
-      "源连节点 a；客户端连节点 b：经 /x/v1 转发，10 MB 随机字节双向原样",
+      "场景 1：A 注册 → 未验证时建团队 403 email_unverified → 取信验证 → 门通过",
       async () => {
-        core = await connectCore(nodes.a);
-        const opened = await channel(
-          nodes.b,
-          sourceId,
-          issuer.relayToken(sourceId),
+        await A.register();
+        expectEqual(A.accountId.length > 0, true, "A 的 accountId");
+        await A.expectCall(
+          "未验证建团队",
+          403,
+          "email_unverified",
+          "POST",
+          "/v1/teams",
+          { body: { slug: `t-${tag}`, name: "研发" } },
         );
-        expect(opened.ws, `通道没开成：${JSON.stringify(opened)}`);
-        sockets.push(opened.ws);
-        expectEqual(opened.ws.protocol, "armadra-e2e.1", "子协议");
-        await echo(opened.ws, 10 * 1024 * 1024);
-        expectEqual(core.e2eOpens.length, 1, "源收到一条 e2e OPEN");
+        await A.expectCall(
+          "未验证要注册令牌",
+          403,
+          "email_unverified",
+          "POST",
+          "/v1/sources/registration-tokens",
+          { body: {} },
+        );
+        await verifyEmail(A);
+        const me = await A.expectCall("me.get", 200, "", "GET", "/v1/me");
+        expectEqual(me.body.emailVerified, true, "emailVerified");
+        events.a = await openStream(A);
+      },
+    );
+
+    /* ---------- 场景 2 ---------- */
+    await report.step(
+      "场景 2：A 建团队 T → 邀请 B（member）→ B（控制台形态）注册、验证、接受",
+      async () => {
+        const created = await A.expectCall(
+          "teams.create",
+          200,
+          "",
+          "POST",
+          "/v1/teams",
+          { body: { slug: `t-${tag}`, name: "研发" } },
+        );
+        teamId = created.body.teamId;
+        expectEqual(created.body.role, "owner", "创建者角色");
+        await A.expectCall(
+          "invitations.create",
+          200,
+          "",
+          "POST",
+          "/v1/invitations",
+          {
+            body: { kind: "team", teamId, email: B.email, role: "member" },
+          },
+        );
+        // 邀请邮件先到，B 之后才注册（邀请按邮箱匹配）。
+        const invite = await mail.link(
+          B.email,
+          /\/invite\/([A-Za-z0-9_-]+)#(\S+)/,
+        );
+        const [, invitationId, inviteToken] = invite.match;
+        secret(inviteToken, "邀请令牌");
+        await B.register();
+        expect(B.csrf, "控制台形态的 B 有 CSRF 值");
+        await B.expectCall(
+          "未验证接受邀请",
+          403,
+          "email_unverified",
+          "POST",
+          `/v1/invitations/${invitationId}/accept`,
+          { body: { token: inviteToken } },
+        );
+        await verifyEmail(B);
+        const accepted = await B.expectCall(
+          "invitations.accept",
+          200,
+          "",
+          "POST",
+          `/v1/invitations/${invitationId}/accept`,
+          { body: { token: inviteToken } },
+        );
+        expectEqual(accepted.body.teamId, teamId, "接受后的 teamId");
+        await until("A 的 me-stream 收到 memberChanged(added)", () =>
+          events.a.has(
+            (e) =>
+              e.type === "memberChanged" &&
+              e.teamId === teamId &&
+              e.change === "added" &&
+              e.accountId === B.accountId,
+          ),
+        );
+        const spaces = await B.expectCall(
+          "me.spaces",
+          200,
+          "",
+          "GET",
+          "/v1/me/spaces",
+        );
+        expect(
+          spaces.body.spaces.some(
+            (s) => s.teamId === teamId && s.role === "member",
+          ),
+          "me.spaces 含 T",
+        );
+      },
+    );
+
+    /* ---------- 场景 3 ---------- */
+    const H1 = newHost("H1");
+    let core1;
+    await report.step(
+      "场景 3：A 设备码登录假 core H1 → 选空间 T 登记；ownerAccountId = A，sources.list(space=T) 含 H1",
+      async () => {
+        const start = await new Client(base, "H1-core", "bearer").call(
+          "POST",
+          "/v1/auth/device/start",
+          {
+            anonymous: true,
+            body: { device: { platform: "desktop", name: "H1" } },
+          },
+        );
+        expectEqual(start.status, 200, "device/start");
+        const { deviceCode, userCode } = start.body;
+        secret(deviceCode, "设备码");
+        const coreClient = new Client(base, "H1core", "bearer");
+        const pending = await coreClient.call("POST", "/v1/auth/device/poll", {
+          anonymous: true,
+          body: { deviceCode },
+        });
+        expectEqual(pending.body.status, "pending", "批准前轮询");
+        // 批准新设备要先提权（再验证口令，10 分钟内有效）。
+        await A.expectCall(
+          "device/approve 未提权",
+          401,
+          "mfa_required",
+          "POST",
+          "/v1/auth/device/approve",
+          { body: { userCode, approve: true } },
+        );
+        const stepUp = await A.expectCall(
+          "auth.stepUp",
+          200,
+          "",
+          "POST",
+          "/v1/auth/step-up",
+          { body: { password: A.password } },
+        );
+        expect(stepUp.body.elevatedUntilMs > Date.now(), "提权有效期");
+        await A.expectCall(
+          "device/approve",
+          200,
+          "",
+          "POST",
+          "/v1/auth/device/approve",
+          { body: { userCode, approve: true } },
+        );
+        const polled = await until("设备码批准后轮询拿到会话", async () => {
+          const res = await coreClient.call("POST", "/v1/auth/device/poll", {
+            anonymous: true,
+            body: { deviceCode },
+          });
+          return res.body.status === "approved" ? res : false;
+        });
+        coreClient.adopt(polled);
+        expectEqual(coreClient.accountId, A.accountId, "设备码会话属于 A");
+        // 用 core 的会话登记（空间选 T）。
+        const tokenRes = await coreClient.expectCall(
+          "registration-tokens(T)",
+          200,
+          "",
+          "POST",
+          "/v1/sources/registration-tokens",
+          {
+            body: { space: { kind: "team", teamId } },
+          },
+        );
+        const res = await coreClient.expectCall(
+          "sources.register",
+          200,
+          "",
+          "POST",
+          "/v1/sources/register",
+          {
+            anonymous: true,
+            body: {
+              registrationToken: secret(
+                tokenRes.body.registrationToken,
+                "H1 注册令牌",
+              ),
+              sourceId: H1.id,
+              publicKey: { kty: "OKP", crv: "Ed25519", x: H1.x },
+              name: "H1",
+              kind: "desktop",
+              coreVersion: HOST_VERSION,
+              capabilities: ["e2e"],
+              protocol: { major: 1, minor: 4 },
+            },
+          },
+        );
+        expectEqual(res.body.ownerAccountId, A.accountId, "ownerAccountId");
+        const list = await A.expectCall(
+          "sources.list(space=T)",
+          200,
+          "",
+          "GET",
+          "/v1/sources",
+          {
+            query: { "space[kind]": "team", "space[teamId]": teamId },
+          },
+        );
+        expect(
+          list.body.sources.some((s) => s.sourceId === H1.id),
+          "目录含 H1",
+        );
+        core1 = await connectCore(H1, nodes.a);
+      },
+    );
+
+    /* ---------- 场景 4 ---------- */
+    let grantId;
+    await report.step(
+      "场景 4：A 授予 T 全员 editor → grants.effective(B, H1) = editor，来源 team",
+      async () => {
+        const before = await A.expectCall(
+          "授予前的有效权限",
+          200,
+          "",
+          "GET",
+          "/v1/grants/effective",
+          {
+            query: { sourceId: H1.id, accountId: B.accountId },
+          },
+        );
+        expectEqual(before.body.role, null, "授予前 B 没有权限");
+        const granted = await A.expectCall(
+          "grants.create",
+          200,
+          "",
+          "POST",
+          "/v1/grants",
+          {
+            body: {
+              sourceId: H1.id,
+              subject: { kind: "team", teamId },
+              role: "editor",
+            },
+          },
+        );
+        grantId = granted.body.grantId;
+        const after = await A.expectCall(
+          "grants.effective",
+          200,
+          "",
+          "GET",
+          "/v1/grants/effective",
+          {
+            query: { sourceId: H1.id, accountId: B.accountId },
+          },
+        );
+        expectEqual(after.body.role, "editor", "有效角色");
+        expect(
+          after.body.from.some((f) => f.via === "team" && f.role === "editor"),
+          "来源 team",
+        );
+      },
+    );
+
+    /* ---------- 场景 5 ---------- */
+    let trafficCheck;
+    let bToken1;
+    await report.step(
+      "场景 5：H1 隧道在 a，B（控制台）连节点 b：断言 team = {T, member}、role = editor；节点间转发；流量只在 b 计",
+      async () => {
+        const res = await B.expectCall(
+          "B 的 sources.assertion",
+          200,
+          "",
+          "POST",
+          `/v1/sources/${H1.id}/assertion`,
+          {
+            body: { device: { platform: "browser", name: "B 的浏览器" } },
+          },
+        );
+        const { assertion, relayToken, relay } = tokensOf(res);
+        secret(res.body.assertion, "B 的断言");
+        expectEqual(assertion.sub, B.accountId, "断言 sub");
+        expectEqual(assertion.aud, H1.id, "断言 aud");
+        expectEqual(assertion.role, "editor", "断言 role");
+        expectEqual(assertion.team?.teamId, teamId, "断言 team.teamId");
+        expectEqual(assertion.team?.role, "member", "断言 team.role");
+        expectEqual(relay.src, H1.id, "中继令牌 src");
+        expectEqual(relay.team, teamId, "中继令牌 team");
+        bToken1 = { relayToken, jti: relay.jti };
         expectEqual(
-          core.e2eOpens[0].relayNode,
+          res.body.relayOrigin,
+          `https://${H1.id}.src.${DOMAIN}`,
+          "relayOrigin",
+        );
+        const opened = await channel(nodes.b, H1.id, relayToken);
+        expect(opened.ws, `B 经 b 的通道没开成：${JSON.stringify(opened)}`);
+        sockets.push(opened.ws);
+        await echo(opened.ws, 1024 * 1024);
+        expectEqual(
+          core1.e2eOpens.at(-1)?.relayNode,
           "b",
           "OPEN.relayNode 是入口节点",
         );
-        const closed = closeOf(opened.ws);
         opened.ws.close(1000);
-        await closed;
-        const metricsB = await nodes.b.metrics();
+        await closeOf(opened.ws);
         expect(
-          metric(metricsB, "relay_routes_remote_total") >= 1,
-          "b 的 relay_routes_remote_total",
+          metric(await nodes.b.metrics(), "relay_routes_remote_total") >= 1,
+          "b 走了节点间转发",
         );
-        expect(
-          metric(
-            metricsB,
-            'relay_internode_bytes_total{direction="to_source"}',
-          ) >=
-            10 * 1024 * 1024,
-          "b 的节点间上行字节",
-        );
-        expect(
-          metric(await nodes.a.metrics(), "relay_tunnels") === 1,
-          "a 持有隧道",
-        );
-      },
-    );
-
-    await report.step(
-      "慢客户端与下载中途断开：经 b 转发的 24 条不读的下载不拖住别的源；64 次下载中途掉线之后源照常出数据",
-      async () => {
-        // 第二个源：每条通道写 64 MB 的确定序列（下载），同样连 a。
-        const keys = generateKeyPairSync("ed25519");
-        const downloadId = randomBytes(16).toString("hex");
-        const downloader = new FakeCore({
-          tunnelUrl: nodes.a.tunnelUrl,
-          sourceId: downloadId,
-          sourceKey: keys.privateKey,
-          token: () => issuer.tunnelToken(downloadId, keys.publicKey),
-          capabilities: ["e2e"],
-          e2eSend: 64 * 1024 * 1024,
-        });
-        cores.push(downloader);
-        expect((await downloader.connect()).ready, "下载源握手");
-        await until("下载源的路由", async () => {
-          const route = await admin.command(
-            "GET",
-            `relay:route:src:${downloadId}`,
-          );
-          return route && JSON.parse(route).node === "a";
-        });
-        // 慢客户端：开了不读。
-        const slow = [];
-        for (let i = 0; i < 24; i += 1) {
-          const ws = await rawChannel(
-            nodes.b,
-            downloadId,
-            issuer.relayToken(downloadId),
-            true,
-          );
-          slow.push(ws);
-          sockets.push(ws);
-        }
-        await sleep(500);
-        const echoing = await channel(
-          nodes.b,
-          sourceId,
-          issuer.relayToken(sourceId),
-        );
-        expect(echoing.ws, "别的源的通道");
-        sockets.push(echoing.ws);
-        await echo(echoing.ws, 1024 * 1024);
-        echoing.ws.close(1000);
-        for (const ws of slow) ws.terminate();
-        // 下载中途掉线 64 次。
-        for (let i = 0; i < 64; i += 1) {
-          const ws = await rawChannel(
-            nodes.b,
-            downloadId,
-            issuer.relayToken(downloadId),
-          );
-          sockets.push(ws);
-          await new Promise((done) => ws.once("message", done));
-          await sleep(30);
-          ws.terminate();
-        }
-        // 源照常出数据：读满 8 MB。
-        const last = await rawChannel(
-          nodes.b,
-          downloadId,
-          issuer.relayToken(downloadId),
-        );
-        sockets.push(last);
-        let received = 0;
-        last.on("message", (data) => {
-          received += data.length;
-        });
-        await until(
-          "掉线 64 次之后下载照常",
-          () => received >= 8 * 1024 * 1024,
-          30_000,
-          50,
-        );
-        last.terminate();
-        await downloader.stop();
-      },
-    );
-
-    await report.step(
-      "节点间 /x/v1：没有、伪造、错类型的令牌一律 401",
-      async () => {
-        const valid = issuer.nodeToken("b");
-        for (const [label, token] of [
-          ["没有令牌", undefined],
-          ["伪造", `${valid.slice(0, -4)}AAAA`],
-          ["中继令牌", issuer.relayToken(sourceId)],
-        ]) {
-          const status = await new Promise((done, failed) => {
-            const ws = new WebSocket(
-              `${nodes.a.origin.replace(/^http/, "ws")}/x/v1`,
-              {
-                headers: token ? { authorization: `Bearer ${token}` } : {},
-              },
+        // 流量最终出现在 b 的行上、team_id = T，a 上没有这个源的 e2e 行（节点每 60 秒落库，晚点再收口）。
+        trafficCheck = until(
+          "流量桶：节点 b、team_id = T、a 上没有",
+          async () => {
+            const rows = await psql(
+              `SELECT node, team_id, kind FROM relay_traffic_buckets WHERE source_id = '${H1.id}'`,
             );
-            ws.once("unexpected-response", (_request, response) =>
-              done(response.statusCode),
+            if (!rows.some(([node]) => node === "b")) return false;
+            expect(
+              rows.every(([node, team]) => node === "b" && team === teamId),
+              `流量行：${JSON.stringify(rows)}`,
             );
-            ws.once("open", () => {
-              ws.terminate();
-              done(101);
-            });
-            ws.once("error", (error) => {
-              if (!ws.readyState) failed(error);
-            });
-          });
-          expectEqual(status, 401, label);
-        }
+            return rows;
+          },
+          150_000,
+          1000,
+        );
+        trafficCheck.catch(() => {});
       },
     );
 
+    /* ---------- 场景 9、10 ---------- */
     await report.step(
-      "撤销跨节点生效：写撤销表并广播、kick，在线通道被踢，旧令牌在每个节点 4401",
+      "场景 9：老版本 core H2 登记进 T 得 426 protocol_unsupported；登记到个人空间成功、断言不带 team",
       async () => {
-        const jti = randomBytes(8).toString("hex");
-        const token = issuer.relayToken(sourceId, { jti, sub: "acct_revoked" });
-        const online = await channel(nodes.b, sourceId, token);
-        expect(online.ws, "撤销前能开");
-        sockets.push(online.ws);
-        const closed = closeOf(online.ws);
-        const expMs = Date.now() + 3_600_000;
-        // 控制面的写法（SaaS 实施设计 §2.4、§4.8）：先写键再广播；再按人 kick（sourceId 必填）。
-        await admin.command("SET", `relay:revoked:${jti}`, "1", "PXAT", expMs);
-        await admin.command(
-          "PUBLISH",
-          "relay:revoked",
-          JSON.stringify({ origin: "cloud/e2e", kind: "revoked", jti, expMs }),
+        const old = await registerHost(
+          A,
+          "H2",
+          { kind: "team", teamId },
+          OLD_HOST_VERSION,
         );
-        await admin.command(
-          "PUBLISH",
-          "relay:ctl",
-          JSON.stringify({
-            origin: "cloud/e2e",
-            kind: "command",
-            command: {
-              type: "kick",
-              sourceId,
-              subject: "acct_revoked",
-              reason: "revoked",
-            },
-          }),
-        );
-        await Promise.race([
-          closed,
-          sleep(15_000).then(() => {
-            throw new Error("在线通道没被踢");
-          }),
-        ]);
-        for (const name of ["a", "b", "c"]) {
-          const again = await channel(nodes[name], sourceId, token);
-          expectEqual(again.code, 4401, `${name} 上的旧令牌`);
-        }
-        const fresh = await channel(
-          nodes.c,
-          sourceId,
-          issuer.relayToken(sourceId),
-        );
-        expect(fresh.ws, "别的令牌照常（经 c 转发）");
-        fresh.ws.close(1000);
-      },
-    );
-
-    await report.step(
-      "持有节点 a 下线：GOAWAY rebalance、节点表先 draining 后删除；源重连到 c，客户端经 b 重连后落到 c",
-      async () => {
-        const ws = (
-          await channel(nodes.b, sourceId, issuer.relayToken(sourceId))
-        ).ws;
-        expect(ws, "下线前的通道");
-        sockets.push(ws);
-        const wsClosed = closeOf(ws);
-        nodes.a.signal("SIGTERM");
-        await until("a 标成 draining", async () => {
-          const value = await admin.command("HGET", "relay:nodes", "a");
-          return value === null || JSON.parse(value).draining === true;
-        });
-        await until("源收到 GOAWAY rebalance", () =>
-          core.goaways.includes("rebalance"),
-        );
-        expectEqual(await core.closed(), 4492, "旧隧道的关闭码");
-        expectEqual(await wsClosed, 4404, "经 b 转发的通道随旧隧道结束");
-        const { code } = await nodes.a.exited;
-        expectEqual(code, 0, "a 正常退出");
         expectEqual(
-          await admin.command("HEXISTS", "relay:nodes", "a"),
-          0,
-          "a 从节点表里删掉",
+          old.res.status,
+          426,
+          `H2 进 T（${old.res.text?.slice(0, 160)}）`,
         );
-        // 源按节点表（去掉 draining 的）选节点：这里固定选 c，让客户端经 b 转发。
-        core = await connectCore(nodes.c);
-        const again = await channel(
-          nodes.b,
-          sourceId,
-          issuer.relayToken(sourceId),
+        expectEqual(
+          old.res.body.code,
+          "protocol_unsupported",
+          "H2 进 T 的错误码",
         );
-        expect(again.ws, `重连没开成：${JSON.stringify(again)}`);
-        sockets.push(again.ws);
-        await echo(again.ws, 256 * 1024);
-        expectEqual(core.e2eOpens.at(-1)?.relayNode, "b", "落到 c、经 b 转发");
-        // 持有节点 c 突然没了：节点间连接断开，经 b 的通道 4404。
-        const lost = closeOf(again.ws);
-        nodes.c.signal("SIGKILL");
-        expectEqual(await lost, 4404, "持有节点没了，客户端 4404");
-        const retry = await channel(
-          nodes.b,
-          sourceId,
-          issuer.relayToken(sourceId),
+        const personal = await registerHost(
+          A,
+          "H2",
+          undefined,
+          OLD_HOST_VERSION,
         );
-        expectEqual(retry.code, 4404, "源不在线时重连 4404");
+        expectEqual(
+          personal.res.status,
+          200,
+          `H2 进个人空间（${personal.res.text?.slice(0, 160)}）`,
+        );
+        const res = await A.expectCall(
+          "个人空间主机的断言",
+          200,
+          "",
+          "POST",
+          `/v1/sources/${personal.host.id}/assertion`,
+          { body: {} },
+        );
+        secret(res.body.assertion, "A 的断言(H2)");
+        const { assertion, relay } = tokensOf(res);
+        expect(
+          assertion.team === undefined && relay.team === undefined,
+          "个人空间的断言与中继令牌不带 team",
+        );
       },
     );
 
-    await report.step("节点日志里没有任何秘密", async () => {
-      await nodes.b.stop();
-      const text = Object.values(nodes)
-        .map((node) => node.logs.join(""))
-        .join("");
-      const leaked = secretEntries().filter(([value]) => text.includes(value));
-      expectEqual(
-        leaked.map(([, label]) => label).join("、"),
-        "",
-        "日志里的秘密",
-      );
-      expect(text.includes("中继已停止"), "b 正常停下");
-    });
+    await report.step(
+      "场景 10：T 里第 4 台主机得 429 limit_reached，details.quota = hosts",
+      async () => {
+        for (const label of ["H3", "H4"]) {
+          const added = await registerHost(A, label, { kind: "team", teamId });
+          expectEqual(
+            added.res.status,
+            200,
+            `${label} 进 T（${added.res.text?.slice(0, 160)}）`,
+          );
+        }
+        const fourth = await registerHost(A, "H5", { kind: "team", teamId });
+        expectEqual(
+          fourth.res.status,
+          429,
+          `第 4 台（${fourth.stage}：${fourth.res.text?.slice(0, 160)}）`,
+        );
+        expectEqual(fourth.res.body.code, "limit_reached", "第 4 台的错误码");
+        expectEqual(fourth.res.body.details?.quota, "hosts", "details.quota");
+      },
+    );
+
+    /* ---------- 场景 6 ---------- */
+    await report.step(
+      "场景 6：A 撤销授予 → B 的通道最终被关；旧中继令牌重连 4401；再要断言 403 source_access_denied",
+      async () => {
+        const live = await channel(nodes.b, H1.id, bToken1.relayToken);
+        // 旧令牌此时已用过一次，仍有效（授予还在）。
+        expect(live.ws, "撤销前旧令牌还能开");
+        sockets.push(live.ws);
+        const closed = closedWithin(live.ws, "撤销授予");
+        await A.expectCall(
+          "grants.revoke",
+          200,
+          "",
+          "DELETE",
+          `/v1/grants/${grantId}`,
+        );
+        await closed;
+        await until(
+          "旧中继令牌被拒 4401",
+          async () =>
+            (await channel(nodes.b, H1.id, bToken1.relayToken)).code === 4401,
+          30_000,
+          300,
+        );
+        expectEqual(
+          (await channel(nodes.a, H1.id, bToken1.relayToken)).code,
+          4401,
+          "a 上的旧令牌",
+        );
+        await B.expectCall(
+          "撤销后再要断言",
+          403,
+          "source_access_denied",
+          "POST",
+          `/v1/sources/${H1.id}/assertion`,
+          { body: {} },
+        );
+      },
+    );
+
+    /* ---------- 场景 7 ---------- */
+    let bToken2;
+    await report.step(
+      "场景 7：重新授予后 A 把 B 移出团队 → 同 6；A 收到 memberChanged(removed)",
+      async () => {
+        const granted = await A.expectCall(
+          "重新授予",
+          200,
+          "",
+          "POST",
+          "/v1/grants",
+          {
+            body: {
+              sourceId: H1.id,
+              subject: { kind: "team", teamId },
+              role: "editor",
+            },
+          },
+        );
+        expect(granted.body.grantId, "新的 grantId");
+        const res = await B.expectCall(
+          "B 再取断言",
+          200,
+          "",
+          "POST",
+          `/v1/sources/${H1.id}/assertion`,
+          { body: {} },
+        );
+        const { relayToken, relay } = tokensOf(res);
+        bToken2 = { relayToken, jti: relay.jti };
+        const live = await channel(nodes.b, H1.id, relayToken);
+        expect(live.ws, "重新授予后能开通道");
+        sockets.push(live.ws);
+        const closed = closedWithin(live.ws, "移出团队");
+        await A.expectCall(
+          "teams.memberRemove",
+          200,
+          "",
+          "DELETE",
+          `/v1/teams/${teamId}/members/${B.accountId}`,
+        );
+        await closed;
+        await until(
+          "旧中继令牌被拒 4401",
+          async () => (await channel(nodes.b, H1.id, relayToken)).code === 4401,
+          30_000,
+          300,
+        );
+        await B.expectCall(
+          "移出后再要断言",
+          403,
+          "source_access_denied",
+          "POST",
+          `/v1/sources/${H1.id}/assertion`,
+          { body: {} },
+        );
+        await until("A 收到 memberChanged(removed)", () =>
+          events.a.has(
+            (e) =>
+              e.type === "memberChanged" &&
+              e.teamId === teamId &&
+              e.change === "removed" &&
+              e.accountId === B.accountId,
+          ),
+        );
+      },
+    );
+
+    /* ---------- 运营账号 ---------- */
+    const operator = new Client(base, "OPS", "cookie");
+    operator.cookieName = "__Host-armadra-ops";
+    let opsSecretUri;
+    await report.step(
+      "运营账号：C 注册验证 → operators add / totp（命令行）→ 口令 + TOTP 登录（Cookie 运营会话）",
+      async () => {
+        await C.register();
+        await verifyEmail(C);
+        await runCli(
+          cloudBin,
+          ["operators", "add", "--email", C.email],
+          cloudEnv,
+        );
+        const { stdout } = await runCli(
+          cloudBin,
+          ["operators", "totp", "--email", C.email],
+          cloudEnv,
+        );
+        opsSecretUri = stdout
+          .split("\n")
+          .find((line) => line.startsWith("otpauth://"));
+        expect(opsSecretUri, "命令行打印了 otpauth 地址");
+        const seed = new URL(opsSecretUri).searchParams.get("secret");
+        secret(seed, "TOTP 种子");
+        operator.email = C.email;
+        operator.password = C.password;
+        const login = await operator.call("POST", "/v1/auth/login", {
+          anonymous: true,
+          body: {
+            account: C.email,
+            password: C.password,
+            scope: "operator",
+            device: { platform: "browser", name: "运营" },
+          },
+        });
+        expectEqual(
+          login.status,
+          200,
+          `运营登录第一步（${login.text.slice(0, 160)}）`,
+        );
+        expect(login.body.mfa?.challengeId, "要两步验证");
+        secret(login.body.mfa.challengeId, "MFA 挑战");
+        let verified;
+        for (const at of [Date.now(), Date.now() + 30_000]) {
+          verified = await operator.call("POST", "/v1/auth/mfa/verify", {
+            anonymous: true,
+            body: {
+              challengeId: login.body.mfa.challengeId,
+              code: totp(seed, at),
+            },
+          });
+          if (verified.status === 200) break;
+        }
+        operator.adopt(verified);
+        expect(operator.jar.has("__Host-armadra-ops"), "拿到运营会话 Cookie");
+        // 普通会话调 admin.* 不行、运营会话能调。
+        await C.expectCall(
+          "普通会话调 admin",
+          401,
+          "",
+          "GET",
+          "/v1/admin/teams",
+        );
+        const nodesList = await operator.expectCall(
+          "admin.relayNodes",
+          200,
+          "",
+          "GET",
+          "/v1/admin/relay-nodes",
+        );
+        expect(
+          nodesList.body.nodes.some((n) => n.node === "a" && n.online) &&
+            nodesList.body.nodes.some((n) => n.node === "b" && n.online),
+          "两个节点在线",
+        );
+      },
+    );
+
+    /* ---------- 场景 12 ---------- */
+    await report.step(
+      "场景 12：节点 a 排空 → H1 收 GOAWAY rebalance 转到 b；heartbeatHint 不再含 a",
+      async () => {
+        const drained = await operator.expectCall(
+          "admin.relayNodeDrain",
+          200,
+          "",
+          "PUT",
+          "/v1/admin/relay-nodes/a/drain",
+          {
+            body: { drain: true, reason: "e2e 排空演练" },
+          },
+        );
+        expect(drained.status === 200, "排空接口");
+        await until(
+          "H1 收到 GOAWAY rebalance",
+          () => core1.goaways.includes("rebalance"),
+          20_000,
+          100,
+        );
+        const code = await core1.closed();
+        expect([4491, 4492].includes(code), `旧隧道的关闭码 ${code}`);
+        await until(
+          "heartbeatHint 不再含 a",
+          async () => {
+            const { status, body } = await hint(H1);
+            return (
+              status === 200 &&
+              body.nodes.length > 0 &&
+              !body.nodes.some((n) => n.url === nodes.a.tunnelUrl) &&
+              body.nodes.some((n) => n.url === nodes.b.tunnelUrl)
+            );
+          },
+          30_000,
+          300,
+        );
+        core1 = await connectCore(H1, nodes.b);
+        const entry = JSON.parse(
+          (await adminRedis.command("HGET", "relay:nodes", "a")) ?? "{}",
+        );
+        expect(
+          entry.draining === true || Object.keys(entry).length === 0,
+          "节点表里 a 标了排空",
+        );
+      },
+    );
+
+    /* ---------- 场景 11 ---------- */
+    await report.step(
+      "场景 11：运营停用团队 T → 在线连接最终被踢、断言 403 team_suspended；审计 actor.kind = operator 带 reason",
+      async () => {
+        const res = await A.expectCall(
+          "A 的断言",
+          200,
+          "",
+          "POST",
+          `/v1/sources/${H1.id}/assertion`,
+          { body: {} },
+        );
+        const { relayToken } = tokensOf(res);
+        const live = await channel(nodes.b, H1.id, relayToken);
+        expect(live.ws, `A 的通道没开成：${JSON.stringify(live)}`);
+        sockets.push(live.ws);
+        const closed = closedWithin(live.ws, "停用团队");
+        const reason = "e2e 滥用处置演练";
+        await operator.expectCall(
+          "admin.teamStatus(suspended)",
+          200,
+          "",
+          "PUT",
+          `/v1/admin/teams/${teamId}/status`,
+          {
+            body: { status: "suspended", reason },
+          },
+        );
+        await closed;
+        await until(
+          "断言 403 team_suspended",
+          async () => {
+            const again = await A.call(
+              "POST",
+              `/v1/sources/${H1.id}/assertion`,
+              { body: {} },
+            );
+            return again.status === 403 && again.body.code === "team_suspended";
+          },
+          20_000,
+          300,
+        );
+        const rows = await psql(
+          `SELECT actor_kind, reason FROM audit_log WHERE team_id = '${teamId}' AND actor_kind = 'operator' ORDER BY at_ms`,
+        );
+        expect(
+          rows.length >= 1 &&
+            rows.every(([kind, why]) => kind === "operator" && why.length > 0),
+          `运营审计行：${JSON.stringify(rows)}`,
+        );
+        expect(
+          rows.some(([, why]) => why === reason),
+          "审计带了理由",
+        );
+        await operator.expectCall(
+          "admin.teamStatus(active)",
+          200,
+          "",
+          "PUT",
+          `/v1/admin/teams/${teamId}/status`,
+          {
+            body: { status: "active", reason: "e2e 演练结束，恢复" },
+          },
+        );
+        const audit = await A.expectCall(
+          "audit.list",
+          200,
+          "",
+          "GET",
+          `/v1/teams/${teamId}/audit`,
+          { query: { limit: "100" } },
+        );
+        expect(
+          audit.body.events.some((e) => e.actor.kind === "operator"),
+          "audit.list 看得到运营动作",
+        );
+        await until(
+          "恢复后断言可用",
+          async () =>
+            (
+              await A.call("POST", `/v1/sources/${H1.id}/assertion`, {
+                body: {},
+              })
+            ).status === 200,
+          20_000,
+          300,
+        );
+      },
+    );
+
+    /* ---------- 场景 8 ---------- */
+    await report.step(
+      "场景 8：A 撤销 H1 → 隧道关、sourceRevoked、心跳 410 source_revoked",
+      async () => {
+        const closed = core1.closed();
+        await A.expectCall(
+          "sources.revoke",
+          200,
+          "",
+          "DELETE",
+          `/v1/sources/${H1.id}`,
+        );
+        const code = await Promise.race([
+          closed,
+          sleep(20_000).then(() =>
+            Promise.reject(new Error("H1 的隧道没被关")),
+          ),
+        ]);
+        expect(code > 0, `隧道关闭码 ${code}`);
+        await until("A 的 me-stream 收到 sourceRevoked", () =>
+          events.a.has(
+            (e) => e.type === "sourceRevoked" && e.sourceId === H1.id,
+          ),
+        );
+        const beat = await hint(H1);
+        expectEqual(beat.status, 410, "撤销后的心跳");
+        expectEqual(beat.body.code, "source_revoked", "心跳错误码");
+      },
+    );
+
+    // 逐键转储 Redis（场景 13 清空前后各一份，场景 14 都扫）。
+    const dumpRedis = async () => {
+      const out = [];
+      let cursor = "0";
+      do {
+        const [next, keys] = await adminRedis.command(
+          "SCAN",
+          cursor,
+          "COUNT",
+          "1000",
+        );
+        cursor = next;
+        for (const key of keys) {
+          const type = await adminRedis.command("TYPE", key);
+          out.push(key);
+          if (type === "string")
+            out.push(String(await adminRedis.command("GET", key)));
+          else if (type === "hash")
+            out.push((await adminRedis.command("HGETALL", key)).join("\n"));
+          else if (type === "zset")
+            out.push(
+              (await adminRedis.command("ZRANGE", key, 0, -1)).join("\n"),
+            );
+          else if (type === "set")
+            out.push((await adminRedis.command("SMEMBERS", key)).join("\n"));
+          else if (type === "list")
+            out.push(
+              (await adminRedis.command("LRANGE", key, 0, -1)).join("\n"),
+            );
+        }
+      } while (cursor !== "0");
+      return out;
+    };
+    let redisBeforeWipe = [];
+
+    /* ---------- 场景 13 ---------- */
+    await report.step(
+      "场景 13：撤销后重启 Redis（数据清空）→ 控制面重放，B 的旧中继令牌仍被拒",
+      async () => {
+        const jtis = [bToken1.jti, bToken2.jti];
+        redisBeforeWipe = await dumpRedis();
+        adminRedis.close();
+        await exec("docker", ["restart", "-t", "1", redisName]);
+        await until(
+          "Redis 重启后可用",
+          async () => {
+            const probe = redisClient(redis.url);
+            try {
+              if ((await probe.command("PING")) !== "PONG") return false;
+              adminRedis = probe;
+              return true;
+            } catch {
+              probe.close();
+              return false;
+            }
+          },
+          30_000,
+          300,
+        );
+        await until(
+          "控制面把撤销重放回 Redis",
+          async () => {
+            for (const jti of jtis)
+              if (!(await adminRedis.command("EXISTS", `relay:revoked:${jti}`)))
+                return false;
+            return true;
+          },
+          60_000,
+          500,
+        );
+        // 节点内存里的撤销表是并集、不会被 Redis 清空洗掉，所以另起一个新节点 c 接同一个 Redis：
+        // 它只能靠控制面重放回 Redis 的撤销记录拒绝旧令牌。
+        const fresh = await startRelay("c");
+        for (const token of [bToken1.relayToken, bToken2.relayToken]) {
+          await until(
+            "新节点 c 上旧令牌被拒 4401",
+            async () => (await channel(fresh, H1.id, token)).code === 4401,
+            30_000,
+            300,
+          );
+          expectEqual(
+            (await channel(nodes.b, H1.id, token)).code,
+            4401,
+            "b 上的旧令牌",
+          );
+        }
+        // a 在场景 12 排空了（/ready 按设计不就绪），所以只看控制面与 b；b 的节点表项要在 Redis 清空后重新写回。
+        await until(
+          "控制面与节点 b 在 Redis 重启后仍就绪",
+          async () => {
+            const [c, bReady] = await Promise.all([
+              fetch(`${base}/ready`),
+              fetch(`${nodes.b.origin}/ready`),
+            ]);
+            return c.ok && bReady.ok;
+          },
+          60_000,
+          500,
+        );
+        await until(
+          "节点 b 重新写回节点表",
+          async () =>
+            (await adminRedis.command("HEXISTS", "relay:nodes", "b")) === 1,
+          60_000,
+          500,
+        );
+      },
+    );
+
+    await report.step(
+      "场景 5（收口）：流量桶只在入口节点 b、team_id = T",
+      async () => {
+        const rows = await trafficCheck;
+        return `${rows.length} 行`;
+      },
+    );
+
+    /* ---------- 场景 14 ---------- */
+    await report.step(
+      "场景 14：泄密扫描：日志、库转储、Redis 转储里没有登记过的令牌、口令、邮件令牌",
+      async () => {
+        for (const node of Object.values(nodes)) await node.stop();
+        // 节点退出时最后 Flush：此时 a 上没有这个源的流量行（场景 5 的轮询只能在落库前后某个时刻看到）。
+        const finalRows = await psql(
+          `SELECT node, team_id FROM relay_traffic_buckets WHERE source_id = '${H1.id}'`,
+        );
+        expect(
+          finalRows.length >= 1 &&
+            finalRows.every(([node, team]) => node === "b" && team === teamId),
+          `最终流量行：${JSON.stringify(finalRows)}`,
+        );
+        const dump = (
+          await exec("docker", [
+            "exec",
+            pgName,
+            "pg_dump",
+            "-U",
+            "armadra",
+            "-d",
+            "armadra_cloud",
+            "--data-only",
+          ])
+        ).stdout;
+        const redisText = [...redisBeforeWipe, ...(await dumpRedis())];
+        const haystacks = {
+          控制面日志: cloud.logs.join(""),
+          节点日志: Object.values(nodes)
+            .map((n) => n.logs.join(""))
+            .join(""),
+          库转储: dump,
+          Redis转储: redisText.join("\n"),
+        };
+        const leaks = [];
+        for (const [where, text] of Object.entries(haystacks))
+          for (const [value, label] of secretEntries())
+            if (text.includes(value)) leaks.push(`${where}：${label}`);
+        expectEqual(leaks.join("；"), "", "泄露的秘密");
+        return `库转储 ${dump.length} 字节，Redis ${redisText.length} 段（清空前后各一份）`;
+      },
+    );
   } catch (error) {
-    if (process.env.E2E_DEBUG)
+    if (process.env.E2E_DEBUG) {
+      log(`--- cloud\n${(cloud?.logs.join("") ?? "").slice(-4000)}`);
       for (const node of Object.values(nodes))
-        log(`--- ${node.name}\n${node.logs.join("").slice(-3000)}`);
+        log(`--- ${node.name}\n${node.logs.join("").slice(-2500)}`);
+    }
     throw error;
   } finally {
     for (const ws of sockets) ws.terminate();
     for (const core of cores) await core.stop().catch(() => {});
     for (const node of Object.values(nodes)) await node.stop().catch(() => {});
-    admin?.close();
-    await issuer?.close();
-    await redis?.stop();
-    if (buildDir) rmSync(buildDir, { recursive: true, force: true });
+    await cloud?.stop().catch(() => {});
+    adminRedis?.close();
+    for (const container of containers) await container.stop();
+    // 兜底：startContainer 中途失败时，按预定名字清理自己起的容器。
+    for (const name of containerNames)
+      await exec("docker", ["rm", "-f", "-v", name], { allowFail: true });
+    if (work) rmSync(work, { recursive: true, force: true });
     await sleep(0);
   }
 }

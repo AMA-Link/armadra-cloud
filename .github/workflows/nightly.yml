@@ -139,8 +139,9 @@ jobs:
           path: e2e-out/result.json
           if-no-files-found: ignore
 
-  # SaaS 中继节点（Go 设计 §5 的 SaaS 行）：三个节点 + 一次性 Redis 容器对假 core——节点间转发、
-  # 撤销跨节点、持有节点下线再平衡。只依赖本仓。
+  # SaaS 端到端（SaaS 实施设计 §8.4）：真实控制面 + 两个节点 + 一次性 PostgreSQL / Redis / mailpit 容器对假 core——
+  # 账号与团队、授予与断言、经节点转发、撤销、停用、排空、Redis 清空后重放、泄密扫描；再跑只有节点的用例
+  # （saas-nodes：测试签发者代替控制面，10 MB 双向转发、慢客户端、节点下线再平衡）。只依赖本仓与 Docker。
   e2e-saas:
     needs: gate
     if: ${{ needs.gate.outputs.run == 'true' }}
@@ -164,12 +165,16 @@ jobs:
       - run: pnpm libs:build
       - name: pnpm e2e --mode saas
         run: pnpm e2e --mode saas --output e2e-out
+      - name: pnpm e2e --mode saas-nodes
+        run: pnpm e2e --mode saas-nodes --output e2e-out-nodes
       - name: 结果
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e2e-saas
-          path: e2e-out/result.json
+          path: |
+            e2e-out/result.json
+            e2e-out-nodes/result.json
           if-no-files-found: ignore
 
   # 真 Armadra core 对本地 workerd 的 Workers 中继（平台计划 V4）：Armadra 主仓的
