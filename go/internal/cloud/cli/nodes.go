@@ -135,8 +135,8 @@ func nodesRevoke(args []string, env config.Env, stdout, stderr io.Writer, option
 	defer func() { _ = plane.Close() }()
 	redis := relayctl.NewRedis(relayctl.RedisOptions{Plane: plane, Now: options.Now})
 	expMs := options.Now().Add(revokeKeep).UnixMilli()
-	if err := relayctl.RevokeToken(ctx, db.SaaS(), redis, *jti, expMs); err != nil {
-		fmt.Fprintf(stderr, "撤销已写入 PostgreSQL，但没能写进 Redis（%v）；控制面启动与重新连上 Redis 时会重放\n", err)
+	if err := relayctl.RevokeToken(ctx, db.SaaS(), server.TenantID, redis, *jti, expMs); err != nil {
+		fmt.Fprintf(stderr, "撤销已写入 PostgreSQL 并排了 relay.revoke 作业，但这次没能写进 Redis（%v）；运行中的控制面会重试，启动与重新连上 Redis 时也会重放\n", err)
 		return ExitFail
 	}
 	fmt.Fprintf(stdout, "已作废节点令牌：%s\n", *jti)

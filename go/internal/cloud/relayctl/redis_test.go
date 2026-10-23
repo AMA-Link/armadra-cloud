@@ -8,12 +8,15 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
@@ -697,5 +700,215 @@ func TestBroadcastShellsRoundTripThroughWire(t *testing.T) {
 	}
 	if kinds[cluster.KindRevoked] != 1 || kinds[cluster.KindCommand] != 2 || kinds[cluster.KindQuota] != 1 || kinds[cluster.KindIncident] != 1 {
 		t.Fatalf("种类与次数（kick 在 ctl 与持有节点频道各一条）：%v", kinds)
+	}
+}
+
+// failWhen 让命中的命令失败（别的命令照常）：模拟 Redis 部分故障——写拒绝而订阅与读仍健康。
+type failWhen struct {
+	on   *atomic.Bool
+	hits func(name, key string) bool
+}
+
+func (failWhen) DialHook(next goredis.DialHook) goredis.DialHook { return next }
+func (failWhen) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return next
+}
+func (h failWhen) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		args := cmd.Args()
+		name, _ := args[0].(string)
+		key := ""
+		if len(args) > 1 {
+			key, _ = args[1].(string)
+		}
+		if h.on.Load() && h.hits(strings.ToLower(name), key) {
+			return errors.New("READONLY You can't write against a read only replica. 10.0.0.1:6379")
+		}
+		return next(ctx, cmd)
+	}
+}
+
+type partialEnv struct {
+	*redisEnv
+	fail *atomic.Bool
+	rc   *relayctl.Redis
+	d    *relayctl.Durable
+	st   saas.Store
+	db   *postgres.DB
+}
+
+// newPartialEnv 起 PostgreSQL（随机 schema）、带故障钩子的 Redis 实现与打开兜底作业的 Durable。
+func newPartialEnv(t *testing.T, hits func(name, key string) bool) *partialEnv {
+	t.Helper()
+	e := newRedisEnv(t)
+	url, schema := pgtest.Schema(t)
+	db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.CreateTenant(ctx, "cloud", store.Tenant{TenantSettings: store.TenantSettings{Issuer: "https://x.test", TrustedOrigins: []string{}}}); err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := goredis.ParseURL(e.url)
+	client := goredis.NewClient(opts)
+	t.Cleanup(func() { _ = client.Close() })
+	fail := &atomic.Bool{}
+	client.AddHook(failWhen{on: fail, hits: hits})
+	plane, err := controlredis.New(ctx, controlredis.Options{
+		Options: cluster.Options{Issuer: "https://x.test", Mode: "saas", Origin: "cloud/a"}, Client: client, Prefix: e.prefix,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = plane.Close() })
+	st := db.SaaS()
+	rc := relayctl.NewRedis(relayctl.RedisOptions{Plane: plane, IssuedPrefix: e.issued})
+	d := relayctl.NewDurable(rc, st, "cloud", nil, nil).EnableRetryJobs()
+	return &partialEnv{redisEnv: e, fail: fail, rc: rc, d: d, st: st, db: db}
+}
+
+func (p *partialEnv) jobs(kind, dedupe string) int {
+	p.t.Helper()
+	var n int
+	if err := p.db.Pool().QueryRow(ctx, "SELECT count(*)::int FROM jobs WHERE kind = $1 AND ($2 = '' OR dedupe_key = $2) AND done_at_ms IS NULL AND failed_at_ms IS NULL", kind, dedupe).Scan(&n); err != nil {
+		p.t.Fatal(err)
+	}
+	return n
+}
+
+func (p *partialEnv) runJobs() {
+	p.t.Helper()
+	runner := jobs.New(jobs.Options{Store: p.st, TenantID: "cloud", Workers: 1})
+	relayctl.RegisterJobs(runner, p.rc)
+	runner.Start()
+	p.t.Cleanup(func() { runner.Stop(5 * time.Second) })
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("等不到：%s", what)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func writesToRevoked(prefix string) func(name, key string) bool {
+	return func(name, key string) bool { return name == "set" && strings.HasPrefix(key, prefix+"revoked:") }
+}
+
+// Redis 部分故障（订阅与读都健康，只是写撤销键被拒）：撤销只落了 PostgreSQL 的话会一直悬着。
+// 现在同一个 PostgreSQL 事务里有 relay.revoke 作业（按 jti 去重），故障恢复后作业运行器把撤销送到节点；
+// 正常成功的撤销会取消作业。补登记索引失败也不会跳过撤销。
+func TestDurableRevokeSurvivesPartialRedisFailureViaJob(t *testing.T) {
+	var p *partialEnv
+	p = newPartialEnv(t, func(name, key string) bool { return writesToRevoked(p.prefix)(name, key) })
+	node, _ := p.newNode("node-1")
+	exp := inHour()
+	for _, i := range []relayctl.Issued{
+		{Subject: "a1", SourceID: "s1", DeviceID: "d1", JTI: "r.fail", ExpMs: exp},
+		{Subject: "a1", SourceID: "s1", DeviceID: "d1", JTI: "r.ok", ExpMs: exp},
+	} {
+		if err := p.d.IndexIssued(ctx, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 成功路径：不留作业。
+	if n, err := p.d.RevokeWhere(ctx, relayctl.Filter{JTI: "r.ok"}); err != nil || n != 1 {
+		t.Fatalf("成功的撤销：%d %v", n, err)
+	}
+	if p.jobs(relayctl.JobRevoke, "r.ok") != 0 {
+		t.Fatal("Redis 写成功后兜底作业应取消")
+	}
+	// 失败路径：写撤销键被拒，撤销只在 PostgreSQL，但作业已在同一事务里入库。
+	p.fail.Store(true)
+	if _, err := p.d.RevokeWhere(ctx, relayctl.Filter{JTI: "r.fail"}); err == nil {
+		t.Fatal("Redis 写失败要报错")
+	}
+	if p.jobs(relayctl.JobRevoke, "r.fail") != 1 {
+		t.Fatal("撤销落盘的同一事务里应有 relay.revoke 作业")
+	}
+	if ok, _ := node.Tokens().IsRevoked(ctx, "r.fail"); ok {
+		t.Fatal("故障期间节点不该知道")
+	}
+	// 故障恢复，作业运行器重试。
+	p.fail.Store(false)
+	p.runJobs()
+	waitFor(t, "作业把撤销送到节点", func() bool { ok, _ := node.Tokens().IsRevoked(ctx, "r.fail"); return ok })
+}
+
+// 踢人命令发布失败：排 relay.kick 作业，恢复后到达节点。
+func TestDurableSinkKickFailureRetriesViaJob(t *testing.T) {
+	var p *partialEnv
+	p = newPartialEnv(t, func(name, key string) bool { return name == "publish" })
+	_, sink := p.newNode("node-1")
+	if err := p.d.IndexIssued(ctx, relayctl.Issued{Subject: "a1", SourceID: "s1", DeviceID: "d1", JTI: "r.k", ExpMs: inHour()}); err != nil {
+		t.Fatal(err)
+	}
+	p.fail.Store(true)
+	p.d.Revocations().DeviceRevoked(ctx, "a1", "d1")
+	if p.jobs(relayctl.JobKick, "") != 1 {
+		t.Fatal("踢人发布失败应排 relay.kick 作业")
+	}
+	p.fail.Store(false)
+	p.runJobs()
+	waitFor(t, "踢人命令最终到达", func() bool {
+		cmds, _, _ := sink.snapshot()
+		for _, c := range cmds {
+			if c.Type == control.CommandKick && c.SourceID == "s1" && c.Subject == "a1" && c.DeviceID == "d1" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// nodes revoke 的 RevokeToken：PostgreSQL 同事务排作业，Redis 失败后由运行器重试。
+func TestRevokeTokenQueuesRetryJob(t *testing.T) {
+	var p *partialEnv
+	p = newPartialEnv(t, func(name, key string) bool { return writesToRevoked(p.prefix)(name, key) })
+	node, _ := p.newNode("node-1")
+	jti := "n.node-a.0123456789abcdef01234567"
+	p.fail.Store(true)
+	if err := relayctl.RevokeToken(ctx, p.st, "cloud", p.rc, jti, inHour()); err == nil {
+		t.Fatal("Redis 写失败要报错")
+	}
+	if p.jobs(relayctl.JobRevoke, jti) != 1 {
+		t.Fatal("应有重试作业")
+	}
+	p.fail.Store(false)
+	p.runJobs()
+	waitFor(t, "作业把节点令牌的撤销送到节点", func() bool { ok, _ := node.Tokens().IsRevoked(ctx, jti); return ok })
+	// 成功路径不留作业。
+	jti2 := "n.node-a.fedcba9876543210fedcba98"
+	if err := relayctl.RevokeToken(ctx, p.st, "cloud", p.rc, jti2, inHour()); err != nil || p.jobs(relayctl.JobRevoke, jti2) != 0 {
+		t.Fatalf("成功路径：%v 作业 %d", err, p.jobs(relayctl.JobRevoke, jti2))
+	}
+}
+
+// 重放重写额度键时，键丢了或值变了的团队补发 kind: quota 广播；没变的不发。
+func TestWriteQuotasBroadcastsOnlyChanges(t *testing.T) {
+	e := newRedisEnv(t)
+	rc, _ := e.newControl("a", nil)
+	_, sink := e.newNode("node-1")
+	quotas := relayctl.TeamQuotas{"t1": {Concurrent: 10}, "t2": {Concurrent: 10}}
+	if err := rc.WriteQuotas(ctx, quotas); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "新键各广播一次", func() bool { _, q, _ := sink.snapshot(); return len(q) == 2 })
+	if err := rc.WriteQuotas(ctx, quotas); err != nil {
+		t.Fatal(err)
+	}
+	quotas["t2"] = relayctl.Quota{Concurrent: 50}
+	if err := rc.WriteQuotas(ctx, quotas); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "只有变了的广播", func() bool { _, q, _ := sink.snapshot(); return len(q) == 3 })
+	time.Sleep(200 * time.Millisecond)
+	if _, q, _ := sink.snapshot(); len(q) != 3 || q[2].TeamID != "t2" || q[2].Concurrent != 50 {
+		t.Fatalf("额度广播：%+v", q)
 	}
 }

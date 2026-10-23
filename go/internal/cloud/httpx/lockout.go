@@ -113,7 +113,9 @@ func (u *UnknownLockouts) Guard(ctx context.Context) error {
 	}
 	probe, cancel := context.WithTimeout(ctx, guardTimeout)
 	defer cancel()
-	if err := u.Client.Ping(probe).Err(); err != nil {
+	// 写探活，不是 PING：Redis 拒写（OOM、READONLY、MISCONF）而 PING 照常答时，未注册路径的记账脚本会失败、
+	// 已注册路径却不碰 Redis，两类邮箱就能被区分。探活与记账用同一个键空间、同样是写命令。
+	if err := u.Client.Set(probe, LockoutPrefix+"probe", "1", 5*time.Second).Err(); err != nil {
 		return u.markDown(err)
 	}
 	return nil

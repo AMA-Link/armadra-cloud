@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,20 +13,40 @@ import (
 )
 
 // outage 是可开关的 Redis 故障：开着时客户端上的每条命令都失败。
-type outage struct{ down atomic.Bool }
+type outage struct {
+	down atomic.Bool
+	// writesOnly 为真时只有写命令失败，PING 与读照常（Redis 拒写：OOM、READONLY、MISCONF）。
+	writesOnly bool
+}
+
+func (o *outage) fails(cmd goredis.Cmder) bool {
+	if !o.down.Load() {
+		return false
+	}
+	if !o.writesOnly {
+		return true
+	}
+	switch strings.ToLower(cmd.Name()) {
+	case "set", "setex", "eval", "evalsha", "hset", "hincrby", "expire", "pexpire", "del", "zadd", "incr", "getdel", "publish":
+		return true
+	}
+	return false
+}
 
 func (o *outage) DialHook(next goredis.DialHook) goredis.DialHook { return next }
 func (o *outage) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []goredis.Cmder) error {
-		if o.down.Load() {
-			return errors.New("redis down")
+		for _, cmd := range cmds {
+			if o.fails(cmd) {
+				return errors.New("redis down")
+			}
 		}
 		return next(ctx, cmds)
 	}
 }
 func (o *outage) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
 	return func(ctx context.Context, cmd goredis.Cmder) error {
-		if o.down.Load() {
+		if o.fails(cmd) {
 			return errors.New("redis down")
 		}
 		return next(ctx, cmd)
@@ -43,7 +64,17 @@ func (r *rig) at(url string) *rig {
 // （503 unavailable、同一个形状），不回落计数也不暴露谁注册了；故障期间已注册账号的失败计数不动；恢复后锁定照旧。
 func TestLoginFailsClosedForBothKindsAcrossInstances(t *testing.T) {
 	t.Parallel()
-	hook := &outage{}
+	failClosed(t, &outage{})
+}
+
+// 同一个场景，但 Redis 只是拒写（PING 与读都正常）：探活是写命令，所以仍然对两类邮箱一视同仁地答 503，
+// 不会因为「PING 通了、只有未注册路径的记账写失败」而被区分。
+func TestLoginFailsClosedWhenRedisRejectsWrites(t *testing.T) {
+	t.Parallel()
+	failClosed(t, &outage{writesOnly: true})
+}
+
+func failClosed(t *testing.T, hook *outage) {
 	r := newRig(t, rigOptions{redisHook: hook})
 	peer := r.at(r.startPeer().URL)
 	instances := []*rig{r, peer}

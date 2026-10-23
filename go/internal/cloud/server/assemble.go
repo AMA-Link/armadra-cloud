@@ -96,6 +96,9 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	}
 	// 签发索引与撤销落盘到 PostgreSQL（设计 §7.2）；Redis（或内存）只是快路径。
 	durable := relayctl.NewDurable(inner, saasStore, TenantID, now, logger)
+	if redisControl != nil {
+		durable.EnableRetryJobs()
+	}
 	out.control = durable
 	limiter := deps.Limiter
 	if limiter == nil {
