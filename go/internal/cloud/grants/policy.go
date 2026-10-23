@@ -226,8 +226,10 @@ func (p *Policy) versionGate(ctx context.Context, source store.SourceRecord, bas
 	return nil
 }
 
-// AccessChanged 是给 Watcher.Refresh 的事件：某账号对某台主机的可见性变了（授予 / 撤销 / 成员变动）。
-// S8 的领域事件（grantChanged、memberChanged）转成它；AccountID 空 = 对所有连接生效。
+// AccessChanged 是给 Watcher.Refresh 的内部事件：某账号对某台主机的可见性变了（授予 / 撤销 / 成员变动）。
+// S8 的领域事件（grantChanged、memberChanged）转成它。它是 core.InternalEvent，不会进客户端的事件队列。
+// AccountID 空只允许 Visible = false（对所有连接移除，例如主机撤销）；放宽（Visible = true）必须带具体账号，
+// 否则会把别人看不到的主机露给所有连接——这样的事件被忽略。
 type AccessChanged struct {
 	SourceID  string
 	AccountID string
@@ -236,6 +238,9 @@ type AccessChanged struct {
 
 // EventSource 实现 core.Event。
 func (e AccessChanged) EventSource() string { return e.SourceID }
+
+// InternalOnly 实现 core.InternalEvent。
+func (AccessChanged) InternalOnly() {}
 
 // Watch 实现 core.AccessPolicy：连接建立时解析可见集合（取全部页），之后靠 Refresh 更新。
 func (p *Policy) Watch(ctx context.Context, caller core.Caller) (core.Watcher, error) {
@@ -312,6 +317,9 @@ func (w *watcher) apply(e AccessChanged) {
 		return
 	}
 	if e.Visible {
+		if e.AccountID == "" {
+			return // 放宽必须点名账号
+		}
 		w.visible[e.SourceID] = struct{}{}
 		return
 	}

@@ -22,12 +22,13 @@ func TestWatcherRefreshUpdatesVisibility(t *testing.T) {
 	}
 	w.Refresh(AccessChanged{SourceID: "c", AccountID: "me", Visible: true})
 	w.Refresh(AccessChanged{SourceID: "d", AccountID: "other", Visible: true}) // 别人的变化不影响本连接
-	w.Refresh(AccessChanged{SourceID: "a", Visible: false})                    // AccountID 空 = 对所有连接生效
+	w.Refresh(AccessChanged{SourceID: "a", Visible: false})                    // AccountID 空只允许移除，对所有连接生效
+	w.Refresh(AccessChanged{SourceID: "f", Visible: true})                     // 放宽不点名账号：忽略
 	w.Refresh(core.NewSourceRevoked("b"))
-	w.Refresh(&AccessChanged{SourceID: "e", Visible: true})
+	w.Refresh(&AccessChanged{SourceID: "e", AccountID: "me", Visible: true})
 	w.Refresh(nil)
 	w.Refresh(core.NewSourceOnline("a", 1, "x")) // 不相关的事件
-	for id, want := range map[string]bool{"a": false, "b": false, "c": true, "d": false, "e": true} {
+	for id, want := range map[string]bool{"a": false, "b": false, "c": true, "d": false, "e": true, "f": false} {
 		if got := w.Sees(id); got != want {
 			t.Errorf("Sees(%s) = %v，应为 %v", id, got, want)
 		}
@@ -72,5 +73,13 @@ func TestWatcherConcurrent(t *testing.T) {
 	wg.Wait()
 	if w.Sees("a") {
 		t.Fatal("全部结束后已关闭")
+	}
+}
+
+// AccessChanged 是内部事件：MeStream 不把它放进客户端队列（core.InternalEvent）。
+func TestAccessChangedIsInternalOnly(t *testing.T) {
+	var event core.Event = AccessChanged{SourceID: "a", AccountID: "me", Visible: true}
+	if _, ok := event.(core.InternalEvent); !ok {
+		t.Fatal("AccessChanged 应实现 core.InternalEvent")
 	}
 }

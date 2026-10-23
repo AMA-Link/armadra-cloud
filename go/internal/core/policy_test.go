@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core/coretest"
@@ -290,4 +292,42 @@ func tokenClaims(t *testing.T, token string) map[string]any {
 		t.Fatal(err)
 	}
 	return claims
+}
+
+type internalEvent struct{ source string }
+
+func (e internalEvent) EventSource() string { return e.source }
+func (internalEvent) InternalOnly()         {}
+
+// 内部事件只交给 Watcher.Refresh，不进客户端的事件队列；普通事件照常。
+func TestMeStreamDropsInternalEvents(t *testing.T) {
+	e := newEnv(t, coretest.Options{})
+	owner := e.owner()
+	e.register(owner, sourceID)
+	var mu sync.Mutex
+	var seen []core.Event
+	detach, err := core.NewMeStream(e.h.Context).Attach(owner, func(ev core.Event) { mu.Lock(); seen = append(seen, ev); mu.Unlock() }, nil)
+	e.must(err)
+	defer detach()
+	e.h.Context.Emit(internalEvent{source: sourceID}, nil)
+	e.h.Context.Emit(core.NewSourceRevoked(sourceID), nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(seen)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 {
+		t.Fatalf("应只收到普通事件：%v", seen)
+	}
+	if _, ok := seen[0].(core.SourceRevoked); !ok {
+		t.Fatalf("收到的不是 sourceRevoked：%T", seen[0])
+	}
 }
