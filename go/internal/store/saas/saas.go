@@ -56,8 +56,9 @@ type Reader interface {
 // Tx 是一个事务里的全部仓储。
 type Tx interface {
 	Reader
-	Accounts() AccountRepo // 邮箱、状态、范围、凭据、邮件令牌、设备码
-	Teams() TeamRepo       // 团队、成员、设置；LockTeam / LockAccount
+	Accounts() AccountRepo       // 邮箱、状态、范围、凭据、邮件令牌、设备码
+	Teams() TeamRepo             // 团队、成员、设置；LockTeam / LockAccount
+	DeviceCodes() DeviceCodeRepo // 设备码（S3）
 	Invitations() InvitationRepo
 	Hosts() HostRepo // source_spaces、注册令牌（带空间）、登记事务
 	Grants() GrantRepo
