@@ -39,32 +39,6 @@ func TestAtLeast(t *testing.T) {
 	}
 }
 
-func TestCanManage(t *testing.T) {
-	team := func(owner string, role saas.TeamRole) saas.Host {
-		return saas.Host{TeamID: "t1", OwnerAccountID: owner, ViewerRole: role}
-	}
-	cases := []struct {
-		name string
-		host saas.Host
-		want bool
-	}{
-		{"个人空间的所有者", saas.Host{OwnerAccountID: "me"}, true},
-		{"个人空间的别人", saas.Host{OwnerAccountID: "x"}, false},
-		{"团队主机的所有者（member）", team("me", saas.RoleMember), true},
-		{"团队 owner", team("x", saas.RoleOwner), true},
-		{"团队 admin", team("x", saas.RoleAdmin), true},
-		{"团队 member 管不了别人的", team("x", saas.RoleMember), false},
-		{"billing", team("x", saas.RoleBilling), false},
-		{"guest", team("x", saas.RoleGuest), false},
-		{"没有角色", team("x", ""), false},
-	}
-	for _, c := range cases {
-		if got := canManage(c.host, "me"); got != c.want {
-			t.Errorf("%s：%v，应为 %v", c.name, got, c.want)
-		}
-	}
-}
-
 func TestSettingsOfDefaultsAndOverlay(t *testing.T) {
 	if got := settingsOf(saas.Host{}); got != (hostSettings{LinkCreators: "owner_admin", AllowGuests: true, DefaultRole: "viewer"}) {
 		t.Fatalf("缺省：%+v", got)

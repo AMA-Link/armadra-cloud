@@ -14,6 +14,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/accounts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/invitations"
@@ -46,6 +47,9 @@ type assembly struct {
 // 其余交给 /v1 与 /.well-known 的 API（还没实现的过程答 501 not_implemented）。
 func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.UniversalClient, logger *obs.Logger, now func() time.Time, deps Deps) (*assembly, error) {
 	relay := relayctl.NewMemory(now)
+	saasStore := db.SaaS()
+	// 签发索引与撤销落盘到 PostgreSQL（设计 §7.2）；内存实现只是快路径，S8 换成 Redis。
+	durable := relayctl.NewDurable(relay, saasStore, TenantID, now, logger)
 	limiter := deps.Limiter
 	if limiter == nil {
 		limiter = controlredis.NewLimiter(redisClient, httpx.LimitPrefix, httpx.Rules, func(err error) {
@@ -57,10 +61,12 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 
 	coreCtx := &core.Context{
 		TenantID: TenantID, Ports: db.SaaSPorts(), Signer: core.NewSigner(db.Keys(TenantID), now),
-		Limits: limits, Relay: relay.Relay(), Revocations: relay.Revocations(),
+		Limits: limits, Relay: durable.Relay(), Revocations: durable.Revocations(),
 		PasswordPolicy: core.DefaultPasswordPolicy, Now: now, Events: core.NewEventBus(),
-		RelayOrigin: relayOrigin, RelayBaseURL: relayOrigin, TunnelNodes: hosts.TunnelNodes(relay),
+		RelayOrigin: relayOrigin, RelayBaseURL: relayOrigin, TunnelNodes: hosts.TunnelNodes(durable),
 	}
+	policy := grants.NewPolicy(grants.PolicyOptions{Core: coreCtx, Store: saasStore, Relay: durable})
+	coreCtx.Policy = policy
 	if cfg.Turnstile != nil {
 		gate, err := challengeGate(cfg, logger, now, deps.Challenge)
 		if err != nil {
@@ -73,7 +79,6 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	if err != nil {
 		return nil, err
 	}
-	saasStore := db.SaaS()
 
 	lockouts := httpx.NewUnknownLockouts(redisClient, func(err error) {
 		logger.Warn("登录失败计数回落到进程内计数，已注册与未注册邮箱的锁定可能不一致", obs.Operation("lockout"), obs.Error(err))
@@ -101,7 +106,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		handlers[name] = handler
 	}
 	teamService := teams.New(teams.Options{
-		Core: coreCtx, Store: saasStore, Relay: relay, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+		Core: coreCtx, Store: saasStore, Relay: durable, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
 	})
 	teamService.Register(runner)
 	for name, handler := range teamService.Handlers() {
@@ -115,7 +120,8 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		handlers[name] = handler
 	}
 	hostService := hosts.New(hosts.Options{
-		Core: coreCtx, Store: saasStore, Limits: limits, Relay: relay, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+		Core: coreCtx, Store: saasStore, Limits: limits, Relay: durable, Directory: policy,
+		RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
 	})
 	for name, handler := range hostService.Handlers() {
 		handlers[name] = handler
