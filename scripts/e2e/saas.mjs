@@ -4,7 +4,7 @@
 //      给了 `--redis-url` 就用它（必须是专用的空库：节点的键前缀固定是 relay:）；
 //   2. 测试签发者：本进程里的 Ed25519 钥，`/.well-known/jwks.json` 走 HTTP；节点令牌、隧道令牌、
 //      中继令牌都由它签（控制面落地之前代替 armadra-cloud）；
-//   3. 假 core（relay-runtime-node 的测试件）连节点 a 的隧道，客户端连节点 b（`<sourceId>.src.<域>`）：
+//   3. 假 core（packages/e2e-fake-core）连节点 a 的隧道，客户端连节点 b（`<sourceId>.src.<域>`）：
 //      通道经 `/x/v1` 转到 a，10 MB 随机字节双向原样；`/x/v1` 没有有效节点令牌一律 401；
 //      慢客户端（不读的下载）不拖住同一条节点间连接上别的源；下载中途掉线 64 次之后源照常出数据；
 //   4. 撤销跨节点生效：照控制面的写法写 `relay:revoked:<jti>` 并广播、发 `kick`，在线通道被踢，
@@ -410,7 +410,7 @@ function metric(text, name) {
 /** 跑完全部步骤；`report` 是 e2e.mjs 的步骤记录。 */
 export async function runSaasE2e({ root, report, redisUrl: givenRedis }) {
   const { FakeCore } = await import(
-    "../../packages/relay-runtime-node/test/fake-core.ts"
+    "../../packages/e2e-fake-core/src/fake-core.ts"
   );
   const nodes = {};
   const cores = [];
