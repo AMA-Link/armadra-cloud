@@ -7,6 +7,16 @@
 - 协议补缺（Refs #60，Closes #84，协议 1.4 发布后的只加不改补充，协议包下一版起（暂记 0.10.1，发版时按实际版本改））：`auth.register` 与 `auth.passwordResetStart` 的入参多可选的 `challenge`，`platform.info.challenge.scope` 可含 `auth.register`（action `armadra-register`）与 `auth.passwordResetStart`（action `armadra-reset`），cloud-api §16 追加说明；`armadra-cloud` 的 `ARMADRA_CLOUD_CHALLENGE_SCOPE` 按范围生效，去掉两条「协议还没有该入口的挑战入参」的启动警告，`auth.register` 在按 IP 限流与事故开关之后、口令策略之前校验挑战。personal 不实现这两个过程，也不接受它们作范围。旧客户端应忽略 `scope` 里不认识的项（输出侧解析过滤未知项）。
   Protocol gap fix (Refs #60, Closes #84; an additive-only supplement after the 1.4 release, from the next protocol package version (provisionally 0.10.1; adjust at release)): the inputs of `auth.register` and `auth.passwordResetStart` gain an optional `challenge`, and `platform.info.challenge.scope` may include `auth.register` (action `armadra-register`) and `auth.passwordResetStart` (action `armadra-reset`), with a note appended to cloud-api §16; `ARMADRA_CLOUD_CHALLENGE_SCOPE` of `armadra-cloud` now takes effect per entry and the two "protocol has no challenge input yet" startup warnings are gone; `auth.register` checks the challenge after the per-IP limit and the incident switch and before the password policy. Personal does not implement these two procedures and does not accept them in its scope. Clients should ignore unknown `scope` entries (the output side filters unknown entries when parsing).
 
+### 变更 / Changed
+
+- 中继镜像 Dockerfile 从 `apps/relay/Dockerfile` 挪到 `go/Dockerfile`，运行底座从 `debian:bookworm-slim` + tini 换成 distroless static（Refs #59，G4.1；106 MB 降到 22.8 MB，入口 `armadra-relay`，uid 10002、`/data`、8443、健康检查不变；没有 shell，排障办法见 `go/Dockerfile` 头注释）。`pnpm dev` 的 relay 改起 Go 二进制。
+  The relay image Dockerfile moves from `apps/relay/Dockerfile` to `go/Dockerfile` and the runtime base changes from `debian:bookworm-slim` + tini to distroless static (Refs #59, G4.1; 106 MB down to 22.8 MB, entrypoint `armadra-relay`; uid 10002, `/data`, port 8443 and the health check are unchanged; there is no shell, see the header of `go/Dockerfile` for troubleshooting). The relay in `pnpm dev` now runs the Go binary.
+
+### 移除 / Removed
+
+- 删除 TypeScript 版个人中转 `apps/relay` 与 `packages/relay-runtime-node`（Refs #59，G4.1）；`relay-kernel`、`control-core`、`control-store-*` 留给 Workers 版。随之去掉只被它们用的 `acme-client` 补丁与 `follow-redirects` 覆盖，第三方声明少了约 45 个包。端到端的假 core 拆成 `packages/e2e-fake-core`，兼容夹具生成脚本自带最小的状态结构。
+  Removed the TypeScript personal relay `apps/relay` and `packages/relay-runtime-node` (Refs #59, G4.1); `relay-kernel`, `control-core` and `control-store-*` stay for the Workers relay. The `acme-client` patch and the `follow-redirects` override that only they needed are gone, and the third-party notices drop about 45 packages. The e2e fake core becomes `packages/e2e-fake-core`, and the compat fixture generator carries its own minimal state schema.
+
 ## 0.10.0（2026-10-23）
 
 ### 新增 / Added

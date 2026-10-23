@@ -1,5 +1,5 @@
 // Package dataplane 把数据面装配起来：隧道表、客户端边缘、健康与指标，
-// 并按请求分派（对应 packages/relay-runtime-node 的 dispatch.ts 与 start-relay.ts 里的装配）。
+// 并按请求分派（对应 已删除的 TypeScript 版 packages/relay-runtime-node 的 dispatch.ts 与 start-relay.ts 里的装配）。
 // 个人中转（G3）与 SaaS 节点（G5）在它外面加各自的控制面与 HTTP 面。
 //
 // 分派：

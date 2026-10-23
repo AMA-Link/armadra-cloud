@@ -21,7 +21,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
-// 对应 packages/relay-kernel/src/tunnel/hub.test.ts 与 packages/relay-runtime-node 的隧道端到端用例。
+// 对应 packages/relay-kernel/src/tunnel/hub.test.ts 与 已删除的 TypeScript 版 packages/relay-runtime-node 的隧道端到端用例。
 
 type fakeMsg struct {
 	binary bool

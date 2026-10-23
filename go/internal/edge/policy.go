@@ -1,7 +1,7 @@
 // Package edge 是客户端边缘：解析源、限流、校验中继令牌、找隧道，决定开通道还是拒绝；
 // 再把已升级的连接和隧道流接成一条端到端通道的管道。
 //
-// 对应 packages/relay-kernel/src/edge/ 与 packages/relay-runtime-node/src/edge.ts、e2e-pipe.ts。
+// 对应 packages/relay-kernel/src/edge/ 与 已删除的 TypeScript 版 packages/relay-runtime-node/src/edge.ts、e2e-pipe.ts。
 // 判定（本文件）与字节进出（conn.go、server.go）分开；判定对模式零分支：地址写法由
 // Addressing 决定，控制面由 control.Plane 决定。
 //

@@ -8,7 +8,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
-// 对应 packages/relay-runtime-node/src/stream.test.ts。
+// 对应 已删除的 TypeScript 版 packages/relay-runtime-node/src/stream.test.ts。
 
 func TestStreamWrite(t *testing.T) {
 	t.Run("写：切块与信用/按 64 KiB 切块", func(t *testing.T) {

@@ -23,7 +23,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
-// 对应 packages/relay-runtime-node/test/integration/roundtrip.test.ts：
+// 对应 已删除的 TypeScript 版 packages/relay-runtime-node/test/integration/roundtrip.test.ts：
 // 假 core 经中继完成端到端通道往返、背压、限额、断线重连、GOAWAY。
 
 func TestPlainPathsRemoved(t *testing.T) {

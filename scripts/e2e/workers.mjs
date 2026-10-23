@@ -3,7 +3,7 @@
 //   1. `wrangler dev --local` 按 apps/relay-workers/wrangler.jsonc 起中继（本机回环、临时存储目录，
 //      secret 用这一次随机生成的测试值；不连 Cloudflare 账号）；
 //   2. 账号口令登录 → 注册令牌 → 登记源 → 源 JWS 换隧道令牌，节点地址带 `?src=`；
-//   3. 假 core（relay-runtime-node 的测试件，真 `ws` 客户端与真 HTTP 解析）连隧道：握手、45 秒心跳；
+//   3. 假 core（packages/e2e-fake-core，真 `ws` 客户端与真 HTTP 解析）连隧道：握手、45 秒心跳；
 //   4. 经中继的 HTTP（剥令牌、X-Forwarded-*、1 MiB 大体）与 WebSocket（子协议、回显）；
 //      端到端通道 `_relay/e2e`（假 core 报 `e2e`）：10 MB 随机字节双向原样；
 //   5. 撤销源：隧道 4492、客户端 WS 断开、旧中继令牌 401；
@@ -193,7 +193,7 @@ const closeOf = (ws) =>
 /** 跑完全部步骤；`report` 是 e2e.mjs 的步骤记录。 */
 export async function runWorkersE2e({ root, report }) {
   const { FakeCore } = await import(
-    "../../packages/relay-runtime-node/test/fake-core.ts"
+    "../../packages/e2e-fake-core/src/fake-core.ts"
   );
   let relay;
   let core;

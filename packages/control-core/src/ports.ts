@@ -1,8 +1,8 @@
 /**
  * 控制面的端口（ports）：服务只经这些接口读写状态，不碰文件、数据库或缓存。
  *
- * - personal：`apps/relay/src/personal/ports.ts` 用状态文件实现全部端口；
- * - saas：端口的 PostgreSQL / Redis 实现（后续包）。
+ * - Workers 中继：DO SQLite 实现全部端口（`control-store-sqlite`）；
+ * - cloud：PostgreSQL 实现（`control-store-postgres`）；Go 中继在 `go/internal/store` 有自己的实现。
  *
  * 约定：
  * - 存储端口的方法第一个参数是 `tenantId`（personal 恒为 {@link DEFAULT_TENANT}）；

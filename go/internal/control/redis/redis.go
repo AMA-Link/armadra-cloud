@@ -1,5 +1,5 @@
 // Package redis 是控制面的 Redis 实现（多节点；设计 §3.6，对应
-// packages/relay-runtime-node/src/control/redis.ts，键与频道逐项一致）。
+// 已删除的 TypeScript 版 packages/relay-runtime-node/src/control/redis.ts，键与频道逐项一致）。
 //
 //	| 功能          | 实现                                                                        |
 //	| 路由          | <前缀>route:src:<id> = JSON，SET … PX；Touch 用 PEXPIRE；Delete 用脚本按 tunnelId CAS |

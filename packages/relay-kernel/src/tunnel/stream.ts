@@ -1,7 +1,7 @@
 /**
  * 一条隧道流的信用与队列（中继设计 §3.3、协议包 §3.3），与运行时无关：只用 `Uint8Array`，
- * 不碰 `node:stream` 与 Web Streams。运行时各自在外面包一层（Node 的 `stream.Duplex` 在
- * `@armadra/relay-runtime-node` 的 `stream.ts`；Web Streams 版在 `web-stream.ts`）。
+ * 不碰 `node:stream` 与 Web Streams。运行时各自在外面包一层（Web Streams 版在 `web-stream.ts`；端到端的假 core 用
+ * `packages/e2e-fake-core` 的 `stream.Duplex` 版）。
  *
  * 写（本端 → 对端）：按 `maxDataChunk` 切块，每块同时扣「流信用」与「隧道信用」，
  * 任一不足就挂起这次写的回调，直到 `WINDOW` 补回——背压经适配层传给上游。可用信用比

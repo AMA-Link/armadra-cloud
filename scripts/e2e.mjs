@@ -23,10 +23,10 @@
 // 用 `git archive` 取那一版构建，不动主仓的检出；ARMADRA_REF=worktree 则直接用目录现状；
 // ARMADRA_FETCH=0 不先 fetch。`--server-image` 直接用现成镜像（nightly 的 compat.min）。
 //
-// 中继镜像缺省由 apps/relay/Dockerfile 构建（Go 实现）。对上一版 Node 镜像跑同一套用例（回滚演练），
+// 中继镜像缺省由 go/Dockerfile 构建（Go 实现）。对上一版 Node 镜像跑同一套用例（回滚演练），
 // 不改用例，只换镜像与容器里的命令行：
 //   E2E_RELAY_CLI="node /app/out/cli.js" pnpm e2e --mode personal --relay-image ghcr.io/ama-link/armadra-relay:<上一版>
-//   E2E_RELAY_DOCKERFILE  构建中继镜像用的 Dockerfile（缺省 apps/relay/Dockerfile）
+//   E2E_RELAY_DOCKERFILE  构建中继镜像用的 Dockerfile（缺省 go/Dockerfile）
 //   E2E_RELAY_CLI         容器里中继命令行的写法（缺省 `armadra-relay`，空格分隔）
 //   已有镜像时用 --relay-image <镜像>，不构建。
 //
@@ -214,8 +214,7 @@ const project = `armadra-e2e-${randomBytes(4).toString("hex")}`;
 const composeFile = join(root, "deploy/e2e/compose.yml");
 const output = resolve(root, options.values.get("--output") ?? ".data/e2e");
 const relayImage = options.values.get("--relay-image") ?? "armadra-relay:e2e";
-const relayDockerfile =
-  process.env.E2E_RELAY_DOCKERFILE ?? "apps/relay/Dockerfile";
+const relayDockerfile = process.env.E2E_RELAY_DOCKERFILE ?? "go/Dockerfile";
 const relayCli = (process.env.E2E_RELAY_CLI ?? "armadra-relay")
   .split(" ")
   .filter(Boolean);

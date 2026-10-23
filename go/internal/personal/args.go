@@ -13,7 +13,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
 )
 
-// 参数解析：命令行优先，其次环境变量（RELAY_*），最后缺省值。对应 apps/relay/src/personal/args.ts。
+// 参数解析：命令行优先，其次环境变量（RELAY_*），最后缺省值。对应 已删除的 TypeScript 版 apps/relay/src/personal/args.ts。
 
 // TLS 模式。
 const (

@@ -7,7 +7,7 @@
  * - `_final` → 发 `END`；`_destroy` → 发 `RST`（无错误时 `clientGone`）；
  * - 收 `RST` → `destroy(StreamResetError)`。
  *
- * 本类对角色无感：中继与测试里的假 core 都能用（只有中继发 `OPEN`）。
+ * 本类对角色无感：中继节点与假 core 都能用（只有中继发 `OPEN`）；TypeScript 版中继删除后只剩假 core 在用。
  */
 import { Duplex } from "node:stream";
 

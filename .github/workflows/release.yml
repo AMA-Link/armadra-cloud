@@ -55,7 +55,9 @@ jobs:
           v="${{ steps.version.outputs.version }}"
           for app in cloud relay; do
             image="ghcr.io/ama-link/armadra-${app}"
-            docker build -f "apps/${app}/Dockerfile" -t "${image}:${v}" -t "${image}:latest" .
+            dockerfile="apps/${app}/Dockerfile"
+            [ "$app" = relay ] && dockerfile="go/Dockerfile"
+            docker build -f "$dockerfile" -t "${image}:${v}" -t "${image}:latest" .
           done
           # 冒烟过了才推。
           docker run --rm "ghcr.io/ama-link/armadra-relay:${v}" personal --help

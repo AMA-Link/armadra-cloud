@@ -37,7 +37,7 @@ import {
 } from "@armadra/platform-protocol/tunnel";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
-import { CreditPool, TunnelStream, type StreamHost } from "../src/stream.ts";
+import { CreditPool, TunnelStream, type StreamHost } from "./stream.ts";
 import {
   sourceKey as defaultSourceKey,
   SOURCE_ID,

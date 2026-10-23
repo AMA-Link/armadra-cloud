@@ -1,4 +1,4 @@
-// 错误码扫描（AGENTS.md「错误码只从协议包取」）：cloud / relay 与共享包源码里
+// 错误码扫描（AGENTS.md「错误码只从协议包取」）：cloud、中继内核与共享包源码里
 // 出现的每个 `code: "…"` 字面量都必须在协议包的错误码注册表里。
 import { strict as assert } from "node:assert";
 import { readdirSync, readFileSync } from "node:fs";
@@ -9,11 +9,9 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const ROOTS = [
   "apps/cloud/src",
-  "apps/relay/src",
   "packages/cloud-shared/src",
   "packages/control-core/src",
   "packages/relay-kernel/src",
-  "packages/relay-runtime-node/src",
 ];
 const registry = JSON.parse(
   readFileSync(

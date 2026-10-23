@@ -1,7 +1,7 @@
 /**
  * 中继自有的两页（托管页面产物缺失时的错误页与分享落地页）与静态产物的响应头规则，与运行时
- * 无关：Node 中继（`apps/relay` 的 `personal/web.ts`）与 Workers 中继（`relay-runtime-workers`）
- * 共用同一份文案、样式与 CSP。
+ * 无关：Go 中继（`go/internal/web` 照这里逐字对应）与 Workers 中继（`relay-runtime-workers`）
+ * 用同一份文案、样式与 CSP。
  *
  * - 页面 CSP 与 core Gateway 的服务器版相同（`connect-src 'self'` 等）；带哈希的资源永久缓存，
  *   `index.html` 不缓存。

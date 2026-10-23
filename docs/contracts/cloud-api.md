@@ -299,7 +299,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **日志与指标**：通道结束时记一条元数据（源、流号、两个方向的字节数、时长、关闭码），不记账号、设备、IP 与任何内容；指标 `relay_edge_streams_total{kind}` 计开出的流（0.5.0 起只有 `e2e`）。
 - **活性**：Node 中继每 30 秒发 `ping`、60 秒没有任何消息或 `pong` 即断开（与 §7 相同）；Workers 中继由检查周期按空闲时长断开。客户端的通道自己另有内层 `PING`（协议包 `LIMITS_E2E.pingIntervalMs`）。
 - **访客链接的身份指纹**（0.5.0 起）：`links.accept`（§10）的答案多可选的 `identityFp`——源登记的公钥（也就是它端到端通道的身份公钥）的指纹 `base32(SHA-256(pub))`，52 字符。它来自中继，只作提示与旧链接的兜底；core 生成的分享链接片段第三段（`<secret>.<邀请令牌>.<指纹前 16 位>`）才是访客钉扎的依据，两者不符时客户端拒绝。
-- **实现**：Node 中继（`relay-runtime-node` 的 `e2e-pipe.ts`）与 Workers 中继（`SourceDO` 的 `e2e-bridge.ts`，休眠后照样接上）行为相同；签发方从 0.4.0 起在中继令牌里带 `dev`。
+- **实现**：Go 中继（`go/internal/edge` 的端到端管道）与 Workers 中继（`SourceDO` 的 `e2e-bridge.ts`，休眠后照样接上）行为相同；签发方从 0.4.0 起在中继令牌里带 `dev`。
 
 ## §19 流量统计
 
