@@ -85,7 +85,7 @@ pnpm dev:down    # 停掉依赖；pnpm dev:down --volumes 连数据一起删
 ```sh
 pnpm check             # 构建协议包 + prettier + eslint + typecheck + repo:check + contract:check + 工作流校验 + 第三方声明
 pnpm repo:test         # tools/ 的自检
-pnpm go:check          # Go：gofmt + vet + staticcheck + race 测试 + 生成物新鲜度；PostgreSQL 的测试读 ARMADRA_CLOUD_TEST_DATABASE_URL（没有就跳过）
+pnpm go:check          # Go：gofmt + vet + staticcheck + race 测试 + 生成物新鲜度；PostgreSQL、Redis、mailpit 的测试读 ARMADRA_CLOUD_TEST_DATABASE_URL、REDIS_URL、MAILPIT_SMTP_ADDR + MAILPIT_API_URL（没有就跳过）
 pnpm test              # 全部单测
 pnpm test:integration  # 集成测试，需要 pnpm dev:up；见下
 pnpm images:build      # 本地构建两个镜像（不推送）
