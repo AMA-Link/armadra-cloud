@@ -203,7 +203,11 @@ go/
 - **节点间转发**（关掉 #51）：
   - 客户端连到节点 A，源的隧道在节点 B。A 按路由表找到 B，经一条常驻的节点间 WebSocket（`/x/v1`，节点令牌鉴权，scope `relay-node`）把这条 e2e 通道转过去。
   - 节点间连接直接复用隧道帧（OPEN / DATA / WINDOW / END / RST，A 每个心跳周期 PING、B 答 PONG），信用照样逐跳计。e2e 的 OPEN 规定路径固定、不带头，没处放目标源，所以节点之间的 OPEN 用 `kind: ws`、路径寻址 `/s/<sourceId>/_relay/e2e`（与 personal 的源地址同一种写法，`edge.InternodeOpen` / `ParseInternodeOpen`），B 再以标准的 `kind: e2e` OPEN 转给源，`remoteIp`、`clientOrigin`、`relayNode`（入口节点）照抄。
-  - A 这一侧的节点间连接就是一条 `tunnel.Tunnel`（A 是开流方，`Link()` 是对端节点名），每个对端一条，断了下次用到时重连，连不上 2 秒内不再试（客户端直接 4404）。对端地址取节点表的 `internodeUrl`。没配节点令牌的节点不转发。
+  - A 这一侧的节点间连接就是一条 `tunnel.Tunnel`（A 是开流方，`Link()` 是对端节点名），每个对端一条，断了下次用到时重连，连不上 2 秒内不再试（客户端直接 4404）。对端地址取节点表的 `internodeUrl`，同样要是 `wss`（开发时 `RELAY_ALLOW_INSECURE_TUNNEL` 才许 `ws`）。没配节点令牌的节点不转发。
+  - 链路的限制（两端同一份 `linkConfig`）：每条链路最多 4096 条流（跨租户共用，满了答 `limit_reached`）；链路级窗口取「流数上限 × 流窗」= 1 GiB，链路级信用永远不是瓶颈，慢客户端只占满自己那条流的 256 KiB，拖不住同一条链路上的别人。内存上界：每条链路每一端「在途流数 × 256 KiB」（全卡住时 1 GiB，实际受边缘的账号 / 团队并发上限约束）。同一个源被自己的慢客户端占满 8 MiB 隧道窗口是协议本身的限制，与转发无关。
+  - B 丢掉一条转来的流（源 RST、A RST、链路断开）时，把挂着还没发出去的下行字节记作已消费、还给本地隧道，否则源的隧道级窗口会被一点点漏光。
+  - B 记下 A 出示的节点令牌的 `jti` 与 `exp`：到 `exp` 断开；每 5 秒查一次撤销表（内存副本），命中就断开（`nodes revoke` 对已建立的链路也生效）。
+  - 源的 e2e 能力由 B 判：A 不替远端的源声明能力；源没报 e2e 时 B 答 RST `refused`，A 以 4404 `e2e_unsupported` 关客户端，与本地判定同一结果（只是多一次往返，先完成了升级）。
   - B 侧把转来的流当作本地边缘流接进隧道。
   - 所有节点共享路由表；源端按 `heartbeatHint.nodes` 的权重选节点。控制面按 sourceId 做 rendezvous 哈希给节点排序，让客户端与源大概率落在同一节点，转发只兜底。
 - **再平衡**：
