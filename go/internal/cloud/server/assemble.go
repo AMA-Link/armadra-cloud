@@ -15,6 +15,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/accounts"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/admin"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/billing"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
@@ -44,6 +45,8 @@ type assembly struct {
 	relay   *relayctl.Memory
 	// lockouts 是未注册邮箱的 Redis 失败计数（因 Redis 不可用而拒绝的次数进指标）。
 	lockouts *httpx.UnknownLockouts
+	// admin 是运营后台（serve 启动后按库同步事故开关）。
+	admin *admin.Service
 	// jobs 是作业运行器（serve 在监听前启动、关闭时停止领取）。
 	jobs *jobs.Runner
 	// control 是对节点的约定（落盘包装之后的）；sync 是 Redis 实现的重放（内存实现时为 nil）。
@@ -148,6 +151,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	for name, handler := range accounts.New(accounts.Options{
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer,
 		Unknown: lockouts, LoginGuard: lockouts.Guard, AppOrigin: cfg.AppOrigin,
+		MFA: &admin.RedisChallenges{Client: redisClient}, Wrapper: db.Wrapper(),
 	}).Handlers() {
 		handlers[name] = handler
 	}
@@ -190,6 +194,10 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	})
 	auditService.Register(runner)
 	for name, handler := range auditService.Handlers() {
+		handlers[name] = handler
+	}
+	adminService := admin.New(admin.Options{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger, IncidentEvery: deps.IncidentEvery})
+	for name, handler := range adminService.Handlers() {
 		handlers[name] = handler
 	}
 	for name, handler := range billing.New(billing.Options{Core: coreCtx, Store: saasStore}).Handlers() {
@@ -237,7 +245,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	if out.sync != nil {
 		probes["relay"] = out.sync.Ready
 	}
-	out.handler, out.core, out.auth, out.lockouts, out.jobs = mux, coreCtx, auth, lockouts, runner
+	out.handler, out.core, out.auth, out.lockouts, out.jobs, out.admin = mux, coreCtx, auth, lockouts, runner, adminService
 	return out, nil
 }
 

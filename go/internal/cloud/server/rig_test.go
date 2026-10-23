@@ -89,6 +89,8 @@ type rigOptions struct {
 	redisHook goredis.Hook
 	// flushEvery 缩短设备最近使用与主机最近在线的落盘间隔。
 	flushEvery time.Duration
+	// incidentEvery 缩短事故开关按库同步的间隔。
+	incidentEvery time.Duration
 }
 
 // rig 是一套真实的控制面：PostgreSQL（随机 schema）+ Redis + 完整路由，经 HTTP 访问。
@@ -107,6 +109,8 @@ type rig struct {
 	// deps 是启动本实例用的依赖（第二个实例复用同一份）；redisRelay 时 relayPrefix / issuedPrefix 是随机前缀。
 	deps                      server.Deps
 	relayPrefix, issuedPrefix string
+	// stubbed：测试挂了假的 admin.* 处理器，它们的答复不按契约验形状。
+	stubbed bool
 }
 
 func redisURL(t *testing.T) string {
@@ -174,6 +178,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	deps := server.Deps{
 		Log: obs.NewNamedLogger(logs, obs.LevelDebug, "cloud"), Now: clk.Now, Version: "test",
 		Challenge: options.verifier, ExtraHandlers: options.extra, Mail: sender, GrantsHook: options.grantsHook,
+		IncidentEvery: options.incidentEvery,
 	}
 	if options.redisRelay {
 		deps.RelayPrefix, deps.IssuedPrefix = randomPrefixes(t)
@@ -195,7 +200,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	}
 	oapi := schema.Load(t, filepath.Join(testutil.ProtocolDir(t), "schema", "cloud-openapi.json"))
 	return &rig{
-		t: t, run: run, clock: clk, deps: deps, relayPrefix: deps.RelayPrefix, issuedPrefix: deps.IssuedPrefix, log: logs, cfg: cfg, url: run.URL, router: router, oapi: oapi, mail: memory,
+		t: t, run: run, clock: clk, deps: deps, relayPrefix: deps.RelayPrefix, issuedPrefix: deps.IssuedPrefix, log: logs, cfg: cfg, url: run.URL, router: router, oapi: oapi, mail: memory, stubbed: options.extra != nil,
 		// 每个测试一个随机的客户端 IP（经受信代理头），限流桶在 Redis 里互不干扰。
 		ip: fmt.Sprintf("10.%d.%d.%d", rand.IntN(256), rand.IntN(256), rand.IntN(256)),
 	}
@@ -275,7 +280,7 @@ func (r *rig) do(method, path string, body any, h headers) response {
 	if lookup == http.MethodHead {
 		lookup = http.MethodGet
 	}
-	stub := strings.HasPrefix(path, "/v1/admin/") // 测试挂的假处理器，不按契约验形状
+	stub := r.stubbed && strings.HasPrefix(path, "/v1/admin/") // 测试挂的假处理器，不按契约验形状
 	if match := r.router.Match(lookup, strings.SplitN(path, "?", 2)[0]); match != nil && !stub && res.StatusCode == http.StatusOK && method != http.MethodHead {
 		if err := r.oapi.ValidateOutput(match.Route.Procedure, data); err != nil {
 			r.t.Fatalf("%s %s 的答复不符合 %s 的输出 schema：%v\n%s", method, path, match.Route.Procedure, err, data)

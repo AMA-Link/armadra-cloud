@@ -75,8 +75,7 @@ func Run(args []string, env config.Env, stdout, stderr io.Writer, options Option
 		}
 	case "operators":
 		if len(rest) > 0 && (rest[0] == "add" || rest[0] == "totp") {
-			fmt.Fprintf(stderr, "这个命令还没有提供：%s %s\n", command, rest[0])
-			return ExitUsage
+			return operators(rest[0], rest[1:], env, stdout, stderr, options)
 		}
 	}
 	fmt.Fprintf(stderr, "未知命令：%s\n\n%s\n", strings.Join(args, " "), Usage)

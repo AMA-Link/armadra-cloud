@@ -2477,6 +2477,9 @@ var RouteInputs = map[string]*schema.Schema{
 			{Name: "pauseRegistrations", Schema: &schema.Schema{
 				Type: "boolean",
 			}},
+			{Name: "rejectNewConnections", Schema: &schema.Schema{
+				Type: "boolean",
+			}},
 			{Name: "reason", Schema: &schema.Schema{
 				Type:      "string",
 				MinLength: schema.Int(1),

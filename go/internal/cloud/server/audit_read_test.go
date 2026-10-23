@@ -252,3 +252,25 @@ func TestRetentionJobsDeleteOnlyTheirScope(t *testing.T) {
 		}
 	}
 }
+
+// 团队清除后 entitlements 随之删掉，但审计行按设计保留：不能按 free 的 7 天删，只随 13 个月的整月分区 DROP。
+func TestRetentionKeepsAuditOfPurgedTeams(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	owner := r.verified()
+	gone := r.seedTeam("gone", map[string]string{owner.accountID: "owner"})
+	live := r.seedTeam("live", map[string]string{owner.accountID: "owner"})
+	r.exec(`INSERT INTO entitlements (tenant_id, space_kind, space_id, plan, status, updated_at_ms) VALUES ('cloud', 'team', $1, 'enterprise', 'active', 1)`, gone)
+	now := r.clock.Now().Add(dayDur + time.Minute)
+	eighth := now.Add(-8 * dayDur).UnixMilli()
+	r.putAudit(eighth, "gone-8d", gone, "", "system", "", "team.purge")
+	r.putAudit(eighth, "live-8d", live, "", "system", "", "x.old") // 对照：还在的 free 团队，8 天前的行要被删
+	// 清除：团队行（成员级联）与 entitlements 都没了，审计行还在。
+	r.exec("DELETE FROM entitlements WHERE space_id = $1", gone)
+	r.exec("DELETE FROM teams WHERE team_id = $1", gone)
+
+	r.clock.Advance(dayDur + time.Minute)
+	eventuallyDB(t, "保留期作业跑过", func() bool { return r.auditCount("event_id = 'live-8d'") == 0 })
+	if r.auditCount("event_id = 'gone-8d'") != 1 {
+		t.Fatal("已清除团队的审计行不按 free 的 7 天删")
+	}
+}

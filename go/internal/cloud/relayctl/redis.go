@@ -293,7 +293,12 @@ func (r *Redis) Route(ctx context.Context, sourceID string) (string, bool, error
 }
 
 // Nodes 实现 Control：读 relay:nodes（过期字段由 Redis 自己丢），去掉排空的，按 id 排序。
-func (r *Redis) Nodes(ctx context.Context) ([]Node, error) {
+func (r *Redis) Nodes(ctx context.Context) ([]Node, error) { return r.readNodes(ctx, false) }
+
+// AllNodes 实现 Control：含排空中的，按 id 排序（运营后台列节点用）。
+func (r *Redis) AllNodes(ctx context.Context) ([]Node, error) { return r.readNodes(ctx, true) }
+
+func (r *Redis) readNodes(ctx context.Context, withDraining bool) ([]Node, error) {
 	all, err := r.client.HGetAll(ctx, r.plane.Prefix()+"nodes").Result()
 	if err != nil {
 		return nil, sanitize(err)
@@ -301,7 +306,7 @@ func (r *Redis) Nodes(ctx context.Context) ([]Node, error) {
 	out := make([]Node, 0, len(all))
 	for id, value := range all {
 		n, err := cluster.DecodeNode(id, []byte(value))
-		if err != nil || n.Draining {
+		if err != nil || (n.Draining && !withDraining) {
 			continue // 坏记录跳过
 		}
 		out = append(out, Node{
