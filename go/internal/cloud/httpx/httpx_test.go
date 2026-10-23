@@ -287,6 +287,8 @@ func TestRulesMatchDesignTable(t *testing.T) {
 		httpx.LimitMFAAcct:      {Max: 10, Window: 10 * time.Minute},
 		httpx.LimitAssertAcct:   {Max: 60, Window: time.Minute},
 		httpx.LimitDeviceStart:  {Max: 30, Window: time.Hour},
+		httpx.LimitDevicePoll:   {Max: 120, Window: time.Minute},
+		httpx.LimitDeviceGuess:  {Max: 10, Window: time.Hour},
 		httpx.LimitInviteResend: {Max: 5, Window: time.Hour},
 	}
 	for kind, rule := range want {
@@ -294,8 +296,8 @@ func TestRulesMatchDesignTable(t *testing.T) {
 			t.Errorf("%s：%+v", kind, httpx.Rules[kind])
 		}
 	}
-	if len(httpx.Rules) != 16 {
-		t.Errorf("§5.4 共 16 种：%d", len(httpx.Rules))
+	if len(httpx.Rules) != 18 {
+		t.Errorf("§5.4 共 18 种：%d", len(httpx.Rules))
 	}
 }
 

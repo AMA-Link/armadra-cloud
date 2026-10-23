@@ -814,6 +814,13 @@ type Watcher interface {
 | `deviceGet`                    | 要会话；按 IP 每分钟 30 次（防猜码）；答发起设备的平台、名字与时间                                                                                                                                                                           |
 | `deviceApprove` / `deviceDeny` | 要会话；只对 `pending` 生效（否则 `410 device_code_expired` / `404 not_found`）；写安全日志 `security.deviceApprove`                                                                                                                         |
 
+**设备码的补充规则**（S3 审查定下）：
+
+- **批准要什么会话**：`deviceApprove(approve: true)` 只认 Cookie 会话（页面里的人点的，Origin 与 CSRF 由认证闸核过），或提权窗口内（`elevated_until_ms` 未过）的 Bearer 会话；其余答 `401 mfa_required`（同 Q7 的「未提权」码，客户端调 `auth.stepUp` 后重试）。拒绝（`deviceDeny`、`approve: false`）不要求。一个被盗的 Bearer 令牌因此不能静默地把别的设备登进来。
+- **猜码**：`deviceGet` / `deviceApprove` / `deviceDeny` 先判账号桶 `device.guess.acct`（只统计查无此码的 `404` 失败，每账号每小时 10 次，满了直接 `429`，换 IP 也逃不掉），再计 IP 桶 `device.get.ip`（三者共用）；`410` 与成功不计入账号桶。
+- **轮询**：`devicePoll` 先过 IP 桶 `device.poll.ip`（每分钟 120 次），再进事务；会话的访问令牌在兑换事务提交之前签好，提交失败则丢弃。
+- **加锁**：兑换先不加锁读 `account_id` → `LockAccount` → `FOR UPDATE` 重读设备码行并复核状态；批准 / 拒绝只锁设备码行。
+
 ### 4.4 团队与邀请（`cloud/teams`、`cloud/invitations`）
 
 **团队设置缺省**（`teams.create` 写入）：`membersCanRegisterHosts: true`、`defaultHostRole: "viewer"`、`allowGuests: true`、`allowAnonymousLinks: false`（能力设计 Q2）、`deviceEndorsers: "owner_admin"`、`memberSelfEndorse: true`、`requireMfa: false`、`sessionMaxAgeMs: null`、`allowedEmailDomains: []`。M2 的三项 M1 可读可写、不生效。
@@ -1034,21 +1041,23 @@ type Tx interface {
 
 速率桶在 Redis（`cloud:limit:`，§2.4 的独立限流器），窗口固定；`429` 带 `details.retryAfterMs` 与 `Retry-After`。键以 `.ip` 结尾的种类按客户端 IP 限流，**IPv6 截到所在的 /64**（只影响限流键）。
 
-| 种类                                | 键            | 额度                 | 过程                                                              |
-| ----------------------------------- | ------------- | -------------------- | ----------------------------------------------------------------- |
-| `login.ip`                          | IP            | 20 / 分钟            | `auth.login`、`auth.changePassword`、`sources.register`（沿用）   |
-| `login.acct`                        | 邮箱的哈希    | 20 / 分钟            | `auth.login`（另有逐账号锁定）                                    |
-| `register.ip`                       | IP            | 10 / 小时            | `auth.register`                                                   |
-| `reset.ip` / `reset.email`          | IP / 邮箱哈希 | 10 / 小时、3 / 小时  | `auth.passwordResetStart`                                         |
-| `verify.acct`                       | 账号          | 3 / 小时             | `auth.emailVerifyResend`、`me.emailChange`                        |
-| `token.ip`                          | IP            | 30 / 分钟            | `auth.emailVerify`、`auth.passwordResetFinish`、`invitations.get` |
-| `device.start.ip` / `device.get.ip` | IP            | 30 / 小时、30 / 分钟 | `auth.deviceStart`、`auth.deviceGet`                              |
-| `stepup.dev`                        | 设备          | 10 / 10 分钟         | `auth.stepUp`                                                     |
-| `mfa.acct`                          | 账号          | 10 / 10 分钟         | `auth.mfaVerify`（每挑战另限 5 次）                               |
-| `assert.acct`                       | 账号          | 60 / 分钟            | `sources.assertion`                                               |
-| `trust.src`                         | 源            | 30 / 分钟            | `sources.trustRequest`                                            |
-| `invite.acct` / `invite.resend`     | 账号 / 邀请   | 50 / 小时、5 / 小时  | `invitations.create` / `resend`                                   |
-| `link.accept.ip`                    | IP            | 20 / 分钟            | `links.accept`（沿用）                                            |
+| 种类                                | 键            | 额度                         | 过程                                                                    |
+| ----------------------------------- | ------------- | ---------------------------- | ----------------------------------------------------------------------- |
+| `login.ip`                          | IP            | 20 / 分钟                    | `auth.login`、`auth.changePassword`、`sources.register`（沿用）         |
+| `login.acct`                        | 邮箱的哈希    | 20 / 分钟                    | `auth.login`（另有逐账号锁定）                                          |
+| `register.ip`                       | IP            | 10 / 小时                    | `auth.register`                                                         |
+| `reset.ip` / `reset.email`          | IP / 邮箱哈希 | 10 / 小时、3 / 小时          | `auth.passwordResetStart`                                               |
+| `verify.acct`                       | 账号          | 3 / 小时                     | `auth.emailVerifyResend`、`me.emailChange`                              |
+| `token.ip`                          | IP            | 30 / 分钟                    | `auth.emailVerify`、`auth.passwordResetFinish`、`invitations.get`       |
+| `device.start.ip` / `device.get.ip` | IP            | 30 / 小时、30 / 分钟         | `auth.deviceStart`、`auth.deviceGet`（批准 / 拒绝共用 `device.get.ip`） |
+| `device.poll.ip`                    | IP            | 120 / 分钟                   | `auth.devicePoll`                                                       |
+| `device.guess.acct`                 | 账号          | 10 / 小时（只计 `404` 失败） | `auth.deviceGet`、`auth.deviceApprove`、`auth.deviceDeny`               |
+| `stepup.dev`                        | 设备          | 10 / 10 分钟                 | `auth.stepUp`                                                           |
+| `mfa.acct`                          | 账号          | 10 / 10 分钟                 | `auth.mfaVerify`（每挑战另限 5 次）                                     |
+| `assert.acct`                       | 账号          | 60 / 分钟                    | `sources.assertion`                                                     |
+| `trust.src`                         | 源            | 30 / 分钟                    | `sources.trustRequest`                                                  |
+| `invite.acct` / `invite.resend`     | 账号 / 邀请   | 50 / 小时、5 / 小时          | `invitations.create` / `resend`                                         |
+| `link.accept.ip`                    | IP            | 20 / 分钟                    | `links.accept`（沿用）                                                  |
 
 挑战（Turnstile，契约 §16）缺省范围：`auth.login`、`auth.register`、`auth.passwordResetStart`、`links.accept`；校验沿用 `core.ChallengeGate`，先于口令与锁定、晚于按 IP 限流。原生 App 与 core 经同源挑战页取令牌，规则不变。
 

@@ -1,4 +1,4 @@
-// Package accounts 是 SaaS 账号的过程（设计 §4.3）：注册、登录、刷新、登出、改口令、提权，以及
+// Package accounts 是 SaaS 账号的过程（设计 §4.3）：注册、登录、刷新、登出、改口令、提权、设备码，以及
 // me.get / update / devices / deviceRevoke。账号用邮箱登录，口令、锁定与会话复用控制核；
 // 会话按请求的传输（Bearer 或 Cookie）下发。
 package accounts
@@ -27,6 +27,12 @@ type Options struct {
 	Limits *httpx.Limits
 	// Unknown 存未注册邮箱的失败计数与锁定（多实例共享的 Redis 版）；nil = 进程内计数。
 	Unknown core.UnknownStore
+	// AppOrigin 是控制台来源，设备码的 verificationUrl 以它开头。
+	AppOrigin string
+	// OnDeviceDecision 在批准 / 拒绝设备码的事务里调用，S2 接审计后在这里写安全日志
+	// security.deviceApprove（设计 §4.3）；nil = 不写。返回错误会回滚这次决定。
+	// 外部副作用（发邮件、推事件、Redis）一律经 tx.AfterCommit，不能在钩子里直接做：事务可能回滚或重试。
+	OnDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
 }
 
 // Service 是账号服务。
@@ -37,11 +43,17 @@ type Service struct {
 	limits *httpx.Limits
 	// unknown 给未注册的邮箱同样计失败、同样锁定：锁定不暴露邮箱有没有注册。
 	unknown core.UnknownAccounts
+
+	appOrigin        string
+	onDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
 }
 
 // New 建账号服务。
 func New(options Options) *Service {
-	s := &Service{c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits}
+	s := &Service{
+		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits,
+		appOrigin: strings.TrimRight(options.AppOrigin, "/"), onDeviceDecision: options.OnDeviceDecision,
+	}
 	s.unknown.Store = options.Unknown
 	return s
 }
@@ -110,6 +122,11 @@ func (s *Service) Handlers() map[string]api.Handler {
 		"auth.logout":         s.logout,
 		"auth.changePassword": s.changePassword,
 		"auth.stepUp":         s.stepUp,
+		"auth.deviceStart":    s.deviceStart,
+		"auth.devicePoll":     s.devicePoll,
+		"auth.deviceApprove":  s.deviceApprove,
+		"auth.deviceGet":      s.deviceGet,
+		"auth.deviceDeny":     s.deviceDeny,
 		"me.get":              s.meGet,
 		"me.update":           s.meUpdate,
 		"me.devices":          s.meDevices,

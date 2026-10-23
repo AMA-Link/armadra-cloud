@@ -166,13 +166,19 @@ func DisplayNameOf(ctx context.Context, c *Context, subject string) (string, err
 
 // SessionFor 给一台设备签访问令牌，拼成线上的 Session。
 func SessionFor(ctx context.Context, c *Context, device store.DeviceRecord, refreshToken string) (Session, error) {
-	access, err := c.Signer.Sign(ctx, gen.TokenTypeAccess, Claims{
-		{"sub", device.Subject}, {"aud", gen.TokenAudienceAccess}, {"sid", device.DeviceID},
-	}, SignOptions{TTL: AccessTTL, JTIPrefix: "a." + device.DeviceID})
+	name, err := DisplayNameOf(ctx, c, device.Subject)
 	if err != nil {
 		return Session{}, err
 	}
-	name, err := DisplayNameOf(ctx, c, device.Subject)
+	return SessionNamed(ctx, c, device, refreshToken, name)
+}
+
+// SessionNamed 同 SessionFor，但显示名由调用方给：不读存储，可以在事务提交之前签出会话
+// （令牌签发不依赖库；事务失败就丢弃）。
+func SessionNamed(ctx context.Context, c *Context, device store.DeviceRecord, refreshToken, displayName string) (Session, error) {
+	access, err := c.Signer.Sign(ctx, gen.TokenTypeAccess, Claims{
+		{"sub", device.Subject}, {"aud", gen.TokenAudienceAccess}, {"sid", device.DeviceID},
+	}, SignOptions{TTL: AccessTTL, JTIPrefix: "a." + device.DeviceID})
 	if err != nil {
 		return Session{}, err
 	}
@@ -181,7 +187,7 @@ func SessionFor(ctx context.Context, c *Context, device store.DeviceRecord, refr
 		RefreshToken:      refreshToken,
 		AccessExpiresAtMs: access.ExpiresAtMs,
 		ExpiresAtMs:       device.ExpiresAtMs,
-		Account:           AccountInfo{AccountID: device.Subject, DisplayName: name},
+		Account:           AccountInfo{AccountID: device.Subject, DisplayName: displayName},
 		Device:            DeviceRef{DeviceID: device.DeviceID},
 	}, nil
 }
