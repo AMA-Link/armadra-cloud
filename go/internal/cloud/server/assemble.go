@@ -13,6 +13,8 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/accounts"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/billing"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
@@ -29,6 +31,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
+	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
 
 // assembly 是装配好的控制核与路由。
@@ -132,6 +135,21 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 	})
 	grantService.Register(runner)
 	for name, handler := range grantService.Handlers() {
+		handlers[name] = handler
+	}
+	auditService := audit.New(audit.Options{
+		Core: coreCtx, Store: saasStore, Log: logger, Partitions: db,
+		TrafficRetention: time.Duration(cfg.TrafficRetentionDays) * 24 * time.Hour,
+		Authorize: func(ctx context.Context, r saas.Reader, tenantID, accountID, teamID string) (saas.TeamScope, error) {
+			access, err := teams.Require(ctx, r, tenantID, accountID, teamID, teams.MinAdmin)
+			return access.Scope, err
+		},
+	})
+	auditService.Register(runner)
+	for name, handler := range auditService.Handlers() {
+		handlers[name] = handler
+	}
+	for name, handler := range billing.New(billing.Options{Core: coreCtx, Store: saasStore}).Handlers() {
 		handlers[name] = handler
 	}
 	webApp := ""
