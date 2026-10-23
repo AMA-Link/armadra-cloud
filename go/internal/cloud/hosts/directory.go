@@ -99,7 +99,10 @@ func (s *Service) summary(ctx context.Context, viewerID string, h saas.Host) (su
 	}
 	if h.TeamID != "" {
 		out.Space = spaceOut{Kind: saas.SpaceTeam, TeamID: h.TeamID}
-		if !out.Owner {
+	}
+	if !out.Owner {
+		out.Via = "link" // 个人空间里被授予的访客：契约的来路枚举没有 guest，按分享给他的人算 link
+		if h.TeamID != "" {
 			out.Via = "team"
 		}
 	}

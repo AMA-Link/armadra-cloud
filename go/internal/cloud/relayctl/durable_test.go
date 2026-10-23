@@ -1,9 +1,13 @@
 package relayctl_test
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
@@ -163,5 +167,56 @@ func TestDurableRevokesTokensMissingFromInnerIndexAndKicksOncePerDevice(t *testi
 	onlyPG("r.d2.s9.x", "a2", "s9", "d2")
 	if n, err := e.d.RevokeWhere(ctx, relayctl.Filter{Subject: "a2"}); err != nil || n != 1 || !e.mem.IsRevoked("r.d2.s9.x") {
 		t.Fatalf("RevokeWhere：%d %v", n, err)
+	}
+}
+
+// failingInner 让指定 jti 的内层登记 / 撤销出错，其余照常。
+type failingInner struct {
+	*relayctl.Memory
+	failIndex, failRevoke string
+}
+
+func (f failingInner) IndexIssued(c context.Context, issued relayctl.Issued) error {
+	if issued.JTI == f.failIndex {
+		return errors.New("内层登记失败")
+	}
+	return f.Memory.IndexIssued(c, issued)
+}
+
+func (f failingInner) Revoke(c context.Context, filter relayctl.Filter, keep string) ([]relayctl.Issued, error) {
+	if filter.JTI != "" && filter.JTI == f.failRevoke {
+		return nil, errors.New("内层撤销失败")
+	}
+	return f.Memory.Revoke(c, filter, keep)
+}
+
+// 内层对某枚令牌出错：记下继续，剩余令牌与最后的按过滤撤销照常跑，最后合并返回错误。
+func TestDurableContinuesAfterInnerErrors(t *testing.T) {
+	e := openDurable(t)
+	inner := failingInner{Memory: e.mem, failIndex: "r.d1.s1.a", failRevoke: "r.d1.s1.b"}
+	d := relayctl.NewDurable(inner, e.soft, "cloud", func() time.Time { return time.UnixMilli(1_000_000) }, nil)
+	for _, jti := range []string{"r.d1.s1.a", "r.d1.s1.b", "r.d1.s1.c"} {
+		err := e.soft.Tx(ctx, func(tx saas.Tx) error {
+			return tx.Issued().Insert(ctx, "cloud", saas.IssuedToken{JTI: jti, AccountID: "a1", SourceID: "s1", DeviceID: "d1", ExpMs: 9_000_000})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 只在内层的令牌：最后的按过滤撤销必须仍然跑。
+	issue(t, e.mem, "a1", "s1", "d1", "r.d1.s1.memonly", 9_000_000)
+
+	hits, err := d.Revoke(ctx, relayctl.Filter{Subject: "a1", SourceID: "s1"}, "")
+	if err == nil || !strings.Contains(err.Error(), "内层登记失败") || !strings.Contains(err.Error(), "内层撤销失败") {
+		t.Fatalf("应合并返回两个错误：%v", err)
+	}
+	if !e.mem.IsRevoked("r.d1.s1.c") || !e.mem.IsRevoked("r.d1.s1.memonly") {
+		t.Fatal("出错之后的令牌与按过滤的内层撤销照常跑")
+	}
+	if n := e.count(t, "SELECT count(*)::int FROM relay_revoked_tokens"); n != 3 {
+		t.Fatalf("PostgreSQL 撤销表是权威：%d", n)
+	}
+	if len(hits) < 3 {
+		t.Fatalf("命中至少含 PostgreSQL 的 3 枚：%v", hits)
 	}
 }

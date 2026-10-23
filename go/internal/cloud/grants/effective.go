@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
 
@@ -34,6 +35,7 @@ type Source struct {
 	Role         string
 	WorkspaceIDs []string
 	ExpiresAtMs  *int64
+	CreatedAtMs  int64
 }
 
 // Effective 是一个账号对一台主机的有效权限：纯查询 + 纯函数合成，不落库。
@@ -106,7 +108,7 @@ func Compose(b saas.AccessBasis, accountID string, nowMs int64) Effective {
 		}
 		if via != "" {
 			from = append(from, Source{
-				Via: via, GrantID: g.GrantID, Role: g.Role, WorkspaceIDs: sortedUnique(g.WorkspaceIDs), ExpiresAtMs: g.ExpiresAtMs,
+				Via: via, GrantID: g.GrantID, Role: g.Role, WorkspaceIDs: sortedUnique(g.WorkspaceIDs), ExpiresAtMs: g.ExpiresAtMs, CreatedAtMs: g.CreatedAtMs,
 			})
 		}
 	}
@@ -181,7 +183,7 @@ func (e Effective) ScopeClaims() []string {
 	}
 	out := make([]string, 0, len(e.WorkspaceIDs))
 	for _, id := range e.WorkspaceIDs {
-		out = append(out, "ws:"+id)
+		out = append(out, gen.ScopePrefixWorkspace+id)
 	}
 	return out
 }

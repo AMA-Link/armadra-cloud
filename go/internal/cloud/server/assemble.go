@@ -65,7 +65,7 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		PasswordPolicy: core.DefaultPasswordPolicy, Now: now, Events: core.NewEventBus(),
 		RelayOrigin: relayOrigin, RelayBaseURL: relayOrigin, TunnelNodes: hosts.TunnelNodes(durable),
 	}
-	policy := grants.NewPolicy(grants.PolicyOptions{Core: coreCtx, Store: saasStore, Relay: durable})
+	policy := grants.NewPolicy(grants.PolicyOptions{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger})
 	coreCtx.Policy = policy
 	if cfg.Turnstile != nil {
 		gate, err := challengeGate(cfg, logger, now, deps.Challenge)
@@ -124,6 +124,14 @@ func assemble(cfg *config.Config, db *postgres.DB, redisClient goredis.Universal
 		RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
 	})
 	for name, handler := range hostService.Handlers() {
+		handlers[name] = handler
+	}
+	grantService := grants.New(grants.Options{
+		Core: coreCtx, Store: saasStore, Limits: limits, Relay: durable, Policy: policy,
+		RequireEmailVerified: cfg.RequireEmailVerified, Log: logger, Hook: deps.GrantsHook,
+	})
+	grantService.Register(runner)
+	for name, handler := range grantService.Handlers() {
 		handlers[name] = handler
 	}
 	webApp := ""

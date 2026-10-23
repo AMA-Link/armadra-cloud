@@ -92,6 +92,8 @@ type GrantExtra struct {
 	// Email 非空时进断言的 email 与 emailVerified。
 	Email         string
 	EmailVerified bool
+	// ExpiresAtMs 非 0 时断言与中继令牌的寿命不超过它（SaaS 授予的到期；personal 没有到期，恒为 0）。
+	ExpiresAtMs int64
 	// TrackJTI 为真时断言的 jti 带前缀 s.<deviceId>.<sourceId>（签发索引按它过滤，SaaS 实现方案 §4.6）。
 	TrackJTI bool
 }
@@ -174,7 +176,12 @@ func (s *Sources) Grant(ctx context.Context, source store.SourceRecord, device s
 		claims = append(claims, Claim{"scp", scp})
 	}
 	claims = append(claims, Claim{"device", gen.AssertionClaimsDevice{DeviceID: device.DeviceID, Platform: platform, Name: name}})
-	assertionOptions := SignOptions{TTL: assertionTTL}
+	assertionLife, relayLife := assertionTTL, relayTokenTTL
+	if extra.ExpiresAtMs > 0 {
+		remaining := time.Duration(extra.ExpiresAtMs-s.c.NowMs()) * time.Millisecond
+		assertionLife, relayLife = min(assertionLife, remaining), min(relayLife, remaining)
+	}
+	assertionOptions := SignOptions{TTL: assertionLife}
 	if extra.TrackJTI {
 		assertionOptions.JTIPrefix = "s." + device.DeviceID + "." + source.SourceID
 	}
@@ -191,7 +198,7 @@ func (s *Sources) Grant(ctx context.Context, source store.SourceRecord, device s
 	}
 	relayClaims = append(relayClaims, Claim{"dev", device.DeviceID})
 	relay, err := s.c.Signer.Sign(ctx, gen.TokenTypeRelay, relayClaims, SignOptions{
-		TTL: relayTokenTTL, JTIPrefix: "r." + device.DeviceID + "." + source.SourceID,
+		TTL: relayLife, JTIPrefix: "r." + device.DeviceID + "." + source.SourceID,
 	})
 	if err != nil {
 		return Grant{}, err
