@@ -297,6 +297,21 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
           scope: ["auth.login"],
         },
       },
+      // SaaS 控制面：注册与找回口令也要挑战（§16）。
+      {
+        mode: "saas",
+        issuer: ISSUER,
+        protocol: { major: 1, minor: 4 },
+        capabilities: ["auth.password", "me.stream", "challenge.turnstile"],
+        relay: { addressing: "subdomain" },
+        webApp: "https://app.armadra.test",
+        registrationsOpen: true,
+        challenge: {
+          provider: "turnstile",
+          siteKey: "test-site-key",
+          scope: ["auth.login", "auth.register", "auth.passwordResetStart"],
+        },
+      },
     ],
   },
   "platform.jwks": {
@@ -324,6 +339,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       password: "correct horse battery staple",
       displayName: "Dev",
       device,
+      challenge: { provider: "turnstile", token: "test-challenge-token" },
     },
     output: { session },
   },
@@ -1121,7 +1137,10 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
   },
   "auth.emailVerifyResend": { input: {}, output: {} },
   "auth.passwordResetStart": {
-    input: { email: "dev@armadra.test" },
+    input: {
+      email: "dev@armadra.test",
+      challenge: { provider: "turnstile", token: "test-challenge-token" },
+    },
     output: {},
   },
   "auth.passwordResetFinish": {

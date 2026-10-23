@@ -67,7 +67,13 @@ export const auth = {
     .route({ method: "POST", path: "/v1/auth/register" })
     .meta(anonymous)
     .errors({
-      ...errors.pick("email_taken", "rate_limited", "registrations_paused"),
+      ...errors.pick(
+        "email_taken",
+        "rate_limited",
+        "registrations_paused",
+        "challenge_required",
+        "challenge_invalid",
+      ),
       ...passwordErrors,
     })
     .input(
@@ -76,6 +82,8 @@ export const auth = {
         password: z.string(),
         displayName: z.string().min(1).max(128),
         device: deviceInputSchema,
+        /** 挑战令牌（cloud-api §16）：`platform.info.challenge.scope` 含 `auth.register` 时必带。 */
+        challenge: challengeTokenSchema.optional(),
       }),
     )
     .output(sessionResultSchema),
@@ -318,8 +326,16 @@ export const auth = {
   passwordResetStart: base
     .route({ method: "POST", path: "/v1/auth/password-reset/start" })
     .meta(since10("anonymous"))
-    .errors(errors.pick("rate_limited"))
-    .input(z.object({ email: z.email() }))
+    .errors(
+      errors.pick("rate_limited", "challenge_required", "challenge_invalid"),
+    )
+    .input(
+      z.object({
+        email: z.email(),
+        /** 挑战令牌（cloud-api §16）：`platform.info.challenge.scope` 含 `auth.passwordResetStart` 时必带。 */
+        challenge: challengeTokenSchema.optional(),
+      }),
+    )
     .output(empty),
   /** 成功后撤销该账号全部设备，要重新登录（不答会话）。 */
   passwordResetFinish: base
