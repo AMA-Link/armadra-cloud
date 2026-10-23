@@ -537,3 +537,26 @@ func TestHostInvitationMergeNeverEscalates(t *testing.T) {
 		t.Fatalf("viewer 整台 + driver@w1 仍是 viewer 整台：%v", rows)
 	}
 }
+
+// 新增一条授予也可能让已有的有效权限变窄（团队授予 driver@w1 加上 member 的 viewer 整台 = viewer 整台）：
+// 接受时前后各取一份有效权限，收窄就撤令牌踢人。
+func TestHostInvitationNewGrantNarrowsExistingAccess(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner, member := r.verified(), r.verified()
+	team := r.seedTeam("hi-n", map[string]string{owner.accountID: "owner", member.accountID: "member"})
+	h := r.addHost(owner, teamSpace(team), "0.11.0")
+	r.mustGrant(owner, h.id, teamOf(team), "driver", map[string]any{"workspaceIds": []string{"w1"}})
+	signed := r.assertion(member, h.id)
+	r.expect(signed, 200, "")
+	id, token := r.mustInviteHost(owner, h.id, r.queryString("SELECT email FROM accounts WHERE account_id = $1", member.accountID), "viewer", nil)
+	r.expect(r.acceptInvite(member, id, token), 200, "")
+	if !r.bothRevoked(signed) {
+		t.Fatal("新增授予让有效权限变窄，已签的令牌应被撤")
+	}
+	res := r.do("GET", "/v1/grants/effective?sourceId="+h.id+"&accountId="+member.accountID, nil, owner.bearer())
+	r.expect(res, 200, "")
+	if res.json["role"] != "viewer" || len(res.json["workspaceIds"].([]any)) != 0 {
+		t.Fatalf("有效权限应是 viewer 整台：%s", res.body)
+	}
+}

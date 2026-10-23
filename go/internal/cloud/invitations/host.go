@@ -285,6 +285,11 @@ func (s *Service) acceptHost(ctx context.Context, tx saas.Tx, call *api.Call, ac
 	if !hosts.GuestsAllowed(h) {
 		return "", "", core.Fail(gen.ErrGuestsDisabled)
 	}
+	beforeBasis, err := tx.AccessBasis(ctx, s.tenant(), account.AccountID, h.SourceID)
+	if err != nil {
+		return "", "", err
+	}
+	beforeEff := grants.Compose(beforeBasis, account.AccountID, nowMs)
 	subject := saas.GrantSubjectGuest
 	if h.TeamID != "" {
 		role, err := teams.EnsureGuestMember(ctx, tx, s.tenant(), nowMs, h.TeamID, account, inv.InvitedBy)
@@ -312,15 +317,18 @@ func (s *Service) acceptHost(ctx context.Context, tx saas.Tx, call *api.Call, ac
 	} else if account.EmailVerifiedAtMs == nil {
 		return "", "", core.Fail(gen.ErrEmailUnverified) // 个人空间的访客授予要求已验证邮箱（与 grants.create 一致）
 	}
-	_, _, narrowed, err := grants.ApplyInvitation(ctx, tx, s.tenant(), nowMs, grants.InviteGrant{
+	if _, _, err := grants.ApplyInvitation(ctx, tx, s.tenant(), nowMs, grants.InviteGrant{
 		SourceID: h.SourceID, TeamID: h.TeamID, SubjectKind: subject, AccountID: account.AccountID, Role: inv.HostRole,
 		WorkspaceIDs: inv.WorkspaceIDs, ExpiresAtMs: inv.GrantExpiresAtMs, GrantedBy: inv.InvitedBy, InvitationID: inv.InvitationID,
-	})
+	}); err != nil {
+		return "", "", err
+	}
+	// 合成（与已有授予合并，或新增一条受限的授予）可能让他的有效权限变窄：前后各取一份，收窄就在提交后撤掉已签的令牌并踢人。
+	afterBasis, err := tx.AccessBasis(ctx, s.tenant(), account.AccountID, h.SourceID)
 	if err != nil {
 		return "", "", err
 	}
-	if narrowed && s.relay != nil {
-		// 合成结果比已有授予窄（角色降、范围缩或到期提前）：撤掉他在这台主机上已签的令牌，重连时按新权限重签。
+	if grants.Narrowed(beforeEff, grants.Compose(afterBasis, account.AccountID, nowMs)) && s.relay != nil {
 		grants.RevokeAccess(tx, s.relay, s.log, h.SourceID, []string{account.AccountID}, "invitation_merged")
 	}
 	if err := tx.Invitations().Decide(ctx, s.tenant(), inv.InvitationID, saas.InvitationAccepted, account.AccountID, nowMs); err != nil {
