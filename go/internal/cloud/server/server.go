@@ -62,6 +62,8 @@ type Deps struct {
 	Mail mail.Sender
 	// GrantsHook 让测试在断言签发的交错点（"signed"、"indexed"）停住，验证与并发撤销交错也不漏撤；生产不设。
 	GrantsHook func(stage string)
+	// IncidentEvery 缩短事故开关按库同步给节点的间隔（测试用，缺省 5 秒）。
+	IncidentEvery time.Duration
 	// ExtraHandlers 给测试挂额外的过程处理器（例如用 admin.* 检查凭据闸）；生产装配不设。
 	ExtraHandlers map[string]api.Handler
 }
@@ -170,6 +172,8 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 	// 作业在监听之前启动、在 HTTP 停收请求之后停（undo 后进先出）：等当前作业最多 jobsGrace。
 	assembly.jobs.Start()
 	undo.push(func() { assembly.jobs.Stop(jobsGrace) })
+	// 事故开关按库同步给节点（各实例各一份，不依赖 Redis 保活）：随作业一起启动、一起停。
+	undo.push(assembly.admin.Start())
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fail(fmt.Errorf("监听失败：%s", cfg.Listen))

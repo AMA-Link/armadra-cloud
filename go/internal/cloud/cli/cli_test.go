@@ -86,7 +86,7 @@ func TestUsageAndSimpleCommands(t *testing.T) {
 	if code, _, errOut := run(t, config.MapEnv{}, "keys"); code != 64 || !strings.Contains(errOut, "未知命令") {
 		t.Fatalf("keys 缺子命令：%d %q", code, errOut)
 	}
-	for _, args := range [][]string{{"nodes", "token"}, {"nodes", "revoke"}, {"operators", "add"}, {"operators", "totp"}} {
+	for _, args := range [][]string{{"nodes", "token"}, {"nodes", "revoke"}} {
 		if code, _, errOut := run(t, config.MapEnv{}, args...); code != 64 || !strings.Contains(errOut, "这个命令还没有提供") {
 			t.Fatalf("%v：%d %q", args, code, errOut)
 		}
@@ -122,7 +122,7 @@ func TestMigrateThenServeRefusesBehindLedger(t *testing.T) {
 		t.Fatalf("serve 不自动迁移：%d %q", code, errOut)
 	}
 	code, out, errOut := run(t, env, "migrate")
-	if code != 0 || !strings.Contains(out, "本次新增 9 个") {
+	if code != 0 || !strings.Contains(out, "本次新增 10 个") {
 		t.Fatalf("migrate：%d %q %q", code, out, errOut)
 	}
 	// 再迁移一次是空操作。
@@ -198,7 +198,7 @@ func TestServeBootstrapsHealthReadyAndAnswers501(t *testing.T) {
 		t.Fatalf("/ready：%d %v", status, body)
 	}
 	// 还没实现的过程答 501 not_implemented；未知路径 404。
-	for _, path := range []string{"/v1/source-transfers", "/v1/billing/plan", "/v1/teams/x/groups"} {
+	for _, path := range []string{"/v1/source-transfers", "/v1/api-tokens", "/v1/teams/x/groups"} {
 		status, body, _ = getJSON(t, running.URL+path)
 		if status != 501 || body["code"] != "not_implemented" {
 			t.Fatalf("%s 应答 501：%d %v", path, status, body)

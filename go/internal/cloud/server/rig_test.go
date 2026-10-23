@@ -80,6 +80,8 @@ type rigOptions struct {
 	mail mail.Sender
 	// grantsHook 在断言签发的交错点停住。
 	grantsHook func(stage string)
+	// incidentEvery 缩短事故开关按库同步的间隔。
+	incidentEvery time.Duration
 }
 
 // rig 是一套真实的控制面：PostgreSQL（随机 schema）+ Redis + 完整路由，经 HTTP 访问。
@@ -95,6 +97,8 @@ type rig struct {
 	oapi   *schema.OpenAPI
 	// mail 是缺省的内存发信方；换了发信方时为 nil。
 	mail *mail.MemorySender
+	// stubbed：测试挂了假的 admin.* 处理器，它们的答复不按契约验形状。
+	stubbed bool
 }
 
 func redisURL(t *testing.T) string {
@@ -162,6 +166,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	run, err := server.Serve(ctx, cfg, server.Deps{
 		Log: obs.NewNamedLogger(logs, obs.LevelDebug, "cloud"), Now: clk.Now, Version: "test",
 		Challenge: options.verifier, ExtraHandlers: options.extra, Mail: sender, GrantsHook: options.grantsHook,
+		IncidentEvery: options.incidentEvery,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +178,7 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	}
 	oapi := schema.Load(t, filepath.Join(testutil.ProtocolDir(t), "schema", "cloud-openapi.json"))
 	return &rig{
-		t: t, run: run, clock: clk, log: logs, cfg: cfg, url: run.URL, router: router, oapi: oapi, mail: memory,
+		t: t, run: run, clock: clk, log: logs, cfg: cfg, url: run.URL, router: router, oapi: oapi, mail: memory, stubbed: options.extra != nil,
 		// 每个测试一个随机的客户端 IP（经受信代理头），限流桶在 Redis 里互不干扰。
 		ip: fmt.Sprintf("10.%d.%d.%d", rand.IntN(256), rand.IntN(256), rand.IntN(256)),
 	}
@@ -253,7 +258,7 @@ func (r *rig) do(method, path string, body any, h headers) response {
 	if lookup == http.MethodHead {
 		lookup = http.MethodGet
 	}
-	stub := strings.HasPrefix(path, "/v1/admin/") // 测试挂的假处理器，不按契约验形状
+	stub := r.stubbed && strings.HasPrefix(path, "/v1/admin/") // 测试挂的假处理器，不按契约验形状
 	if match := r.router.Match(lookup, strings.SplitN(path, "?", 2)[0]); match != nil && !stub && res.StatusCode == http.StatusOK && method != http.MethodHead {
 		if err := r.oapi.ValidateOutput(match.Route.Procedure, data); err != nil {
 			r.t.Fatalf("%s %s 的答复不符合 %s 的输出 schema：%v\n%s", method, path, match.Route.Procedure, err, data)

@@ -52,6 +52,8 @@ type Reader interface {
 	GrantReader
 	TrustReader
 	LinkReader
+	UsageReader
+	OpsReader
 	// Ping 探活：连接池里能取到连接并执行一条语句。
 	Ping(ctx context.Context) error
 	// Account 按账号 id 读完整的账号行；没有答 nil。
@@ -78,10 +80,12 @@ type Tx interface {
 	Hosts() HostRepo // source_spaces、注册令牌（带空间）
 	Grants() GrantRepo
 	Trust() TrustRepo
-	Audit() AuditRepo       // 只追加
-	Jobs() JobRepo          // Enqueue（含 dedupe / slot、NOTIFY）、发件箱
-	Settings() SettingsRepo // platform_settings、entitlements
-	Issued() IssuedRepo     // cloud_issued_tokens、relay_revoked_tokens
+	Audit() AuditRepo         // 只追加
+	Jobs() JobRepo            // Enqueue（含 dedupe / slot、NOTIFY）、发件箱
+	Settings() SettingsRepo   // platform_settings、entitlements
+	Issued() IssuedRepo       // cloud_issued_tokens、relay_revoked_tokens
+	Retention() RetentionRepo // 保留期清理（audit.retention、traffic.retention）
+	Ops() OpsRepo             // 运营动作（团队 / 账号状态、范围、运营两步验证）
 	// AfterCommit 登记一个提交成功之后才执行的回调；回滚、重试时丢弃。回调里的失败只能记录，不能回滚事务。
 	AfterCommit(fn func(ctx context.Context))
 	// Ports 是绑定到本事务的核心端口（建设备、登记主机等和 SaaS 表写在同一个事务里）：不锁 tenants 行、
@@ -131,6 +135,10 @@ type AuditRepo interface {
 	Append(ctx context.Context, tenantID string, entry AuditEntry) error
 	// SeenLogin 报告账号从 sinceMs 起有没有在同名设备、同一 IP 前缀登录（或注册）过：新设备提醒用。
 	SeenLogin(ctx context.Context, tenantID, accountID, deviceName, ipPrefix string, sinceMs int64) (bool, error)
+	// ListTeam 按时间倒序（at_ms, event_id）列团队审计：只读 team_id 相符的行。
+	ListTeam(ctx context.Context, scope TeamScope, query AuditQuery) ([]AuditEntry, error)
+	// ListSecurity 按时间倒序列账号本人的安全日志（action 以 security. 开头）；Actor、SourceID 筛选不适用。
+	ListSecurity(ctx context.Context, tenantID, accountID string, query AuditQuery) ([]AuditEntry, error)
 }
 
 // JobRepo 是业务事务里的作业入队与发件箱。

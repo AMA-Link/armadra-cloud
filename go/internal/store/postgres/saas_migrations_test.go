@@ -1,11 +1,12 @@
 package postgres_test
 
-// 迁移 0004–0009（SaaS）的测试，对应设计 §3.5。直接用 SQL 验证 DDL 的约束，端口相关的用端口。
+// 迁移 0004–0010（SaaS）的测试，对应设计 §3.5。直接用 SQL 验证 DDL 的约束，端口相关的用端口。
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -128,7 +129,7 @@ func (e *saasEnv) source(id string) {
 	}
 }
 
-// 空库连续跑 0001–0009：账本连续，SaaS 的表都在。
+// 空库连续跑 0001–0010：账本连续，SaaS 的表都在。
 func TestSaaSMigrationsFromEmpty(t *testing.T) {
 	e := openSaaS(t)
 	rows, err := e.pool.Query(e.ctx, "SELECT id, name FROM cloud_migrations ORDER BY id")
@@ -138,7 +139,7 @@ func TestSaaSMigrationsFromEmpty(t *testing.T) {
 	defer rows.Close()
 	want := []string{
 		"0001_control_init", "0002_relay_control", "0003_traffic", "0004_saas_accounts", "0005_saas_teams",
-		"0006_saas_hosts", "0007_saas_grants", "0008_saas_audit", "0009_saas_ops",
+		"0006_saas_hosts", "0007_saas_grants", "0008_saas_audit", "0009_saas_ops", "0010_saas_audit_security_index",
 	}
 	var got []string
 	for rows.Next() {
@@ -166,7 +167,7 @@ func TestSaaSMigrationsFromEmpty(t *testing.T) {
 	}
 }
 
-// 对停在 0003 的库补跑 0004–0009：老行取缺省，现有端口照常读写。
+// 对停在 0003 的库补跑 0004–0010：老行取缺省，现有端口照常读写。
 func TestSaaSMigrationsOnOldDatabase(t *testing.T) {
 	url, schema := pgtest.Schema(t)
 	ctx := context.Background()
@@ -174,8 +175,8 @@ func TestSaaSMigrationsOnOldDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 9 {
-		t.Fatalf("随包迁移应有 9 条：%d", len(all))
+	if len(all) != 10 {
+		t.Fatalf("随包迁移应有 10 条：%d", len(all))
 	}
 	old, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, Migrations: all[:3]})
 	if err != nil {
@@ -213,8 +214,8 @@ func TestSaaSMigrationsOnOldDatabase(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 	var n int
-	if err := db.Pool().QueryRow(ctx, "SELECT count(*)::int FROM cloud_migrations").Scan(&n); err != nil || n != 9 {
-		t.Fatalf("账本应有 9 条：%d %v", n, err)
+	if err := db.Pool().QueryRow(ctx, "SELECT count(*)::int FROM cloud_migrations").Scan(&n); err != nil || n != 10 {
+		t.Fatalf("账本应有 10 条：%d %v", n, err)
 	}
 	var email, reason *string
 	var verified *int64
@@ -805,10 +806,15 @@ func TestFreezeReviewAdditions(t *testing.T) {
 		}
 	})
 	t.Run("新索引都在", func(t *testing.T) {
-		for _, idx := range []string{"outbox_emails_job", "jobs_done", "jobs_failed", "audit_log_source", "account_credentials_totp", "cloud_issued_tokens_exp"} {
+		for _, idx := range []string{"outbox_emails_job", "jobs_done", "jobs_failed", "audit_log_source", "account_credentials_totp", "cloud_issued_tokens_exp", "audit_log_security"} {
 			if e.count("SELECT count(*)::int FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1", idx) != 1 {
 				t.Errorf("缺索引 %s", idx)
 			}
+		}
+		var def string
+		if err := e.pool.QueryRow(e.ctx, "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'audit_log_security'").Scan(&def); err != nil ||
+			!strings.Contains(def, "(tenant_id, at_ms)") || !strings.Contains(def, "team_id IS NULL") || !strings.Contains(def, "security.%") {
+			t.Errorf("audit_log_security 应是安全日志的部分索引：%s %v", def, err)
 		}
 		if n := e.count(`SELECT count(*)::int FROM information_schema.key_column_usage WHERE table_schema = current_schema()
 		  AND table_name = 'cloud_issued_tokens' AND constraint_name = 'cloud_issued_tokens_pkey' AND column_name = 'tenant_id'`); n != 1 {

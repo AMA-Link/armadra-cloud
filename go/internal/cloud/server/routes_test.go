@@ -27,8 +27,21 @@ var enabledThroughS5b = map[string]bool{
 	"sources.get": true, "sources.update": true, "sources.revoke": true, "me.sources": true,
 	"sources.assertion": true, "sources.accessList": true, "sources.accessRevoke": true,
 	"grants.list": true, "grants.create": true, "grants.update": true, "grants.revoke": true, "grants.effective": true,
-	"links.create": true, "links.get": true, "links.accept": true, "links.list": true, "links.update": true, "links.revoke": true,
+}
+
+// enabledS6 是 S6 实现的过程（单独一张表，各批并行时少冲突）。
+var enabledS6 = map[string]bool{
 	"sources.trustRequest": true, "sources.trustResolve": true, "trust.list": true, "trust.reject": true,
+	"links.create": true, "links.get": true, "links.accept": true, "links.list": true, "links.update": true, "links.revoke": true,
+}
+
+// enabledS7 是 S7 实现的过程（单独一张表，各批并行时少冲突）。
+var enabledS7 = map[string]bool{
+	"audit.list": true, "me.securityLog": true, "billing.plan": true, "billing.usage": true,
+	"auth.mfaVerify": true,
+	"admin.tenants":  true, "admin.accounts": true, "admin.account": true, "admin.accountStatus": true,
+	"admin.teams": true, "admin.team": true, "admin.teamStatus": true, "admin.relayNodes": true, "admin.relayNodeDrain": true,
+	"admin.incident": true, "admin.incidentSet": true,
 }
 
 func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
@@ -51,7 +64,7 @@ func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 		}
 		res := r.do(method, path, body, nil)
 		is501 := res.status == 501 && res.json["code"] == "not_implemented"
-		if enabledThroughS5b[route.Procedure] {
+		if enabledThroughS5b[route.Procedure] || enabledS6[route.Procedure] || enabledS7[route.Procedure] {
 			seen++
 			if is501 {
 				t.Errorf("%s 应已启用", route.Procedure)
@@ -60,7 +73,7 @@ func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 			t.Errorf("%s 还没实现，应答 501 not_implemented：%d %s", route.Procedure, res.status, res.body)
 		}
 	}
-	if seen != len(enabledThroughS5b) {
+	if seen != len(enabledThroughS5b)+len(enabledS6)+len(enabledS7) {
 		t.Fatalf("启用表里有契约里没有的过程：%d / %d", seen, len(enabledThroughS5b))
 	}
 }
