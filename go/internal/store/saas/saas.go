@@ -51,6 +51,7 @@ type Reader interface {
 	HostReader
 	GrantReader
 	UsageReader
+	OpsReader
 	// Ping 探活：连接池里能取到连接并执行一条语句。
 	Ping(ctx context.Context) error
 	// Account 按账号 id 读完整的账号行；没有答 nil。
@@ -82,6 +83,7 @@ type Tx interface {
 	Settings() SettingsRepo   // platform_settings、entitlements
 	Issued() IssuedRepo       // cloud_issued_tokens、relay_revoked_tokens
 	Retention() RetentionRepo // 保留期清理（audit.retention、traffic.retention）
+	Ops() OpsRepo             // 运营动作（团队 / 账号状态、范围、运营两步验证）
 	// AfterCommit 登记一个提交成功之后才执行的回调；回滚、重试时丢弃。回调里的失败只能记录，不能回滚事务。
 	AfterCommit(fn func(ctx context.Context))
 	// Ports 是绑定到本事务的核心端口（建设备、登记主机等和 SaaS 表写在同一个事务里）：不锁 tenants 行、
