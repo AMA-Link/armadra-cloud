@@ -254,6 +254,26 @@ func (s *Service) restore(ctx context.Context, call *api.Call) (any, error) {
 			if team.PurgeAtMs != nil && *team.PurgeAtMs <= nowMs {
 				return core.Fail(gen.ErrTeamDeleted)
 			}
+			// 恢复等于重新拥有一个团队：按个人账号的 teams 额度核对（团队→账号的加锁顺序），
+			// 否则删 A、建 B、再恢复 A 就绕过了 Free 的 1 个团队。
+			if _, err := tx.Accounts().LockAccount(ctx, s.tenant(), account.AccountID); err != nil {
+				return err
+			}
+			e, err := tx.Entitlement(ctx, s.tenant(), saas.SpacePersonal, account.AccountID)
+			if err != nil {
+				return err
+			}
+			limit := quota.ForPersonal(saas.FreePlan, nil)
+			if e != nil {
+				limit = quota.ForPersonal(e.Plan, e.Overrides)
+			}
+			owned, err := tx.OwnedTeamCount(ctx, s.tenant(), account.AccountID)
+			if err != nil {
+				return err
+			}
+			if err := quota.Check(quota.Teams, owned, limit.Teams); err != nil {
+				return err
+			}
 			if err := tx.Teams().Restore(ctx, access.Scope, nowMs); err != nil {
 				return err
 			}

@@ -123,7 +123,7 @@ func (s *Service) memberRole(ctx context.Context, call *api.Call) (any, error) {
 				return err
 			}
 			if narrows(target.Role, in.Role) {
-				if err := s.revokeMember(ctx, tx, access, account.AccountID, target.AccountID); err != nil {
+				if err := s.revokeMember(ctx, tx, access, account.AccountID, target.AccountID, in.Role == teamscope.Billing || in.Role == teamscope.Guest); err != nil {
 					return err
 				}
 			}
@@ -177,10 +177,14 @@ func (s *Service) checkRoleChange(ctx context.Context, tx saas.Tx, access Access
 	return quota.Check(quota.Members, seats.Members+pending.Members, lim.Members)
 }
 
-// revokeMember 撤销此人在团队里的授予，提交后撤销他在团队各主机上已签的令牌并踢掉在线连接。
-func (s *Service) revokeMember(ctx context.Context, tx saas.Tx, access Access, actorID, accountID string) error {
-	if _, err := tx.Teams().RevokeMemberGrants(ctx, access.Scope, accountID, actorID, s.nowMs()); err != nil {
-		return err
+// revokeMember 提交后撤销此人在团队各主机上已签的令牌并踢掉在线连接（重连时按新角色重新签）；
+// grants 为真时同时撤销他在团队里的显式授予——只有降为 billing / guest、被移除或离开才撤，
+// admin 降 member、原 owner 降 admin 仍是成员，保留显式授予。
+func (s *Service) revokeMember(ctx context.Context, tx saas.Tx, access Access, actorID, accountID string, grants bool) error {
+	if grants {
+		if _, err := tx.Teams().RevokeMemberGrants(ctx, access.Scope, accountID, actorID, s.nowMs()); err != nil {
+			return err
+		}
 	}
 	hosts, err := tx.Teams().HostIDs(ctx, access.Scope)
 	if err != nil {
@@ -211,7 +215,7 @@ func (s *Service) removeMember(ctx context.Context, tx saas.Tx, access Access, a
 			return err
 		}
 	}
-	if err := s.revokeMember(ctx, tx, access, actorID, target.AccountID); err != nil {
+	if err := s.revokeMember(ctx, tx, access, actorID, target.AccountID, true); err != nil {
 		return err
 	}
 	return tx.Teams().RemoveMember(ctx, access.Scope, target.AccountID)
@@ -318,7 +322,7 @@ func (s *Service) transferOwnership(ctx context.Context, call *api.Call) (any, e
 		if err := tx.Teams().SetRole(ctx, access.Scope, account.AccountID, teamscope.Admin); err != nil {
 			return err
 		}
-		if err := s.revokeMember(ctx, tx, access, account.AccountID, account.AccountID); err != nil {
+		if err := s.revokeMember(ctx, tx, access, account.AccountID, account.AccountID, false); err != nil {
 			return err
 		}
 		return s.record(ctx, tx, call, account.AccountID, access.Scope.TeamID(), ActionTransfer, "member", target.AccountID)
