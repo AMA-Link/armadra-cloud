@@ -2,6 +2,7 @@ package relayctl_test
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
@@ -114,5 +115,53 @@ func TestDurableSinkPersists(t *testing.T) {
 	}
 	if got := jtis(e.mem); len(got) != 4 {
 		t.Fatalf("内层也撤了：%v", got)
+	}
+}
+
+// 内层索引缺了而 PostgreSQL 有的令牌（重启、Redis 丢数据）照样被撤并踢；两边都命中的只踢一次；只在内层的也撤到。
+func TestDurableRevokesTokensMissingFromInnerIndexAndKicksOncePerDevice(t *testing.T) {
+	e := openDurable(t)
+	onlyPG := func(jti, account, source, device string) {
+		t.Helper()
+		err := e.soft.Tx(ctx, func(tx saas.Tx) error {
+			return tx.Issued().Insert(ctx, "cloud", saas.IssuedToken{JTI: jti, AccountID: account, SourceID: source, DeviceID: device, ExpMs: 9_000_000})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	onlyPG("r.d1.s1.pgonly", "a1", "s1", "d1")
+	onlyPG("r.d1.s2.pgonly", "a1", "s2", "d1")
+	both := relayctl.Issued{Subject: "a1", SourceID: "s1", DeviceID: "d1", JTI: "s.d1.s1.both", ExpMs: 9_000_000}
+	if err := e.d.IndexIssued(ctx, both); err != nil {
+		t.Fatal(err)
+	}
+	// 内层独有（PostgreSQL 已被别处删掉）：同设备同源，不该多踢一次。
+	issue(t, e.mem, "a1", "s1", "d1", "r.d1.s1.memonly", 9_000_000)
+	issue(t, e.mem, "a1", "s3", "d1", "r.d1.s3.memonly", 9_000_000)
+
+	e.d.Revocations().DeviceRevoked(ctx, "a1", "d1")
+	for _, jti := range []string{"r.d1.s1.pgonly", "r.d1.s2.pgonly", "s.d1.s1.both", "r.d1.s1.memonly", "r.d1.s3.memonly"} {
+		if !e.mem.IsRevoked(jti) {
+			t.Errorf("内层没撤到 %s", jti)
+		}
+	}
+	if n := e.count(t, "SELECT count(*)::int FROM relay_revoked_tokens"); n != 3 {
+		t.Fatalf("PostgreSQL 撤销表只该有 PostgreSQL 命中的 3 枚：%d", n)
+	}
+	var kicks []string
+	for _, c := range e.mem.Commands() {
+		if c.Type == relayctl.CommandKick {
+			kicks = append(kicks, c.SourceID+"|"+c.Subject+"|"+c.DeviceID)
+		}
+	}
+	sort.Strings(kicks)
+	if want := []string{"s1|a1|d1", "s2|a1|d1", "s3|a1|d1"}; !reflect.DeepEqual(kicks, want) {
+		t.Fatalf("按 (源, subject, 设备) 去重的踢人：%v", kicks)
+	}
+	// RevokeWhere 同样把 PostgreSQL 独有的令牌撤到内层。
+	onlyPG("r.d2.s9.x", "a2", "s9", "d2")
+	if n, err := e.d.RevokeWhere(ctx, relayctl.Filter{Subject: "a2"}); err != nil || n != 1 || !e.mem.IsRevoked("r.d2.s9.x") {
+		t.Fatalf("RevokeWhere：%d %v", n, err)
 	}
 }

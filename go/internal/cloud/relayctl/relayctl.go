@@ -43,7 +43,7 @@ func (f Filter) empty() bool {
 }
 
 // KickFilter 选出要踢掉的客户端连接，字段含义同 core.ConnectionFilter，另有按设备。
-// 老节点不认识 Subject / SubjectPrefix / DeviceID，会退化为踢该源全部连接（多踢不漏踢）。
+// 节点（G5 N2 起）按 Subject / SubjectPrefix / DeviceID 精确踢人；不认识这些字段的老节点会退化为踢该源全部连接（多踢不漏踢）。
 type KickFilter struct {
 	SourceID      string
 	Subject       string
@@ -110,6 +110,8 @@ type Control interface {
 	IndexIssued(ctx context.Context, issued Issued) error
 	// RevokeWhere 撤销签发索引里符合过滤的未到期令牌，答撤销了几枚。
 	RevokeWhere(ctx context.Context, filter Filter) (int, error)
+	// Revoke 同 RevokeWhere，但答被撤销的条目（keepDeviceID 非空时那台设备的除外），让调用方据此按 (源, subject, 设备) 踢人。
+	Revoke(ctx context.Context, filter Filter, keepDeviceID string) ([]Issued, error)
 	// Kick 踢掉符合过滤的客户端连接。
 	Kick(ctx context.Context, filter KickFilter, reason string) error
 	// CloseTunnel 关掉主机的隧道。

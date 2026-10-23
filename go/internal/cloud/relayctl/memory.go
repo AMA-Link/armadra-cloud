@@ -110,6 +110,13 @@ func (m *Memory) RevokeWhere(_ context.Context, filter Filter) (int, error) {
 	return len(m.revokeLocked(filter, "")), nil
 }
 
+// Revoke 实现 Control。
+func (m *Memory) Revoke(_ context.Context, filter Filter, keepDeviceID string) ([]Issued, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revokeLocked(filter, keepDeviceID), nil
+}
+
 // Kick 实现 Control。
 func (m *Memory) Kick(_ context.Context, filter KickFilter, reason string) error {
 	m.mu.Lock()
@@ -290,7 +297,7 @@ func (p relayPort) Disconnect(filter core.ConnectionFilter) {
 
 type sink struct{ m *Memory }
 
-// expand 把被撤销的令牌展开成逐源的 kick：同一 (源, 设备) 一条，老节点退化为踢该源全部连接。
+// expand 把被撤销的令牌展开成逐源的 kick：同一 (源, subject, 设备) 一条，节点按 subject / deviceId 精确踢人。
 func (s sink) expand(hit []Issued, reason string) {
 	type key struct{ source, subject, device string }
 	seen := map[key]bool{}
