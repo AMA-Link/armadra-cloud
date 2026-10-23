@@ -6,6 +6,7 @@
 //      中继令牌都由它签（控制面落地之前代替 armadra-cloud）；
 //   3. 假 core（relay-runtime-node 的测试件）连节点 a 的隧道，客户端连节点 b（`<sourceId>.src.<域>`）：
 //      通道经 `/x/v1` 转到 a，10 MB 随机字节双向原样；`/x/v1` 没有有效节点令牌一律 401；
+//      慢客户端（不读的下载）不拖住同一条节点间连接上别的源；下载中途掉线 64 次之后源照常出数据；
 //   4. 撤销跨节点生效：照控制面的写法写 `relay:revoked:<jti>` 并广播、发 `kick`，在线通道被踢，
 //      旧令牌在每个节点上都 4401；
 //   5. 持有节点下线再平衡：给 a 发 SIGTERM → 隧道收到 GOAWAY rebalance、节点表里 a 先标 draining 再删掉、
@@ -351,6 +352,25 @@ function channel(node, sourceId, relayToken) {
   });
 }
 
+/** 开一条通道就答（不等看会不会被关）；paused 为真时一开就停读（慢客户端：下行字节堆在内核与中继里）。 */
+function rawChannel(node, sourceId, relayToken, paused = false) {
+  return new Promise((done, failed) => {
+    const ws = new WebSocket(
+      `${node.origin.replace(/^http/, "ws")}/_relay/e2e`,
+      ["armadra-e2e.1", `armadra-relay.${relayToken}`],
+      {
+        perMessageDeflate: false,
+        headers: { host: `${sourceId}.src.${DOMAIN}` },
+      },
+    );
+    ws.once("open", () => {
+      if (paused) ws.pause();
+      done(ws);
+    });
+    ws.once("error", failed);
+  });
+}
+
 const closeOf = (ws) =>
   ws.readyState === WebSocket.CLOSED
     ? Promise.resolve(-1)
@@ -518,6 +538,86 @@ export async function runSaasE2e({ root, report, redisUrl: givenRedis }) {
           metric(await nodes.a.metrics(), "relay_tunnels") === 1,
           "a 持有隧道",
         );
+      },
+    );
+
+    await report.step(
+      "慢客户端与下载中途断开：经 b 转发的 24 条不读的下载不拖住别的源；64 次下载中途掉线之后源照常出数据",
+      async () => {
+        // 第二个源：每条通道写 64 MB 的确定序列（下载），同样连 a。
+        const keys = generateKeyPairSync("ed25519");
+        const downloadId = randomBytes(16).toString("hex");
+        const downloader = new FakeCore({
+          tunnelUrl: nodes.a.tunnelUrl,
+          sourceId: downloadId,
+          sourceKey: keys.privateKey,
+          token: () => issuer.tunnelToken(downloadId, keys.publicKey),
+          capabilities: ["e2e"],
+          e2eSend: 64 * 1024 * 1024,
+        });
+        cores.push(downloader);
+        expect((await downloader.connect()).ready, "下载源握手");
+        await until("下载源的路由", async () => {
+          const route = await admin.command(
+            "GET",
+            `relay:route:src:${downloadId}`,
+          );
+          return route && JSON.parse(route).node === "a";
+        });
+        // 慢客户端：开了不读。
+        const slow = [];
+        for (let i = 0; i < 24; i += 1) {
+          const ws = await rawChannel(
+            nodes.b,
+            downloadId,
+            issuer.relayToken(downloadId),
+            true,
+          );
+          slow.push(ws);
+          sockets.push(ws);
+        }
+        await sleep(500);
+        const echoing = await channel(
+          nodes.b,
+          sourceId,
+          issuer.relayToken(sourceId),
+        );
+        expect(echoing.ws, "别的源的通道");
+        sockets.push(echoing.ws);
+        await echo(echoing.ws, 1024 * 1024);
+        echoing.ws.close(1000);
+        for (const ws of slow) ws.terminate();
+        // 下载中途掉线 64 次。
+        for (let i = 0; i < 64; i += 1) {
+          const ws = await rawChannel(
+            nodes.b,
+            downloadId,
+            issuer.relayToken(downloadId),
+          );
+          sockets.push(ws);
+          await new Promise((done) => ws.once("message", done));
+          await sleep(30);
+          ws.terminate();
+        }
+        // 源照常出数据：读满 8 MB。
+        const last = await rawChannel(
+          nodes.b,
+          downloadId,
+          issuer.relayToken(downloadId),
+        );
+        sockets.push(last);
+        let received = 0;
+        last.on("message", (data) => {
+          received += data.length;
+        });
+        await until(
+          "掉线 64 次之后下载照常",
+          () => received >= 8 * 1024 * 1024,
+          30_000,
+          50,
+        );
+        last.terminate();
+        await downloader.stop();
       },
     );
 
