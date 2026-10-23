@@ -385,7 +385,7 @@ func (s *Service) changePassword(ctx context.Context, call *api.Call) (any, erro
 	return s.respond(ctx, call, device, refresh, account)
 }
 
-// stepUp 是 auth.stepUp：按设备限流（所有尝试都计，失败不会因此少算）→ 口令（运营会话另认两步验证码，S7）→
+// stepUp 是 auth.stepUp：按设备限流（所有尝试都计，失败不会因此少算）→ 口令（运营账号另认两步验证码 totpCode）→
 // 把设备提权 10 分钟。M1 不要求任何过程提权。
 func (s *Service) stepUp(ctx context.Context, call *api.Call) (any, error) {
 	caller, err := call.Caller(ctx)
