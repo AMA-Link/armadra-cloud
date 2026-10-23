@@ -171,6 +171,7 @@ func (s *Service) Handlers() map[string]api.Handler {
 		"me.update":       s.meUpdate,
 		"me.devices":      s.meDevices,
 		"me.deviceRevoke": s.meDeviceRevoke,
+		"me.spaces":       s.meSpaces,
 	}
 	for name, handler := range handlers {
 		handlers[name] = wrap(handler)

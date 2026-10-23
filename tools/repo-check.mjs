@@ -569,7 +569,9 @@ const underModule = (path, module) =>
  * Go 代码的依赖边界：`go.mod` 的 require 只许登记过的模块（不得有 replace / exclude），
  * `.go` 里只许 import 标准库、本模块与登记过的模块；`internalBoundaries` 里某个目录下
  * 的代码不许 import 列出的本模块子路径（例如 `internal/core` 不碰 `internal/tunnel`）；
- * `testOnly` 里的模块只许出现在 `_test.go` 与 `testutil/` 下；`testOnlyPackages` 里的包（本模块的子路径）只许被 `_test.go` 与它自己 import。
+ * `testOnly` 里的模块只许出现在 `_test.go` 与 `testutil/` 下；`testOnlyPackages` 里的包（本模块的子路径）只许被 `_test.go` 与它自己 import；
+ * `onlyImportedBy` 里的包（`package`）的生产代码只许被 `allow` 列出的目录（本模块的子路径，含子目录）import，
+ * `_test.go` 与包自己不受限（`internalBoundaries` 只能禁止，这条是白名单写法）。
  */
 function checkGoModules(context, problems) {
   for (const rule of context.rules.goModules ?? []) {
@@ -646,6 +648,20 @@ function checkGoModules(context, problems) {
           ) {
             problems.push(
               `${path} 在生产代码里 import 了测试用的包：${target}`,
+            );
+          }
+        }
+        for (const only of rule.onlyImportedBy ?? []) {
+          const inside = [only.package, ...only.allow].some((dir) =>
+            path.startsWith(`${rule.root}/${dir}/`),
+          );
+          if (
+            underModule(target, `${mod.module}/${only.package}`) &&
+            !inside &&
+            !path.endsWith("_test.go")
+          ) {
+            problems.push(
+              `${path} 不得 import ${target}（${only.package} 只许 ${only.allow.join("、")} import）`,
             );
           }
         }
