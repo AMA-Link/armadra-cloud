@@ -188,6 +188,16 @@ func (s *Service) checkRoleChange(ctx context.Context, tx saas.Tx, access Access
 // admin 降 member、原 owner 降 admin 仍是成员，保留显式授予。
 func (s *Service) revokeMember(ctx context.Context, tx saas.Tx, access Access, actorID, accountID string, grants bool) error {
 	if grants {
+		// 被移除 / 离开 / 降为 billing 或 guest：发给此人邮箱、在团队主机上的待处理主机邀请一并作废，否则拿旧邀请又能接受回来。
+		if person, err := tx.Account(ctx, s.tenant(), accountID); err != nil {
+			return err
+		} else if person != nil {
+			if _, err := tx.Invitations().RevokeHostByEmail(ctx, s.tenant(), person.Email, access.Scope.TeamID(), "", actorID, s.nowMs()); err != nil {
+				return err
+			}
+		}
+	}
+	if grants {
 		if _, err := tx.Teams().RevokeMemberGrants(ctx, access.Scope, accountID, actorID, s.nowMs()); err != nil {
 			return err
 		}

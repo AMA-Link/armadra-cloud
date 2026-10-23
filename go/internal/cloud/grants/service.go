@@ -360,6 +360,32 @@ func (s *Service) revokeAccess(tx saas.Tx, sourceID string, accounts []string, r
 	})
 }
 
+// revokeInvites 把发给这些账号邮箱、在这台主机上的待处理主机邀请改成 revoked：授予被撤销或收窄之后，旧邀请不能再接受回来
+// （接受会按「角色取高、到期取晚」放宽甚至清掉新加的到期）。
+func (s *Service) revokeInvites(ctx context.Context, tx saas.Tx, sourceID string, accounts []string, actor string) error {
+	for _, id := range accounts {
+		person, err := tx.Account(ctx, s.tenant(), id)
+		if err != nil {
+			return err
+		}
+		if person == nil {
+			continue
+		}
+		if _, err := tx.Invitations().RevokeHostByEmail(ctx, s.tenant(), person.Email, "", sourceID, actor, s.nowMs()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// personal 是授予直接指向的账号（member / guest 主体）；team 主体不指向某个邮箱，没有待作废的邀请。
+func personal(g saas.Grant) []string {
+	if g.SubjectKind == saas.GrantSubjectMember || g.SubjectKind == saas.GrantSubjectGuest {
+		return []string{g.SubjectID}
+	}
+	return nil
+}
+
 // ---- grants.list / effective ----
 
 func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
@@ -739,7 +765,11 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 				return err
 			}
 		}
-		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_changed")
+		narrowed := narrowedAccounts(before, after)
+		if err := s.revokeInvites(ctx, tx, g.SourceID, narrowed, account.AccountID); err != nil {
+			return err
+		}
+		s.revokeAccess(tx, g.SourceID, narrowed, "grant_changed")
 		if err := s.record(ctx, tx, call.IP, saas.ActorAccount, account.AccountID, h.TeamID, g.SourceID, ActionUpdate, "grant", g.GrantID); err != nil {
 			return err
 		}
@@ -787,6 +817,9 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		if err := tx.Jobs().Cancel(ctx, s.tenant(), JobExpire, g.GrantID); err != nil {
+			return err
+		}
+		if err := s.revokeInvites(ctx, tx, g.SourceID, personal(g), account.AccountID); err != nil {
 			return err
 		}
 		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_revoked")
@@ -841,6 +874,9 @@ func (s *Service) expire(ctx context.Context, job saas.Job) error {
 		}
 		after, err := s.snapshot(ctx, tx, g.SourceID, accounts)
 		if err != nil {
+			return err
+		}
+		if err := s.revokeInvites(ctx, tx, g.SourceID, personal(*g), saas.GrantRevokedBySystem); err != nil {
 			return err
 		}
 		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_expired")

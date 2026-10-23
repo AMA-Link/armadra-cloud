@@ -25,7 +25,7 @@ func scanTrust(row scanner) (saas.TrustRequest, error) {
 // 只含主机未撤销、团队未在恢复期、请求者仍是团队成员的请求。
 const trustViewSelect = `SELECT t.request_id, t.source_id, t.pending_id, COALESCE(t.team_id, ''), t.account_id, t.device_id, t.device_name,
 	  t.platform, t.state, t.requested_at_ms, t.expires_at_ms, t.resolved_at_ms, COALESCE(t.resolved_by, ''),
-	  s.name, COALESCE(p.owner_account_id, ''), a.email, a.display_name, COALESCE(vm.role, ''), tm.settings::text
+	  s.name, COALESCE(p.owner_account_id, ''), a.email, a.display_name, rm.role, COALESCE(vm.role, ''), tm.settings::text
 	FROM trust_requests t
 	JOIN sources s ON s.tenant_id = t.tenant_id AND s.source_id = t.source_id AND s.revoked_at_ms IS NULL
 	JOIN source_spaces p ON p.tenant_id = t.tenant_id AND p.source_id = t.source_id AND p.team_id IS NOT DISTINCT FROM t.team_id
@@ -36,13 +36,15 @@ const trustViewSelect = `SELECT t.request_id, t.source_id, t.pending_id, COALESC
 
 func scanTrustView(row scanner) (saas.TrustView, error) {
 	var (
-		v        saas.TrustView
-		role     string
-		settings string
+		v         saas.TrustView
+		role      string
+		requester string
+		settings  string
 	)
 	err := row.Scan(&v.RequestID, &v.SourceID, &v.PendingID, &v.TeamID, &v.AccountID, &v.DeviceID, &v.DeviceName, &v.Platform,
 		&v.State, &v.RequestedAtMs, &v.ExpiresAtMs, &v.ResolvedAtMs, &v.ResolvedBy, &v.SourceName, &v.SourceOwnerID,
-		&v.MemberEmail, &v.MemberName, &role, &settings)
+		&v.MemberEmail, &v.MemberName, &requester, &role, &settings)
+	v.RequesterRole = saas.TeamRole(requester)
 	v.ViewerRole = saas.TeamRole(role)
 	v.TeamSettings = []byte(settings)
 	return v, err
@@ -63,6 +65,13 @@ func (r reader) PendingTrust(ctx context.Context, tenantID, viewerID, teamID str
 	return list(ctx, r.q, scanTrustView, trustViewSelect+`
 		WHERE t.tenant_id = $1 AND vm.account_id IS NOT NULL AND ($3 = '' OR t.team_id = $3)
 		  AND t.state = 'pending' AND t.expires_at_ms > $4
+		  AND (
+		    (p.owner_account_id = $2 AND vm.role IN ('owner', 'admin', 'member'))
+		    OR (rm.role <> 'guest' AND vm.role IN ('owner', 'admin')
+		        AND COALESCE(tm.settings->>'deviceEndorsers', 'owner_admin') = 'owner_admin')
+		    OR (rm.role IN ('owner', 'admin', 'member') AND t.account_id = $2
+		        AND COALESCE((tm.settings->>'memberSelfEndorse')::boolean, true))
+		  )
 		ORDER BY t.requested_at_ms DESC, t.request_id LIMIT $5`, tenantID, viewerID, teamID, nowMs, limit)
 }
 
@@ -131,6 +140,14 @@ func (r trustRepo) Insert(ctx context.Context, tenantID string, t saas.TrustRequ
 		tenantID, t.RequestID, t.SourceID, t.PendingID, t.TeamID, t.AccountID, t.DeviceID, t.DeviceName, t.Platform,
 		t.RequestedAtMs, t.ExpiresAtMs)
 	return err
+}
+
+func (r trustRepo) Reopen(ctx context.Context, tenantID, requestID, newRequestID string, nowMs, expiresAtMs int64) (bool, error) {
+	tag, err := r.q.Exec(ctx,
+		`UPDATE trust_requests SET request_id = $1, state = 'pending', requested_at_ms = $2, expires_at_ms = $3,
+		   resolved_at_ms = NULL, resolved_by = NULL
+		 WHERE tenant_id = $4 AND request_id = $5 AND state = 'rejected'`, newRequestID, nowMs, expiresAtMs, tenantID, requestID)
+	return tag.RowsAffected() == 1, err
 }
 
 func (r trustRepo) Resolve(ctx context.Context, tenantID, requestID, state, resolvedBy string, nowMs int64) (bool, error) {
