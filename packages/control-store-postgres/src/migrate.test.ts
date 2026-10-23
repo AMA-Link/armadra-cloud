@@ -20,6 +20,7 @@ it("随包的迁移编号从 1 起连续，SQL 不带事务语句", () => {
     "0007_saas_grants",
     "0008_saas_audit",
     "0009_saas_ops",
+    "0010_saas_audit_security_index",
   ]);
   expect(() => checkAvailable(migrations)).not.toThrow();
   for (const migration of migrations) {
