@@ -150,3 +150,20 @@ func FuzzClientIP(f *testing.F) {
 		}
 	})
 }
+
+func TestRateKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"198.51.100.7":                     "198.51.100.7",
+		"::ffff:198.51.100.7":              "198.51.100.7",
+		"2001:db8:1:2:3:4:5:6":             "2001:db8:1:2::/64",
+		"2001:DB8:1:2::1":                  "2001:db8:1:2::/64",
+		"[2001:db8:1:2::1]":                "2001:db8:1:2::/64",
+		"fe80::1%eth0":                     "fe80::/64",
+		"not-an-ip":                        "not-an-ip",
+		"2001:db8:1:2:ffff:ffff:ffff:ffff": "2001:db8:1:2::/64",
+	} {
+		if got := RateKey(in); got != want {
+			t.Errorf("RateKey(%q) = %q，应为 %q", in, got, want)
+		}
+	}
+}
