@@ -19,12 +19,7 @@ import (
 
 const download = 4 << 20
 
-// stalled 经节点 n 开一条通道但不读（慢客户端 / 中途断开的客户端）。
-func (r *rig) stalled(n *running) *websocket.Conn {
-	r.t.Helper()
-	return r.stalledTo(n, r.env)
-}
-
+// stalledTo 经节点 n 开一条到 src 的通道但不读（慢客户端）。
 func (r *rig) stalledTo(n *running, src *relayenv.Env) *websocket.Conn {
 	r.t.Helper()
 	header := http.Header{"Host": {src.SourceID + ".src." + domain}}

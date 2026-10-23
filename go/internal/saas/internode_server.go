@@ -130,19 +130,6 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 	return true
 }
 
-// dropConns 断开现有的入向连接（测试：模拟节点间连接中途断开），之后照常收新连接。
-func (s *internodeServer) dropConns() {
-	s.mu.Lock()
-	list := make([]*internodeConn, 0, len(s.conns))
-	for c := range s.conns {
-		list = append(list, c)
-	}
-	s.mu.Unlock()
-	for _, c := range list {
-		c.closeTransport()
-	}
-}
-
 // close 不再收新连接并断开现有的（转来的流已随本地隧道结束）。
 func (s *internodeServer) close() {
 	s.mu.Lock()
