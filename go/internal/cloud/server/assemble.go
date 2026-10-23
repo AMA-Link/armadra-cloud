@@ -31,6 +31,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/platform"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/trust"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	controlredis "github.com/AMA-Link/armadra-cloud/go/internal/control/redis"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
@@ -214,6 +215,11 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	})
 	grantService.Register(runner)
 	for name, handler := range grantService.Handlers() {
+		handlers[name] = handler
+	}
+	trustService := trust.New(trust.Options{Core: coreCtx, Store: saasStore, Limits: limits, Log: logger})
+	trustService.Register(runner)
+	for name, handler := range trustService.Handlers() {
 		handlers[name] = handler
 	}
 	auditService := audit.New(audit.Options{
