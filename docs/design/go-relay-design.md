@@ -202,7 +202,8 @@ go/
   - **PostgreSQL**（`relay_routes` 等三张表 + `NOTIFY`）是同一接口的另一实现，给不想引入 Redis 的多节点个人中转用。
 - **节点间转发**（关掉 #51）：
   - 客户端连到节点 A，源的隧道在节点 B。A 按路由表找到 B，经一条常驻的节点间 WebSocket（`/x/v1`，节点令牌鉴权，scope `relay-node`）把这条 e2e 通道转过去。
-  - 节点间连接直接复用隧道帧（OPEN `kind: e2e` / DATA / WINDOW / END / RST），信用照样逐跳计。
+  - 节点间连接直接复用隧道帧（OPEN / DATA / WINDOW / END / RST，A 每个心跳周期 PING、B 答 PONG），信用照样逐跳计。e2e 的 OPEN 规定路径固定、不带头，没处放目标源，所以节点之间的 OPEN 用 `kind: ws`、路径寻址 `/s/<sourceId>/_relay/e2e`（与 personal 的源地址同一种写法，`edge.InternodeOpen` / `ParseInternodeOpen`），B 再以标准的 `kind: e2e` OPEN 转给源，`remoteIp`、`clientOrigin`、`relayNode`（入口节点）照抄。
+  - A 这一侧的节点间连接就是一条 `tunnel.Tunnel`（A 是开流方，`Link()` 是对端节点名），每个对端一条，断了下次用到时重连，连不上 2 秒内不再试（客户端直接 4404）。对端地址取节点表的 `internodeUrl`。没配节点令牌的节点不转发。
   - B 侧把转来的流当作本地边缘流接进隧道。
   - 所有节点共享路由表；源端按 `heartbeatHint.nodes` 的权重选节点。控制面按 sourceId 做 rendezvous 哈希给节点排序，让客户端与源大概率落在同一节点，转发只兜底。
 - **再平衡**：
