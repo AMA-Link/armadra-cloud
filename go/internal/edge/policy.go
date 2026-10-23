@@ -277,7 +277,9 @@ func (p *Policy) DecideUpgrade(ctx context.Context, r Request) (Decision, error)
 		p.o.Metrics.EdgeConnection(string(gen.ErrProtocolUnsupported))
 		return Decision{Code: gen.ErrProtocolUnsupported, SourceID: addressed.SourceID}, nil
 	}
-	if !adm.tunnel.HasCapability(gen.E2ECapability) {
+	// 节点间连接替不了远端的源声明能力：持有节点判，源没报 e2e 时答 RST refused，边缘照样以
+	// 4404 e2e_unsupported 关（见 edgeConn.Reset）。
+	if adm.tunnel.Link() == "" && !adm.tunnel.HasCapability(gen.E2ECapability) {
 		p.o.Metrics.EdgeConnection(string(gen.ErrSourceOffline))
 		return Decision{Code: gen.ErrSourceOffline, SourceID: addressed.SourceID, Reason: "e2e_unsupported"}, nil
 	}

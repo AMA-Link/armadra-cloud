@@ -414,13 +414,18 @@ func (ec *edgeConn) End(s *tunnel.Stream) {
 	ec.closeGracefully(int(protocol.CloseNormal), "")
 }
 
-// Reset：源 RST 或隧道没了 → 4404。
-func (ec *edgeConn) Reset(s *tunnel.Stream, _ protocol.RstCode) {
+// Reset：源 RST 或隧道没了 → 4404。经节点间连接转发、持有节点答 refused（源没报 e2e）时，
+// 原因与本地判定一致：e2e_unsupported。
+func (ec *edgeConn) Reset(s *tunnel.Stream, code protocol.RstCode) {
 	ec.attach(s)
 	ec.mu.Lock()
 	ec.srcDone = true
 	ec.mu.Unlock()
-	ec.closeGracefully(int(protocol.CloseSourceOffline), "source_offline")
+	reason := "source_offline"
+	if code == protocol.RstRefused && s.Link() != "" {
+		reason = "e2e_unsupported"
+	}
+	ec.closeGracefully(int(protocol.CloseSourceOffline), reason)
 }
 
 // Resume：上行挂起的字节发完了，恢复读客户端。
