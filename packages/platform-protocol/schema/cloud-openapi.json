@@ -13366,6 +13366,35 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "not_found"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -13404,7 +13433,8 @@
                     "code": {
                       "type": "string",
                       "enum": [
-                        "team_role_insufficient"
+                        "team_role_insufficient",
+                        "source_access_denied"
                       ]
                     },
                     "message": {
@@ -13757,6 +13787,35 @@
               }
             }
           },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "bad_request"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
           "403": {
             "description": "403",
             "content": {
@@ -13767,7 +13826,8 @@
                     "code": {
                       "type": "string",
                       "enum": [
-                        "team_role_insufficient"
+                        "team_role_insufficient",
+                        "source_access_denied"
                       ]
                     },
                     "message": {
@@ -14165,7 +14225,8 @@
                       "enum": [
                         "invitation_email_mismatch",
                         "email_unverified",
-                        "team_policy_denied"
+                        "team_policy_denied",
+                        "guests_disabled"
                       ]
                     },
                     "message": {
