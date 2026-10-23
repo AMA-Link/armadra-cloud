@@ -13,6 +13,12 @@ import (
 // ErrSyncing 是重放进行中时 /ready 的答复（设计 §7.2：重放完成前不对外答就绪）。
 var ErrSyncing = errors.New("正在把撤销、签发索引与团队额度重放进 Redis")
 
+// ErrQuotaUnstable：额度重写的最后一轮写完之后，PostgreSQL 里的额度又变了（与重放交错的变更），这次重放作废重来。
+var ErrQuotaUnstable = errors.New("团队额度在重放期间持续变化，重放作废重来")
+
+// quotaWriteRounds 是额度重写最多写几轮；之后还有一次只比对的读。
+const quotaWriteRounds = 3
+
 // Sync 把 PostgreSQL 里不能丢的状态重写进 Redis（设计 §7.2）：
 //
 //   - 撤销表：未到期的 relay_revoked_tokens 全部 SET … PXAT … NX；
@@ -80,15 +86,19 @@ func (s *Sync) Run(ctx context.Context) error {
 	if err := s.Redis.Restore(ctx, revoked, issued); err != nil {
 		return err
 	}
-	// 额度：写完再读 PostgreSQL 核对，不一致就再写（额度变更是提交之后才写 Redis 的，重放读 PostgreSQL 与写 Redis 之间
-	// 如果有人改了额度，重放会写回旧值；核对到的差异在下一轮修正，最多三轮）。
-	for attempt := 0; attempt < 3; attempt++ {
+	// 额度：写完再读 PostgreSQL 核对。额度变更是提交之后才写 Redis 的，重放读 PostgreSQL 与写 Redis 之间如果有人改了额度，
+	// 重放会把旧值写回；最多写三轮收敛，第四次读只比对——还不一致就报错（作为就绪回调则这次订阅作废、退避重连再来），
+	// 不再留着一个没人核对过的最后一次写。
+	for round := 0; round <= quotaWriteRounds; round++ {
 		fresh, err := s.readQuotas(ctx)
 		if err != nil {
 			return err
 		}
-		if attempt > 0 && sameQuotas(fresh, quotas) {
+		if round > 0 && sameQuotas(fresh, quotas) {
 			break
+		}
+		if round == quotaWriteRounds {
+			return ErrQuotaUnstable
 		}
 		if err := s.Redis.WriteQuotas(ctx, fresh); err != nil {
 			return err
