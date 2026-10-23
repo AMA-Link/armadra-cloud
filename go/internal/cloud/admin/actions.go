@@ -166,8 +166,8 @@ func (s *Service) relayNodes(ctx context.Context, call *api.Call) (any, error) {
 }
 
 // relayNodeDrain 是 admin.relayNodeDrain：drain = true 发 drain 命令（节点收到 GOAWAY rebalance，自己把 draining 写回节点表）。
-// 节点一旦排空只能重启回来，控制面没有「取消排空」的命令：drain = false 在节点不在排空时是空操作，
-// 在排空中答 409 conflict。
+// 节点一旦排空只能重启回来，控制面没有「取消排空」的命令：drain = false 是空操作，答复里的 draining
+// 如实反映节点此刻的状态（排空中仍是 true）。契约（§28）给这个过程的错误码只有 not_found / forbidden，所以不另答 conflict。
 func (s *Service) relayNodeDrain(ctx context.Context, call *api.Call) (any, error) {
 	var in struct {
 		Node  string `json:"node"`
@@ -204,8 +204,6 @@ func (s *Service) relayNodeDrain(ctx context.Context, call *api.Call) (any, erro
 			return nil, err
 		}
 		node.Draining = true
-	case !in.Drain && node.Draining:
-		return nil, core.Fail(gen.ErrConflict)
 	}
 	return s.nodeView(*node), nil
 }
