@@ -175,6 +175,10 @@ func newRig(t *testing.T, options rigOptions) *rig {
 		Log: obs.NewNamedLogger(logs, obs.LevelDebug, "cloud"), Now: clk.Now, Version: "test",
 		Challenge: options.verifier, ExtraHandlers: options.extra, Mail: sender, GrantsHook: options.grantsHook,
 	}
+	// 领域事件的频道与 me-stream 票的键前缀每个测试随机，互不串台。
+	eventsID := fmt.Sprintf("%012x", rand.Uint64N(1<<48))
+	deps.EventsChannel, deps.TicketPrefix = "cloud-test-events:"+eventsID, "cloud-test-ticket:"+eventsID+":"
+	t.Cleanup(func() { wipePrefixes(t, deps.TicketPrefix) })
 	if options.redisRelay {
 		deps.RelayPrefix, deps.IssuedPrefix = randomPrefixes(t)
 	} else {

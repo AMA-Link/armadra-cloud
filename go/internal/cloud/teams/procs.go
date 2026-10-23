@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/quota"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
@@ -77,6 +78,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		s.afterSetQuota(tx, team.TeamID, quota.ForTeam(saas.FreePlan, nil).Concurrent)
+		s.events.MemberChanged(tx, team.TeamID, account.AccountID, events.MemberAdded)
 		return s.record(ctx, tx, call, account.AccountID, team.TeamID, ActionCreate, "team", team.TeamID)
 	})
 	if err != nil {
@@ -214,6 +216,7 @@ func (s *Service) delete(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		s.afterRevokeHosts(tx, hosts, "team_deleted", false)
+		s.events.TeamRemoved(tx, access.Scope.TeamID())
 		return s.record(ctx, tx, call, account.AccountID, access.Scope.TeamID(), ActionDelete, "team", access.Scope.TeamID())
 	})
 	if err != nil {

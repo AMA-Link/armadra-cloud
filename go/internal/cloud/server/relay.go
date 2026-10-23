@@ -9,10 +9,13 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
 	controlredis "github.com/AMA-Link/armadra-cloud/go/internal/control/redis"
+	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
@@ -23,8 +26,7 @@ const RelayPrefix = controlredis.DefaultPrefix
 
 // newRedisControl 建 Redis 版对节点的约定：Plane（Origin = cloud/<实例 id>）、relayctl.Redis 与重放。
 // Plane 每次订阅就绪（包括断线重连）都回调重放，启动时由 Serve 在监听之前再显式跑一次。
-func newRedisControl(ctx context.Context, cfg *config.Config, saasStore saas.Store, client goredis.UniversalClient, logger *obs.Logger, now func() time.Time, deps Deps, out *assembly) (*relayctl.Redis, *relayctl.Sync, error) {
-	instance := newInstanceID()
+func newRedisControl(ctx context.Context, cfg *config.Config, instance string, saasStore saas.Store, client goredis.UniversalClient, logger *obs.Logger, now func() time.Time, deps Deps, out *assembly) (*relayctl.Redis, *relayctl.Sync, error) {
 	var late atomic.Pointer[relayctl.Sync]
 	plane, err := controlredis.New(ctx, controlredis.Options{
 		Options: cluster.Options{
@@ -125,6 +127,60 @@ func (r *presenceRecorder) Flush(ctx context.Context) {
 				r.seen[id] = seen
 			}
 			r.mu.Unlock()
+		}
+	}
+}
+
+// presenceAdapter 把控制面的在线事件接成控制核的 PresenceBus（me-stream 的 sourceOnline / sourceOffline）。
+type presenceAdapter struct{ p control.Presence }
+
+func (a presenceAdapter) Subscribe(fn func(core.PresenceEvent)) func() {
+	return a.p.Subscribe(func(ev control.PresenceEvent) {
+		fn(core.PresenceEvent{
+			Online: ev.Type == control.PresenceSourceOnline, SourceID: ev.SourceID, CoreVersion: ev.CoreVersion, AtMs: ev.AtMs,
+		})
+	})
+}
+
+// accessPreparer 是事件在本机分发之前的准备：把授予 / 成员变动转成连接的可见集合更新（设计 §7.1）。
+//
+//   - grantChanged：受众里在本实例有连接的账号，逐个重算它对这台主机的可见性，作为内部事件 grants.AccessChanged
+//     交给连接的 Watcher（core.InternalEvent，不会进客户端队列）；
+//   - memberChanged：变动的账号（团队删除时是受众里在本实例有连接的账号）的连接整份重算。
+func accessPreparer(c *core.Context, policy *grants.Policy, stream *core.MeStream, log *obs.Logger) func(context.Context, core.Event, *core.Audience) {
+	local := func(audience *core.Audience) []string {
+		if audience == nil {
+			return nil
+		}
+		var out []string
+		for _, id := range stream.Accounts() {
+			if audience.Includes(core.Caller{AccountID: id}) {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	return func(ctx context.Context, event core.Event, audience *core.Audience) {
+		switch e := event.(type) {
+		case events.GrantChanged:
+			for _, id := range local(audience) {
+				_, visible, err := policy.Access(ctx, core.Caller{AccountID: id}, e.SourceID)
+				if err != nil {
+					log.Warn("重算授予变动后的可见性失败", obs.Operation("events.access"), obs.SourceID(e.SourceID), obs.Error(err))
+					continue
+				}
+				c.Events.Deliver(grants.AccessChanged{SourceID: e.SourceID, AccountID: id, Visible: visible}, nil)
+			}
+		case events.MemberChanged:
+			targets := local(audience)
+			if e.AccountID != "" {
+				targets = []string{e.AccountID}
+			}
+			for _, id := range targets {
+				if failed := stream.Resync(ctx, id); failed > 0 {
+					log.Warn("成员变动后整份重算可见性失败", obs.Operation("events.access"), obs.Count(failed))
+				}
+			}
 		}
 	}
 }

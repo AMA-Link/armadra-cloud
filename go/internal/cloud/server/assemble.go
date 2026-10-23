@@ -10,18 +10,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/accounts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/invitations"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mestream"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/platform"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
@@ -48,6 +51,8 @@ type assembly struct {
 	sync    *relayctl.Sync
 	// presence 累计主机上下线的最近在线，serve 周期性落盘。
 	presence *presenceRecorder
+	// stream 是 /v1/me/stream 的 WebSocket 外壳（关闭时先发 1001）。
+	stream *mestream.MeStream
 	// closers 在关闭时按后进先出执行（Plane 的订阅等）。
 	closers []func()
 }
@@ -64,6 +69,7 @@ func newInstanceID() string {
 func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisClient goredis.UniversalClient, logger *obs.Logger, now func() time.Time, deps Deps) (built *assembly, err error) {
 	saasStore := db.SaaS()
 	out := &assembly{}
+	instance := newInstanceID()
 	defer func() {
 		if err != nil {
 			out.close()
@@ -76,7 +82,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 		inner, out.relay = deps.Relay, deps.Relay
 	} else {
 		var syncer *relayctl.Sync
-		redisControl, syncer, err = newRedisControl(ctx, cfg, saasStore, redisClient, logger, now, deps, out)
+		redisControl, syncer, err = newRedisControl(ctx, cfg, instance, saasStore, redisClient, logger, now, deps, out)
 		if err != nil {
 			return nil, err
 		}
@@ -107,6 +113,27 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	}
 	policy := grants.NewPolicy(grants.PolicyOptions{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger})
 	coreCtx.Policy = policy
+	if redisControl != nil {
+		coreCtx.Presence = presenceAdapter{redisControl.Plane().Presence()}
+	}
+	stream := core.NewMeStream(coreCtx)
+	stream.UseTicketStore(&events.Tickets{Client: redisClient, Prefix: deps.TicketPrefix})
+	shell := mestream.New(stream, now, deps.StreamPing)
+	publisher := &events.Publisher{Core: coreCtx, Store: saasStore, Log: logger}
+	hub := events.NewHub(events.HubOptions{
+		Client: redisClient, Channel: deps.EventsChannel, Origin: "cloud/" + instance, Bus: coreCtx.Events,
+		Prepare: accessPreparer(coreCtx, policy, stream, logger),
+		// 事件订阅断线重连后，断线期间的事件丢了：让客户端重连并重新拉取。
+		OnResubscribed: func() { shell.CloseAll(websocket.CloseServiceRestart, "resubscribed") },
+		Log:            logger,
+	})
+	if err := hub.Start(ctx); err != nil {
+		return nil, err
+	}
+	coreCtx.Events.SetPublisher(hub)
+	out.closers = append(out.closers, func() { coreCtx.Events.SetPublisher(nil); hub.Close() })
+	// me-stream 的连接在 HTTP 停收请求之前发 1001 关闭（关闭顺序，设计 §2.1）；这里登记的是兜底，Serve 另有显式的一步。
+	out.stream = shell
 	if cfg.Turnstile != nil {
 		gate, err := challengeGate(cfg, logger, now, deps.Challenge)
 		if err != nil {
@@ -143,13 +170,14 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 
 	handlers := map[string]api.Handler{}
 	for name, handler := range accounts.New(accounts.Options{
-		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer,
+		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer, Stream: stream,
 		Unknown: lockouts, LoginGuard: lockouts.Guard, AppOrigin: cfg.AppOrigin,
 	}).Handlers() {
 		handlers[name] = handler
 	}
 	teamService := teams.New(teams.Options{
 		Core: coreCtx, Store: saasStore, Relay: durable, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+		Events: publisher,
 	})
 	teamService.Register(runner)
 	for name, handler := range teamService.Handlers() {
@@ -157,6 +185,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	}
 	inviteService := invitations.New(invitations.Options{
 		Core: coreCtx, Store: saasStore, Limits: limits, Mail: mailer, RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
+		Events: publisher,
 	})
 	inviteService.Register(runner)
 	for name, handler := range inviteService.Handlers() {
@@ -171,7 +200,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	}
 	grantService := grants.New(grants.Options{
 		Core: coreCtx, Store: saasStore, Limits: limits, Relay: durable, Policy: policy,
-		RequireEmailVerified: cfg.RequireEmailVerified, Log: logger, Hook: deps.GrantsHook,
+		RequireEmailVerified: cfg.RequireEmailVerified, Log: logger, Hook: deps.GrantsHook, Events: publisher,
 	})
 	grantService.Register(runner)
 	for name, handler := range grantService.Handlers() {
@@ -208,6 +237,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/ready", obs.ReadyHandler(probes))
+	mux.Handle(mestream.MeStreamPath, shell)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { serveHealth(w, r, deps.Version) })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if apiServer.Claims(r.URL.Path) {

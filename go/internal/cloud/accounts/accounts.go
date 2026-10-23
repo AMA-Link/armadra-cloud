@@ -32,6 +32,8 @@ type Options struct {
 	Mail *mail.Service
 	// Unknown 存未注册邮箱的失败计数与锁定（多实例共享的 Redis 版）；nil = 进程内计数。
 	Unknown core.UnknownStore
+	// Stream 发 me-stream 的票（me.streamTicket，票存在 Redis，任一实例都能兑换）；nil = 不实现这个过程（答 501）。
+	Stream *core.MeStream
 	// LoginGuard 在 auth.login 里探活共享的失败计数存储（Redis）：不可用答 503，对已注册与未注册的邮箱一视同仁
 	// （失败关闭，设计 §4.3）。nil = 不探活（测试与单进程）。
 	LoginGuard func(ctx context.Context) error
@@ -52,6 +54,7 @@ type Service struct {
 	mail   *mail.Service
 	// unknown 给未注册的邮箱同样计失败、同样锁定：锁定不暴露邮箱有没有注册。
 	unknown core.UnknownAccounts
+	stream  *core.MeStream
 	// guard 见 Options.LoginGuard。
 	guard func(ctx context.Context) error
 
@@ -69,6 +72,7 @@ func New(options Options) *Service {
 		s.onDeviceDecision = s.auditDeviceDecision
 	}
 	s.unknown.Store = options.Unknown
+	s.stream = options.Stream
 	s.guard = options.LoginGuard
 	if s.guard == nil {
 		s.guard = func(context.Context) error { return nil }
@@ -181,6 +185,9 @@ func (s *Service) Handlers() map[string]api.Handler {
 		"me.devices":      s.meDevices,
 		"me.deviceRevoke": s.meDeviceRevoke,
 		"me.spaces":       s.meSpaces,
+	}
+	if s.stream != nil {
+		handlers["me.streamTicket"] = s.meStreamTicket
 	}
 	for name, handler := range handlers {
 		handlers[name] = wrap(handler)

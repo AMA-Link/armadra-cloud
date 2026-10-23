@@ -10,6 +10,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/quota"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
@@ -115,6 +116,8 @@ type Options struct {
 	// RequireEmailVerified 为真时未验证邮箱的账号不能建团队（设计 §4.3）。
 	RequireEmailVerified bool
 	Log                  *obs.Logger
+	// Events 在提交之后发 memberChanged（成员加入、离开、改角色，团队删除）；nil = 不发。
+	Events *events.Publisher
 }
 
 // Service 是团队服务。
@@ -124,6 +127,7 @@ type Service struct {
 	relay    relayctl.Control
 	verified bool
 	log      *obs.Logger
+	events   *events.Publisher
 }
 
 // New 建团队服务。
@@ -132,7 +136,7 @@ func New(options Options) *Service {
 	if log == nil {
 		log = obs.Nop()
 	}
-	return &Service{c: options.Core, store: options.Store, relay: options.Relay, verified: options.RequireEmailVerified, log: log}
+	return &Service{c: options.Core, store: options.Store, relay: options.Relay, verified: options.RequireEmailVerified, log: log, events: options.Events}
 }
 
 func (s *Service) tenant() string { return s.c.TenantID }

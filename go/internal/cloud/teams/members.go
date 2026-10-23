@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/quota"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
@@ -122,6 +123,7 @@ func (s *Service) memberRole(ctx context.Context, call *api.Call) (any, error) {
 			if err := tx.Teams().SetRole(ctx, access.Scope, target.AccountID, in.Role); err != nil {
 				return err
 			}
+			s.events.MemberChanged(tx, access.Scope.TeamID(), target.AccountID, events.MemberRoleChanged)
 			// 不再是 admin 的人，发出的待处理邀请随之撤销（Join 时也会核对邀请人仍是 admin 以上）。
 			if in.Role != teamscope.Admin && in.Role != teamscope.Owner {
 				if _, err := tx.Invitations().RevokeByInviter(ctx, access.Scope, target.AccountID, account.AccountID, s.nowMs()); err != nil {
@@ -227,7 +229,11 @@ func (s *Service) removeMember(ctx context.Context, tx saas.Tx, access Access, a
 	if err := s.revokeMember(ctx, tx, access, actorID, target.AccountID, true); err != nil {
 		return err
 	}
-	return tx.Teams().RemoveMember(ctx, access.Scope, target.AccountID)
+	if err := tx.Teams().RemoveMember(ctx, access.Scope, target.AccountID); err != nil {
+		return err
+	}
+	s.events.MemberChanged(tx, access.Scope.TeamID(), target.AccountID, events.MemberRemoved)
+	return nil
 }
 
 // memberRemove 是 teams.memberRemove（admin）：admin 不能移除 owner。
@@ -331,6 +337,8 @@ func (s *Service) transferOwnership(ctx context.Context, call *api.Call) (any, e
 		if err := tx.Teams().SetRole(ctx, access.Scope, account.AccountID, teamscope.Admin); err != nil {
 			return err
 		}
+		s.events.MemberChanged(tx, access.Scope.TeamID(), target.AccountID, events.MemberRoleChanged)
+		s.events.MemberChanged(tx, access.Scope.TeamID(), account.AccountID, events.MemberRoleChanged)
 		if err := s.revokeMember(ctx, tx, access, account.AccountID, account.AccountID, false); err != nil {
 			return err
 		}
