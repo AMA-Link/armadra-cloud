@@ -17,6 +17,10 @@ const JobRevoke = "relay.revoke"
 // JobKick 是 relay.kick：踢人命令发布失败时兜底，把同一条命令再发一次（命令幂等）。
 const JobKick = "relay.kick"
 
+// MaxAttempts 是 relay.revoke / relay.kick 的 max_attempts：实际上不设上限（退避封顶 1 小时，约 40 天），
+// 撤销与踢人是安全动作，不能因为 Redis 持续故障一小时就判失败；Redis 恢复后下一次重试即送达，另有定时重放（Sync）兜底。
+const MaxAttempts = 1000
+
 // retryDelay 是兜底作业的首次到期延后：给正常路径留出时间先做完（成功后会取消作业）。
 const retryDelay = 2 * time.Second
 
@@ -55,7 +59,7 @@ func RegisterJobs(runner *jobs.Runner, redis *Redis) {
 // 就一定有兜底作业；Redis 写成功后由调用方取消，失败则由作业运行器退避重试。
 func enqueueRevoke(ctx context.Context, tx saas.Tx, tenantID, jti string, expMs, nowMs int64) error {
 	payload, _ := json.Marshal(revokePayload{JTI: jti, ExpMs: expMs})
-	_, _, err := tx.Jobs().Enqueue(ctx, tenantID, saas.NewJob{Kind: JobRevoke, Payload: payload, RunAtMs: nowMs + retryDelay.Milliseconds(), DedupeKey: jti}, nowMs)
+	_, _, err := tx.Jobs().Enqueue(ctx, tenantID, saas.NewJob{Kind: JobRevoke, Payload: payload, RunAtMs: nowMs + retryDelay.Milliseconds(), DedupeKey: jti, MaxAttempts: MaxAttempts}, nowMs)
 	return err
 }
 
@@ -79,7 +83,7 @@ func enqueueKick(ctx context.Context, store saas.Store, tenantID string, filter 
 	payload, _ := json.Marshal(kickPayload{SourceID: filter.SourceID, Subject: filter.Subject, SubjectPrefix: filter.SubjectPrefix, DeviceID: filter.DeviceID, Reason: reason})
 	key := filter.SourceID + "|" + filter.Subject + "|" + filter.SubjectPrefix + "|" + filter.DeviceID
 	return store.Tx(context.WithoutCancel(ctx), func(tx saas.Tx) error {
-		_, _, err := tx.Jobs().Enqueue(ctx, tenantID, saas.NewJob{Kind: JobKick, Payload: payload, RunAtMs: nowMs + retryDelay.Milliseconds(), DedupeKey: key}, nowMs)
+		_, _, err := tx.Jobs().Enqueue(ctx, tenantID, saas.NewJob{Kind: JobKick, Payload: payload, RunAtMs: nowMs + retryDelay.Milliseconds(), DedupeKey: key, MaxAttempts: MaxAttempts}, nowMs)
 		return err
 	})
 }
@@ -95,7 +99,7 @@ func RevokeFailureEnqueuer(store saas.Store, tenantID string, now Clock, log fun
 		// 调用方的 ctx 可能已取消（请求结束）：作业入库用独立的上下文，别因此丢掉兜底。
 		detached := context.WithoutCancel(ctx)
 		err := store.Tx(detached, func(tx saas.Tx) error {
-			_, _, err := tx.Jobs().Enqueue(detached, tenantID, saas.NewJob{Kind: JobRevoke, Payload: payload, RunAtMs: nowMs, DedupeKey: jti}, nowMs)
+			_, _, err := tx.Jobs().Enqueue(detached, tenantID, saas.NewJob{Kind: JobRevoke, Payload: payload, RunAtMs: nowMs, DedupeKey: jti, MaxAttempts: MaxAttempts}, nowMs)
 			return err
 		})
 		if err != nil && log != nil {

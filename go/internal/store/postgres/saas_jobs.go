@@ -29,10 +29,10 @@ func (r jobRepo) Enqueue(ctx context.Context, tenantID string, job saas.NewJob, 
 	}
 	var id int64
 	err := r.q.QueryRow(ctx,
-		`INSERT INTO jobs (tenant_id, kind, payload, dedupe_key, slot_key, run_at_ms, created_at_ms)
-		 VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7)
+		`INSERT INTO jobs (tenant_id, kind, payload, dedupe_key, slot_key, run_at_ms, created_at_ms, max_attempts)
+		 VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7, COALESCE(NULLIF($8::integer, 0), 8))
 		 ON CONFLICT DO NOTHING RETURNING job_id`,
-		tenantID, job.Kind, payload, job.DedupeKey, job.SlotKey, job.RunAtMs, nowMs).Scan(&id)
+		tenantID, job.Kind, payload, job.DedupeKey, job.SlotKey, job.RunAtMs, nowMs, job.MaxAttempts).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, false, nil
 	}

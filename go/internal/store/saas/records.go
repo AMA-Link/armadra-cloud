@@ -83,6 +83,8 @@ type NewJob struct {
 	DedupeKey string
 	// SlotKey：定时作业的时间槽，完成后也不能再插。
 	SlotKey string
+	// MaxAttempts 为 0 用库的缺省（8）；撤销、踢人这类安全动作放宽。
+	MaxAttempts int
 }
 
 // Job 是领到手的作业。

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
@@ -75,3 +76,59 @@ func TestSyncQuotaFinalWriteIsVerified(t *testing.T) {
 	}
 }
 
+// relay.revoke / relay.kick 作业放宽 max_attempts；定时重放从 PostgreSQL 补回撤销，已有的键不覆盖。
+func TestRevokeJobsAreNotCappedAndReplayHealsRevocations(t *testing.T) {
+	p := newPartialEnv(t, writesToRevoked)
+	node, _ := p.newNode("node-1")
+	exp := inHour()
+	if err := p.d.IndexIssued(ctx, relayctl.Issued{Subject: "a1", SourceID: "s1", DeviceID: "d1", JTI: "r.lost", ExpMs: exp}); err != nil {
+		t.Fatal(err)
+	}
+	// Redis 只拒写、订阅与读正常：撤销落了 PostgreSQL，Redis 没写成。
+	p.fail.Store(true)
+	if _, err := p.d.RevokeWhere(ctx, relayctl.Filter{JTI: "r.lost"}); err == nil {
+		t.Fatal("Redis 写失败要报错")
+	}
+	var maxAttempts int
+	if err := p.db.Pool().QueryRow(ctx, "SELECT max_attempts FROM jobs WHERE kind = $1 AND dedupe_key = 'r.lost'", relayctl.JobRevoke).Scan(&maxAttempts); err != nil || maxAttempts != relayctl.MaxAttempts {
+		t.Fatalf("relay.revoke 的 max_attempts：%d %v", maxAttempts, err)
+	}
+	if relayctl.MaxAttempts < 100 {
+		t.Fatalf("上限应远大于默认的 8：%d", relayctl.MaxAttempts)
+	}
+	// 踢人作业同样放宽。
+	p2 := newPartialEnv(t, func(_, name, _ string) bool { return name == "publish" })
+	if err := p2.d.IndexIssued(ctx, relayctl.Issued{Subject: "a1", SourceID: "s1", DeviceID: "d1", JTI: "r.k", ExpMs: exp}); err != nil {
+		t.Fatal(err)
+	}
+	p2.fail.Store(true)
+	p2.d.Revocations().DeviceRevoked(ctx, "a1", "d1")
+	if err := p2.db.Pool().QueryRow(ctx, "SELECT max_attempts FROM jobs WHERE kind = $1", relayctl.JobKick).Scan(&maxAttempts); err != nil || maxAttempts != relayctl.MaxAttempts {
+		t.Fatalf("relay.kick 的 max_attempts：%d %v", maxAttempts, err)
+	}
+
+	// 作业运行器没来得及（或已用尽）：故障恢复后，定时重放把撤销补回 Redis。
+	p.fail.Store(false)
+	if ok, _ := node.Tokens().IsRevoked(ctx, "r.lost"); ok {
+		t.Fatal("重放前节点不该知道")
+	}
+	// 已有的键不覆盖：先给另一枚令牌手工写一个特殊到期，重放后不变。
+	keep := p.prefix + "revoked:r.keep"
+	if err := p.d.IndexIssued(ctx, relayctl.Issued{Subject: "a1", SourceID: "s1", DeviceID: "d1", JTI: "r.keep", ExpMs: exp}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.d.RevokeWhere(ctx, relayctl.Filter{JTI: "r.keep"}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := p.admin.PTTL(ctx, keep).Result()
+	if err := p.admin.PExpire(ctx, keep, 30*time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	s := &relayctl.Sync{Store: p.st, Tenant: "cloud", Redis: p.rc, ReplayEvery: 50 * time.Millisecond}
+	stop := s.StartRevocationReplay(ctx)
+	defer stop()
+	waitFor(t, "定时重放把撤销送到节点", func() bool { ok, _ := node.Tokens().IsRevoked(ctx, "r.lost"); return ok })
+	if after, _ := p.admin.PTTL(ctx, keep).Result(); after > 30*time.Minute || after <= 0 || before <= 0 {
+		t.Fatalf("已有的键不该被 NX 覆盖：before %v after %v", before, after)
+	}
+}

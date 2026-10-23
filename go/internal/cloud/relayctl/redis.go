@@ -563,5 +563,43 @@ func (r *Redis) ReplayRevoke(ctx context.Context, jti string, expMs int64) error
 	return sanitize(r.plane.Tokens().Revoke(ctx, jti, time.UnixMilli(expMs)))
 }
 
+// ReplayMissing 把 Redis 里缺的撤销补上：键已在的不动（不覆盖到期）；缺的走 ReplayRevoke，也就是写键并广播——
+// 订阅健康的节点只靠广播和重新就绪时的全量重读知道撤销，而原先那次写失败时广播也没发出去。
+// 逐条尝试，答补了几条与第一个错误。
+func (r *Redis) ReplayMissing(ctx context.Context, revoked []Revoked) (replayed int, err error) {
+	nowMs := r.nowMs()
+	for start := 0; start < len(revoked); start += batchSize {
+		batch := revoked[start:min(start+batchSize, len(revoked))]
+		cmds, perr := r.client.Pipelined(ctx, func(pipe goredis.Pipeliner) error {
+			for _, token := range batch {
+				pipe.Exists(ctx, r.plane.Prefix()+"revoked:"+token.JTI)
+			}
+			return nil
+		})
+		if perr != nil && len(cmds) != len(batch) {
+			return replayed, sanitize(perr)
+		}
+		for i, cmd := range cmds {
+			if cmd.Err() != nil {
+				if err == nil {
+					err = sanitize(cmd.Err())
+				}
+				continue
+			}
+			if cmd.(*goredis.IntCmd).Val() > 0 || batch[i].ExpMs <= nowMs {
+				continue
+			}
+			if rerr := r.ReplayRevoke(ctx, batch[i].JTI, batch[i].ExpMs); rerr != nil {
+				if err == nil {
+					err = rerr
+				}
+				continue
+			}
+			replayed++
+		}
+	}
+	return replayed, err
+}
+
 // Plane 是包装的控制面（装配方订阅在线事件用）。
 func (r *Redis) Plane() *controlredis.Plane { return r.plane }

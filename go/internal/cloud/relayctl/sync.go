@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/quota"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -19,6 +20,9 @@ var ErrQuotaUnstable = errors.New("团队额度在重放期间持续变化，重
 // quotaWriteRounds 是额度重写最多写几轮；之后还有一次只比对的读。
 const quotaWriteRounds = 3
 
+// DefaultReplayEvery 是撤销定时重放的间隔。
+const DefaultReplayEvery = 10 * time.Minute
+
 // Sync 把 PostgreSQL 里不能丢的状态重写进 Redis（设计 §7.2）：
 //
 //   - 撤销表：未到期的 relay_revoked_tokens 全部 SET … PXAT … NX；
@@ -33,6 +37,8 @@ type Sync struct {
 	Redis  *Redis
 	Now    Clock
 	Log    *obs.Logger
+	// ReplayEvery 是撤销定时重放的间隔；缺省 DefaultReplayEvery。
+	ReplayEvery time.Duration
 
 	syncing atomic.Int32
 }
@@ -138,4 +144,56 @@ func sameQuotas(a, b TeamQuotas) bool {
 		}
 	}
 	return true
+}
+
+// ReplayRevocations 把 PostgreSQL 里未到期而 Redis 里缺的撤销补回去（写键并广播；已有的键不动、不覆盖到期）。
+// 兜住「Redis 只拒写、订阅正常」超过兜底作业重试窗口的情形：订阅没有断，就绪回调不会触发全量重放。
+func (s *Sync) ReplayRevocations(ctx context.Context) error {
+	nowMs := s.nowMs()
+	var revoked []Revoked
+	err := s.Store.Tx(ctx, func(tx saas.Tx) error {
+		revoked = nil
+		rows, err := tx.Issued().Revoked(ctx, nowMs)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			revoked = append(revoked, Revoked{JTI: row.JTI, ExpMs: row.ExpMs})
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	replayed, err := s.Redis.ReplayMissing(ctx, revoked)
+	if replayed > 0 && s.Log != nil {
+		s.Log.Warn("定时重放把缺失的撤销补回 Redis", obs.Operation("relayctl.replay"), obs.Count(replayed))
+	}
+	return err
+}
+
+// StartRevocationReplay 起定时重放（每 ReplayEvery 一次），答停止函数（等协程退出）。失败只记警告，下一轮再来。
+func (s *Sync) StartRevocationReplay(parent context.Context) (stop func()) {
+	every := s.ReplayEvery
+	if every <= 0 {
+		every = DefaultReplayEvery
+	}
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.ReplayRevocations(ctx); err != nil && ctx.Err() == nil && s.Log != nil {
+					s.Log.Warn("定时重放撤销失败，下一轮再试", obs.Operation("relayctl.replay"), obs.Error(err))
+				}
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
 }
