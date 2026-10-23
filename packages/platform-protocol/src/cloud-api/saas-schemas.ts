@@ -185,7 +185,7 @@ export const createInvitationInputSchema = z.discriminatedUnion("kind", [
     role: grantRoleSchema,
     /** 工作空间 id 列表；缺省 = 整台主机。 */
     workspaceIds: z.array(z.string().min(1).max(128)).max(64).optional(),
-    /** 缺省 7 天，最长 30 天。 */
+    /** 接受后授予的到期（不是邀请自身的有效期，那恒为 7 天）：必须在将来、至多 30 天；缺省 = 授予不过期。 */
     expiresAtMs: z.number().int().optional(),
   }),
 ]);

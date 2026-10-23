@@ -372,6 +372,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - `invitations.resend`：换新令牌、重新计 7 天、旧链接作废，按邀请限流。
 - **`invitations.preview`**（协议包 0.11.0 起，只加不改）：`POST /v1/invitations/{invitationId}/preview`，令牌放请求体，答复与错误同 `invitations.get`。`invitations.get` 的 `?token=` 会进代理与访问日志，**已弃用**，客户端应改用 `preview`；服务端暂保留 `get` 以兼容。
 - `invitations.list` 的 `box = sent`（缺省）列自己能管的邀请，`received` 列发给自己邮箱的待处理邀请。
+- **主机邀请的两个有效期**（SaaS M1 实现）：邀请自身恒为 7 天（`invitations.expiresAtMs`，只管多久内可接受，`resend` 重新计）；创建入参里的 `expiresAtMs` 是接受后**授予的到期**（必须在将来、至多 30 天；不给 = 授予不过期）。接受时授予的到期已过按 `410 invitation_expired` 答。团队主机上，受邀者不是团队 owner / admin / member 时接受后成为 guest 成员，所以创建时 `workspaceIds` 不能为空（`400 bad_request`）；接受答 `{ sourceId }`，团队主机另带 `teamId`。已有同主体的有效授予时合并进那一条（角色取高、范围并集、到期取晚）。
 
 <!-- rpc:begin contract=§22 -->
 
