@@ -176,11 +176,8 @@ func TestLinkConfigInvariant(t *testing.T) {
 
 // 审查 P1-4：节点令牌只在升级时验不够——撤销之后已建立的连接要断，到期也要断。
 func TestLinkClosesWhenNodeTokenRevokedOrExpired(t *testing.T) {
-	old := internodeCheckEvery
-	internodeCheckEvery = 50 * time.Millisecond
-	t.Cleanup(func() { internodeCheckEvery = old })
 	r := newRig(t)
-	a := r.start("a", nil)
+	a := r.start("a", func(c *Config) { c.InternodeCheckEvery = 50 * time.Millisecond })
 	jti := "n.b." + randomHex(6)
 	b := r.start("b", func(c *Config) { c.NodeToken = r.nodeToken("b", relayenv.Claims{"jti": jti}) })
 	now := time.Now().Unix()
@@ -254,5 +251,15 @@ func TestLinkRefusesInsecurePeerURL(t *testing.T) {
 	l := newLinks("self", "token", false, r.admin, r.prefix, obs.Nop(), &internodeMetrics{})
 	if _, err := l.connect("peer"); err == nil || !strings.Contains(err.Error(), "wss") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// 撤销复查间隔随节点配置走、创建后不再改：缺省 5 秒，Config 可缩短（原先是被测试改写的包级变量）。
+func TestInternodeCheckEveryComesFromConfig(t *testing.T) {
+	if s := newInternodeServer(nil, nil, obs.Nop(), &internodeMetrics{}, 0); s.checkEvery != defaultInternodeCheckEvery {
+		t.Fatalf("缺省：%v", s.checkEvery)
+	}
+	if s := newInternodeServer(nil, nil, obs.Nop(), &internodeMetrics{}, 50*time.Millisecond); s.checkEvery != 50*time.Millisecond {
+		t.Fatalf("配置：%v", s.checkEvery)
 	}
 }
