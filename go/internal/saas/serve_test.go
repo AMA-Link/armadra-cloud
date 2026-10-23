@@ -312,8 +312,9 @@ func TestShutdownDrainsFirst(t *testing.T) {
 	core := r.env.StartCore(t, a.URL, relayenv.CoreOptions{Capabilities: []string{"e2e"}})
 	eventually(t, "路由", func() bool { t2, _ := a.Plane.Hub.Lookup(ctx, r.env.SourceID); return t2 != nil })
 	a.stop()
-	goaways := core.Goaways()
-	if len(goaways) == 0 || goaways[0] != "rebalance" {
-		t.Fatalf("下线先发 GOAWAY rebalance：%v", goaways)
-	}
+	// 假 core 在自己的协程里记帧：等它记下。
+	eventually(t, "下线先发 GOAWAY rebalance", func() bool {
+		goaways := core.Goaways()
+		return len(goaways) > 0 && goaways[0] == "rebalance"
+	})
 }
