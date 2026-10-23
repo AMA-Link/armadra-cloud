@@ -83,8 +83,36 @@ func NewAccessRevoked(sourceID string) AccessRevoked {
 	return AccessRevoked{Type: "accessRevoked", SourceID: sourceID}
 }
 
-// Audience 指定事件只发给某条链接的访客。
-type Audience struct{ LinkID string }
+// Audience 指定事件的受众：LinkID 非空只发给那条链接的访客；AccountIDs 非空只发给这些账号（SaaS 的团队 / 邀请 /
+// 授予事件，受众由发事件的一方在提交后算好）。两者都空等于没有受众限制（按主机可见性过滤）。
+type Audience struct {
+	LinkID     string
+	AccountIDs []string
+}
+
+// Includes 报告调用方是否在受众里。
+func (a *Audience) Includes(caller Caller) bool {
+	if a.LinkID != "" {
+		return caller.LinkID == a.LinkID
+	}
+	if len(a.AccountIDs) > 0 {
+		if caller.AccountID == "" {
+			return false
+		}
+		for _, id := range a.AccountIDs {
+			if id == caller.AccountID {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// EventPublisher 接管 EventBus.Emit：SaaS 的多实例把事件发给其它实例，再回头调 Deliver 在本机分发。
+type EventPublisher interface {
+	Publish(event Event, audience *Audience)
+}
 
 // EventBus 是事件总线：Emit 同步地调每个订阅者，订阅者出错（panic）不影响其它订阅者。
 //
@@ -92,9 +120,10 @@ type Audience struct{ LinkID string }
 // 扇出的代价与当前订阅者数成正比（不看历史订阅编号）。同步订阅者不得阻塞（会拖住发事件的
 // 一方）；要做网络写的（me-stream 把事件推给客户端）用 SubscribeBuffered。
 type EventBus struct {
-	mu   sync.Mutex
-	next uint64
-	subs atomic.Pointer[[]busSub]
+	mu        sync.Mutex
+	next      uint64
+	subs      atomic.Pointer[[]busSub]
+	publisher atomic.Pointer[EventPublisher]
 }
 
 type busSub struct {
@@ -105,8 +134,27 @@ type busSub struct {
 // NewEventBus 建一个总线。
 func NewEventBus() *EventBus { return &EventBus{} }
 
-// Emit 发一个事件；给了 audience 就只发给那条链接的访客。
+// SetPublisher 让 Emit 经 publisher 分发（nil = 取消）。SaaS 装配时设：事件先到其它实例，本机的分发
+// 由 publisher 回头调 Deliver。
+func (b *EventBus) SetPublisher(publisher EventPublisher) {
+	if publisher == nil {
+		b.publisher.Store(nil)
+		return
+	}
+	b.publisher.Store(&publisher)
+}
+
+// Emit 发一个事件；给了 audience 就只发给那里面的连接。设了 publisher 时交给它（它负责本机与别的实例）。
 func (b *EventBus) Emit(event Event, audience *Audience) {
+	if p := b.publisher.Load(); p != nil {
+		(*p).Publish(event, audience)
+		return
+	}
+	b.Deliver(event, audience)
+}
+
+// Deliver 只在本机分发（不经 publisher）：别的实例发来的事件、publisher 自己回头分发都走这里。
+func (b *EventBus) Deliver(event Event, audience *Audience) {
 	snapshot := b.subs.Load()
 	if snapshot == nil {
 		return

@@ -10,6 +10,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
@@ -74,6 +75,8 @@ type Options struct {
 	Log                  *obs.Logger
 	// Hook 给测试在断言签发的两个交错点停住（"signed"：令牌已签、索引未登记；"indexed"：索引已登记、复核之前）。生产不设。
 	Hook func(stage string)
+	// Events 在提交之后发 grantChanged；nil = 不发。
+	Events *events.Publisher
 }
 
 // Service 是授予与断言服务。
@@ -87,6 +90,7 @@ type Service struct {
 	verified bool
 	log      *obs.Logger
 	hook     func(stage string)
+	events   *events.Publisher
 }
 
 // New 建授予服务。
@@ -97,7 +101,7 @@ func New(options Options) *Service {
 	}
 	return &Service{
 		c: options.Core, store: options.Store, limits: options.Limits, relay: options.Relay, policy: options.Policy,
-		sources: core.NewSources(options.Core), verified: options.RequireEmailVerified, log: log, hook: options.Hook,
+		sources: core.NewSources(options.Core), verified: options.RequireEmailVerified, log: log, hook: options.Hook, events: options.Events,
 	}
 }
 
@@ -539,6 +543,7 @@ func (s *Service) create(ctx context.Context, call *api.Call) (any, error) {
 		if err := tx.Grants().Insert(ctx, s.tenant(), grant); err != nil {
 			return err
 		}
+		s.events.GrantChanged(tx, grant)
 		if err := s.scheduleExpiry(ctx, tx, grant.GrantID, grant.ExpiresAtMs, nowMs); err != nil {
 			return err
 		}
@@ -741,6 +746,7 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 			}
 		}
 		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_changed")
+		s.events.GrantChanged(tx, g)
 		if err := s.record(ctx, tx, call.IP, saas.ActorAccount, account.AccountID, h.TeamID, g.SourceID, ActionUpdate, "grant", g.GrantID); err != nil {
 			return err
 		}
@@ -791,6 +797,7 @@ func (s *Service) revoke(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_revoked")
+		s.events.GrantChanged(tx, g)
 		return s.record(ctx, tx, call.IP, saas.ActorAccount, account.AccountID, h.TeamID, g.SourceID, ActionRevoke, "grant", g.GrantID)
 	})
 	if err != nil {
@@ -845,6 +852,7 @@ func (s *Service) expire(ctx context.Context, job saas.Job) error {
 			return err
 		}
 		s.revokeAccess(tx, g.SourceID, narrowedAccounts(before, after), "grant_expired")
+		s.events.GrantChanged(tx, *g)
 		return s.record(ctx, tx, "", saas.ActorSystem, "", g.TeamID, g.SourceID, ActionExpire, "grant", g.GrantID)
 	})
 }

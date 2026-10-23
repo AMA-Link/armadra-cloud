@@ -87,6 +87,8 @@ type rigOptions struct {
 	redisRelay bool
 	// redisHook 挂在 Redis 客户端上（注入故障）。
 	redisHook goredis.Hook
+	// streamPing 缩短 me-stream 的心跳与可见集合兜底重算间隔。
+	streamPing time.Duration
 	// flushEvery 缩短设备最近使用与主机最近在线的落盘间隔。
 	flushEvery time.Duration
 	// incidentEvery 缩短事故开关按库同步的间隔。
@@ -180,12 +182,17 @@ func newRig(t *testing.T, options rigOptions) *rig {
 		Challenge: options.verifier, ExtraHandlers: options.extra, Mail: sender, GrantsHook: options.grantsHook,
 		IncidentEvery: options.incidentEvery,
 	}
+	// 领域事件的频道与 me-stream 票的键前缀每个测试随机，互不串台。
+	eventsID := fmt.Sprintf("%012x", rand.Uint64N(1<<48))
+	deps.EventsChannel, deps.TicketPrefix = "cloud-test-events:"+eventsID, "cloud-test-ticket:"+eventsID+":"
+	t.Cleanup(func() { wipePrefixes(t, deps.TicketPrefix) })
 	if options.redisRelay {
 		deps.RelayPrefix, deps.IssuedPrefix = randomPrefixes(t)
 	} else {
 		deps.Relay = relayctl.NewMemory(clk.Now)
 	}
 	deps.RedisHook = options.redisHook
+	deps.StreamPing = options.streamPing
 	if options.flushEvery > 0 {
 		deps.FlushEvery = options.flushEvery
 	}

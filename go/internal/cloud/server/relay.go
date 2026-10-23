@@ -9,10 +9,13 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
 	controlredis "github.com/AMA-Link/armadra-cloud/go/internal/control/redis"
+	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
@@ -23,8 +26,7 @@ const RelayPrefix = controlredis.DefaultPrefix
 
 // newRedisControl 建 Redis 版对节点的约定：Plane（Origin = cloud/<实例 id>）、relayctl.Redis 与重放。
 // Plane 每次订阅就绪（包括断线重连）都回调重放，启动时由 Serve 在监听之前再显式跑一次。
-func newRedisControl(ctx context.Context, cfg *config.Config, saasStore saas.Store, client goredis.UniversalClient, logger *obs.Logger, now func() time.Time, deps Deps, out *assembly) (*relayctl.Redis, *relayctl.Sync, error) {
-	instance := newInstanceID()
+func newRedisControl(ctx context.Context, cfg *config.Config, instance string, saasStore saas.Store, client goredis.UniversalClient, logger *obs.Logger, now func() time.Time, deps Deps, out *assembly) (*relayctl.Redis, *relayctl.Sync, error) {
 	var late atomic.Pointer[relayctl.Sync]
 	plane, err := controlredis.New(ctx, controlredis.Options{
 		Options: cluster.Options{
@@ -127,4 +129,87 @@ func (r *presenceRecorder) Flush(ctx context.Context) {
 			r.mu.Unlock()
 		}
 	}
+}
+
+// presenceAdapter 把控制面的在线事件接成控制核的 PresenceBus（me-stream 的 sourceOnline / sourceOffline）。
+type presenceAdapter struct{ p control.Presence }
+
+func (a presenceAdapter) Subscribe(fn func(core.PresenceEvent)) func() {
+	return a.p.Subscribe(func(ev control.PresenceEvent) {
+		fn(core.PresenceEvent{
+			Online: ev.Type == control.PresenceSourceOnline, SourceID: ev.SourceID, CoreVersion: ev.CoreVersion, AtMs: ev.AtMs,
+		})
+	})
+}
+
+// accessPreparer 是事件在本机分发之前的准备：把授予 / 成员变动转成连接的可见集合更新（设计 §7.1）。
+//
+//   - grantChanged：受众里在本实例有连接的账号，逐个重算它对这台主机的可见性，作为内部事件 grants.AccessChanged
+//     交给连接的 Watcher（core.InternalEvent，不会进客户端队列）；
+//   - memberChanged：变动的账号（团队删除时是受众里在本实例有连接的账号）的连接整份重算。
+func accessPreparer(c *core.Context, policy *grants.Policy, stream *core.MeStream, log *obs.Logger) func(context.Context, core.Event, *core.Audience) {
+	local := func(audience *core.Audience) []string {
+		if audience == nil {
+			return nil
+		}
+		var out []string
+		for _, id := range stream.Accounts() {
+			if audience.Includes(core.Caller{AccountID: id}) {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	return func(ctx context.Context, event core.Event, audience *core.Audience) {
+		switch e := event.(type) {
+		case events.GrantChanged:
+			// 可见性不等于有效权限非空（团队 owner / admin 看得到全部主机），所以逐账号走 Policy.Access，
+			// 而不是用 AccessBases 合成；每个账号单独超时、有限并发，一个慢账号拖不垮整批。
+			forEach(local(audience), func(id string) {
+				actx, cancel := context.WithTimeout(ctx, prepareEach)
+				defer cancel()
+				_, visible, err := policy.Access(actx, core.Caller{AccountID: id}, e.SourceID)
+				if err != nil {
+					log.Warn("重算授予变动后的可见性失败", obs.Operation("events.access"), obs.SourceID(e.SourceID), obs.Error(err))
+					return
+				}
+				c.Events.Deliver(grants.AccessChanged{SourceID: e.SourceID, AccountID: id, Visible: visible}, nil)
+			})
+		case events.MemberChanged:
+			targets := local(audience)
+			if e.AccountID != "" {
+				targets = []string{e.AccountID}
+			}
+			forEach(targets, func(id string) {
+				actx, cancel := context.WithTimeout(ctx, prepareEach)
+				defer cancel()
+				if failed := stream.Resync(actx, id); failed > 0 {
+					log.Warn("成员变动后整份重算可见性失败", obs.Operation("events.access"), obs.Count(failed))
+				}
+			})
+		}
+	}
+}
+
+// prepareEach 是准备阶段每个账号的超时；prepareWorkers 是同时处理的账号数。
+const (
+	prepareEach    = 3 * time.Second
+	prepareWorkers = 8
+	// resubscribeSpread 是订阅断线重连后关闭 me-stream 连接的随机错开时长，避免客户端同一刻重连重拉。
+	resubscribeSpread = 10 * time.Second
+)
+
+// forEach 对 ids 有限并发地执行 fn，全部做完才返回。
+func forEach(ids []string, fn func(string)) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, prepareWorkers)
+	for _, id := range ids {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			fn(id)
+		}()
+	}
+	wg.Wait()
 }

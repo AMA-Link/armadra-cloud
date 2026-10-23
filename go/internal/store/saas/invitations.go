@@ -71,7 +71,7 @@ type InvitationRepo interface {
 	PendingSeats(ctx context.Context, scope TeamScope, nowMs int64) (Seats, error)
 	// RevokeByInviter 把某人在团队里发出的待处理邀请改成 revoked（此人被移除或不再是 admin 时），
 	// 答撤销了几条；decidedBy 是操作者。
-	RevokeByInviter(ctx context.Context, scope TeamScope, inviterID, decidedBy string, nowMs int64) (int, error)
+	RevokeByInviter(ctx context.Context, scope TeamScope, inviterID, decidedBy string, nowMs int64) ([]Invitation, error)
 	// Decide 置终态（accepted、declined、revoked）并记决定者与时刻。
 	Decide(ctx context.Context, tenantID, invitationID, state, decidedBy string, nowMs int64) error
 	// Reissue 重发：邀请回到 pending（已过期的也可以重发）、换新的有效期、清令牌哈希

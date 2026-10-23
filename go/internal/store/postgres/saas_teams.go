@@ -79,6 +79,14 @@ func (r reader) Entitlement(ctx context.Context, tenantID, spaceKind, spaceID st
 	return &e, err
 }
 
+func (r reader) TeamStaffIDs(ctx context.Context, tenantID, teamID string) ([]string, error) {
+	return list(ctx, r.q, func(s scanner) (string, error) {
+		var id string
+		return id, s.Scan(&id)
+	}, "SELECT account_id FROM team_members WHERE tenant_id = $1 AND team_id = $2 AND role IN ('owner', 'admin') ORDER BY account_id",
+		tenantID, teamID)
+}
+
 func (r reader) TeamEntitlements(ctx context.Context, tenantID string) ([]saas.TeamEntitlement, error) {
 	return list(ctx, r.q, func(s scanner) (saas.TeamEntitlement, error) {
 		var e saas.TeamEntitlement

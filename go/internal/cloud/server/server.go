@@ -64,6 +64,11 @@ type Deps struct {
 	GrantsHook func(stage string)
 	// RedisHook 挂在 Redis 客户端上（测试注入故障：让命令失败）；生产不设。
 	RedisHook goredis.Hook
+	// StreamPing 缩短 me-stream 的服务端 ping 与会话复核间隔（缺省 30 秒；测试用）。
+	StreamPing time.Duration
+	// TicketPrefix 与 EventsChannel 换掉 me-stream 票的键前缀和领域事件的频道（缺省 cloud:ticket: 与 cloud:events；测试用随机值隔离）。
+	TicketPrefix  string
+	EventsChannel string
 	// FlushEvery 缩短设备最近使用与主机最近在线的落盘间隔（缺省 5 分钟；测试用）。
 	FlushEvery time.Duration
 	// Relay 用内存实现代替 Redis 实现（测试断言发出的撤销与节点命令）；生产不设。
@@ -214,6 +219,8 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 		_ = httpServer.Shutdown(shutdown)
 		<-serveDone
 	})
+	// me-stream 的连接被 WebSocket 接管，Shutdown 不会等它们：先以 1001 关闭，客户端重连到别的实例。
+	undo.push(assembly.stream.Close)
 
 	var metricsServer *http.Server
 	if cfg.MetricsListen != "" {

@@ -126,6 +126,7 @@ func (s *Service) accessRevoke(ctx context.Context, call *api.Call) (any, error)
 			return err
 		}
 		s.revokeAccess(tx, sourceID, narrowedAccounts(before, after), "access_revoked")
+		s.events.GrantChanged(tx, saas.Grant{GrantID: revoked[0], SourceID: sourceID, TeamID: h.TeamID, SubjectKind: saas.GrantSubjectMember, SubjectID: target})
 		return s.record(ctx, tx, call.IP, saas.ActorAccount, account.AccountID, h.TeamID, sourceID, ActionAccessRevoke, "account", target)
 	})
 	if err != nil {
