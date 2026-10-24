@@ -1,7 +1,8 @@
 {
   "input": {
     "node": "relay-1",
-    "drain": true
+    "drain": true,
+    "reason": "maintenance"
   },
   "output": {
     "node": "relay-1",

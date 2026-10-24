@@ -18,11 +18,11 @@ import (
 // updateRow 是一行的原子读-改-写：fn 拿到副本（或 nil），改了就按原主键写回。
 func updateRow[R any](
 	ctx context.Context, d *DB, tenantID string,
-	read func(q *sql.Conn) (*R, error),
-	write func(q *sql.Conn, draft R) error,
+	read func(q *safeConn) (*R, error),
+	write func(q *safeConn, draft R) error,
 	fn func(draft *R) error,
 ) error {
-	return d.write(ctx, func(q *sql.Conn) error {
+	return d.write(ctx, func(q *safeConn) error {
 		row, err := read(q)
 		if err != nil {
 			return err
@@ -72,12 +72,12 @@ func (d *DB) Ports() *store.Ports {
 
 type accounts ports
 
-func (a accounts) selectOne(ctx context.Context, q *sql.Conn, where string, args ...any) (*store.AccountRecord, error) {
+func (a accounts) selectOne(ctx context.Context, q *safeConn, where string, args ...any) (*store.AccountRecord, error) {
 	return one(toAccount(q.QueryRowContext(ctx, "SELECT "+accountColumns+" FROM accounts WHERE "+where, args...)))
 }
 
 func (a accounts) FindByName(ctx context.Context, tenantID, name string) (out *store.AccountRecord, err error) {
-	err = a.d.read(ctx, func(q *sql.Conn) (err error) {
+	err = a.d.read(ctx, func(q *safeConn) (err error) {
 		out, err = a.selectOne(ctx, q, "tenant_id = ? AND name = ?", tenantID, name)
 		return err
 	})
@@ -85,7 +85,7 @@ func (a accounts) FindByName(ctx context.Context, tenantID, name string) (out *s
 }
 
 func (a accounts) Get(ctx context.Context, tenantID, accountID string) (out *store.AccountRecord, err error) {
-	err = a.d.read(ctx, func(q *sql.Conn) (err error) {
+	err = a.d.read(ctx, func(q *safeConn) (err error) {
 		out, err = a.selectOne(ctx, q, "tenant_id = ? AND account_id = ?", tenantID, accountID)
 		return err
 	})
@@ -94,17 +94,17 @@ func (a accounts) Get(ctx context.Context, tenantID, accountID string) (out *sto
 
 func (a accounts) Update(ctx context.Context, tenantID, accountID string, fn func(draft *store.AccountRecord) error) error {
 	return updateRow(ctx, a.d, tenantID,
-		func(q *sql.Conn) (*store.AccountRecord, error) {
+		func(q *safeConn) (*store.AccountRecord, error) {
 			return a.selectOne(ctx, q, "tenant_id = ? AND account_id = ?", tenantID, accountID)
 		},
-		func(q *sql.Conn, draft store.AccountRecord) error {
+		func(q *safeConn, draft store.AccountRecord) error {
 			return writeAccount(ctx, q, tenantID, accountID, draft)
 		},
 		fn)
 }
 
 func (a accounts) ResetPassword(ctx context.Context, tenantID, accountID string, password identity.PasswordRecord, nowMs int64, keepDeviceID string) (found bool, err error) {
-	err = a.d.write(ctx, func(q *sql.Conn) error {
+	err = a.d.write(ctx, func(q *safeConn) error {
 		row, err := a.selectOne(ctx, q, "tenant_id = ? AND account_id = ?", tenantID, accountID)
 		if err != nil || row == nil {
 			return err
@@ -128,13 +128,13 @@ func (a accounts) ResetPassword(ctx context.Context, tenantID, accountID string,
 
 type devices ports
 
-func (v devices) selectOne(ctx context.Context, q *sql.Conn, tenantID, deviceID string) (*store.DeviceRecord, error) {
+func (v devices) selectOne(ctx context.Context, q *safeConn, tenantID, deviceID string) (*store.DeviceRecord, error) {
 	return one(toDevice(q.QueryRowContext(ctx,
 		"SELECT "+deviceColumns+" FROM devices WHERE tenant_id = ? AND device_id = ?", tenantID, deviceID)))
 }
 
 func (v devices) Get(ctx context.Context, tenantID, deviceID string) (out *store.DeviceRecord, err error) {
-	err = v.d.read(ctx, func(q *sql.Conn) (err error) {
+	err = v.d.read(ctx, func(q *safeConn) (err error) {
 		out, err = v.selectOne(ctx, q, tenantID, deviceID)
 		return err
 	})
@@ -142,7 +142,7 @@ func (v devices) Get(ctx context.Context, tenantID, deviceID string) (out *store
 }
 
 func (v devices) ListBySubject(ctx context.Context, tenantID, subject string) (out []store.DeviceRecord, err error) {
-	err = v.d.read(ctx, func(q *sql.Conn) error {
+	err = v.d.read(ctx, func(q *safeConn) error {
 		rows, err := q.QueryContext(ctx,
 			"SELECT "+deviceColumns+" FROM devices WHERE tenant_id = ? AND subject = ? ORDER BY rowid", tenantID, subject)
 		if err != nil {
@@ -162,7 +162,7 @@ func (v devices) ListBySubject(ctx context.Context, tenantID, subject string) (o
 }
 
 func (v devices) Insert(ctx context.Context, tenantID string, device store.DeviceRecord, nowMs int64) error {
-	return v.d.write(ctx, func(q *sql.Conn) error {
+	return v.d.write(ctx, func(q *safeConn) error {
 		// 顺手清掉早已失效的设备行，表不无限长（判定与内存参照同一个函数）。
 		rows, err := q.QueryContext(ctx, "SELECT "+deviceColumns+" FROM devices WHERE tenant_id = ?", tenantID)
 		if err != nil {
@@ -198,8 +198,8 @@ func (v devices) Insert(ctx context.Context, tenantID string, device store.Devic
 
 func (v devices) Update(ctx context.Context, tenantID, deviceID string, fn func(draft *store.DeviceRecord) error) error {
 	return updateRow(ctx, v.d, tenantID,
-		func(q *sql.Conn) (*store.DeviceRecord, error) { return v.selectOne(ctx, q, tenantID, deviceID) },
-		func(q *sql.Conn, draft store.DeviceRecord) error {
+		func(q *safeConn) (*store.DeviceRecord, error) { return v.selectOne(ctx, q, tenantID, deviceID) },
+		func(q *safeConn, draft store.DeviceRecord) error {
 			return writeDevice(ctx, q, tenantID, deviceID, draft)
 		},
 		fn)
@@ -209,7 +209,7 @@ func (v devices) Touch(ctx context.Context, tenantID string, seen map[string]int
 	if len(seen) == 0 {
 		return nil
 	}
-	return v.d.write(ctx, func(q *sql.Conn) error {
+	return v.d.write(ctx, func(q *safeConn) error {
 		var changed int64
 		for deviceID, atMs := range seen {
 			res, err := q.ExecContext(ctx,
@@ -233,13 +233,13 @@ func (v devices) Touch(ctx context.Context, tenantID string, seen map[string]int
 
 type sources ports
 
-func (s sources) selectOne(ctx context.Context, q *sql.Conn, tenantID, sourceID string) (*store.SourceRecord, error) {
+func (s sources) selectOne(ctx context.Context, q *safeConn, tenantID, sourceID string) (*store.SourceRecord, error) {
 	return one(toSource(q.QueryRowContext(ctx,
 		"SELECT "+sourceColumns+" FROM sources WHERE tenant_id = ? AND source_id = ?", tenantID, sourceID)))
 }
 
 func (s sources) Get(ctx context.Context, tenantID, sourceID string) (out *store.SourceRecord, err error) {
-	err = s.d.read(ctx, func(q *sql.Conn) (err error) {
+	err = s.d.read(ctx, func(q *safeConn) (err error) {
 		out, err = s.selectOne(ctx, q, tenantID, sourceID)
 		return err
 	})
@@ -247,7 +247,7 @@ func (s sources) Get(ctx context.Context, tenantID, sourceID string) (out *store
 }
 
 func (s sources) List(ctx context.Context, tenantID string) (out []store.SourceRecord, err error) {
-	err = s.d.read(ctx, func(q *sql.Conn) error {
+	err = s.d.read(ctx, func(q *safeConn) error {
 		rows, err := q.QueryContext(ctx,
 			"SELECT "+sourceColumns+" FROM sources WHERE tenant_id = ? ORDER BY rowid", tenantID)
 		if err != nil {
@@ -267,7 +267,7 @@ func (s sources) List(ctx context.Context, tenantID string) (out []store.SourceR
 }
 
 func (s sources) Put(ctx context.Context, tenantID, sourceID string, fn func(existing *store.SourceRecord) (store.SourceRecord, error)) (out store.SourceRecord, err error) {
-	err = s.d.write(ctx, func(q *sql.Conn) error {
+	err = s.d.write(ctx, func(q *safeConn) error {
 		existing, err := s.selectOne(ctx, q, tenantID, sourceID)
 		if err != nil {
 			return err
@@ -291,8 +291,8 @@ func (s sources) Put(ctx context.Context, tenantID, sourceID string, fn func(exi
 
 func (s sources) Update(ctx context.Context, tenantID, sourceID string, fn func(draft *store.SourceRecord) error) error {
 	return updateRow(ctx, s.d, tenantID,
-		func(q *sql.Conn) (*store.SourceRecord, error) { return s.selectOne(ctx, q, tenantID, sourceID) },
-		func(q *sql.Conn, draft store.SourceRecord) error {
+		func(q *safeConn) (*store.SourceRecord, error) { return s.selectOne(ctx, q, tenantID, sourceID) },
+		func(q *safeConn, draft store.SourceRecord) error {
 			return writeSource(ctx, q, tenantID, sourceID, draft)
 		},
 		fn)
@@ -303,7 +303,7 @@ func (s sources) Update(ctx context.Context, tenantID, sourceID string, fn func(
 type registrations ports
 
 func (r registrations) Add(ctx context.Context, tenantID string, token store.RegistrationToken, nowMs int64, max int) (added bool, err error) {
-	err = r.d.write(ctx, func(q *sql.Conn) error {
+	err = r.d.write(ctx, func(q *safeConn) error {
 		var live int
 		if err := q.QueryRowContext(ctx,
 			"SELECT count(*) FROM registration_tokens WHERE tenant_id = ? AND expires_at_ms > ?",
@@ -327,7 +327,7 @@ func (r registrations) Add(ctx context.Context, tenantID string, token store.Reg
 }
 
 func (r registrations) Consume(ctx context.Context, tenantID, tokenHash string, nowMs int64) (accountID string, ok bool, err error) {
-	err = r.d.write(ctx, func(q *sql.Conn) error {
+	err = r.d.write(ctx, func(q *safeConn) error {
 		// 逐条定时安全地比较（与内存参照一样不按哈希直接查）。
 		rows, err := q.QueryContext(ctx,
 			"SELECT "+registrationColumns+" FROM registration_tokens WHERE tenant_id = ? AND expires_at_ms > ? ORDER BY rowid",
@@ -369,13 +369,13 @@ func (r registrations) Consume(ctx context.Context, tenantID, tokenHash string, 
 
 type links ports
 
-func (l links) selectOne(ctx context.Context, q *sql.Conn, tenantID, linkID string) (*store.LinkRecord, error) {
+func (l links) selectOne(ctx context.Context, q *safeConn, tenantID, linkID string) (*store.LinkRecord, error) {
 	return one(toLink(q.QueryRowContext(ctx,
 		"SELECT "+linkColumns+" FROM links WHERE tenant_id = ? AND link_id = ?", tenantID, linkID)))
 }
 
 func (l links) Get(ctx context.Context, tenantID, linkID string) (out *store.LinkRecord, err error) {
-	err = l.d.read(ctx, func(q *sql.Conn) (err error) {
+	err = l.d.read(ctx, func(q *safeConn) (err error) {
 		out, err = l.selectOne(ctx, q, tenantID, linkID)
 		return err
 	})
@@ -383,7 +383,7 @@ func (l links) Get(ctx context.Context, tenantID, linkID string) (out *store.Lin
 }
 
 func (l links) List(ctx context.Context, tenantID, sourceID string) (out []store.LinkRecord, err error) {
-	err = l.d.read(ctx, func(q *sql.Conn) error {
+	err = l.d.read(ctx, func(q *safeConn) error {
 		query, args := "SELECT "+linkColumns+" FROM links WHERE tenant_id = ? ORDER BY rowid", []any{tenantID}
 		if sourceID != "" {
 			query = "SELECT " + linkColumns + " FROM links WHERE tenant_id = ? AND source_id = ? ORDER BY rowid"
@@ -407,7 +407,7 @@ func (l links) List(ctx context.Context, tenantID, sourceID string) (out []store
 }
 
 func (l links) Insert(ctx context.Context, tenantID string, link store.LinkRecord) error {
-	return l.d.write(ctx, func(q *sql.Conn) error {
+	return l.d.write(ctx, func(q *safeConn) error {
 		if err := insertLink(ctx, q, tenantID, link); err != nil {
 			return err
 		}
@@ -417,13 +417,13 @@ func (l links) Insert(ctx context.Context, tenantID string, link store.LinkRecor
 
 func (l links) Update(ctx context.Context, tenantID, linkID string, fn func(draft *store.LinkRecord) error) error {
 	return updateRow(ctx, l.d, tenantID,
-		func(q *sql.Conn) (*store.LinkRecord, error) { return l.selectOne(ctx, q, tenantID, linkID) },
-		func(q *sql.Conn, draft store.LinkRecord) error { return writeLink(ctx, q, tenantID, linkID, draft) },
+		func(q *safeConn) (*store.LinkRecord, error) { return l.selectOne(ctx, q, tenantID, linkID) },
+		func(q *safeConn, draft store.LinkRecord) error { return writeLink(ctx, q, tenantID, linkID, draft) },
 		fn)
 }
 
 func (l links) Revoke(ctx context.Context, tenantID, linkID string, nowMs int64) (sourceID string, ok bool, err error) {
-	err = l.d.write(ctx, func(q *sql.Conn) error {
+	err = l.d.write(ctx, func(q *safeConn) error {
 		err := q.QueryRowContext(ctx,
 			"SELECT source_id FROM links WHERE tenant_id = ? AND link_id = ? AND revoked_at_ms IS NULL",
 			tenantID, linkID).Scan(&sourceID)
@@ -458,7 +458,7 @@ func (l links) Revoke(ctx context.Context, tenantID, linkID string, nowMs int64)
 type tenants ports
 
 func (t tenants) Get(ctx context.Context, tenantID string) (out store.TenantSettings, err error) {
-	err = t.d.read(ctx, func(q *sql.Conn) error {
+	err = t.d.read(ctx, func(q *safeConn) error {
 		var origins string
 		err := q.QueryRowContext(ctx,
 			"SELECT issuer, allow_guests, trusted_origins_json FROM tenants WHERE tenant_id = ?", tenantID).

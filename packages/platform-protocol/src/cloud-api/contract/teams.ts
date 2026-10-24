@@ -73,7 +73,7 @@ export const teams = {
   delete: base
     .route({ method: "DELETE", path: "/v1/teams/{teamId}" })
     .meta(owner)
-    .errors({ ...teamErrors, ...errors.pick("conflict") })
+    .errors({ ...teamErrors, ...errors.pick("conflict", "team_hosts_online") })
     .input(z.object(teamId))
     .output(z.object({ purgeAtMs: z.number().int() })),
   restore: base

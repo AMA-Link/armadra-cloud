@@ -78,6 +78,8 @@ export const links = {
         label: z.string(),
         role: z.string().optional(),
         sourceName: z.string().optional(),
+        /** 链接主人的显示名（0.11.0 起，只加不改）；只给显示名，不给邮箱。 */
+        ownerName: z.string().optional(),
         teamName: z.string().optional(),
         /** 0.3.0 起；整台时不出现。 */
         scope: linkScopeSchema.optional(),

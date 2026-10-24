@@ -299,7 +299,11 @@ func (s *Service) deviceGet(ctx context.Context, call *api.Call) (any, error) {
 	if err != nil {
 		return nil, s.countGuess(ctx, account.AccountID, err)
 	}
-	return map[string]any{"platform": row.Platform, "name": row.Name, "requestedAtMs": row.CreatedAtMs, "expiresAtMs": row.ExpiresAtMs}, nil
+	out := map[string]any{"platform": row.Platform, "name": row.Name, "requestedAtMs": row.CreatedAtMs, "expiresAtMs": row.ExpiresAtMs}
+	if row.IPPrefix != "" {
+		out["ipPrefix"] = row.IPPrefix
+	}
+	return out, nil
 }
 
 // deviceApprove 是 auth.deviceApprove：approve = false 等同拒绝。

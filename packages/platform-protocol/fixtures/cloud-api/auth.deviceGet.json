@@ -5,6 +5,7 @@
   "output": {
     "platform": "server",
     "name": "armadra-server",
+    "ipPrefix": "203.0.113.7",
     "requestedAtMs": 1760000000000,
     "expiresAtMs": 1760000600000
   }

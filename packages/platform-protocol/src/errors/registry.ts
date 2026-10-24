@@ -56,6 +56,8 @@ export const ERRORS = {
   /** 账号注销前要先转移名下团队的所有权（`me.delete`）。 */
   team_owner_required: { status: 409 },
   team_slug_taken: { status: 409 },
+  /** `teams.delete` 时团队还有在线主机（0.11.0 起，只加不改）；`details.onlineHosts` 是在线主机数。 */
+  team_hosts_online: { status: 409 },
   /** 团队设置不允许这个操作（成员登记主机、guest、匿名链接…）；`details.setting` 写是哪一项。 */
   team_policy_denied: { status: 403 },
   /** 团队被运营方停用：拒绝签断言与登记。 */
