@@ -79,7 +79,8 @@ func bytesBetween(frames []protocol.Frame, from int, match func(protocol.Frame) 
 func TestInteractiveStreamLatencyIsBoundedWhileBulkRuns(t *testing.T) {
 	// 上界：当前批剩下的（至多 WriteBudget 加一块）+ 测量误差（读计数到入队之间多写的一两块）。
 	bound := tunnel.WriteBudget + 3*chunk
-	for _, bulk := range []int{4, 16, 64} {
+	// 不测 4 条：改前的 2N 块（8 块 = 128 KiB）恰好落在上界内，关掉稀疏优先也能通过，区分不了。
+	for _, bulk := range []int{8, 16, 64} {
 		f := newFairRig(t, bulk)
 		probe := f.open(&recSink{})
 		var aheads []int
