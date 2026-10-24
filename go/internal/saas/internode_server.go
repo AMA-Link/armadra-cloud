@@ -262,11 +262,23 @@ func newInternodeConn(s *internodeServer, ws *websocket.Conn, peer string) *inte
 	}
 }
 
-// flushed 答已排队的帧是否都写出去了（或连接已关）。
+// flushed 答已排队的帧是否都写出去了（或连接已关）。挂着等链路或流信用的下行字节、
+// 还没排进出队列的 END 也算没写完：对端补了信用它们才会排队写出（close 的上限兜底）。
 func (c *internodeConn) flushed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.closed || (len(c.ctl) == 0 && c.queued == 0 && !c.writing)
+	if c.closed {
+		return true
+	}
+	if len(c.ctl) > 0 || c.queued > 0 || c.writing {
+		return false
+	}
+	for _, fs := range c.streams {
+		if len(fs.pending) > 0 || (fs.pendingEnd && !fs.localEnded) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *internodeConn) count() int {
