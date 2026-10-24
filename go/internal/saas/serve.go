@@ -92,6 +92,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 	// 控制面：订阅本节点频道；quota / incident 交给准入闸。
 	var ctl *redis.Plane
 	g := newGate(client, prefix, cfg.NodeID, cfg.TeamConcurrent, func() control.Limiter { return ctl.Limits() }, onError)
+	g.fwdCap = cfg.ForwardedPerAccount
 	defer g.close()
 	origin := jose.HTTPFetch(&http.Client{Timeout: 10 * time.Second}, cfg.JWKSURL)
 	startCtx, cancelStart := context.WithTimeout(ctx, 10*time.Second)
@@ -167,6 +168,12 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 		log.Warn("没配 RELAY_NODE_TOKEN，源在别的节点上时不转发")
 	}
 	var in *internodeServer
+	metrics.unwritten = func() int64 {
+		if out == nil {
+			return 0
+		}
+		return out.unwrittenBytes()
+	}
 	metrics.streams = func() int {
 		n := in.streams()
 		if out != nil {

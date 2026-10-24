@@ -3,6 +3,7 @@ package tunnel_test
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol"
 	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
@@ -341,4 +342,29 @@ func TestStreamGolden(t *testing.T) {
 			t.Fatal("OPEN 与夹具不同")
 		}
 	})
+}
+
+func TestTunnelPendingBytes(t *testing.T) {
+	r := newRig(t, func(c *tunnel.Config) { c.StreamWindow = 1000 })
+	s := r.open(&recSink{})
+	r.tr.take()
+	if n := r.tun.PendingBytes(); n != 0 {
+		t.Fatalf("空闲：%d", n)
+	}
+	s.Send(bytes.Repeat([]byte{1}, 2500))
+	// 写协程可能已经取走一块；无论在出队列还是挂着，已发出的不再计。总数 = 2500 - 已写出。
+	r.tr.take()
+	want := 2500 - 1000
+	deadline := time.Now().Add(2 * time.Second)
+	for r.tun.PendingBytes() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("未写出 %d，想要 %d", r.tun.PendingBytes(), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	r.feed(protocol.Frame{Type: protocol.FrameWindow, StreamID: s.ID(), Credit: 1500})
+	r.tr.take()
+	if n := r.tun.PendingBytes(); n != 0 {
+		t.Fatalf("发完之后：%d", n)
+	}
 }

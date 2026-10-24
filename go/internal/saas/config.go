@@ -68,6 +68,8 @@ type Config struct {
 	// （Free：并发 10）；控制面写的 relay:quota:team:* 覆盖并发上限。
 	TeamConcurrent       int
 	TeamConnectPerMinute int
+	// ForwardedPerAccount 是每个账号经节点间连接转发的通道数上限（节点间链路的 4096 个流位各租户共用）。
+	ForwardedPerAccount int
 
 	// RedisPrefix 是键与频道的前缀，缺省 relay:（只给测试改）。
 	RedisPrefix string
@@ -94,7 +96,8 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 	cfg := Config{
 		Host: "0.0.0.0", Port: 8443, LogLevel: obs.LevelInfo, Weight: 1,
 		TeamConcurrent: DefaultTeamConcurrent, TeamConnectPerMinute: DefaultTeamConnectPerMinute,
-		DrainGrace: time.Duration(protocol.GoawayGraceMs) * time.Millisecond,
+		ForwardedPerAccount: DefaultForwardedPerAccount,
+		DrainGrace:          time.Duration(protocol.GoawayGraceMs) * time.Millisecond,
 	}
 	if v, ok := get("RELAY_LISTEN"); ok {
 		m := listenPattern.FindStringSubmatch(v)
@@ -251,7 +254,8 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 	for _, item := range []struct {
 		key  string
 		into *int
-	}{{"RELAY_TEAM_CONCURRENT", &cfg.TeamConcurrent}, {"RELAY_TEAM_CONNECT_PER_MINUTE", &cfg.TeamConnectPerMinute}} {
+	}{{"RELAY_TEAM_CONCURRENT", &cfg.TeamConcurrent}, {"RELAY_TEAM_CONNECT_PER_MINUTE", &cfg.TeamConnectPerMinute},
+		{"RELAY_FORWARDED_PER_ACCOUNT", &cfg.ForwardedPerAccount}} {
 		if v, ok := get(item.key); ok {
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 1 || n > 1_000_000 {

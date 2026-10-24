@@ -36,6 +36,9 @@ const (
 	DefaultTeamConnectPerMinute = 600
 )
 
+// DefaultForwardedPerAccount 是每个账号经节点间连接转发的通道数缺省上限（RELAY_FORWARDED_PER_ACCOUNT）。
+const DefaultForwardedPerAccount = 64
+
 // teamLimitRules 是团队维度的限流规则（并入控制面的规则表；并发的上限另由额度键覆盖）。
 func teamLimitRules(cfg Config) map[control.LimitKind]control.LimitRule {
 	return map[control.LimitKind]control.LimitRule{
@@ -84,6 +87,15 @@ type gate struct {
 	fallback int
 	// release 承接名额的 Redis 释放：自己的工作协程，不与边缘的账号并发释放共用队列；出错不重试。
 	release *control.Dispatcher
+	// stop 在 close 的排空超时之后取消：排队与进行中的释放立刻放弃（成员由过期兜底），不拖住下线。
+	stop         context.Context
+	cancelStop   context.CancelFunc
+	flushTimeout time.Duration
+
+	// fwdCap 是每个账号经节点间连接转发的通道数上限（0 不限）；fwd 是各账号当前占用，由 mu 守护。
+	fwdCap     int
+	fwd        map[string]int
+	fwdRefused atomic.Int64
 
 	incident atomic.Bool
 	// failOpen 是 Redis 出错时团队并发放行的次数（指标）；lastFailLog 给日志限频。
@@ -99,9 +111,12 @@ type gate struct {
 }
 
 func newGate(client goredis.UniversalClient, prefix, node string, fallback int, limits func() control.Limiter, onError func(string, error)) *gate {
+	stop, cancelStop := context.WithCancel(context.Background())
 	return &gate{
+		stop: stop, cancelStop: cancelStop, flushTimeout: releaseFlushTimeout,
 		client: client, prefix: prefix, node: node, limits: limits, onError: onError, fallback: fallback,
 		release: control.NewDispatcher(1, 0),
+		fwd:     map[string]int{},
 		quotas:  map[string]int{}, live: map[string]map[string]struct{}{},
 		admitScript: goredis.NewScript(concAdmit), refreshScript: goredis.NewScript(concRefresh),
 	}
@@ -132,9 +147,51 @@ func (g *gate) limit(team string) int {
 	return g.fallback
 }
 
-// Admit 实现 edge.Gate：没有 team（个人空间）不限；有 team 先按团队速率，再占一个并发名额。
-// Redis 出错时并发判断放行（只报告，不因 Redis 抖动挡住全部连接）；速率限流自己会退回本节点内存。
+// Admit 实现 edge.Gate：先按账号限经节点间连接转发的通道数（链路的 4096 个流位各租户共用，
+// 不设上限一个账号就能占满），再走团队准入。
 func (g *gate) Admit(ctx context.Context, in edge.GateInput) (func(), gen.ErrorCode, error) {
+	unfwd := func() {}
+	if in.Forwarded && g.fwdCap > 0 {
+		var ok bool
+		if unfwd, ok = g.acquireForward(in.Subject); !ok {
+			g.fwdRefused.Add(1)
+			return nil, gen.ErrLimitReached, nil
+		}
+	}
+	release, code, err := g.admitTeam(ctx, in)
+	if err != nil || code != "" {
+		unfwd()
+		return nil, code, err
+	}
+	return func() { release(); unfwd() }, "", nil
+}
+
+// acquireForward 占一个账号的转发名额；release 幂等。
+func (g *gate) acquireForward(subject string) (release func(), ok bool) {
+	g.mu.Lock()
+	if g.fwd[subject] >= g.fwdCap {
+		g.mu.Unlock()
+		return nil, false
+	}
+	g.fwd[subject]++
+	g.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			g.mu.Lock()
+			if g.fwd[subject] <= 1 {
+				delete(g.fwd, subject)
+			} else {
+				g.fwd[subject]--
+			}
+			g.mu.Unlock()
+		})
+	}, true
+}
+
+// admitTeam：没有 team（个人空间）不限；有 team 先按团队速率，再占一个并发名额。
+// Redis 出错时并发判断放行（只报告，不因 Redis 抖动挡住全部连接）；速率限流自己会退回本节点内存。
+func (g *gate) admitTeam(ctx context.Context, in edge.GateInput) (func(), gen.ErrorCode, error) {
 	if in.Team == "" {
 		return func() {}, "", nil
 	}
@@ -177,28 +234,44 @@ func (g *gate) Admit(ctx context.Context, in edge.GateInput) (func(), gen.ErrorC
 			}
 			g.mu.Unlock()
 			// 投递即返回（调用方可能在 epoll 循环上）；只试一次，失败由成员过期兜底。
-			g.release.Go(in.Team, func() {
-				rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := g.client.ZRem(rctx, key, member).Err(); err != nil {
-					g.onError("team concurrency release", err)
-				}
-			})
+			g.release.Go(in.Team, func() { g.zrem(key, member) })
 		})
 	}, "", nil
 }
 
-// close 等已投递的释放做完（最多 5 秒），再停掉工作协程。
+// zrem 释放一个并发成员；下线放弃之后不再碰 Redis。
+func (g *gate) zrem(key, member string) {
+	if g.stop.Err() != nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(g.stop, 5*time.Second)
+	defer cancel()
+	if err := g.client.ZRem(rctx, key, member).Err(); err != nil && g.stop.Err() == nil {
+		g.onError("team concurrency release", err)
+	}
+}
+
+// releaseFlushTimeout 是下线时等已投递的释放做完的最长时间。
+const releaseFlushTimeout = 5 * time.Second
+
+// close 等已投递的释放做完（最多 releaseFlushTimeout）；超时就放弃还排着的释放，
+// 否则 Redis 卡住时每条释放各等满超时，Close 要等的就是队列长度乘 5 秒。
 func (g *gate) close() {
-	g.release.Flush(5 * time.Second)
+	if !g.release.Flush(g.flushTimeout) {
+		g.cancelStop()
+	}
 	g.release.Close()
+	g.cancelStop()
 }
 
 // render 是准入闸的指标（接在原有指标之后）。
 func (g *gate) render() string {
 	return "# HELP relay_team_concurrency_fail_open_total Team concurrency checks let through because Redis failed.\n" +
 		"# TYPE relay_team_concurrency_fail_open_total counter\n" +
-		"relay_team_concurrency_fail_open_total " + strconv.FormatInt(g.failOpen.Load(), 10) + "\n"
+		"relay_team_concurrency_fail_open_total " + strconv.FormatInt(g.failOpen.Load(), 10) + "\n" +
+		"# HELP relay_forward_account_refused_total Forwarded channels refused because the account hit its forwarded-stream cap.\n" +
+		"# TYPE relay_forward_account_refused_total counter\n" +
+		"relay_forward_account_refused_total " + strconv.FormatInt(g.fwdRefused.Load(), 10) + "\n"
 }
 
 // refresh 给本节点占着的全部成员续期。

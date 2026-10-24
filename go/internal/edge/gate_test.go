@@ -171,3 +171,29 @@ func TestTakeBySubjectAndDevice(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// 经节点间连接转发的通道，准入入参带 Forwarded（Gate 据此限每账号的转发通道数）；本地通道不带。
+func TestGateInputMarksForwarded(t *testing.T) {
+	for _, forwarded := range []bool{false, true} {
+		gate := &fakeGate{}
+		env := relayenv.New(t, relayenv.Options{})
+		tun := tunnel.New("tun1", env.SourceID, "0.2.0", nullTransport{}, tunnel.DefaultConfig(), tunnel.Hooks{})
+		tun.SetCapabilities([]string{"e2e"})
+		if forwarded {
+			tun.SetLink("a")
+		}
+		t.Cleanup(func() { tun.Close(protocol.CloseNormal, "done") })
+		p := edge.NewPolicy(edge.PolicyOptions{
+			NodeID: "n", Addressing: edge.HostAddressing("example.test"), Auth: env.Auth, Control: env.Control,
+			Lookup:  func(context.Context, string) (*tunnel.Tunnel, error) { return tun, nil },
+			Metrics: obs.NewMetrics(nil), Gate: gate,
+		})
+		d, err := p.DecideUpgrade(context.Background(), edge.Request{
+			Method: "GET", URL: "/_relay/e2e", Host: env.SourceID + ".src.example.test", ClientIP: "203.0.113.9",
+			Header: http.Header{"Upgrade": {"websocket"}, "Sec-Websocket-Protocol": {"armadra-e2e.1, armadra-relay." + env.RelayToken(t, nil)}},
+		})
+		if err != nil || !d.Accept || len(gate.inputs) != 1 || gate.inputs[0].Forwarded != forwarded {
+			t.Fatalf("forwarded=%v：%+v %+v %v", forwarded, d, gate.inputs, err)
+		}
+	}
+}

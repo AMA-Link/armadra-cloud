@@ -54,6 +54,12 @@
 - 登录失败计数共享在 Redis。Redis 不可用时**失败关闭**：`auth.login` 对已注册与未注册的邮箱一律答 `503 unavailable`（带 `retryAfterMs`），**登录不可用**，不回落到各实例进程内计数（多实例下计数会分叉，可借此枚举账号）。已登录的会话与不经过登录失败计数的接口不受这条规则影响。
 - 告警：控制面的指标 `armadra_cloud_lockout_unavailable_total`（计数器，每次因 Redis 不可用而拒绝登录加一）。配 `ARMADRA_CLOUD_METRICS_LISTEN`（与 `ARMADRA_CLOUD_METRICS_TOKEN_FILE`）后在该监听的 `/metrics` 读到。建议规则：`increase(armadra_cloud_lockout_unavailable_total[5m]) > 0` 就告警（页面或值班），同时监控 `/ready` 的 `redis` 项。处置：恢复 Redis（`docker compose up -d redis`，AOF 会自己回放）；恢复后登录自动恢复，不需要重启控制面。
 
+## 节点间转发
+
+- 每个账号经节点间连接（`/x/v1`）转发的通道数受 `RELAY_FORWARDED_PER_ACCOUNT`（缺省 64）限制，计数在每个入口节点上、按账号各算各的，不是全集群合计，超出的新通道答 4429 `limit_reached`；链路上的 4096 个流位各租户共用，没有这个上限一个账号就能占满。本地通道不受它限制。
+- 指标：`relay_forward_account_refused_total`（计数器，因账号转发名额满而拒绝的通道数）与 `relay_internode_unwritten_bytes`（仪表，入口节点出向连接上还没写出的转发字节：挂着等信用的加已排队没写进内核的）。建议规则：`relay_internode_unwritten_bytes > 64 * 1024 * 1024` 持续 5 分钟就告警（对端或链路慢，或某个租户在占住链路）；`increase(relay_forward_account_refused_total[10m]) > 0` 作提示，反复出现时看是哪个账号、是否该调高上限。
+- 节点令牌撤销（`armadra-cloud nodes revoke`）经 `relay:revoked` 广播即时断开已建立的节点间连接；5 秒一次的复查留作兜底。
+
 ## 排空、下线与事故开关
 
 - 单个节点下线：控制台运营后台（`admin.relayNodeDrain`）或 `SIGTERM`；节点表标 `draining`、`/ready` 不就绪、隧道收 GOAWAY `rebalance`，源按 `heartbeatHint`（已去掉排空节点）重连到别的节点，经该节点转发的通道以 4404 结束，客户端重连。

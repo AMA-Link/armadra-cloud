@@ -45,6 +45,9 @@ type Base struct {
 
 	mu      sync.Mutex
 	revoked map[string]int64 // jti → 到期毫秒
+	// revokedSubs 是撤销订阅者（OnRevoked）；ReceiveRevoked 记下新撤销后在锁外逐个调用。
+	revokedSubs    map[int]func(jti string)
+	revokedSubNext int
 
 	tasks sync.WaitGroup
 	out   *control.Dispatcher
@@ -171,10 +174,38 @@ func (b *Base) ReceiveRevoked(jti string, expMs int64) {
 		return
 	}
 	b.mu.Lock()
+	var subs []func(string)
 	if cur, ok := b.revoked[jti]; !ok || cur < expMs {
 		b.revoked[jti] = expMs
+		for _, fn := range b.revokedSubs {
+			subs = append(subs, fn)
+		}
 	}
 	b.mu.Unlock()
+	for _, fn := range subs {
+		func() {
+			defer func() { _ = recover() }() // 一个订阅者出错不影响撤销本身。
+			fn(jti)
+		}()
+	}
+}
+
+// OnRevoked 实现 control.RevokedNotifier：每记下一条新的撤销（广播来的、本节点写的）就回调一次 jti。
+// 回调在调用 ReceiveRevoked 的协程里、锁外执行，必须立即返回。
+func (b *Base) OnRevoked(fn func(jti string)) (cancel func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.revokedSubs == nil {
+		b.revokedSubs = map[int]func(string){}
+	}
+	b.revokedSubNext++
+	id := b.revokedSubNext
+	b.revokedSubs[id] = fn
+	return func() {
+		b.mu.Lock()
+		delete(b.revokedSubs, id)
+		b.mu.Unlock()
+	}
 }
 
 // MergeRevoked 把全量重读到的撤销并进内存副本，顺手清掉已过期的。撤销记录只会随到期而消失，

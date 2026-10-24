@@ -41,6 +41,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.TeamConcurrent != DefaultTeamConcurrent || cfg.TeamConnectPerMinute != DefaultTeamConnectPerMinute || DefaultTeamConcurrent != 10 {
 		t.Fatalf("团队额度缺省取最严格的套餐：%+v", cfg)
 	}
+	if cfg.ForwardedPerAccount != DefaultForwardedPerAccount || DefaultForwardedPerAccount != 64 {
+		t.Fatalf("转发名额缺省 64：%+v", cfg)
+	}
 	if cfg.NodeToken != "" || cfg.DatabaseURL != "" || cfg.TrustedProxy != nil {
 		t.Fatalf("%+v", cfg)
 	}
@@ -59,8 +62,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	env["RELAY_METRICS_LISTEN"] = "127.0.0.1:9100"
 	env["RELAY_TEAM_CONCURRENT"] = "50"
 	env["RELAY_TEAM_CONNECT_PER_MINUTE"] = "3000"
+	env["RELAY_FORWARDED_PER_ACCOUNT"] = "8"
 	cfg, issues = LoadConfig(env, host)
-	if cfg.TeamConcurrent != 50 || cfg.TeamConnectPerMinute != 3000 {
+	if cfg.TeamConcurrent != 50 || cfg.TeamConnectPerMinute != 3000 || cfg.ForwardedPerAccount != 8 {
 		t.Fatalf("显式覆盖团队缺省：%+v", cfg)
 	}
 	if len(issues) > 0 {

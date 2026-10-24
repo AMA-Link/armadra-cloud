@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/auth"
+	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
 	"github.com/AMA-Link/armadra-cloud/go/internal/httperr"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -50,13 +51,38 @@ type internodeServer struct {
 	mu       sync.Mutex
 	conns    map[*internodeConn]struct{}
 	stopping bool
+	// unsubscribe 取消撤销订阅（控制面支持 RevokedNotifier 时）。
+	unsubscribe func()
 }
 
 func newInternodeServer(a *auth.Context, local func(string) *tunnel.Tunnel, log *obs.Logger, m *internodeMetrics, checkEvery time.Duration) *internodeServer {
 	if checkEvery <= 0 {
 		checkEvery = defaultInternodeCheckEvery
 	}
-	return &internodeServer{auth: a, local: local, cfg: linkConfig(), checkEvery: checkEvery, log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
+	s := &internodeServer{auth: a, local: local, cfg: linkConfig(), checkEvery: checkEvery, log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
+	// 撤销广播（relay:revoked）一到就断开持这枚令牌的连接；定时复查（watch）留作兜底（广播丢了、订阅重连之间）。
+	if a != nil {
+		if n, ok := a.Control.(control.RevokedNotifier); ok {
+			s.unsubscribe = n.OnRevoked(s.revoked)
+		}
+	}
+	return s
+}
+
+// revoked 是撤销通知：断开用这枚节点令牌建立的连接。
+func (s *internodeServer) revoked(jti string) {
+	s.mu.Lock()
+	var hit []*internodeConn
+	for c := range s.conns {
+		if c.jti == jti {
+			hit = append(hit, c)
+		}
+	}
+	s.mu.Unlock()
+	for _, c := range hit {
+		s.log.Warn("对端的节点令牌已撤销，断开", obs.Node(c.peer))
+		c.closeTransport()
+	}
 }
 
 // streams 是各入向连接上的流数。
@@ -126,6 +152,11 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 	}
 	s.conns[c] = struct{}{}
 	s.mu.Unlock()
+	// 验令牌与登记之间到达的撤销通知没人收：登记之后补查一次。
+	if revoked, err := s.auth.Control.Tokens().IsRevoked(r.Context(), c.jti); err == nil && revoked {
+		s.log.Warn("对端的节点令牌已撤销，断开", obs.Node(c.peer))
+		c.closeTransport()
+	}
 	s.log.Info("对端节点已连上", obs.Node(c.peer))
 	c.serve()
 	s.mu.Lock()
@@ -139,11 +170,16 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 func (s *internodeServer) close() {
 	s.mu.Lock()
 	s.stopping = true
+	unsubscribe := s.unsubscribe
+	s.unsubscribe = nil
 	list := make([]*internodeConn, 0, len(s.conns))
 	for c := range s.conns {
 		list = append(list, c)
 	}
 	s.mu.Unlock()
+	if unsubscribe != nil {
+		unsubscribe()
+	}
 	for _, c := range list {
 		c.closeTransport()
 	}
@@ -608,7 +644,14 @@ func (fs *fwdStream) End(s *tunnel.Stream) {
 
 // Reset 是源 RST 或本地隧道没了：给对端发 RST，入口节点给客户端 4404。挂着的下行字节作废，
 // 信用还给本地隧道（隧道还在、只是这条流被源重置时，不还会永久漏掉隧道级窗口）。
+//
+// 链路上的 refused 只表示「持有节点上的源没报 e2e」（open 里自己判的），入口节点据此答 e2e_unsupported；
+// 源自己发来的 refused 若原样转回，客户端会看到 e2e_unsupported，本地却是 source_offline，
+// 所以这里改成 sourceGone 再转出。
 func (fs *fwdStream) Reset(s *tunnel.Stream, code protocol.RstCode) {
+	if code == protocol.RstRefused {
+		code = protocol.RstSourceGone
+	}
 	c := fs.c
 	c.mu.Lock()
 	if fs.gone {

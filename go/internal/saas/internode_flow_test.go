@@ -263,3 +263,65 @@ func TestInternodeCheckEveryComesFromConfig(t *testing.T) {
 		t.Fatalf("配置：%v", s.checkEvery)
 	}
 }
+
+// 审查 G5：源自己发来的 RST refused 不能原样转回入口节点（入口节点把链路上的 refused 当 e2e_unsupported），
+// 改成 sourceGone；其余码原样。持有节点自己判的 refused（源没报 e2e）走 open，不经这里。
+func TestForwardedResetMapsSourceRefused(t *testing.T) {
+	cases := []struct{ in, want protocol.RstCode }{
+		{protocol.RstRefused, protocol.RstSourceGone},
+		{protocol.RstSourceGone, protocol.RstSourceGone},
+		{protocol.RstInternal, protocol.RstInternal},
+		{protocol.RstClientGone, protocol.RstClientGone},
+	}
+	for _, tc := range cases {
+		c := &internodeConn{streams: map[uint32]*fwdStream{}}
+		fs := &fwdStream{c: c, id: 7}
+		c.streams[7] = fs
+		fs.Reset(nil, tc.in)
+		if len(c.queue) != 1 {
+			t.Fatalf("%v：写队列 %d 帧", tc.in, len(c.queue))
+		}
+		f, err := protocol.DecodeView(c.queue[0].frame)
+		if err != nil || f.Type != protocol.FrameRst || f.StreamID != 7 || f.Code != tc.want {
+			t.Fatalf("%v → 想要 %v，实际 %+v（%v）", tc.in, tc.want, f, err)
+		}
+		if len(c.streams) != 0 {
+			t.Fatalf("流没摘掉")
+		}
+	}
+}
+
+// 节点令牌撤销即时生效：定时复查关到 1 小时，仍在撤销广播到达时立刻断开已建立的连接
+// （本节点写的撤销、别的节点经 relay:revoked 广播来的撤销各一次）。
+func TestLinkClosesOnRevokedBroadcastWithoutPolling(t *testing.T) {
+	r := newRig(t)
+	a := r.start("a", func(c *Config) { c.InternodeCheckEvery = time.Hour })
+	jtiLocal, jtiRemote := "n.b."+randomHex(6), "n.c."+randomHex(6)
+	b := r.start("b", func(c *Config) { c.NodeToken = r.nodeToken("b", relayenv.Claims{"jti": jtiLocal}) })
+	c := r.start("c", func(c *Config) { c.NodeToken = r.nodeToken("c", relayenv.Claims{"jti": jtiRemote}) })
+	other := r.start("d", nil)
+	r.env.StartCore(t, a.URL, relayenv.CoreOptions{Capabilities: []string{"e2e"}})
+	r.online(a)
+	viaB := r.channel(b, r.relayToken(nil))
+	viaC := r.channel(c, r.relayToken(nil))
+	if viaB.outcome() != 0 || viaC.outcome() != 0 {
+		t.Fatal("转发的通道应开成")
+	}
+	start := time.Now()
+	ctx := context.Background()
+	if err := a.Plane.Auth.Control.Tokens().Revoke(ctx, jtiLocal, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Plane.Auth.Control.Tokens().Revoke(ctx, jtiRemote, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if code := viaB.wait(t); code != 4404 {
+		t.Fatalf("本节点撤销之后：%d", code)
+	}
+	if code := viaC.wait(t); code != 4404 {
+		t.Fatalf("别的节点广播撤销之后：%d", code)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("撤销生效用了 %v，应远小于复查间隔", d)
+	}
+}
