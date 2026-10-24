@@ -370,7 +370,12 @@ func TestRetryDoesNotReuseMessageID(t *testing.T) {
 	e.account("a1", "ann@example.test")
 	e.sender.FailNext(1)
 	e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleEN, To: "ann@example.test", AccountID: "a1"})
-	e.eventually("第一次失败", func() bool { return len(e.sender.Attempts()) == 1 })
+	// 等失败记进库（按当时的时钟排到 30 秒后）再推时钟：只看发件方被调用过，运行器可能还没记失败，
+	// 推过的时钟会被记成重试的起点，重试就排到推完之后再 30 秒，永远等不到。
+	e.eventually("第一次失败", func() bool {
+		return len(e.sender.Attempts()) == 1 &&
+			e.count("SELECT count(*) FROM jobs WHERE last_error IS NOT NULL AND locked_by IS NULL AND done_at_ms IS NULL") == 1
+	})
 	e.clock.Advance(31 * time.Second)
 	e.waitMessages(1)
 	attempts := e.sender.Attempts()
