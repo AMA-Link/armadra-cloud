@@ -47,6 +47,8 @@ type internodeServer struct {
 	checkEvery time.Duration
 	log        *obs.Logger
 	metrics    *internodeMetrics
+	// flushWait 是 close 等各连接写完已排队帧的上限，创建后不再改。
+	flushWait time.Duration
 
 	mu       sync.Mutex
 	conns    map[*internodeConn]struct{}
@@ -59,7 +61,7 @@ func newInternodeServer(a *auth.Context, local func(string) *tunnel.Tunnel, log 
 	if checkEvery <= 0 {
 		checkEvery = defaultInternodeCheckEvery
 	}
-	s := &internodeServer{auth: a, local: local, cfg: linkConfig(), checkEvery: checkEvery, log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
+	s := &internodeServer{auth: a, local: local, cfg: linkConfig(), checkEvery: checkEvery, log: log, metrics: m, flushWait: internodeFlushWait, conns: map[*internodeConn]struct{}{}}
 	// 撤销广播（relay:revoked）一到就断开持这枚令牌的连接；定时复查（watch）留作兜底（广播丢了、订阅重连之间）。
 	if a != nil {
 		if n, ok := a.Control.(control.RevokedNotifier); ok {
@@ -166,7 +168,15 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 	return true
 }
 
-// close 不再收新连接并断开现有的（转来的流已随本地隧道结束）。
+// internodeWriteTimeout 是链路上写一帧的超时：写不动就断开。
+const internodeWriteTimeout = 30 * time.Second
+
+// internodeFlushWait 是下线时等入向连接写完已排队帧（转来的流的下行尾巴与 END）的上限。
+const internodeFlushWait = 5 * time.Second
+
+// close 不再收新连接，等各连接把已排队的帧写完（至多 flushWait），再断开（#138）。
+// 本地隧道都关了：转来的流要么已 RST，要么两端都已 END、只剩出队列里的下行尾巴与 END；
+// 这时立刻断开会把尾巴丢掉，对端节点的客户端收不全源最后发的字节。
 func (s *internodeServer) close() {
 	s.mu.Lock()
 	s.stopping = true
@@ -179,6 +189,12 @@ func (s *internodeServer) close() {
 	s.mu.Unlock()
 	if unsubscribe != nil {
 		unsubscribe()
+	}
+	deadline := time.Now().Add(s.flushWait)
+	for _, c := range list {
+		for !c.flushed() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	for _, c := range list {
 		c.closeTransport()
@@ -209,6 +225,8 @@ type internodeConn struct {
 	recvLeft    int                      // 对端还能发多少（本节点给的链路窗口）；超了是对端违反流控，断开
 	ctl         []outItem                // 控制帧（WINDOW、PONG、RST）：每批先写
 	sched       tunnel.Sched[*fwdStream] // 各流的 DATA / END：按流轮转、稀疏流优先、按字节预算分批（#57）
+	queued      int                      // 各流出队列里还没取走的帧数（含已摘表的流）
+	writing     bool                     // 写协程正在写一批
 	wake        chan struct{}
 	done        chan struct{}
 	closed      bool
@@ -242,6 +260,25 @@ func newInternodeConn(s *internodeServer, ws *websocket.Conn, peer string) *inte
 		s: s, ws: ws, peer: peer, streams: map[uint32]*fwdStream{}, linkCredit: s.cfg.TunnelWindow, recvLeft: s.cfg.TunnelWindow,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
 	}
+}
+
+// flushed 答已排队的帧是否都写出去了（或连接已关）。挂着等链路或流信用的下行字节、
+// 还没排进出队列的 END 也算没写完：对端补了信用它们才会排队写出（close 的上限兜底）。
+func (c *internodeConn) flushed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return true
+	}
+	if len(c.ctl) > 0 || c.queued > 0 || c.writing {
+		return false
+	}
+	for _, fs := range c.streams {
+		if len(fs.pending) > 0 || (fs.pendingEnd && !fs.localEnded) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *internodeConn) count() int {
@@ -357,6 +394,7 @@ func (c *internodeConn) sendStreamLocked(fs *fwdStream, frame []byte, after func
 	}
 	fs.out = append(fs.out, outItem{frame: frame, after: after})
 	fs.outN += dataBytes(frame)
+	c.queued++
 	c.sched.Add(fs, &fs.flow, fs.outN)
 	c.signalLocked()
 }
@@ -387,12 +425,14 @@ func (c *internodeConn) collectLocked(all bool) (batch []outItem, base uint64, c
 				size += dataBytes(it.frame)
 			}
 			batch = append(batch, fs.out...)
+			c.queued -= len(fs.out)
 			fs.out, fs.outN = nil, 0
 			return size, false
 		}
 		it := fs.out[0]
 		fs.out[0] = outItem{}
 		fs.out = fs.out[1:]
+		c.queued--
 		batch = append(batch, it)
 		fs.outN -= dataBytes(it.frame)
 		more := len(fs.out) > 0
@@ -420,6 +460,7 @@ func (c *internodeConn) writer() {
 	for {
 		c.mu.Lock()
 		batch, base, ctlN := c.collectLocked(false)
+		c.writing = len(batch) > 0
 		c.mu.Unlock()
 		if len(batch) == 0 {
 			select {
@@ -431,7 +472,7 @@ func (c *internodeConn) writer() {
 			continue
 		}
 		for i, it := range batch {
-			_ = c.ws.SetWriteDeadline(time.Now().Add(30 * time.Second))
+			_ = c.ws.SetWriteDeadline(time.Now().Add(internodeWriteTimeout))
 			if err := c.ws.WriteMessage(websocket.BinaryMessage, it.frame); err != nil {
 				for _, rest := range batch[i:] {
 					if rest.after != nil {
@@ -693,6 +734,7 @@ func (fs *fwdStream) takeOutLocked() []func() {
 		}
 	}
 	refund := fs.outN
+	c.queued -= len(fs.out)
 	fs.out = nil
 	fs.outN = 0
 	if refund > 0 && !c.closed {

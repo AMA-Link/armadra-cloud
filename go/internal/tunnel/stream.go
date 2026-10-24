@@ -45,6 +45,7 @@ type Stream struct {
 	localEnded      bool
 	peerReset       bool
 	destroyed       bool
+	tail            bool // 已摘出流表、出队列还没写空（计在 Tunnel.tails 里）
 	bytesIn         int64
 	bytesOut        int64
 }
@@ -183,6 +184,7 @@ func (s *Stream) queueEndLocked() {
 func (s *Stream) destroyLocked() int {
 	dropped := s.outN
 	s.destroyed = true
+	s.t.untailLocked(s)
 	s.pending, s.pendingBytes, s.out, s.outN = nil, 0, nil, 0
 	s.unparkLocked()
 	return dropped

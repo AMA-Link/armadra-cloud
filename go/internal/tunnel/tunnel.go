@@ -168,6 +168,9 @@ type Tunnel struct {
 	ctl           [][]byte
 	sched         Sched[*Stream] // 写端的公平调度（sched.go）
 	parked        []*Stream
+	// tails 是已摘出流表、出队列还没写空的流数（两端都已 END，尾巴 DATA 与 END 待写）。
+	// 排空要等它归零才发关闭帧，否则尾巴被丢掉（#138）。
+	tails int
 }
 
 // New 建一条隧道。写协程与心跳到 Start 才开始。
@@ -478,7 +481,7 @@ func (t *Tunnel) receiveGoaway(g *gen.GoawayPayload) {
 	}
 	t.state = StateDraining
 	t.armGraceLocked(time.Duration(g.GraceMs) * time.Millisecond)
-	drained := len(t.streams) == 0
+	drained := t.drainedLocked()
 	t.mu.Unlock()
 	if t.hooks.OnPeerGoaway != nil {
 		t.hooks.OnPeerGoaway(g.Reason)
@@ -514,7 +517,7 @@ func (t *Tunnel) Goaway(reason string, grace time.Duration) {
 		t.state = StateDraining
 	}
 	t.armGraceLocked(grace)
-	drained := len(t.streams) == 0
+	drained := t.drainedLocked()
 	t.mu.Unlock()
 	t.signal()
 	if drained {
@@ -534,9 +537,15 @@ func (t *Tunnel) armGraceLocked(grace time.Duration) {
 	})
 }
 
+// drainedLocked 答排空是否已完成：流表空了，已摘表的流的尾巴也都写出去了。
+// 尾巴的写出有上界：宽限到期强关，写不动时写超时按 write_failed 断开。
+func (t *Tunnel) drainedLocked() bool {
+	return t.state == StateDraining && len(t.streams) == 0 && t.tails == 0
+}
+
 func (t *Tunnel) closeDrained() {
 	t.mu.Lock()
-	ok := t.state == StateDraining && len(t.streams) == 0
+	ok := t.drainedLocked()
 	code := t.goawayCode
 	t.mu.Unlock()
 	if ok {
@@ -579,6 +588,7 @@ func (t *Tunnel) finish(code protocol.CloseCode, reason string, wantClose bool) 
 	t.streams = map[uint32]*Stream{}
 	t.sched.Reset()
 	t.parked = nil
+	t.tails = 0 // 已摘表流的尾巴不再写出（写协程关闭时只交控制帧）
 	replaced := t.replaced
 	started := t.started
 	// 写协程还没起来就被关（握手刚完成、Start 之前来了 kick / GOAWAY）：排队的控制帧要自己发出去，
@@ -749,9 +759,28 @@ func (t *Tunnel) maybeReleaseLocked(s *Stream) bool {
 func (t *Tunnel) releaseLocked(s *Stream) bool {
 	if t.streams[s.id] == s {
 		delete(t.streams, s.id)
+		if !s.destroyed && len(s.out) > 0 && !s.tail {
+			s.tail = true
+			t.tails++
+		}
 	}
 	s.unparkLocked()
-	return t.state == StateDraining && len(t.streams) == 0
+	return t.drainedLocked()
+}
+
+// untailLocked 已摘表的流写空（或销毁）了：不再算待写的尾巴，答排空是否就此完成。
+// 隧道已关时 finish 已把 tails 清零，只清流上的标记，计数不再减。
+func (t *Tunnel) untailLocked(s *Stream) bool {
+	if !s.tail {
+		return false
+	}
+	if t.state == StateClosed {
+		s.tail = false
+		return false
+	}
+	s.tail = false
+	t.tails--
+	return t.drainedLocked()
 }
 
 // ------------------------------------------------------------ 写协程与心跳
@@ -763,10 +792,10 @@ func (t *Tunnel) writer() {
 	defer ticker.Stop()
 	var batch [][]byte
 	for {
-		var closing bool
+		var closing, drained bool
 		var base uint64
 		var ctlN int
-		batch, base, ctlN, closing = t.collect(batch[:0])
+		batch, base, ctlN, closing, drained = t.collect(batch[:0])
 		for i, frame := range batch {
 			if err := t.tr.Send(frame); err != nil {
 				t.finish(protocol.CloseGoingAway, "write_failed", false)
@@ -776,6 +805,10 @@ func (t *Tunnel) writer() {
 			if i >= ctlN {
 				t.sched.NoteSent(base + uint64(i-ctlN+1))
 			}
+		}
+		if drained {
+			// 排空中最后一条已摘表流的尾巴已经写出：现在才发关闭帧（#138）。
+			t.closeDrained()
 		}
 		if closing {
 			t.mu.Lock()
@@ -810,8 +843,9 @@ func (t *Tunnel) writer() {
 
 // collect 取出这一批要写的帧：先写全部控制帧，再按调度器（sched.go）给各流出帧。
 // 隧道已关闭时只交出剩下的控制帧。
-// 返回帧序号的基数与批头控制帧的个数，写端据此逐帧报告写出进度（Sched.NoteSent）。
-func (t *Tunnel) collect(batch [][]byte) (out [][]byte, base uint64, ctlN int, closing bool) {
+// 返回帧序号的基数与批头控制帧的个数，写端据此逐帧报告写出进度（Sched.NoteSent）；
+// drained 为真表示这一批写出了排空中最后一条已摘表流的尾巴，写完这批就该关隧道。
+func (t *Tunnel) collect(batch [][]byte) (out [][]byte, base uint64, ctlN int, closing, drained bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	batch = append(batch, t.ctl...)
@@ -819,10 +853,11 @@ func (t *Tunnel) collect(batch [][]byte) (out [][]byte, base uint64, ctlN int, c
 	t.ctl = t.ctl[:0]
 	ctlN = len(batch)
 	if t.state == StateClosed {
-		return batch, 0, ctlN, true
+		return batch, 0, ctlN, true, false
 	}
 	base = t.sched.Drain(WriteBudget, func(s *Stream) (int, bool) {
 		if s.destroyed || len(s.out) == 0 {
+			drained = t.untailLocked(s) || drained
 			return -1, false
 		}
 		f := s.popLocked()
@@ -830,10 +865,11 @@ func (t *Tunnel) collect(batch [][]byte) (out [][]byte, base uint64, ctlN int, c
 		more := len(s.out) > 0
 		if !more {
 			s.out = nil
+			drained = t.untailLocked(s) || drained
 		}
 		return len(f) - headroom, more
 	})
-	return batch, base, ctlN, false
+	return batch, base, ctlN, false, drained
 }
 
 // tick 是一次心跳：连续 HeartbeatMisses 次没回应就断开，答是否该退出写协程。
