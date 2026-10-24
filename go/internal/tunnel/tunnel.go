@@ -430,13 +430,19 @@ func (t *Tunnel) receiveRst(id uint32, code protocol.RstCode) {
 		return
 	}
 	s.peerReset = true
-	s.destroyLocked()
+	resume, refunded := t.destroyStreamLocked(s)
 	sink := s.sink
 	closeNow := t.releaseLocked(s)
 	t.mu.Unlock()
+	if refunded {
+		t.signal()
+	}
 	sink.Reset(s, code)
-	if closeNow {
+	if closeNow || refunded {
 		t.closeDrained()
+	}
+	for _, p := range resume {
+		p.sink.Resume(p)
 	}
 }
 
@@ -449,14 +455,7 @@ func (t *Tunnel) receiveWindow(id uint32, credit int) {
 	}
 	if id == 0 {
 		t.sendCredit += credit
-		for _, s := range append([]*Stream(nil), t.parked...) {
-			if t.sendCredit <= 0 {
-				break
-			}
-			if t.flushPendingLocked(s) {
-				resume = append(resume, s)
-			}
-		}
+		resume = t.flushParkedLocked()
 	} else if s := t.streams[id]; s != nil {
 		s.sendCredit += credit
 		if len(s.pending) > 0 && t.flushPendingLocked(s) {
@@ -574,7 +573,7 @@ func (t *Tunnel) finish(code protocol.CloseCode, reason string, wantClose bool) 
 	streams := make([]*Stream, 0, len(t.streams))
 	for _, s := range t.streams {
 		s.peerReset = true
-		s.destroyLocked()
+		s.destroyLocked() // 隧道已关，出队列里的字节不再还信用
 		streams = append(streams, s)
 	}
 	t.streams = map[uint32]*Stream{}
@@ -686,6 +685,32 @@ func (t *Tunnel) flushPendingLocked(s *Stream) bool {
 		t.maybeReleaseLocked(s)
 	}
 	return true
+}
+
+// flushParkedLocked 隧道信用补回来之后，按挂起的先后把等信用的流排进出队列，答已全部排完、该 Resume 的流。
+func (t *Tunnel) flushParkedLocked() []*Stream {
+	var resume []*Stream
+	for _, s := range append([]*Stream(nil), t.parked...) {
+		if t.sendCredit <= 0 {
+			break
+		}
+		if t.flushPendingLocked(s) {
+			resume = append(resume, s)
+		}
+	}
+	return resume
+}
+
+// destroyStreamLocked 销毁流（隧道未关时），把它出队列里没写出的字节的隧道信用还回去（#134），
+// 再叫醒因隧道信用挂起的流：答该 Resume 的流（调用方在锁外调 Sink.Resume）与是否还了信用
+// （还了就要叫醒写协程、检查排空）。
+func (t *Tunnel) destroyStreamLocked(s *Stream) (resume []*Stream, refunded bool) {
+	dropped := s.destroyLocked()
+	if dropped == 0 || t.state == StateClosed {
+		return nil, false
+	}
+	t.sendCredit += dropped
+	return t.flushParkedLocked(), true
 }
 
 func (t *Tunnel) noteSent(s *Stream, n int) {

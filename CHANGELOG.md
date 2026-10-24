@@ -59,6 +59,11 @@
 - Go SQLite 存储的语句不再受请求取消影响（Closes #73）：连接上的语句脱离取消信号执行，取消只在事务开始前生效，写事务不会被 interrupt 打断成半写，interrupt 也不会落到复用连接的下一条语句；加并发取消回归测试。
   Go SQLite store statements are no longer affected by request cancellation (Closes #73): statements run detached from the cancel signal, cancellation only takes effect before a transaction starts, so write transactions are never torn by an interrupt and no interrupt leaks to the next statement on the reused connection; a concurrent-cancellation regression test is added.
 
+### 修复 / Fixed
+
+- 流被重置时归还已扣的发送信用（Closes #134）：Go 中继的流在被重置（对端 RST、本端重置、出错中止）时，出队列里已扣隧道信用、还没写出的字节不再随流丢掉信用，而是还给隧道并叫醒因隧道信用挂起的流；持有节点上转来的流被重置时同样把出队列里的 DATA 还给链路信用。改前带积压的流反复被重置会一点点漏光隧道（或节点间链路）的发送窗口，最终停发。Workers 中继扣信用即发出，没有这个问题。线上协议不变。
+  Credit already deducted is returned when a stream is reset (Closes #134): when a Go relay stream is reset (peer RST, local reset, abort on error), bytes in its output queue that were charged against the tunnel window but not yet written now give that credit back to the tunnel and wake streams parked on tunnel credit; on the holder node a reset forwarded stream likewise returns its queued DATA to the link window. Before, streams with a backlog being reset repeatedly leaked the tunnel (or inter-node link) send window until it stalled. The Workers relay sends as soon as it takes credit and is unaffected. The wire protocol is unchanged.
+
 ### 移除 / Removed
 
 - 删除 TypeScript 版个人中转 `apps/relay` 与 `packages/relay-runtime-node`（Refs #59，G4.1）；`relay-kernel`、`control-core`、`control-store-*` 留给 Workers 版。随之去掉只被它们用的 `acme-client` 补丁与 `follow-redirects` 覆盖，第三方声明少了约 45 个包。端到端的假 core 拆成 `packages/e2e-fake-core`，兼容夹具生成脚本自带最小的状态结构。
