@@ -909,3 +909,23 @@ func TestWriteQuotasBroadcastsOnlyChanges(t *testing.T) {
 		t.Fatalf("额度广播：%+v", q)
 	}
 }
+
+// TeamConcurrent 数节点准入共用的并发有序集合里没到期的成员；没有键答 0，到期的不算。
+func TestRedisTeamConcurrentCountsLiveMembers(t *testing.T) {
+	e := newRedisEnv(t)
+	c, _ := e.newControl("a", nil)
+	ctx := context.Background()
+	if n, err := c.TeamConcurrent(ctx, "t1"); err != nil || n != 0 {
+		t.Fatalf("没有键：%d %v", n, err)
+	}
+	now := time.Now().UnixMilli()
+	key := e.prefix + "conc:team:t1"
+	e.admin.ZAdd(ctx, key, goredis.Z{Score: float64(now + 60000), Member: "n1:a"}, goredis.Z{Score: float64(now + 60000), Member: "n2:b"}, goredis.Z{Score: float64(now - 60000), Member: "n1:old"})
+	e.admin.ZAdd(ctx, e.prefix+"conc:team:t2", goredis.Z{Score: float64(now + 60000), Member: "n1:x"})
+	if n, err := c.TeamConcurrent(ctx, "t1"); err != nil || n != 2 {
+		t.Fatalf("t1 应有 2 个在线：%d %v", n, err)
+	}
+	if n, _ := c.TeamConcurrent(ctx, "t2"); n != 1 {
+		t.Fatalf("t2 应有 1 个：%d", n)
+	}
+}

@@ -3,6 +3,7 @@ package teams
 import (
 	"context"
 	"encoding/json"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"net/url"
 	"strings"
 	"time"
@@ -377,9 +378,9 @@ func MonthOf(period string, now time.Time) (start, end time.Time, err error) {
 }
 
 // TeamUsage 是团队在 [start, end) 的用量，对照当前额度：主机、成员、guest、同时连接、流量。
-// teams.usage 与 billing.usage 用同一个统计函数；同时连接只有节点知道，控制面只展示额度（value 为 0）。
+// teams.usage 与 billing.usage 用同一个统计函数；同时连接是此刻的跨节点在线数（relay 的并发计数，不分周期）；读不到（Redis 出错）时不让整页失败，记 0。
 // withDays 为真时另给流量的按天序列。
-func TeamUsage(ctx context.Context, store saas.Store, tenantID string, access Access, start, end time.Time, withDays bool) (entries []UsageEntry, days []saas.DayBytes, err error) {
+func TeamUsage(ctx context.Context, store saas.Store, relay relayctl.Control, tenantID string, access Access, start, end time.Time, withDays bool) (entries []UsageEntry, days []saas.DayBytes, err error) {
 	var (
 		seats saas.Seats
 		hosts int
@@ -406,11 +407,15 @@ func TeamUsage(ctx context.Context, store saas.Store, tenantID string, access Ac
 	if err != nil {
 		return nil, nil, err
 	}
+	live, err := relay.TeamConcurrent(ctx, access.Scope.TeamID())
+	if err != nil {
+		live = 0
+	}
 	return []UsageEntry{
 		{quota.Hosts, int64(hosts), LimitOf(int64(lim.Hosts))},
 		{quota.Members, int64(seats.Members), LimitOf(int64(lim.Members))},
 		{quota.Guests, int64(seats.Guests), LimitOf(int64(lim.Guests))},
-		{quota.Concurrent, 0, LimitOf(int64(lim.Concurrent))},
+		{quota.Concurrent, int64(live), LimitOf(int64(lim.Concurrent))},
 		{quota.Traffic, bytes, LimitOf(lim.TrafficBytes)},
 	}, days, nil
 }
@@ -430,7 +435,7 @@ func (s *Service) usage(ctx context.Context, call *api.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, _, err := TeamUsage(ctx, s.store, s.tenant(), access, start, end, false)
+	entries, _, err := TeamUsage(ctx, s.store, s.relay, s.tenant(), access, start, end, false)
 	if err != nil {
 		return nil, err
 	}

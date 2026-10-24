@@ -31,7 +31,7 @@ func usageMap(t *testing.T, res response) map[string][2]any {
 	return out
 }
 
-// billing.plan：个人空间本人看；团队空间只有 owner 与 billing，别的角色 403、非成员 404。
+// billing.plan：个人空间本人看；团队空间 owner、admin、billing 只读，member 与 guest 403、非成员 404。
 func TestBillingPlanSpacesAndRoles(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	owner, billing, admin, member, outsider := r.verified(), r.verified(), r.verified(), r.verified(), r.verified()
@@ -46,7 +46,7 @@ func TestBillingPlanSpacesAndRoles(t *testing.T) {
 		t.Fatalf("个人计划：%s", res.body)
 	}
 	// 团队空间：计划与状态来自 entitlements，席位 = 非 guest 成员。
-	for _, who := range []session{owner, billing} {
+	for _, who := range []session{owner, billing, admin} {
 		res = r.do("GET", "/v1/billing/plan?"+spaceQuery("team", team), nil, who.bearer())
 		r.expect(res, 200, "")
 		if res.json["plan"] != "pro" || res.json["status"] != "trialing" || res.json["seats"] != float64(4) {
@@ -56,7 +56,7 @@ func TestBillingPlanSpacesAndRoles(t *testing.T) {
 			t.Fatalf("space：%s", res.body)
 		}
 	}
-	for _, who := range []session{admin, member} {
+	for _, who := range []session{member} {
 		r.expect(r.do("GET", "/v1/billing/plan?"+spaceQuery("team", team), nil, who.bearer()), 403, "team_role_insufficient")
 	}
 	r.expect(r.do("GET", "/v1/billing/plan?"+spaceQuery("team", team), nil, outsider.bearer()), 404, "not_found")
@@ -147,4 +147,34 @@ func TestBillingUsageMonthAndDay(t *testing.T) {
 		t.Fatalf("teams.usage 与 billing.usage 同一组统计：%v / %v", teamUsage.json["usage"], billingUsage.json["usage"])
 	}
 	r.expect(r.do("GET", "/v1/billing/usage?"+spaceQuery("team", team), nil, member.bearer()), 403, "team_role_insufficient")
+}
+
+// billing.usage 对 admin 只读放开，guest 与 member 仍 403；团队的同时连接取中继的在线计数，不再恒为 0。
+func TestBillingUsageAdminReadAndConcurrent(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	owner, admin, member, guest := r.verified(), r.verified(), r.verified(), r.verified()
+	team := r.seedTeam("conc", map[string]string{owner.accountID: "owner", admin.accountID: "admin", member.accountID: "member", guest.accountID: "guest"})
+	path := "/v1/billing/usage?" + spaceQuery("team", team)
+
+	res := r.do("GET", path, nil, admin.bearer())
+	r.expect(res, 200, "")
+	if got := usageMap(t, res)["concurrent"]; got != [2]any{float64(0), float64(10)} {
+		t.Fatalf("没有在线连接：%v", got)
+	}
+	r.run.Relay.SetTeamConcurrent(team, 7)
+	for _, who := range []session{owner, admin} {
+		res = r.do("GET", path, nil, who.bearer())
+		r.expect(res, 200, "")
+		if got := usageMap(t, res)["concurrent"]; got != [2]any{float64(7), float64(10)} {
+			t.Fatalf("同时连接：%v", got)
+		}
+	}
+	teamUsage := r.do("GET", teamPath(team, "usage"), nil, owner.bearer())
+	r.expect(teamUsage, 200, "")
+	if got := usageMap(t, teamUsage)["concurrent"]; got != [2]any{float64(7), float64(10)} {
+		t.Fatalf("teams.usage 的同时连接：%v", got)
+	}
+	for _, who := range []session{member, guest} {
+		r.expect(r.do("GET", path, nil, who.bearer()), 403, "team_role_insufficient")
+	}
 }

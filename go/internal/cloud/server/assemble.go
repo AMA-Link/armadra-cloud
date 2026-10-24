@@ -243,7 +243,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	for name, handler := range adminService.Handlers() {
 		handlers[name] = handler
 	}
-	for name, handler := range billing.New(billing.Options{Core: coreCtx, Store: saasStore}).Handlers() {
+	for name, handler := range billing.New(billing.Options{Core: coreCtx, Store: saasStore, Relay: durable}).Handlers() {
 		handlers[name] = handler
 	}
 	// 控制台页面（WEB_ROOT，设计 §5.3）：目录里没有 index.html 就当没配（警告），platform.info 也不报 webApp。

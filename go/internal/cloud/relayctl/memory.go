@@ -22,6 +22,7 @@ type Memory struct {
 	routes   map[string]string
 	nodes    map[string]Node
 	quotas   map[string]Quota
+	live     map[string]int
 	incident Incident
 }
 
@@ -34,7 +35,7 @@ func NewMemory(now Clock) *Memory {
 	}
 	return &Memory{
 		now: now, issued: map[string]Issued{}, revoked: map[string]int64{},
-		routes: map[string]string{}, nodes: map[string]Node{}, quotas: map[string]Quota{},
+		routes: map[string]string{}, nodes: map[string]Node{}, quotas: map[string]Quota{}, live: map[string]int{},
 	}
 }
 
@@ -188,6 +189,20 @@ func (m *Memory) SetTeamQuota(_ context.Context, teamID string, quota Quota) err
 	defer m.mu.Unlock()
 	m.quotas[teamID] = quota
 	return nil
+}
+
+// TeamConcurrent 实现 Control：内存实现没有节点，答 SetTeamConcurrent 设的值（测试用，缺省 0）。
+func (m *Memory) TeamConcurrent(_ context.Context, teamID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.live[teamID], nil
+}
+
+// SetTeamConcurrent 设团队的在线连接数（测试用）。
+func (m *Memory) SetTeamConcurrent(teamID string, n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.live[teamID] = n
 }
 
 // ClearTeamQuota 实现 Control。
