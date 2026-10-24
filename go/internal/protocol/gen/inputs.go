@@ -2462,6 +2462,11 @@ var RouteInputs = map[string]*schema.Schema{
 			{Name: "drain", Schema: &schema.Schema{
 				Type: "boolean",
 			}},
+			{Name: "reason", Schema: &schema.Schema{
+				Type:      "string",
+				MinLength: schema.Int(1),
+				MaxLength: schema.Int(500),
+			}},
 		},
 		Required: []string{"node", "drain"},
 	},

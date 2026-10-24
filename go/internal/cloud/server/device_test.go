@@ -98,6 +98,14 @@ func TestDeviceCodeFullFlow(t *testing.T) {
 	if info.json["platform"] != "desktop" || info.json["name"] != "我的 Mac" {
 		t.Fatalf("发起设备：%s", info.body)
 	}
+	if info.json["ipPrefix"] != r.ip {
+		t.Fatalf("IPv4 原样返回：%s", info.body)
+	}
+	// IPv6 截到 /64。
+	_, v6Code := r.startDevice(hdr("X-Forwarded-For", "2001:db8:1:2:3:4:5:6"))
+	if got := r.deviceGet(browser, v6Code); got.status != 200 || got.json["ipPrefix"] != "2001:db8:1:2::/64" {
+		t.Fatalf("IPv6 前缀：%s", got.body)
+	}
 	// 未批准前轮询仍是 pending。
 	if got := r.pollStatus(deviceCode); got != "pending" {
 		t.Fatalf("状态 %s", got)

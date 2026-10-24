@@ -53,3 +53,11 @@ export const limitReachedDetailsSchema = z.object({
   limit: z.number().nonnegative(),
 });
 export type LimitReachedDetails = z.infer<typeof limitReachedDetailsSchema>;
+
+/** `team_hosts_online` 的 `details`：团队还有几台在线主机（0.11.0 起）。 */
+export const teamHostsOnlineDetailsSchema = z.object({
+  onlineHosts: z.number().int().positive(),
+});
+export type TeamHostsOnlineDetails = z.infer<
+  typeof teamHostsOnlineDetailsSchema
+>;

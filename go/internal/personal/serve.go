@@ -42,7 +42,7 @@ import (
 // 关闭与超时。
 const (
 	shutdownGrace = 5 * time.Second
-	// httpShutdown 是关 HTTP 服务等空闲连接的上限；jobTimeout 是周期任务（落库、清理）单次的上限。
+	// httpShutdown 是关 HTTP 服务等空闲连接的上限；jobTimeout 是周期任务（落库、清理）单次开始前的上限（已开始的事务以 busy_timeout 为上界）。
 	// 关闭总时间：GOAWAY 宽限 ≤5s + 关服务 ≤2s + 等任务 ≤3s，正常（没有长连接在排空）不到 1s。
 	httpShutdown    = 2 * time.Second
 	jobTimeout      = 3 * time.Second
@@ -489,7 +489,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	background, stopBackground := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
 	// 周期任务的 context 不跟 background 一起取消：关闭时让手头的库操作做完，中途取消会让驱动对连接
-	// 发 interrupt，可能落到最后一次流量落库上。每个任务自带 jobTimeout 的上限，关闭等它也有界。
+	// 发 interrupt，可能落到最后一次流量落库上。每个任务自带 jobTimeout：它只拦住还没开始的事务，已开始的以 busy_timeout 为上界，关闭等它也有界。
 	job := func() context.Context {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(background), jobTimeout)
 		time.AfterFunc(jobTimeout, cancel)

@@ -170,8 +170,9 @@ func (s *Service) relayNodes(ctx context.Context, call *api.Call) (any, error) {
 // 如实反映节点此刻的状态（排空中仍是 true）。契约（§28）给这个过程的错误码只有 not_found / forbidden，所以不另答 conflict。
 func (s *Service) relayNodeDrain(ctx context.Context, call *api.Call) (any, error) {
 	var in struct {
-		Node  string `json:"node"`
-		Drain bool   `json:"drain"`
+		Node   string `json:"node"`
+		Drain  bool   `json:"drain"`
+		Reason string `json:"reason"`
 	}
 	if err := call.Bind(&in); err != nil {
 		return nil, err
@@ -196,7 +197,7 @@ func (s *Service) relayNodeDrain(ctx context.Context, call *api.Call) (any, erro
 	switch {
 	case in.Drain && !node.Draining:
 		if err := s.store.Tx(ctx, func(tx saas.Tx) error {
-			return s.record(ctx, tx, call, operator.AccountID, "", ActionNodeDrain, "relay_node", in.Node, "")
+			return s.record(ctx, tx, call, operator.AccountID, "", ActionNodeDrain, "relay_node", in.Node, in.Reason)
 		}); err != nil {
 			return nil, err
 		}

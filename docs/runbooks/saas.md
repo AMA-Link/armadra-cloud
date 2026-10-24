@@ -56,7 +56,7 @@
 
 ## 节点间转发
 
-- 每个账号经节点间连接（`/x/v1`）转发的通道数受 `RELAY_FORWARDED_PER_ACCOUNT`（缺省 64）限制，超出的新通道答 4429 `limit_reached`；链路上的 4096 个流位各租户共用，没有这个上限一个账号就能占满。本地通道不受它限制。
+- 每个账号经节点间连接（`/x/v1`）转发的通道数受 `RELAY_FORWARDED_PER_ACCOUNT`（缺省 64）限制，计数在每个入口节点上、按账号各算各的，不是全集群合计，超出的新通道答 4429 `limit_reached`；链路上的 4096 个流位各租户共用，没有这个上限一个账号就能占满。本地通道不受它限制。
 - 指标：`relay_forward_account_refused_total`（计数器，因账号转发名额满而拒绝的通道数）与 `relay_internode_unwritten_bytes`（仪表，入口节点出向连接上还没写出的转发字节：挂着等信用的加已排队没写进内核的）。建议规则：`relay_internode_unwritten_bytes > 64 * 1024 * 1024` 持续 5 分钟就告警（对端或链路慢，或某个租户在占住链路）；`increase(relay_forward_account_refused_total[10m]) > 0` 作提示，反复出现时看是哪个账号、是否该调高上限。
 - 节点令牌撤销（`armadra-cloud nodes revoke`）经 `relay:revoked` 广播即时断开已建立的节点间连接；5 秒一次的复查留作兜底。
 

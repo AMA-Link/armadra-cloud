@@ -635,9 +635,19 @@ func TestTeamsDeleteRestorePurge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 有在线主机：409 conflict，什么都不变。
+	// 有在线主机：409 team_hosts_online，details.onlineHosts 是在线数（只数在线的），什么都不变。
+	r.seedHost("p-host-2", team, owner.accountID)
 	r.run.Relay.SetRoute("p-host", "0.3.0")
-	r.expect(r.do("DELETE", teamPath(team), nil, owner.bearer()), 409, "conflict")
+	res0 := r.do("DELETE", teamPath(team), nil, owner.bearer())
+	r.expect(res0, 409, "team_hosts_online")
+	if d, _ := res0.json["details"].(map[string]any); d["onlineHosts"] != float64(1) {
+		t.Fatalf("onlineHosts：%s", res0.body)
+	}
+	r.run.Relay.SetRoute("p-host-2", "0.3.0")
+	if d, _ := r.do("DELETE", teamPath(team), nil, owner.bearer()).json["details"].(map[string]any); d["onlineHosts"] != float64(2) {
+		t.Fatal("两台在线应报 2")
+	}
+	r.run.Relay.SetRoute("p-host-2", "")
 	r.expect(r.do("GET", teamPath(team), nil, owner.bearer()), 200, "")
 	r.run.Relay.SetRoute("p-host", "")
 
