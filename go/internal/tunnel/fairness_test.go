@@ -200,3 +200,20 @@ func TestSchedulerKeepsPerStreamOrder(t *testing.T) {
 		t.Fatalf("流内字节乱序或丢失：%d / %d", len(got), len(want))
 	}
 }
+
+// 小帧加背压会在出队列里堆出很多段：入队不能是平方量级（出队列字节数随入队 / 出队增减）。
+func TestEnqueueManyTinyFramesIsNotQuadratic(t *testing.T) {
+	r := newRig(t, func(c *tunnel.Config) { c.StreamWindow = 1 << 20; c.TunnelWindow = 1 << 30 })
+	r.tr.gate = make(chan struct{}) // 写端卡住，段全部堆在出队列里
+	s := r.open(&recSink{})
+	one := []byte{1}
+	start := time.Now()
+	for i := 0; i < 300_000; i++ {
+		s.Send(one)
+	}
+	d := time.Since(start)
+	close(r.tr.gate)
+	if d > 5*time.Second {
+		t.Fatalf("30 万个 1 字节写入用了 %v，疑似平方", d)
+	}
+}

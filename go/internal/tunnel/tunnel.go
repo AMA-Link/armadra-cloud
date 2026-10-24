@@ -668,6 +668,7 @@ func (t *Tunnel) flushPendingLocked(s *Stream) bool {
 		t.sendCredit -= n
 		s.bytesOut += int64(n)
 		s.out = append(s.out, segment{buf: p.buf, off: p.off, n: n})
+		s.outN += n
 		s.pendingBytes -= n
 		p.off += n
 		if p.off == len(p.buf) {
@@ -705,7 +706,7 @@ func (t *Tunnel) markReadyLocked(s *Stream) {
 	if len(s.out) == 0 || s.destroyed {
 		return
 	}
-	t.sched.Add(s, &s.flow, s.outBytes())
+	t.sched.Add(s, &s.flow, s.outN)
 }
 
 func (t *Tunnel) parkLocked(s *Stream) {

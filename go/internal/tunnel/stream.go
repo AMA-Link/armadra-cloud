@@ -37,6 +37,7 @@ type Stream struct {
 	pending         []pendingChunk
 	pendingBytes    int
 	out             []segment
+	outN            int // out 里的载荷字节（入队 / 出队时增减，调度器判断稀疏流不必遍历）
 	endAfterPending bool
 	flow            Flow // 写端调度器里的状态
 	inParked        bool
@@ -167,7 +168,7 @@ func (s *Stream) queueEndLocked() {
 // destroyLocked 丢掉没发出去的字节，流不再收发。
 func (s *Stream) destroyLocked() {
 	s.destroyed = true
-	s.pending, s.pendingBytes, s.out = nil, 0, nil
+	s.pending, s.pendingBytes, s.out, s.outN = nil, 0, nil, 0
 	s.unparkLocked()
 }
 
@@ -192,6 +193,7 @@ func (s *Stream) popLocked() []byte {
 	sg := s.out[0]
 	s.out[0] = segment{}
 	s.out = s.out[1:]
+	s.outN -= sg.n
 	if sg.end {
 		b := make([]byte, headroom)
 		b[0] = byte(protocol.FrameEnd)
@@ -202,13 +204,4 @@ func (s *Stream) popLocked() []byte {
 	frame[0] = byte(protocol.FrameData)
 	binary.BigEndian.PutUint32(frame[1:headroom], s.id)
 	return frame
-}
-
-// outBytes 是已扣信用、排在出队列里的载荷字节（持 t.mu 调用）。
-func (s *Stream) outBytes() int {
-	n := 0
-	for _, sg := range s.out {
-		n += sg.n
-	}
-	return n
 }
