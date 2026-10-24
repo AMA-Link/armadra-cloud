@@ -246,6 +246,20 @@ func (t *Tunnel) StreamCount() int {
 	return len(t.streams)
 }
 
+// PendingBytes 是还没写进传输层的上行载荷字节：挂着等信用的，加已扣信用、排在出队列里的。
+func (t *Tunnel) PendingBytes() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for _, s := range t.streams {
+		n += s.pendingBytes
+		for _, sg := range s.out {
+			n += sg.n
+		}
+	}
+	return n
+}
+
 // Accepting 能否再开流（open 状态）。
 func (t *Tunnel) Accepting() bool { return t.State() == StateOpen }
 

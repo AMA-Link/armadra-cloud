@@ -50,6 +50,7 @@
 | `RELAY_METRICS_TOKEN` / `RELAY_METRICS_TOKEN_FILE`        |      | 指标的 Bearer 令牌                                                                                                                                     |
 | `RELAY_TRUSTED_PROXY` / `RELAY_TRUSTED_PROXY_PREFER`      |      | 受信反向代理的 IP / CIDR（逗号分隔）与先读的头（`forwarded-for` 缺省 / `real-ip`），规则同 personal                                                    |
 | `RELAY_TEAM_CONCURRENT` / `RELAY_TEAM_CONNECT_PER_MINUTE` |      | 控制面没写额度（或额度坏了）时的团队并发与建连速率，缺省 10 与 600 / 分钟（最严格的套餐）                                                              |
+| `RELAY_FORWARDED_PER_ACCOUNT`                             |      | 每个账号经节点间连接转发的端到端通道数上限（链路的 4096 个流位各租户共用），1–1000000，缺省 64；超出答 4429 `limit_reached`                            |
 | `RELAY_DRAIN_GRACE_MS`                                    |      | 排空（GOAWAY rebalance）的宽限，缺省 30000；容器的停止宽限要比它长（compose 的 `stop_grace_period: 40s`）                                              |
 | `RELAY_ALLOW_INSECURE_TUNNEL`                             |      | `1` 允许 `ws://` 的隧道与 `/x/v1` 地址，只用于本地开发                                                                                                 |
 | `RELAY_LOG_LEVEL`                                         |      | 缺省 `info`                                                                                                                                            |

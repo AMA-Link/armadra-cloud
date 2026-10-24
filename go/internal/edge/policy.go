@@ -81,6 +81,8 @@ type GateInput struct {
 	DeviceID string
 	// Team 是中继令牌的 team；个人空间为空串。
 	Team string
+	// Forwarded 为真表示这条通道经节点间连接转发（源的隧道在别的节点）。
+	Forwarded bool
 }
 
 // TrafficIdentity 是一条通道记到谁名下（流量统计，类别 e2e）：中继令牌的 sub / dev / team。
@@ -295,6 +297,7 @@ func (p *Policy) DecideUpgrade(ctx context.Context, r Request) (Decision, error)
 	if p.o.Gate != nil {
 		rel, code, err := p.o.Gate.Admit(ctx, GateInput{
 			SourceID: addressed.SourceID, Subject: adm.subject, DeviceID: adm.device, Team: adm.team,
+			Forwarded: adm.tunnel.Link() != "",
 		})
 		if err != nil || code != "" {
 			p.ReleaseUpgrade(adm.subject)

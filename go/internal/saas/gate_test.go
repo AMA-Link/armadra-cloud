@@ -13,6 +13,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
+	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 )
 
 type errorList struct {
@@ -175,4 +176,69 @@ func TestGateCloseDropsQueuedReleasesAfterFlushTimeout(t *testing.T) {
 	if errs.has("team concurrency release") != 0 {
 		t.Fatalf("放弃的释放不该报错：%v", errs.ops)
 	}
+}
+
+// 每个账号经节点间连接转发的通道数有上限：满了答 limit_reached 并计数；本地通道与别的账号不受影响；
+// 释放（幂等）归还名额；团队准入被拒时转发名额一并归还。
+func TestGateForwardedPerAccountCap(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	client := goredis.NewClient(&goredis.Options{Addr: addr, MaxRetries: -1})
+	defer func() { _ = client.Close() }()
+	g := testGate(t, client, "relay-test:", &errorList{})
+	g.fwdCap = 2
+	ctx := context.Background()
+	fwd := func(sub string) edge.GateInput { return edge.GateInput{Subject: sub, Forwarded: true} }
+
+	r1, code, err := g.Admit(ctx, fwd("a"))
+	if err != nil || code != "" || r1 == nil {
+		t.Fatal(code, err)
+	}
+	r2, _, _ := g.Admit(ctx, fwd("a"))
+	if _, code, _ := g.Admit(ctx, fwd("a")); code != gen.ErrLimitReached {
+		t.Fatalf("第 3 条应被拒：%q", code)
+	}
+	if _, code, _ := g.Admit(ctx, fwd("b")); code != "" {
+		t.Fatalf("别的账号不受影响：%q", code)
+	}
+	for i := 0; i < 5; i++ {
+		if _, code, _ := g.Admit(ctx, edge.GateInput{Subject: "a"}); code != "" {
+			t.Fatalf("本地通道不受转发名额限制：%q", code)
+		}
+	}
+	r1()
+	r1() // 幂等
+	if _, code, _ := g.Admit(ctx, fwd("a")); code != "" {
+		t.Fatalf("释放之后应能再开：%q", code)
+	}
+	if _, code, _ := g.Admit(ctx, fwd("a")); code != gen.ErrLimitReached {
+		t.Fatalf("重复释放不该多还名额：%q", code)
+	}
+	r2()
+	if g.fwdRefused.Load() != 2 || !strings.Contains(g.render(), "relay_forward_account_refused_total 2") {
+		t.Fatal(g.fwdRefused.Load(), g.render())
+	}
+	// 团队速率被拒时转发名额一并归还。
+	g.fwdCap = 1
+	g.limits = func() control.Limiter { return refuseAll{} }
+	if _, code, _ := g.Admit(ctx, edge.GateInput{Subject: "c", Team: "t", Forwarded: true}); code != gen.ErrRateLimited {
+		t.Fatalf("%q", code)
+	}
+	g.mu.Lock()
+	left := g.fwd["c"]
+	g.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("准入被拒应归还转发名额：%d", left)
+	}
+}
+
+// refuseAll 是一个什么都拒的限流器。
+type refuseAll struct{ control.Limiter }
+
+func (refuseAll) Hit(context.Context, control.LimitKind, string) (control.LimitResult, error) {
+	return control.LimitResult{Allowed: false}, nil
 }

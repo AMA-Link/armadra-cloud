@@ -67,6 +67,11 @@ func TestForwardedChannel(t *testing.T) {
 	if got := metricLine(a.Metrics(), `relay_internode_bytes_total{direction="to_client"}`); got != "3145728" {
 		t.Fatalf("a 的节点间下行字节：%s", got)
 	}
+	// 入口节点（b）有出向连接，指标在；全部传完后没有未写出的转发字节。持有节点没有出向连接，指标也在（0）。
+	eventually(t, "入口节点没有未写出的转发字节", func() bool { return metricLine(b.Metrics(), "relay_internode_unwritten_bytes") == "0" })
+	if metricLine(a.Metrics(), "relay_forward_account_refused_total") != "0" {
+		t.Fatal(a.Metrics())
+	}
 	if metricLine(a.Metrics(), "relay_internode_streams") != "1" || metricLine(b.Metrics(), "relay_internode_streams") != "1" {
 		t.Fatalf("两边各一条节点间流：%s / %s", metricLine(a.Metrics(), "relay_internode_streams"), metricLine(b.Metrics(), "relay_internode_streams"))
 	}

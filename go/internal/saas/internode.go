@@ -56,6 +56,8 @@ type internodeMetrics struct {
 	toSource, toClient atomic.Int64
 	remote             atomic.Int64
 	streams            func() int
+	// unwritten 是入口节点出向连接上还没写出的转发字节（挂着等信用的上行 + 已排队没写进内核的）。
+	unwritten func() int64
 }
 
 func (m *internodeMetrics) addBytes(d obs.Direction, n int) {
@@ -76,6 +78,11 @@ func (m *internodeMetrics) render() string {
 	b.WriteString("# TYPE relay_internode_bytes_total counter\n")
 	b.WriteString(`relay_internode_bytes_total{direction="to_source"} ` + itoa(m.toSource.Load()) + "\n")
 	b.WriteString(`relay_internode_bytes_total{direction="to_client"} ` + itoa(m.toClient.Load()) + "\n")
+	if m.unwritten != nil {
+		b.WriteString("# HELP relay_internode_unwritten_bytes Forwarded payload bytes queued on this node's outbound inter-node links but not yet written.\n")
+		b.WriteString("# TYPE relay_internode_unwritten_bytes gauge\n")
+		b.WriteString("relay_internode_unwritten_bytes " + itoa(m.unwritten()) + "\n")
+	}
 	b.WriteString("# HELP relay_routes_remote_total Client channels forwarded to the node holding the tunnel.\n")
 	b.WriteString("# TYPE relay_routes_remote_total counter\n")
 	b.WriteString("relay_routes_remote_total " + itoa(m.remote.Load()) + "\n")
@@ -127,6 +134,21 @@ func (l *links) streams() int {
 	n := 0
 	for _, t := range list {
 		n += t.StreamCount()
+	}
+	return n
+}
+
+// unwrittenBytes 是各出向连接上还没写出的转发字节。
+func (l *links) unwrittenBytes() int64 {
+	l.mu.Lock()
+	list := make([]*tunnel.Tunnel, 0, len(l.byNode))
+	for _, t := range l.byNode {
+		list = append(list, t)
+	}
+	l.mu.Unlock()
+	var n int64
+	for _, t := range list {
+		n += int64(t.PendingBytes())
 	}
 	return n
 }
