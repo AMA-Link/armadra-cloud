@@ -41,7 +41,28 @@ type DB struct {
 	mu     sync.Mutex
 	db     *sql.DB
 	conn   *sql.Conn
+	q      *safeConn
 	closed bool
+}
+
+// safeConn 包住那条唯一的连接：所有语句都用脱离了取消信号的 context 执行。
+//
+// 驱动（modernc）在带取消信号的 context 被取消时会对连接发 interrupt，正在执行的语句会被打断；
+// 写事务中途被打断就是半写，打断还可能落到之后复用这条连接的下一条语句上（#73）。
+// 所以请求的取消只在事务开始之前生效（read / write / snapshot 取得锁后先看 ctx.Err()），
+// 一旦开始，语句跑完为止；等锁的上限是 busy_timeout，不会无限等。context 里的值保留。
+type safeConn struct{ c *sql.Conn }
+
+func (s *safeConn) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return s.c.ExecContext(context.WithoutCancel(ctx), query, args...)
+}
+
+func (s *safeConn) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return s.c.QueryContext(context.WithoutCancel(ctx), query, args...)
+}
+
+func (s *safeConn) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return s.c.QueryRowContext(context.WithoutCancel(ctx), query, args...)
 }
 
 // Options 是打开库的选项。
@@ -115,7 +136,7 @@ func Open(ctx context.Context, path string, options Options) (*DB, error) {
 		}
 		return nil, wrapOpenError(path, err)
 	}
-	db := &DB{path: path, db: raw, conn: conn}
+	db := &DB{path: path, db: raw, conn: conn, q: &safeConn{c: conn}}
 	if err := db.prepare(ctx, options.Create, migrations, now); err != nil {
 		_ = db.Close()
 		// 自己刚建的文件没写成：删掉，下次还能重建；已有的库一个字节也不动。
@@ -189,56 +210,66 @@ func (d *DB) Close() error {
 }
 
 // read 在持锁的连接上读（不开事务）。
-func (d *DB) read(ctx context.Context, fn func(q *sql.Conn) error) error {
+func (d *DB) read(ctx context.Context, fn func(q *safeConn) error) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
 		return sql.ErrConnDone
 	}
-	return fn(d.conn)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fn(d.q)
 }
 
 // write 开 BEGIN IMMEDIATE 写事务：一开始就拿写锁，读-改-写之间别人插不进来。
 // fn 返回错误就回滚并原样返回。
-func (d *DB) write(ctx context.Context, fn func(q *sql.Conn) error) error {
+func (d *DB) write(ctx context.Context, fn func(q *safeConn) error) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
 		return sql.ErrConnDone
 	}
-	if _, err := d.conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+	// 取消只在开始之前生效：开始后整个事务（含 COMMIT）与回滚都不受请求取消影响，不会半写。
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := fn(d.conn); err != nil {
-		_, _ = d.conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+	if _, err := d.q.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
-	if _, err := d.conn.ExecContext(ctx, "COMMIT"); err != nil {
-		_, _ = d.conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+	if err := fn(d.q); err != nil {
+		_, _ = d.q.ExecContext(ctx, "ROLLBACK")
+		return err
+	}
+	if _, err := d.q.ExecContext(ctx, "COMMIT"); err != nil {
+		_, _ = d.q.ExecContext(ctx, "ROLLBACK")
 		return err
 	}
 	return nil
 }
 
 // snapshot 在一个读事务里取一致的多表读。
-func (d *DB) snapshot(ctx context.Context, fn func(q *sql.Conn) error) error {
+func (d *DB) snapshot(ctx context.Context, fn func(q *safeConn) error) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
 		return sql.ErrConnDone
 	}
-	if _, err := d.conn.ExecContext(ctx, "BEGIN"); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	err := fn(d.conn)
-	_, _ = d.conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+	if _, err := d.q.ExecContext(ctx, "BEGIN"); err != nil {
+		return err
+	}
+	err := fn(d.q)
+	_, _ = d.q.ExecContext(ctx, "ROLLBACK")
 	return err
 }
 
 // DataVersion 别的连接（别的进程）提交过就变，自己的提交不变：serve 用它察觉 CLI 的改动。
 func (d *DB) DataVersion(ctx context.Context) (int64, error) {
 	var version int64
-	err := d.read(ctx, func(q *sql.Conn) error {
+	err := d.read(ctx, func(q *safeConn) error {
 		return q.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
 	})
 	return version, err
@@ -247,7 +278,7 @@ func (d *DB) DataVersion(ctx context.Context) (int64, error) {
 // IntegrityCheck 是 PRAGMA integrity_check 的结果行；只有一行 ok 是好的。
 func (d *DB) IntegrityCheck(ctx context.Context) ([]string, error) {
 	var out []string
-	err := d.read(ctx, func(q *sql.Conn) error {
+	err := d.read(ctx, func(q *safeConn) error {
 		rows, err := q.QueryContext(ctx, "PRAGMA integrity_check")
 		if err != nil {
 			return err
@@ -276,7 +307,7 @@ func (d *DB) Backup(ctx context.Context, target string) error {
 		return store.Errorf(store.KindCorrupt, "备份目标建不出来：%s", target)
 	}
 	_ = file.Close()
-	err = d.read(ctx, func(q *sql.Conn) error {
+	err = d.read(ctx, func(q *safeConn) error {
 		_, err := q.ExecContext(ctx, "VACUUM INTO ?", target)
 		return err
 	})

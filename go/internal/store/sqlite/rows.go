@@ -56,7 +56,7 @@ func toAccount(row scanner) (*store.AccountRecord, error) {
 	return &a, nil
 }
 
-func insertAccount(ctx context.Context, q *sql.Conn, tenantID string, a store.AccountRecord) error {
+func insertAccount(ctx context.Context, q *safeConn, tenantID string, a store.AccountRecord) error {
 	_, err := q.ExecContext(ctx,
 		`INSERT INTO accounts (tenant_id, account_id, name, password_json, failures, locked_until_ms,
 		   last_failure_at_ms, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -65,7 +65,7 @@ func insertAccount(ctx context.Context, q *sql.Conn, tenantID string, a store.Ac
 	return err
 }
 
-func writeAccount(ctx context.Context, q *sql.Conn, tenantID, accountID string, a store.AccountRecord) error {
+func writeAccount(ctx context.Context, q *safeConn, tenantID, accountID string, a store.AccountRecord) error {
 	_, err := q.ExecContext(ctx,
 		`UPDATE accounts SET name = ?, password_json = ?, failures = ?, locked_until_ms = ?,
 		   last_failure_at_ms = ?, created_at_ms = ?, updated_at_ms = ?
@@ -103,7 +103,7 @@ func toSigningKey(row scanner) (store.SigningKeyRecord, error) {
 	return k, nil
 }
 
-func insertSigningKey(ctx context.Context, q *sql.Conn, tenantID string, k store.SigningKeyRecord) error {
+func insertSigningKey(ctx context.Context, q *safeConn, tenantID string, k store.SigningKeyRecord) error {
 	_, err := q.ExecContext(ctx,
 		`INSERT INTO signing_keys (tenant_id, kid, private_key_pkcs8, private_key_wrap, public_jwk_json,
 		   active_from_ms, retired_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -141,7 +141,7 @@ func toSource(row scanner) (*store.SourceRecord, error) {
 	return &s, nil
 }
 
-func insertSource(ctx context.Context, q *sql.Conn, tenantID string, s store.SourceRecord) error {
+func insertSource(ctx context.Context, q *safeConn, tenantID string, s store.SourceRecord) error {
 	_, err := q.ExecContext(ctx,
 		`INSERT INTO sources (tenant_id, source_id, name, kind, public_jwk_json, core_version,
 		   capabilities_json, registered_at_ms, last_seen_at_ms, revoked_at_ms, trusted_origins_json)
@@ -152,7 +152,7 @@ func insertSource(ctx context.Context, q *sql.Conn, tenantID string, s store.Sou
 	return err
 }
 
-func writeSource(ctx context.Context, q *sql.Conn, tenantID, sourceID string, s store.SourceRecord) error {
+func writeSource(ctx context.Context, q *safeConn, tenantID, sourceID string, s store.SourceRecord) error {
 	_, err := q.ExecContext(ctx,
 		`UPDATE sources SET name = ?, kind = ?, public_jwk_json = ?, core_version = ?,
 		   capabilities_json = ?, registered_at_ms = ?, last_seen_at_ms = ?, revoked_at_ms = ?,
@@ -174,7 +174,7 @@ func toRegistration(row scanner) (store.RegistrationToken, error) {
 	return r, err
 }
 
-func insertRegistration(ctx context.Context, q *sql.Conn, tenantID string, r store.RegistrationToken) error {
+func insertRegistration(ctx context.Context, q *safeConn, tenantID string, r store.RegistrationToken) error {
 	_, err := q.ExecContext(ctx,
 		"INSERT INTO registration_tokens (tenant_id, token_hash, account_id, expires_at_ms) VALUES (?, ?, ?, ?)",
 		tenantID, r.TokenHash, r.AccountID, r.ExpiresAtMs)
@@ -211,7 +211,7 @@ func nullableString(s *string) any {
 	return *s
 }
 
-func insertDevice(ctx context.Context, q *sql.Conn, tenantID string, d store.DeviceRecord) error {
+func insertDevice(ctx context.Context, q *safeConn, tenantID string, d store.DeviceRecord) error {
 	_, err := q.ExecContext(ctx,
 		`INSERT INTO devices (tenant_id, device_id, subject, platform, name, refresh_hash,
 		   previous_refresh_hash, rotation, created_at_ms, expires_at_ms, revoked_at_ms, last_seen_at_ms)
@@ -221,7 +221,7 @@ func insertDevice(ctx context.Context, q *sql.Conn, tenantID string, d store.Dev
 	return err
 }
 
-func writeDevice(ctx context.Context, q *sql.Conn, tenantID, deviceID string, d store.DeviceRecord) error {
+func writeDevice(ctx context.Context, q *safeConn, tenantID, deviceID string, d store.DeviceRecord) error {
 	_, err := q.ExecContext(ctx,
 		`UPDATE devices SET subject = ?, platform = ?, name = ?, refresh_hash = ?,
 		   previous_refresh_hash = ?, rotation = ?, created_at_ms = ?, expires_at_ms = ?,
@@ -264,7 +264,7 @@ func scopeJSON(l store.LinkRecord) any {
 	return encodeJSON(l.Scope)
 }
 
-func insertLink(ctx context.Context, q *sql.Conn, tenantID string, l store.LinkRecord) error {
+func insertLink(ctx context.Context, q *safeConn, tenantID string, l store.LinkRecord) error {
 	_, err := q.ExecContext(ctx,
 		`INSERT INTO links (tenant_id, link_id, source_id, invitation_id, label, role, secret_hash,
 		   max_uses, uses, created_at_ms, expires_at_ms, revoked_at_ms, scope_json)
@@ -274,7 +274,7 @@ func insertLink(ctx context.Context, q *sql.Conn, tenantID string, l store.LinkR
 	return err
 }
 
-func writeLink(ctx context.Context, q *sql.Conn, tenantID, linkID string, l store.LinkRecord) error {
+func writeLink(ctx context.Context, q *safeConn, tenantID, linkID string, l store.LinkRecord) error {
 	_, err := q.ExecContext(ctx,
 		`UPDATE links SET source_id = ?, invitation_id = ?, label = ?, role = ?, secret_hash = ?,
 		   max_uses = ?, uses = ?, created_at_ms = ?, expires_at_ms = ?, revoked_at_ms = ?, scope_json = ?
@@ -287,7 +287,7 @@ func writeLink(ctx context.Context, q *sql.Conn, tenantID, linkID string, l stor
 // ------------------------------------------------------------ 修订
 
 // bumpRevision：租户的修订加一（每个改了东西的写事务一次）。
-func bumpRevision(ctx context.Context, q *sql.Conn, tenantID string) error {
+func bumpRevision(ctx context.Context, q *safeConn, tenantID string) error {
 	_, err := q.ExecContext(ctx, "UPDATE tenants SET revision = revision + 1 WHERE tenant_id = ?", tenantID)
 	return err
 }

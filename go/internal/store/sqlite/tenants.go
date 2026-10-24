@@ -54,11 +54,11 @@ func displayName(name *string) any {
 	return *name
 }
 
-func readTenant(ctx context.Context, q *sql.Conn, tenantID string) (*store.Tenant, error) {
+func readTenant(ctx context.Context, q *safeConn, tenantID string) (*store.Tenant, error) {
 	return one(toTenant(q.QueryRowContext(ctx, "SELECT "+tenantColumns+" FROM tenants WHERE tenant_id = ?", tenantID)))
 }
 
-func createTenant(ctx context.Context, q *sql.Conn, tenantID string, t store.Tenant) error {
+func createTenant(ctx context.Context, q *safeConn, tenantID string, t store.Tenant) error {
 	_, err := q.ExecContext(ctx,
 		`INSERT INTO tenants (tenant_id, issuer, allow_guests, trusted_origins_json, rate_limits_json,
 		   trusted_proxy_json, display_name, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -69,7 +69,7 @@ func createTenant(ctx context.Context, q *sql.Conn, tenantID string, t store.Ten
 
 // ListTenants 按创建顺序列出租户 id。
 func (d *DB) ListTenants(ctx context.Context) (out []string, err error) {
-	err = d.read(ctx, func(q *sql.Conn) error {
+	err = d.read(ctx, func(q *safeConn) error {
 		rows, err := q.QueryContext(ctx, "SELECT tenant_id FROM tenants ORDER BY rowid")
 		if err != nil {
 			return err
@@ -89,7 +89,7 @@ func (d *DB) ListTenants(ctx context.Context) (out []string, err error) {
 
 // ReadTenant 读租户行；没有答 nil。
 func (d *DB) ReadTenant(ctx context.Context, tenantID string) (out *store.Tenant, err error) {
-	err = d.read(ctx, func(q *sql.Conn) (err error) {
+	err = d.read(ctx, func(q *safeConn) (err error) {
 		out, err = readTenant(ctx, q, tenantID)
 		return err
 	})
@@ -98,7 +98,7 @@ func (d *DB) ReadTenant(ctx context.Context, tenantID string) (out *store.Tenant
 
 // Revision 是租户当前的修订号。
 func (d *DB) Revision(ctx context.Context, tenantID string) (revision int64, ok bool, err error) {
-	err = d.read(ctx, func(q *sql.Conn) error {
+	err = d.read(ctx, func(q *safeConn) error {
 		err := q.QueryRowContext(ctx, "SELECT revision FROM tenants WHERE tenant_id = ?", tenantID).Scan(&revision)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -111,12 +111,12 @@ func (d *DB) Revision(ctx context.Context, tenantID string) (revision int64, ok 
 
 // CreateTenant 建租户（已有同 id 的会因主键冲突失败）。
 func (d *DB) CreateTenant(ctx context.Context, tenantID string, tenant store.Tenant) error {
-	return d.write(ctx, func(q *sql.Conn) error { return createTenant(ctx, q, tenantID, tenant) })
+	return d.write(ctx, func(q *safeConn) error { return createTenant(ctx, q, tenantID, tenant) })
 }
 
 // UpdateTenant 是租户设置的原子读-改-写；没变不写。不改修订号以外的列（revision 由写入加一）。
 func (d *DB) UpdateTenant(ctx context.Context, tenantID string, fn func(draft *store.Tenant) error) error {
-	return d.write(ctx, func(q *sql.Conn) error {
+	return d.write(ctx, func(q *safeConn) error {
 		current, err := readTenant(ctx, q, tenantID)
 		if err != nil {
 			return err
@@ -146,7 +146,7 @@ func (d *DB) UpdateTenant(ctx context.Context, tenantID string, fn func(draft *s
 
 // AddAccount 直接放一个账号（建租户与测试装配用）。
 func (d *DB) AddAccount(ctx context.Context, tenantID string, account store.AccountRecord) error {
-	return d.write(ctx, func(q *sql.Conn) error {
+	return d.write(ctx, func(q *safeConn) error {
 		if err := insertAccount(ctx, q, tenantID, account); err != nil {
 			return err
 		}
@@ -156,7 +156,7 @@ func (d *DB) AddAccount(ctx context.Context, tenantID string, account store.Acco
 
 // ImportTenant 一个事务写入整个租户（租户必须还不存在，否则 exists）；修订号照快照。
 func (d *DB) ImportTenant(ctx context.Context, tenantID string, snapshot store.TenantSnapshot) error {
-	return d.write(ctx, func(q *sql.Conn) error {
+	return d.write(ctx, func(q *safeConn) error {
 		existing, err := readTenant(ctx, q, tenantID)
 		if err != nil {
 			return err
@@ -202,7 +202,7 @@ func (d *DB) ImportTenant(ctx context.Context, tenantID string, snapshot store.T
 }
 
 // collect 把一个查询的所有行用 scan 读成切片。
-func collect[R any](ctx context.Context, q *sql.Conn, query, tenantID string, scan func(scanner) (R, error)) ([]R, error) {
+func collect[R any](ctx context.Context, q *safeConn, query, tenantID string, scan func(scanner) (R, error)) ([]R, error) {
 	rows, err := q.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return nil, err
@@ -221,7 +221,7 @@ func collect[R any](ctx context.Context, q *sql.Conn, query, tenantID string, sc
 
 // ExportTenant 返回整个租户的一致快照（读在一个事务里，别的进程写不进中间）。
 func (d *DB) ExportTenant(ctx context.Context, tenantID string) (snap store.TenantSnapshot, err error) {
-	err = d.snapshot(ctx, func(q *sql.Conn) error {
+	err = d.snapshot(ctx, func(q *safeConn) error {
 		tenant, err := readTenant(ctx, q, tenantID)
 		if err != nil {
 			return err
@@ -283,7 +283,7 @@ func (d *DB) ExportTenant(ctx context.Context, tenantID string) (snap store.Tena
 
 // RevokedIDs 是已撤销的源与链接（serve 察觉到别的进程改了库时比对用）。
 func (d *DB) RevokedIDs(ctx context.Context, tenantID string) (sources, links []string, err error) {
-	err = d.read(ctx, func(q *sql.Conn) error {
+	err = d.read(ctx, func(q *safeConn) error {
 		list := func(query string) ([]string, error) {
 			return collect(ctx, q, query, tenantID, func(s scanner) (string, error) {
 				var id string
