@@ -18,13 +18,13 @@ type keys struct {
 // Keys 是某个租户的签名钥。
 func (d *DB) Keys(tenantID string) store.KeyStore { return keys{d, tenantID} }
 
-func readSigningKeys(ctx context.Context, q *sql.Conn, tenantID string) ([]store.SigningKeyRecord, error) {
+func readSigningKeys(ctx context.Context, q *safeConn, tenantID string) ([]store.SigningKeyRecord, error) {
 	return collect(ctx, q, "SELECT "+keyColumns+" FROM signing_keys WHERE tenant_id = ? ORDER BY rowid", tenantID,
 		func(s scanner) (store.SigningKeyRecord, error) { return toSigningKey(s) })
 }
 
 func (k keys) Issuer(ctx context.Context) (issuer string, err error) {
-	err = k.d.read(ctx, func(q *sql.Conn) error {
+	err = k.d.read(ctx, func(q *safeConn) error {
 		err := q.QueryRowContext(ctx, "SELECT issuer FROM tenants WHERE tenant_id = ?", k.tenantID).Scan(&issuer)
 		if err == sql.ErrNoRows {
 			return store.ErrNoTenant
@@ -35,7 +35,7 @@ func (k keys) Issuer(ctx context.Context) (issuer string, err error) {
 }
 
 func (k keys) SigningKeys(ctx context.Context) (out []store.SigningKeyRecord, err error) {
-	err = k.d.read(ctx, func(q *sql.Conn) (err error) {
+	err = k.d.read(ctx, func(q *safeConn) (err error) {
 		out, err = readSigningKeys(ctx, q, k.tenantID)
 		return err
 	})
@@ -44,7 +44,7 @@ func (k keys) SigningKeys(ctx context.Context) (out []store.SigningKeyRecord, er
 
 // AddSigningKey 加一把钥（建租户、导入时用）。
 func (d *DB) AddSigningKey(ctx context.Context, tenantID string, key store.SigningKeyRecord) error {
-	return d.write(ctx, func(q *sql.Conn) error {
+	return d.write(ctx, func(q *safeConn) error {
 		if err := insertSigningKey(ctx, q, tenantID, key); err != nil {
 			return err
 		}
@@ -54,7 +54,7 @@ func (d *DB) AddSigningKey(ctx context.Context, tenantID string, key store.Signi
 
 // RotateKey 轮换（rotate-key）：追加新钥，其余未退役的定在一小时后退役，早已退役的删掉。答新 kid。
 func (d *DB) RotateKey(ctx context.Context, tenantID string, nowMs int64) (kid string, err error) {
-	err = d.write(ctx, func(q *sql.Conn) error {
+	err = d.write(ctx, func(q *safeConn) error {
 		before, err := readSigningKeys(ctx, q, tenantID)
 		if err != nil {
 			return err

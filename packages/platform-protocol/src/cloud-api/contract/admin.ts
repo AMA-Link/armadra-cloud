@@ -194,7 +194,14 @@ export const admin = {
     .route({ method: "PUT", path: "/v1/admin/relay-nodes/{node}/drain" })
     .meta(operator)
     .errors(adminErrors)
-    .input(z.object({ node: relayNodeIdSchema, drain: z.boolean() }))
+    .input(
+      z.object({
+        node: relayNodeIdSchema,
+        drain: z.boolean(),
+        /** 排空理由，写进审计（0.11.0 起，只加不改）。 */
+        reason: statusReason.optional(),
+      }),
+    )
     .output(adminRelayNodeSchema),
   incident: base
     .route({ method: "GET", path: "/v1/admin/incident" })

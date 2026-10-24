@@ -7,6 +7,7 @@ import {
   errorStatus,
   isErrorCode,
   limitReachedDetailsSchema,
+  teamHostsOnlineDetailsSchema,
   QUOTAS,
   wireErrorSchema,
 } from "../src/errors/index.ts";
@@ -62,5 +63,11 @@ it("limit_reached 的 details 是 { quota, used, limit }，quota 取固定枚举
   expect(
     limitReachedDetailsSchema.safeParse({ quota: "cpu", used: 1, limit: 1 })
       .success,
+  ).toBe(false);
+  expect(teamHostsOnlineDetailsSchema.parse({ onlineHosts: 2 })).toEqual({
+    onlineHosts: 2,
+  });
+  expect(
+    teamHostsOnlineDetailsSchema.safeParse({ onlineHosts: 0 }).success,
   ).toBe(false);
 });

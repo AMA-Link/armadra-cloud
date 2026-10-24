@@ -13,6 +13,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
@@ -273,7 +274,25 @@ func (s *Service) get(ctx context.Context, call *api.Call) (any, error) {
 	if space.TeamID != "" {
 		info.RequiresAccount = !teamSettings(space).AllowAnonymousLinks
 	}
+	info.OwnerName = s.ownerName(ctx, space)
 	return info, nil
+}
+
+// ownerName 是落地页上的「主人」（匿名可读，只给名字，不给邮箱与账号 id）：团队主机给团队名
+// （不暴露登记主机的成员），个人空间给主人的显示名。账号已停用、清理后为空、读取失败都返回空
+// （页面照常，只是少一个名字，不因此答 500）。
+func (s *Service) ownerName(ctx context.Context, space *saas.HostSpace) string {
+	if space.TeamID != "" {
+		return mail.SanitizeLabel(space.TeamName, 64)
+	}
+	if space.OwnerAccountID == "" {
+		return ""
+	}
+	owner, err := s.store.Read().Account(ctx, s.tenant(), space.OwnerAccountID)
+	if err != nil || owner == nil || owner.Status != saas.AccountActive {
+		return ""
+	}
+	return mail.SanitizeLabel(owner.DisplayName, 64)
 }
 
 func teamSettings(space *saas.HostSpace) teams.Settings {

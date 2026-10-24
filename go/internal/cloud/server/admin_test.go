@@ -297,7 +297,7 @@ func TestAdminRelayNodes(t *testing.T) {
 	if n := nodes[0].(map[string]any); n["online"] != true || n["connections"] != float64(9) || n["tunnels"] != float64(4) || n["version"] != "0.10.0" || n["lastSeenAtMs"] == nil {
 		t.Fatalf("节点行：%v", n)
 	}
-	res = r.do("PUT", "/v1/admin/relay-nodes/a/drain", map[string]any{"drain": true}, op.bearer())
+	res = r.do("PUT", "/v1/admin/relay-nodes/a/drain", map[string]any{"drain": true, "reason": "升级前排空"}, op.bearer())
 	r.expect(res, 200, "")
 	if res.json["node"] != "a" || res.json["draining"] != true {
 		t.Fatalf("答复：%s", res.body)
@@ -311,6 +311,11 @@ func TestAdminRelayNodes(t *testing.T) {
 	if drains != 1 || r.auditCount("action = 'relay.drain' AND actor_kind = 'operator' AND target_id = 'a'") != 1 {
 		t.Fatalf("发一条 drain 命令并写审计：%d", drains)
 	}
+	if n := r.auditCount("action = 'relay.drain' AND target_id = 'a' AND reason = '升级前排空'"); n != 1 {
+		t.Fatalf("理由应进审计：%d", n)
+	}
+	r.expect(r.do("PUT", "/v1/admin/relay-nodes/a/drain", map[string]any{"drain": true, "reason": ""}, op.bearer()), 400, "bad_request")
+	r.expect(r.do("PUT", "/v1/admin/relay-nodes/a/drain", map[string]any{"drain": true, "reason": strings.Repeat("x", 501)}, op.bearer()), 400, "bad_request")
 	r.expect(r.do("PUT", "/v1/admin/relay-nodes/zzz/drain", map[string]any{"drain": true}, op.bearer()), 404, "not_found")
 	// 取消排空没有对应的命令（只能重启节点）：空操作，答复如实报节点此刻在排空。
 	res = r.do("PUT", "/v1/admin/relay-nodes/b/drain", map[string]any{"drain": false}, op.bearer())

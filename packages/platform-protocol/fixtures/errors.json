@@ -125,6 +125,9 @@
   "team_slug_taken": {
     "status": 409
   },
+  "team_hosts_online": {
+    "status": 409
+  },
   "team_policy_denied": {
     "status": 403
   },

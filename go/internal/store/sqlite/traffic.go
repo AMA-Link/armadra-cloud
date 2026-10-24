@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -30,7 +29,7 @@ func (t traffic) Upsert(ctx context.Context, tenantID string, rows []store.Traff
 	if len(rows) == 0 {
 		return nil
 	}
-	return t.d.write(ctx, func(q *sql.Conn) error {
+	return t.d.write(ctx, func(q *safeConn) error {
 		for _, row := range rows {
 			if _, err := q.ExecContext(ctx, upsertTraffic, tenantID, row.BucketStartMs, row.Node, row.SourceID,
 				row.Subject, row.DeviceID, row.Kind, row.Connections, row.BytesToSource, row.BytesToClient); err != nil {
@@ -65,7 +64,7 @@ func (t traffic) Query(ctx context.Context, tenantID string, query store.Traffic
 	   GROUP BY 1, node, source_id, subject, device_id, kind
 	   ORDER BY 1, node, source_id, subject, device_id, kind
 	   LIMIT ?`, bucket, strings.Join(where, " AND "))
-	err = t.d.read(ctx, func(q *sql.Conn) error {
+	err = t.d.read(ctx, func(q *safeConn) error {
 		rows, err := q.QueryContext(ctx, statement, args...)
 		if err != nil {
 			return err
@@ -85,7 +84,7 @@ func (t traffic) Query(ctx context.Context, tenantID string, query store.Traffic
 }
 
 func (t traffic) Prune(ctx context.Context, tenantID string, beforeMs int64) (removed int64, err error) {
-	err = t.d.write(ctx, func(q *sql.Conn) error {
+	err = t.d.write(ctx, func(q *safeConn) error {
 		res, err := q.ExecContext(ctx,
 			"DELETE FROM relay_traffic_buckets WHERE tenant_id = ? AND bucket_start_ms < ?", tenantID, beforeMs)
 		if err != nil {

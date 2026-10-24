@@ -18,7 +18,7 @@ const ledgerDDL = "CREATE TABLE relay_migrations (id INTEGER PRIMARY KEY, name T
 // （多进程同时打开时只有一个真正执行）。答这次跑了几个。没有账本却已经有业务表的库不认。
 func (d *DB) migrate(ctx context.Context, migrations []store.Migration, now func() int64) (int, error) {
 	count := 0
-	err := d.write(ctx, func(q *sql.Conn) error {
+	err := d.write(ctx, func(q *safeConn) error {
 		var found int
 		err := q.QueryRowContext(ctx,
 			"SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'relay_migrations'").Scan(&found)
@@ -67,7 +67,7 @@ func (d *DB) migrate(ctx context.Context, migrations []store.Migration, now func
 	return count, err
 }
 
-func readLedger(ctx context.Context, q *sql.Conn) ([]store.Applied, error) {
+func readLedger(ctx context.Context, q *safeConn) ([]store.Applied, error) {
 	rows, err := q.QueryContext(ctx, "SELECT id, name, sha384 FROM relay_migrations ORDER BY id")
 	if err != nil {
 		return nil, err

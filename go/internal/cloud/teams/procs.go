@@ -183,7 +183,7 @@ func checkAvatar(raw string) error {
 	return nil
 }
 
-// delete 是 teams.delete（owner）：有在线主机答 409 conflict；置删除与清除时刻（30 天），撤销团队全部已签令牌，
+// delete 是 teams.delete（owner）：有在线主机答 409 team_hosts_online（details.onlineHosts 是在线主机数）；置删除与清除时刻（30 天），撤销团队全部已签令牌，
 // 插 team.purge 作业（run_at = purge_at，dedupe = teamId）。
 func (s *Service) delete(ctx context.Context, call *api.Call) (any, error) {
 	account, err := s.me(ctx, call)
@@ -200,12 +200,18 @@ func (s *Service) delete(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return err
 		}
+		// 在事务锁内逐台问中继：团队级锁保证期间没有新主机登记，Route 只读内存/Redis 在线表，主机数有套餐上限，开销有界；
+		// 在线状态本来就会在判定后立刻变化，这里的数只是删除那一刻的快照。
+		onlineHosts := 0
 		for _, sourceID := range hosts {
 			if _, online, err := s.relay.Route(ctx, sourceID); err != nil {
 				return err
 			} else if online {
-				return core.Fail(gen.ErrConflict)
+				onlineHosts++
 			}
+		}
+		if onlineHosts > 0 {
+			return core.FailWith(gen.ErrTeamHostsOnline, map[string]any{"onlineHosts": onlineHosts})
 		}
 		nowMs := s.nowMs()
 		purgeAt = nowMs + RecoveryPeriod.Milliseconds()

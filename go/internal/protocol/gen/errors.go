@@ -49,6 +49,7 @@ const (
 	ErrTeamRoleInsufficient     ErrorCode = "team_role_insufficient"
 	ErrTeamOwnerRequired        ErrorCode = "team_owner_required"
 	ErrTeamSlugTaken            ErrorCode = "team_slug_taken"
+	ErrTeamHostsOnline          ErrorCode = "team_hosts_online"
 	ErrTeamPolicyDenied         ErrorCode = "team_policy_denied"
 	ErrTeamSuspended            ErrorCode = "team_suspended"
 	ErrInvitationExpired        ErrorCode = "invitation_expired"
@@ -134,6 +135,7 @@ var ErrorCodes = []ErrorCode{
 	ErrTeamRoleInsufficient,
 	ErrTeamOwnerRequired,
 	ErrTeamSlugTaken,
+	ErrTeamHostsOnline,
 	ErrTeamPolicyDenied,
 	ErrTeamSuspended,
 	ErrInvitationExpired,
@@ -219,6 +221,7 @@ var errorStatus = map[ErrorCode]int{
 	ErrTeamRoleInsufficient:     403,
 	ErrTeamOwnerRequired:        409,
 	ErrTeamSlugTaken:            409,
+	ErrTeamHostsOnline:          409,
 	ErrTeamPolicyDenied:         403,
 	ErrTeamSuspended:            403,
 	ErrInvitationExpired:        410,

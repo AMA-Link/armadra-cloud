@@ -41,6 +41,7 @@
   "team_role_insufficient": 403,
   "team_owner_required": 409,
   "team_slug_taken": 409,
+  "team_hosts_online": 409,
   "team_policy_denied": 403,
   "team_suspended": 403,
   "invitation_expired": 410,

@@ -396,6 +396,8 @@ export const notificationPrefsSchema = z.object({
 export const deviceRequestSchema = z.object({
   platform: devicePlatformSchema,
   name: z.string(),
+  /** 发起请求的 IP 前缀（IPv4 原样，IPv6 截 /64），授权页让用户核对来源（0.11.0 起，只加不改）。 */
+  ipPrefix: z.string().optional(),
   requestedAtMs: z.number().int(),
   expiresAtMs: z.number().int(),
 });
