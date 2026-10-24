@@ -111,6 +111,18 @@ func TestLinksPersonalLifecycle(t *testing.T) {
 		t.Fatalf("落地页：%s", res.body)
 	}
 	r.expect(r.do("GET", linkPathOf("nope"), nil, nil), 404, "link_invalid")
+	// 主人显示名（匿名可读）：只给显示名，不出现邮箱与账号 id；邮箱形态的显示名被清掉。
+	r.exec("UPDATE accounts SET display_name = '爱丽丝' WHERE account_id = $1", owner.accountID)
+	res = r.do("GET", linkPathOf(link.id), nil, nil)
+	r.expect(res, 200, "")
+	if res.json["ownerName"] != "爱丽丝" || strings.Contains(string(res.body), owner.accountID) || strings.Contains(string(res.body), "@") {
+		t.Fatalf("ownerName：%s", res.body)
+	}
+	r.exec("UPDATE accounts SET display_name = 'a@example.com' WHERE account_id = $1", owner.accountID)
+	if res := r.do("GET", linkPathOf(link.id), nil, nil); res.json["ownerName"] != nil {
+		t.Fatalf("邮箱形态的显示名不该泄漏：%s", res.body)
+	}
+	r.exec("UPDATE accounts SET display_name = '爱丽丝' WHERE account_id = $1", owner.accountID)
 
 	// 接受：秘密不对、匿名成功；断言带 link 声明与范围，没有团队与角色；jti 带设备与源并进了签发索引。
 	r.expect(r.do("POST", linkPathOf(link.id, "accept"), map[string]any{"secret": "wrong"}, nil), 403, "link_secret_invalid")

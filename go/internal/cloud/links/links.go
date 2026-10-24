@@ -13,6 +13,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/hosts"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
@@ -272,6 +273,16 @@ func (s *Service) get(ctx context.Context, call *api.Call) (any, error) {
 	}
 	if space.TeamID != "" {
 		info.RequiresAccount = !teamSettings(space).AllowAnonymousLinks
+	}
+	// 主人的显示名（匿名可读，只给显示名，不给邮箱与账号 id）；账号已停用或没有显示名就不给。
+	if space.OwnerAccountID != "" {
+		owner, err := s.store.Read().Account(ctx, s.tenant(), space.OwnerAccountID)
+		if err != nil {
+			return nil, err
+		}
+		if owner != nil && owner.Status == saas.AccountActive {
+			info.OwnerName = mail.SanitizeLabel(owner.DisplayName, 64)
+		}
 	}
 	return info, nil
 }

@@ -143,10 +143,12 @@ type LinkCreated struct {
 
 // LinkInfo 是 links.get 的答复（落地页用，匿名可读）。
 type LinkInfo struct {
-	Kind            string           `json:"kind"`
-	Label           string           `json:"label"`
-	Role            string           `json:"role"`
-	SourceName      string           `json:"sourceName"`
+	Kind       string `json:"kind"`
+	Label      string `json:"label"`
+	Role       string `json:"role"`
+	SourceName string `json:"sourceName"`
+	// OwnerName 是链接主人的显示名（SaaS 补，0.11.0 起；personal 不出现，不含邮箱）。
+	OwnerName       string           `json:"ownerName,omitempty"`
 	Scope           *store.LinkScope `json:"scope,omitempty"`
 	ExpiresAtMs     int64            `json:"expiresAtMs"`
 	Exhausted       bool             `json:"exhausted"`
