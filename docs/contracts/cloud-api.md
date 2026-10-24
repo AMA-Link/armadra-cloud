@@ -130,7 +130,7 @@
 0.5.0 起中继只转端到端通道（§20）：源地址上唯一的入口是 `_relay/e2e` 的 WebSocket 升级，子协议 `armadra-e2e.1` + `armadra-relay.<jwt>`。中继校验令牌的 `aud`、`exp`、`jti` 与 `src`，开一条 `OPEN kind: "e2e"` 的流，之后只转密文。明文的应用请求（HTTP 与普通 WebSocket 经中继转进隧道、`Armadra-Relay-Token` 头、CORS 预检）与媒体票（§12）一并删除。
 
 - 地址：saas 是 `https://<sourceId>.src.<域>/…`，personal 是 `https://<中继>/s/<sourceId>/…`。源地址上除 `_relay/e2e` 的升级外，任何请求（含带令牌的 HTTP、`OPTIONS` 预检、`/_relay/media-tickets`、`/_relay/m/<票>`、别的路径上的 WebSocket 升级）一律 `404 not_found`，不验令牌、不进隧道。
-- 边缘限流分层（WebSocket 以 4429 关闭）：带有效中继令牌的升级先按令牌 `jti`（缺省每分钟 1200 次）、再按账号 `sub`（缺省 3600 次）计数，不看 IP；无令牌、令牌无效或 `src` 不符的按 IP 严格限流（缺省每分钟 60 次）；同一账号同时开着的通道缺省最多 256 条（不可配），满了 4429 `limit_reached`。令牌校验是本地验签，先验后计。personal 的额度可由 `serve` 参数、环境变量或状态文件 `settings.rateLimits` 配置（见 deploy/README.md；`preflight` 一项 0.5.0 起不再使用）；登录（按 IP 每分钟 20 次）与账号锁定不可配、不变。
+- 边缘限流分层（WebSocket 以 4429 关闭）：带有效中继令牌的升级先按令牌 `jti`（缺省每分钟 1200 次）、再按账号 `sub`（缺省 3600 次）计数，不看 IP；无令牌、令牌无效或 `src` 不符的按 IP 严格限流（缺省每分钟 60 次）；同一账号同时开着的通道缺省最多 256 条（不可配），满了 4429 `limit_reached`。经节点间转发的通道另按每账号每入口节点缺省 64 条（`RELAY_FORWARDED_PER_ACCOUNT`）限制，超出同样 4429 `limit_reached`。令牌校验是本地验签，先验后计。personal 的额度可由 `serve` 参数、环境变量或状态文件 `settings.rateLimits` 配置（见 deploy/README.md；`preflight` 一项 0.5.0 起不再使用）；登录（按 IP 每分钟 20 次）与账号锁定不可配、不变。
 - HTTP 监听（中继、cloud）的空闲 keep-alive 为 75 秒，请求头超时 76 秒，整条请求的接收上限 5 分钟（升级后的 WebSocket 不受它管）。
 - 中继自己返回的错误答复（源地址上的 404 与升级被拒的 HTTP 答复）按名单补 CORS 头：来源是原生 App（`capacitor://localhost`、`https://localhost`）或登记时发给源的 `trustedOrigins` 之一 → 按 Origin 回显 `Access-Control-Allow-Origin`，带 `Vary: Origin`，`Access-Control-Expose-Headers: retry-after`，不发 `Allow-Credentials`，不用 `*`；名单外或没有 `Origin` 不加。
 - 活性：中继维持连接活性（ping 由中继或它前面的边缘网络发出，浏览器自动应答）；客户端 120 秒内没有任何字节可能被断开。Node 中继每 30 秒发 `ping`、60 秒无字节即断开。
