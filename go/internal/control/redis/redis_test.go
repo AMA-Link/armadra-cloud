@@ -270,6 +270,26 @@ func killSubscriber(t *testing.T, e *env, name string) {
 	}
 }
 
+// subscriberCommand 是某个节点的订阅连接最近执行的命令（CLIENT LIST 的 cmd；按客户端名与订阅数找）。
+func subscriberCommand(t *testing.T, e *env, name string) string {
+	t.Helper()
+	list, err := e.admin.ClientList(context.Background()).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(list, "\n") {
+		if !strings.Contains(line, "name="+"armadra-go-test-"+e.prefix+name+" ") || strings.Contains(line, " sub=0 ") {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			if cmd, ok := strings.CutPrefix(field, "cmd="); ok {
+				return cmd
+			}
+		}
+	}
+	return ""
+}
+
 // Redis 出错时速率限流退回本节点内存，并报告；不拖垮调用方。
 func TestLimitFallsBackToLocalWhenRedisFails(t *testing.T) {
 	e := newEnv(t)
@@ -370,9 +390,11 @@ func TestPeriodicReloadCatchesMissedBroadcasts(t *testing.T) {
 func TestLivenessPingKeepsSubscriptionWorking(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	a := e.node("node-a", func(o *cr.Options) { o.LivenessEvery = 50 * time.Millisecond })
+	// PONG 晚于一个间隔到就（按设计）判断线；间隔留足余量，否则测的是机器快慢，不是活性检查。
+	a := e.node("node-a", func(o *cr.Options) { o.LivenessEvery = time.Second })
 	b := e.node("node-b", nil)
-	time.Sleep(400 * time.Millisecond)
+	// 等订阅连接真的发过 PING，而不是睡一个估计的时长。
+	controltest.Eventually(t, "空闲时发过 PING", func() bool { return subscriberCommand(t, e, "node-a") == "ping" })
 	must(t, b.Tokens().Revoke(ctx, "after-idle", time.Now().Add(time.Minute)))
 	controltest.Eventually(t, "空闲之后仍收到广播", func() bool {
 		r, _ := a.Tokens().IsRevoked(ctx, "after-idle")
