@@ -166,12 +166,7 @@ type Tunnel struct {
 	recvRemaining int
 	recvUnacked   int
 	ctl           [][]byte
-	ready         []*Stream // 持续有数据的流（老流）
-	readyNext     []*Stream
-	fresh         []*Stream // 刚从空闲转为就绪的流（稀疏流），先于老流出帧
-	freshNext     []*Stream
-	round         uint64 // 写端批次号
-	scratch       []*Stream
+	sched         Sched[*Stream] // 写端的公平调度（sched.go）
 	parked        []*Stream
 }
 
@@ -586,7 +581,8 @@ func (t *Tunnel) finish(code protocol.CloseCode, reason string, wantClose bool) 
 		streams = append(streams, s)
 	}
 	t.streams = map[uint32]*Stream{}
-	t.ready, t.readyNext, t.fresh, t.freshNext, t.parked = nil, nil, nil, nil, nil
+	t.sched.Reset()
+	t.parked = nil
 	replaced := t.replaced
 	started := t.started
 	// 写协程还没起来就被关（握手刚完成、Start 之前来了 kick / GOAWAY）：排队的控制帧要自己发出去，
@@ -704,20 +700,12 @@ func (t *Tunnel) noteSent(s *Stream, n int) {
 	}
 }
 
-// markReadyLocked 把有数据的流排进写端的就绪队列。刚从空闲转为就绪、且排着的字节不多
-// （sparseMax 以内）的流（上一批没出过帧）进 fresh，先于持续有数据的老流出帧：终端按键与回显这类稀疏流因此不必排在大流量流后面。
-// 刚出过帧又立刻就绪的流进老流队列尾，所以反复「停一下再发」换不到额外份额。
+// markReadyLocked 把有数据的流排进写端的调度器。
 func (t *Tunnel) markReadyLocked(s *Stream) {
-	if len(s.out) == 0 || s.queued != queueNone || s.destroyed {
+	if len(s.out) == 0 || s.destroyed {
 		return
 	}
-	if s.servedRound+1 < t.round && s.outBytes() <= sparseMax {
-		s.queued = queueFresh
-		t.fresh = append(t.fresh, s)
-		return
-	}
-	s.queued = queueOld
-	t.ready = append(t.ready, s)
+	t.sched.Add(s, &s.flow, s.outBytes())
 }
 
 func (t *Tunnel) parkLocked(s *Stream) {
@@ -792,23 +780,7 @@ func (t *Tunnel) writer() {
 	}
 }
 
-// writeBudget 是一批最多交给传输层的 DATA 字节（至少一帧）。批次写完才会取下一批，
-// 所以后到的控制帧与稀疏流的帧最多等「当前批剩下的 + 一块」，与就绪流的数量无关。
-const writeBudget = 2 * protocol.MaxDataChunk
-
-// sparseMax 是稀疏流排着的字节上限：超过它的（文件传输、刷屏输出）按老流轮转。
-const sparseMax = 16 << 10
-
-type queueKind uint8
-
-const (
-	queueNone queueKind = iota
-	queueFresh
-	queueOld
-)
-
-// collect 取出这一批要写的帧：先写全部控制帧；再给稀疏流各一帧（fresh）；再按轮转给老流各一帧，
-// 超过 writeBudget 就停，没轮到的留在队首、下一批先出。老流每批至少出一帧，稀疏流再多也饿不死它们。
+// collect 取出这一批要写的帧：先写全部控制帧，再按调度器（sched.go）给各流出帧。
 // 隧道已关闭时只交出剩下的控制帧。
 func (t *Tunnel) collect(batch [][]byte) ([][]byte, bool) {
 	t.mu.Lock()
@@ -819,70 +791,18 @@ func (t *Tunnel) collect(batch [][]byte) ([][]byte, bool) {
 	if t.state == StateClosed {
 		return batch, true
 	}
-	t.round++
-	size := 0
-	pop := func(s *Stream) {
+	t.sched.Drain(WriteBudget, func(s *Stream) (int, bool) {
+		if s.destroyed || len(s.out) == 0 {
+			return -1, false
+		}
 		f := s.popLocked()
-		size += len(f) - headroom
-		s.servedRound = t.round
 		batch = append(batch, f)
-	}
-	fresh, old := t.fresh, t.ready
-	t.fresh, t.ready = t.freshNext[:0], t.readyNext[:0]
-
-	// 稀疏流：每条一帧；发完一帧后还有数据的转入老流。预算用完时剩下的留在 fresh 队首。
-	i := 0
-	for ; i < len(fresh); i++ {
-		if size >= writeBudget {
-			break
-		}
-		s := fresh[i]
-		s.queued = queueNone
-		if s.destroyed || len(s.out) == 0 {
-			continue
-		}
-		pop(s)
-		if len(s.out) > 0 {
-			s.queued = queueOld
-			t.ready = append(t.ready, s)
-		} else {
+		more := len(s.out) > 0
+		if !more {
 			s.out = nil
 		}
-	}
-	t.fresh = append(t.fresh, fresh[i:]...)
-
-	// 老流：轮转；留在队首的（没轮到的）排在这一批新排的前面，保持先来先出。
-	served := 0
-	j := 0
-	var again []*Stream
-	for ; j < len(old); j++ {
-		if served > 0 && size >= writeBudget {
-			break
-		}
-		s := old[j]
-		s.queued = queueNone
-		if s.destroyed || len(s.out) == 0 {
-			continue
-		}
-		pop(s)
-		served++
-		if len(s.out) > 0 {
-			s.queued = queueOld
-			again = append(again, s)
-		} else {
-			s.out = nil
-		}
-	}
-	// 新排进 t.ready 的（稀疏流转入的）在最后；没轮到的老流在最前，其次是本批发过帧的。
-	merged := append(t.scratch[:0], old[j:]...)
-	merged = append(merged, again...)
-	merged = append(merged, t.ready...)
-	t.ready = append(t.ready[:0], merged...)
-	clear(merged)
-	t.scratch = merged[:0]
-	clear(fresh)
-	clear(old)
-	t.freshNext, t.readyNext = fresh[:0], old[:0]
+		return len(f) - headroom, more
+	})
 	return batch, false
 }
 

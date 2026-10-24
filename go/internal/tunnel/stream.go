@@ -38,8 +38,7 @@ type Stream struct {
 	pendingBytes    int
 	out             []segment
 	endAfterPending bool
-	queued          queueKind // 在写端的哪条就绪队列里
-	servedRound     uint64    // 最近一次出帧的批次号（判断是不是「稀疏流」）
+	flow            Flow // 写端调度器里的状态
 	inParked        bool
 	remoteEnded     bool
 	localEnded      bool
