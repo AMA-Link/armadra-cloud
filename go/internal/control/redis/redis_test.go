@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -270,8 +271,14 @@ func killSubscriber(t *testing.T, e *env, name string) {
 	}
 }
 
-// subscriberCommand 是某个节点的订阅连接最近执行的命令（CLIENT LIST 的 cmd；按客户端名与订阅数找）。
-func subscriberCommand(t *testing.T, e *env, name string) string {
+// subscriber 是某个节点的订阅连接在 CLIENT LIST 里的样子：连接 id、最近的命令、累计命令数。
+type subscriber struct {
+	id, cmd string
+	cmds    int
+}
+
+// subscriberOf 按客户端名与订阅数找某个节点的订阅连接；找不到答零值。
+func subscriberOf(t *testing.T, e *env, name string) subscriber {
 	t.Helper()
 	list, err := e.admin.ClientList(context.Background()).Result()
 	if err != nil {
@@ -281,13 +288,21 @@ func subscriberCommand(t *testing.T, e *env, name string) string {
 		if !strings.Contains(line, "name="+"armadra-go-test-"+e.prefix+name+" ") || strings.Contains(line, " sub=0 ") {
 			continue
 		}
+		var s subscriber
 		for _, field := range strings.Fields(line) {
-			if cmd, ok := strings.CutPrefix(field, "cmd="); ok {
-				return cmd
+			key, value, _ := strings.Cut(field, "=")
+			switch key {
+			case "id":
+				s.id = value
+			case "cmd":
+				s.cmd = value
+			case "tot-cmds":
+				s.cmds, _ = strconv.Atoi(value)
 			}
 		}
+		return s
 	}
-	return ""
+	return subscriber{}
 }
 
 // Redis 出错时速率限流退回本节点内存，并报告；不拖垮调用方。
@@ -386,15 +401,27 @@ func TestPeriodicReloadCatchesMissedBroadcasts(t *testing.T) {
 	})
 }
 
-// 活性检查：空闲期间发 PING 不影响收广播。
+// 活性检查：空闲期间一轮轮发 PING 不把健康的连接判成断线，也不影响收广播。
 func TestLivenessPingKeepsSubscriptionWorking(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	// PONG 晚于一个间隔到就（按设计）判断线；间隔留足余量，否则测的是机器快慢，不是活性检查。
 	a := e.node("node-a", func(o *cr.Options) { o.LivenessEvery = time.Second })
 	b := e.node("node-b", nil)
-	// 等订阅连接真的发过 PING，而不是睡一个估计的时长。
-	controltest.Eventually(t, "空闲时发过 PING", func() bool { return subscriberCommand(t, e, "node-a") == "ping" })
+	// 等订阅连接真的发过 PING，记下它；再等同一条连接又发过两轮 PING（每轮都要等满一个间隔、收到 PONG），
+	// 不按估计的时长睡：PONG 之后状态没复位的话第二轮就会判断线、连接换掉，这里等不到。
+	var first subscriber
+	controltest.Eventually(t, "空闲时发过 PING", func() bool {
+		first = subscriberOf(t, e, "node-a")
+		return first.cmd == "ping"
+	})
+	controltest.Eventually(t, "同一条订阅连接又发过两轮 PING", func() bool {
+		now := subscriberOf(t, e, "node-a")
+		return now.id == first.id && now.cmd == "ping" && now.cmds >= first.cmds+2
+	})
+	if a.errors.has("subscriber") {
+		t.Fatal("活性检查不该把正常的连接判成断线")
+	}
 	must(t, b.Tokens().Revoke(ctx, "after-idle", time.Now().Add(time.Minute)))
 	controltest.Eventually(t, "空闲之后仍收到广播", func() bool {
 		r, _ := a.Tokens().IsRevoked(ctx, "after-idle")
