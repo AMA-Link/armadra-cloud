@@ -20,29 +20,45 @@ const chunk = protocol.MaxDataChunk
 // 又写出的字节（含少量测量误差：读计数与入队之间写端可能多写一两块）。
 type fairRig struct {
 	*rig
-	bulk []*tunnel.Stream
+	bulk    []*tunnel.Stream
+	perBulk int // 每条大流量流一共发的字节
 }
 
 func newFairRig(t *testing.T, bulk int) *fairRig {
 	t.Helper()
 	r := newRig(t, func(c *tunnel.Config) {
-		c.StreamWindow = 4 << 20
+		c.StreamWindow = 32 << 20
 		c.TunnelWindow = 1 << 30
 		c.MaxStreams = 4096
 	})
 	r.tr.delay = 50 * time.Microsecond // 模拟有限的链路速率
-	f := &fairRig{rig: r}
+	// 总积压至少 64 MiB（每流至少 4 MiB）：整个测试期间大流量流都不能写空，否则之后的探测没有竞争，结果失真。
+	f := &fairRig{rig: r, perBulk: max(4<<20, (64<<20)/bulk)}
 	for i := 0; i < bulk; i++ {
 		s := r.open(&recSink{})
 		f.bulk = append(f.bulk, s)
 	}
 	r.tr.take()
 	for _, s := range f.bulk {
-		s.Send(make([]byte, 4<<20))
+		s.Send(make([]byte, f.perBulk))
 	}
 	// 等写端进入稳态（已经写出一批帧，积压还在）。
 	eventually(t, "大流量流开始写出", func() bool { return len(dataFrames(r.tr.takeKeep())) >= 3*bulk })
 	return f
+}
+
+// requireBacklog 在有大流量流已经写空时立即失败：没有积压的测量不算数。
+func (f *fairRig) requireBacklog(t *testing.T, frames []protocol.Frame) {
+	t.Helper()
+	sent := map[uint32]int{}
+	for _, fr := range dataFrames(frames) {
+		sent[fr.StreamID] += len(fr.Data)
+	}
+	for _, s := range f.bulk {
+		if sent[s.ID()] >= f.perBulk {
+			t.Fatalf("大流量流 %d 的 %d 字节已全部写出，积压耗尽，测量失真", s.ID(), f.perBulk)
+		}
+	}
 }
 
 // bytesBefore 返回 id 的第一个 DATA 之前（含更早的）所有 DATA 载荷字节中，从下标 from 起的部分。
@@ -82,6 +98,7 @@ func TestInteractiveStreamLatencyIsBoundedWhileBulkRuns(t *testing.T) {
 			// 不用固定停顿：等批次号前进（探测帧之后又写出超过一整批的字节），下一次探测才是「刚醒来的稀疏流」。
 			eventually(t, "批次前进", func() bool {
 				frames = f.tr.takeKeep()
+				f.requireBacklog(t, frames)
 				n := 0
 				seen := false
 				for j := from; j < len(frames); j++ {
@@ -132,6 +149,7 @@ func TestControlFramesAreNotBlockedByBulk(t *testing.T) {
 		// 等批次前进（PONG 之后又写出超过一整批的字节），不用固定停顿。
 		eventually(t, "批次前进", func() bool {
 			frames := f.tr.takeKeep()
+			f.requireBacklog(t, frames)
 			n := 0
 			seen := false
 			for j := from; j < len(frames); j++ {
