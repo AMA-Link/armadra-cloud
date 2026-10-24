@@ -251,10 +251,7 @@ func (t *Tunnel) PendingBytes() int {
 	defer t.mu.Unlock()
 	n := 0
 	for _, s := range t.streams {
-		n += s.pendingBytes
-		for _, sg := range s.out {
-			n += sg.n
-		}
+		n += s.pendingBytes + s.outN
 	}
 	return n
 }
