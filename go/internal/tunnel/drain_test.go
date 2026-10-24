@@ -124,3 +124,24 @@ func TestDrainTailBoundedByGrace(t *testing.T) {
 		t.Fatalf("写端卡住时应在宽限到期后关闭，实际 %+v", info)
 	}
 }
+
+// 隧道关闭后 tails 清零；孤儿流（已摘表、尾巴没写完）此后再被中止也不会把计数减成负数。
+func TestTailsNotNegativeAfterClose(t *testing.T) {
+	r := newRig(t, nil)
+	s := r.open(&recSink{})
+	r.tr.take()
+	gate := gateWriter(r)
+	defer openGate(r, gate)
+	s.Send(payload(2000))
+	s.End()
+	r.feed(protocol.Frame{Type: protocol.FrameEnd, StreamID: s.ID()})
+	if n := r.tun.Tails(); n != 1 {
+		t.Fatalf("摘表时出队列非空，tails 应为 1，实际 %d", n)
+	}
+	r.tun.Close(protocol.CloseNormal, "test")
+	s.Abort()
+	r.feed(protocol.Frame{Type: protocol.FrameRst, StreamID: s.ID(), Code: protocol.RstInternal})
+	if n := r.tun.Tails(); n != 0 {
+		t.Fatalf("隧道关闭后 tails 应为 0，实际 %d", n)
+	}
+}

@@ -769,8 +769,13 @@ func (t *Tunnel) releaseLocked(s *Stream) bool {
 }
 
 // untailLocked 已摘表的流写空（或销毁）了：不再算待写的尾巴，答排空是否就此完成。
+// 隧道已关时 finish 已把 tails 清零，只清流上的标记，计数不再减。
 func (t *Tunnel) untailLocked(s *Stream) bool {
 	if !s.tail {
+		return false
+	}
+	if t.state == StateClosed {
+		s.tail = false
 		return false
 	}
 	s.tail = false
