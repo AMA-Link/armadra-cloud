@@ -10,7 +10,12 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
+	"github.com/AMA-Link/armadra-cloud/go/internal/control"
+	"github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 )
@@ -219,13 +224,28 @@ func TestLoginLockoutDisabledAndRateLimit(t *testing.T) {
 	r.expect(r.login(email, "wrong-password-123", nil), 401, "credentials_invalid")
 	r.expect(r.login(email, password, nil), 403, "account_disabled")
 
-	// login.acct：同一邮箱每分钟 20 次。
+	// login.acct：同一邮箱每分钟 20 次。桶的窗口是 Redis 的真实时间，而每次登录都要做一次 scrypt，
+	// 高负载下 21 次登录能拖过一分钟、桶到期重计；所以先把桶记到 19 次，再登录两次：第 20 次放行、第 21 次拒。
 	other := r.email()
-	var last response
-	for i := 0; i < 21; i++ {
-		last = r.login(other, "wrong-password-123", nil)
+	fillLimit(t, httpx.LimitLoginAcct, other, 19)
+	r.expect(r.login(other, "wrong-password-123", nil), 401, "credentials_invalid")
+	r.expect(r.login(other, "wrong-password-123", nil), 429, "rate_limited")
+}
+
+// fillLimit 把 cloud:limit: 下某个桶直接记到 count 次（窗口按规则），测试结束删掉。
+func fillLimit(t *testing.T, kind control.LimitKind, key string, count int) {
+	t.Helper()
+	opts, err := goredis.ParseURL(redisURL(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	r.expect(last, 429, "rate_limited")
+	client := goredis.NewClient(opts)
+	t.Cleanup(func() { _ = client.Close() })
+	bucket := httpx.LimitPrefix + cluster.LimitID(kind, key)
+	if err := client.Set(context.Background(), bucket, count, httpx.Rules[kind].Window).Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Del(context.Background(), bucket) })
 }
 
 func TestRefreshBearerRotatesAndReplayRevokes(t *testing.T) {
