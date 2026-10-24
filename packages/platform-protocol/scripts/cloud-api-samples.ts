@@ -632,6 +632,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
       label: "For Alice",
       role: "editor",
       sourceName: "Workstation",
+      ownerName: "Alice",
       scope: { workspaceId: "ws_01", readOnly: true },
       expiresAtMs: link.expiresAtMs,
       exhausted: false,
@@ -1065,7 +1066,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
   },
   "admin.relayNodes": { input: {}, output: { nodes: [adminNode] } },
   "admin.relayNodeDrain": {
-    input: { node: "relay-1", drain: true },
+    input: { node: "relay-1", drain: true, reason: "maintenance" },
     output: { ...adminNode, draining: true },
   },
   "admin.incident": {
@@ -1194,6 +1195,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     output: {
       platform: "server",
       name: "armadra-server",
+      ipPrefix: "203.0.113.0/24",
       requestedAtMs: NOW,
       expiresAtMs: NOW + 600_000,
     },

@@ -111,6 +111,8 @@
 
 <!-- rpc:end -->
 
+`links.get` 的答复带可选 `ownerName`（链接主人的显示名，协议包 0.11.0 起，只加不改）：落地页据此写「加入 {ownerName} 的 {sourceName}」。只给显示名，不给邮箱与账号 id；匿名可读，所以主人没有显示名时不出现该字段（不回退成邮箱前缀）。
+
 ## §6 me/stream
 
 <!-- rpc:begin contract=§6 -->
@@ -333,7 +335,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 - **scope** 里的 `team:*` 是调用者在路径（或体里）那个团队里的最低角色：`team:member` 任一角色（含 guest）；`team:admin` owner / admin；`team:owner` 仅 owner；`team:billing` owner / billing。具体的能做 / 不能做表见设计 §2.1，处理器还要按它收窄（例如 billing 只看成员列表、guest 只看被直接授予的主机）。
 - **角色** `owner` / `admin` / `member` / `billing` / `guest`（`guest` 是外部协作者，不占席位，不能进分组，团队设置可关）。每个团队至少一个 owner：最后一个 owner 不能离开、降级或被移除（`409 team_last_owner`），要先 `teams.transferOwnership`（目标必须是 admin）。
-- **删除**：`teams.delete` 先要求没有在线主机，进入 30 天恢复期（`purgeAtMs`），期内 `teams.restore`，之后清除；恢复期内对该团队的其余调用答 `410 team_deleted`。已是成员再被邀请 / 加入答 `409 member_exists`。
+- **删除**：`teams.delete` 先要求没有在线主机（有则答 `409 team_hosts_online`，`details.onlineHosts` 是在线主机数，协议包 0.11.0 起，只加不改；其余冲突仍是通用 `conflict`），进入 30 天恢复期（`purgeAtMs`），期内 `teams.restore`，之后清除；恢复期内对该团队的其余调用答 `410 team_deleted`。已是成员再被邀请 / 加入答 `409 member_exists`。
 - **设置** `teams.settings`：M1 为 `membersCanRegisterHosts`、`defaultHostRole`、`allowGuests`、`allowAnonymousLinks`、新设备背书人 `deviceEndorsers` / `memberSelfEndorse`；M2 起生效的 `requireMfa`、`sessionMaxAgeMs`、`allowedEmailDomains`。设置禁止某个操作时答 `403`：成员登记主机 `host_registration_disabled`、guest `guests_disabled`、匿名接受分享链接 `anonymous_links_disabled`（接受链接 `links.accept`），其余设置项答通用的 `team_policy_denied`，`details.setting` 写是哪一项；界面按码取文案。当前计划不含的功能（如分组、访问申请、强制两步验证）答 `403 plan_feature_unavailable`，与按数量计的 `429 limit_reached` 区分。
 - **配额**：只有 Free 时硬上限答 `429 limit_reached`，`details` 是 `{ quota, used, limit }`（协议包 `./errors` 的 `limitReachedDetailsSchema`）；`quota` 取 `teams`（个人账号能建的团队数）、`hosts`、`members`、`guests`（团队内数量）、`concurrent`（同时连接数）、`traffic`（本月中继流量，字节）。`teams.usage` / `billing.usage` 的用量项 `{ metric, value, limit }` 的 `metric` 取同一张枚举。
 - 团队被运营方停用后拒绝签断言与登记主机（`403 team_suspended`）。
@@ -341,22 +343,22 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 <!-- rpc:begin contract=§21 -->
 
-| procedure                 | 方法与路径                                      | scope         | 错误码                                                                   |
-| ------------------------- | ----------------------------------------------- | ------------- | ------------------------------------------------------------------------ |
-| `teams.create`            | `POST /v1/teams`                                | `session`     | `team_slug_taken`、`bad_request`、`email_unverified`、`limit_reached`    |
-| `teams.list`              | `GET /v1/teams`                                 | `session`     | —                                                                        |
-| `teams.get`               | `GET /v1/teams/{teamId}`                        | `team:member` | `not_found`                                                              |
-| `teams.update`            | `PATCH /v1/teams/{teamId}`                      | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`                    |
-| `teams.delete`            | `DELETE /v1/teams/{teamId}`                     | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`、`conflict`        |
-| `teams.restore`           | `POST /v1/teams/{teamId}/restore`               | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`                    |
-| `teams.transferOwnership` | `POST /v1/teams/{teamId}/transfer-ownership`    | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`、`bad_request`     |
-| `teams.members`           | `GET /v1/teams/{teamId}/members`                | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                    |
-| `teams.memberRole`        | `PATCH /v1/teams/{teamId}/members/{accountId}`  | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner` |
-| `teams.memberRemove`      | `DELETE /v1/teams/{teamId}/members/{accountId}` | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner` |
-| `teams.leave`             | `POST /v1/teams/{teamId}/leave`                 | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner` |
-| `teams.settings`          | `GET /v1/teams/{teamId}/settings`               | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                    |
-| `teams.settingsUpdate`    | `PATCH /v1/teams/{teamId}/settings`             | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`bad_request`     |
-| `teams.usage`             | `GET /v1/teams/{teamId}/usage`                  | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                    |
+| procedure                 | 方法与路径                                      | scope         | 错误码                                                                                 |
+| ------------------------- | ----------------------------------------------- | ------------- | -------------------------------------------------------------------------------------- |
+| `teams.create`            | `POST /v1/teams`                                | `session`     | `team_slug_taken`、`bad_request`、`email_unverified`、`limit_reached`                  |
+| `teams.list`              | `GET /v1/teams`                                 | `session`     | —                                                                                      |
+| `teams.get`               | `GET /v1/teams/{teamId}`                        | `team:member` | `not_found`                                                                            |
+| `teams.update`            | `PATCH /v1/teams/{teamId}`                      | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`                                  |
+| `teams.delete`            | `DELETE /v1/teams/{teamId}`                     | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`、`conflict`、`team_hosts_online` |
+| `teams.restore`           | `POST /v1/teams/{teamId}/restore`               | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`                                  |
+| `teams.transferOwnership` | `POST /v1/teams/{teamId}/transfer-ownership`    | `team:owner`  | `not_found`、`team_role_insufficient`、`team_deleted`、`bad_request`                   |
+| `teams.members`           | `GET /v1/teams/{teamId}/members`                | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                                  |
+| `teams.memberRole`        | `PATCH /v1/teams/{teamId}/members/{accountId}`  | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner`               |
+| `teams.memberRemove`      | `DELETE /v1/teams/{teamId}/members/{accountId}` | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner`               |
+| `teams.leave`             | `POST /v1/teams/{teamId}/leave`                 | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`、`team_last_owner`               |
+| `teams.settings`          | `GET /v1/teams/{teamId}/settings`               | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                                  |
+| `teams.settingsUpdate`    | `PATCH /v1/teams/{teamId}/settings`             | `team:admin`  | `not_found`、`team_role_insufficient`、`team_deleted`、`bad_request`                   |
+| `teams.usage`             | `GET /v1/teams/{teamId}/usage`                  | `team:member` | `not_found`、`team_role_insufficient`、`team_deleted`                                  |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -509,7 +511,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 协议 1.4。单独的 scope `operator`（运营令牌，`Authorization: Bearer`），不对外公开。只读元数据：账号与团队的计划、用量、主机数、状态——看不到任何内容与令牌，也不提供「以用户身份登录」。
 
 - 停用 / 恢复账号或团队（`accountStatus` / `teamStatus`，必须写 `reason`）：拒绝登录与断言、踢掉连接。
-- 中继节点列表与排空（`relayNodes` / `relayNodeDrain`，GOAWAY rebalance）。
+- 中继节点列表与排空（`relayNodes` / `relayNodeDrain`，GOAWAY rebalance）。`relayNodeDrain` 带可选 `reason`（1–500 字，协议包 0.11.0 起，只加不改），写进审计；缺省时审计里理由为空。
 - 事故开关（`incident` / `incidentSet`）：停签断言、停注册；中继侧拒绝新连接、保留在线连接。三项开关：`pauseAssertions`（停签断言）、`pauseRegistrations`（停注册）、`rejectNewConnections`（中继节点拒绝新的隧道与端到端升级，在线连接保留；1.4 发布后的只加不改补充，协议包 0.11.0 起，缺省 = 关）；`incidentSet` 只改给出的项，必须带 `reason`。
 - 租户搜索 `admin.tenants`：账号与团队混排的一张表（名称 / 邮箱 / slug 模糊查）；详情与停用 / 恢复按 `kind` 走 `account` / `accountStatus` 或 `team` / `teamStatus`，详情多席位、本月流量与最近 5 条运营动作。
 - 节点行多当前连接数 `connections`。
@@ -552,7 +554,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **找回口令**：`auth.passwordResetStart` 总是答成功（不泄露邮箱是否注册），邮件链接 30 分钟有效；`auth.passwordResetFinish` 过同一套口令策略，成功后撤销该账号全部设备、不答会话，要重新登录。`auth.register` 与 `auth.passwordResetStart` 可带 `challenge`（§16 的 scope 多了 `auth.register`、`auth.passwordResetStart`）。
 - **第三方登录**（M2）：`oauthStart` 答授权地址与 `state`，`oauthFinish` 用回调的 `code` 换会话（可能答 MFA 挑战）；提供方 `github` / `google`；绑定到已有账号要先验证邮箱（`403 email_unverified`）。`oauthUnlink` 要求至少留一种登录方式（`409 conflict`）。单点登录（`sso*`，M3）暂不预留。
 - **`me.emailChange`**：要口令；新地址收验证邮件，旧地址收通知；验证前旧邮箱照常生效。
-- **设备授权页**：`auth.deviceGet` 答发起设备的平台与名字（设计 §11.5 要求页面显示），`auth.deviceApprove` 批准，`auth.deviceDeny` 拒绝（发起设备的 `devicePoll` 答 `denied`）。
+- **设备授权页**：`auth.deviceGet` 答发起设备的平台与名字（设计 §11.5 要求页面显示），另带可选 `ipPrefix`（发起请求的 IP，IPv4 原样、IPv6 截到 /64，协议包 0.11.0 起，只加不改），页面据此提示用户核对请求来源，`auth.deviceApprove` 批准，`auth.deviceDeny` 拒绝（发起设备的 `devicePoll` 答 `denied`）。
 - **通知偏好**（M2）：`me.notificationPrefs` / `me.notificationPrefsUpdate`，邀请、访问申请、主机上下线按类开关邮件；`security` 恒为 `true`，不可改。
 - **`me.spaces`**：个人空间 + 所属的每个团队及角色、计划，控制台顶部的空间切换用。
 - **`me.securityLog`**：登录、新设备、改口令、两步验证变化；本人可见，游标分页。

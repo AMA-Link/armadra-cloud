@@ -1876,6 +1876,9 @@
                     "name": {
                       "type": "string"
                     },
+                    "ipPrefix": {
+                      "type": "string"
+                    },
                     "requestedAtMs": {
                       "type": "integer",
                       "minimum": -9007199254740991,
@@ -9680,6 +9683,9 @@
                     "sourceName": {
                       "type": "string"
                     },
+                    "ownerName": {
+                      "type": "string"
+                    },
                     "teamName": {
                       "type": "string"
                     },
@@ -11104,7 +11110,8 @@
                     "code": {
                       "type": "string",
                       "enum": [
-                        "conflict"
+                        "conflict",
+                        "team_hosts_online"
                       ]
                     },
                     "message": {
@@ -22874,6 +22881,11 @@
                 "properties": {
                   "drain": {
                     "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
                   }
                 },
                 "required": [
