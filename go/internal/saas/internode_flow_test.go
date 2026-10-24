@@ -413,3 +413,97 @@ func TestInternodeWriterIsFairAcrossStreams(t *testing.T) {
 		t.Fatalf("after %d / %d", afters, 24*8)
 	}
 }
+
+// 源发 RST（Reset）或对端发 RST 时，该流已排进出队列的 DATA / END 作废：RST 之后对端收不到它们，
+// 它们占的信用（after）全部归还本地隧道。
+func TestResetDropsQueuedOutAndReturnsCredit(t *testing.T) {
+	for _, how := range []string{"source-reset", "peer-rst"} {
+		c := &internodeConn{streams: map[uint32]*fwdStream{}, wake: make(chan struct{}, 1)}
+		fs := &fwdStream{c: c, id: 9}
+		other := &fwdStream{c: c, id: 10}
+		c.streams[9], c.streams[10] = fs, other
+		returned := 0
+		c.mu.Lock()
+		for i := 0; i < 5; i++ {
+			c.sendStreamLocked(fs, encode(protocol.Frame{Type: protocol.FrameData, StreamID: 9, Data: make([]byte, 100)}), func() { returned += 100 })
+		}
+		c.sendStreamLocked(fs, encode(protocol.Frame{Type: protocol.FrameEnd, StreamID: 9}), nil)
+		c.sendStreamLocked(other, encode(protocol.Frame{Type: protocol.FrameData, StreamID: 10, Data: make([]byte, 7)}), nil)
+		c.mu.Unlock()
+		if how == "source-reset" {
+			fs.Reset(nil, protocol.RstInternal)
+		} else {
+			c.receive(encode(protocol.Frame{Type: protocol.FrameRst, StreamID: 9, Code: protocol.RstClientGone}))
+		}
+		if returned != 500 {
+			t.Fatalf("%s：归还 %d，应为 500", how, returned)
+		}
+		c.mu.Lock()
+		batch := c.collectLocked(true)
+		c.mu.Unlock()
+		for _, it := range batch {
+			f, err := protocol.DecodeView(it.frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.StreamID == 9 && f.Type != protocol.FrameRst {
+				t.Fatalf("%s：RST 之后又写出该流的 %v", how, f.Type)
+			}
+		}
+		if fs.outN != 0 {
+			t.Fatalf("%s：outN=%d", how, fs.outN)
+		}
+	}
+}
+
+// 大量 1 字节小帧排队时入队不再是平方量级（出队列字节数随入队 / 出队增减，不遍历）。
+func TestEnqueueManyTinyFramesIsNotQuadratic(t *testing.T) {
+	c := &internodeConn{streams: map[uint32]*fwdStream{}, wake: make(chan struct{}, 1)}
+	fs := &fwdStream{c: c, id: 1}
+	frame := encode(protocol.Frame{Type: protocol.FrameData, StreamID: 1, Data: []byte{1}})
+	start := time.Now()
+	c.mu.Lock()
+	for i := 0; i < 300_000; i++ {
+		c.sendStreamLocked(fs, frame, nil)
+	}
+	c.mu.Unlock()
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("30 万个 1 字节帧入队用了 %v，疑似平方", d)
+	}
+}
+
+// 大量稀疏流同时就绪：一批里稀疏流的帧受预算限制（至多预算 + 一块），老流仍每批至少一帧。
+func TestInternodeManySparseStreamsRespectBudget(t *testing.T) {
+	c := &internodeConn{streams: map[uint32]*fwdStream{}, wake: make(chan struct{}, 1)}
+	old := &fwdStream{c: c, id: 1}
+	c.mu.Lock()
+	for k := 0; k < 50; k++ {
+		c.sendStreamLocked(old, encode(protocol.Frame{Type: protocol.FrameData, StreamID: 1, Data: make([]byte, protocol.MaxDataChunk)}), nil)
+	}
+	c.mu.Unlock()
+	for i := 0; i < 3; i++ { // 批次号前进，让后面的流算稀疏流
+		c.mu.Lock()
+		c.collectLocked(false)
+		c.mu.Unlock()
+	}
+	c.mu.Lock()
+	for i := 0; i < 500; i++ {
+		fs := &fwdStream{c: c, id: uint32(100 + i)}
+		c.sendStreamLocked(fs, encode(protocol.Frame{Type: protocol.FrameData, StreamID: fs.id, Data: make([]byte, 8<<10)}), nil)
+	}
+	batch := c.collectLocked(false)
+	c.mu.Unlock()
+	size, olds := 0, 0
+	for _, it := range batch {
+		size += dataBytes(it.frame)
+		if f, _ := protocol.DecodeView(it.frame); f.StreamID == 1 {
+			olds++
+		}
+	}
+	if size > tunnel.WriteBudget+protocol.MaxDataChunk {
+		t.Fatalf("一批 %d 字节，超过预算 + 一块", size)
+	}
+	if olds != 1 {
+		t.Fatalf("老流这一批应恰好出一帧：%d", olds)
+	}
+}

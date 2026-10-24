@@ -223,6 +223,7 @@ type fwdStream struct {
 
 	// 以下由 c.mu 守护。
 	out        []outItem   // 已扣过信用、等写协程出队的 DATA / END
+	outN       int         // out 里的 DATA 载荷字节（随入队 / 出队增减，免得每次入队遍历）
 	flow       tunnel.Flow // 在 c.sched 里的状态
 	credit     int         // 还能往对端发多少（对端的每流接收窗口）
 	pending    [][]byte    // 源发来、还没信用发给对端的字节
@@ -349,7 +350,8 @@ func (c *internodeConn) sendStreamLocked(fs *fwdStream, frame []byte, after func
 		return
 	}
 	fs.out = append(fs.out, outItem{frame: frame, after: after})
-	c.sched.Add(fs, &fs.flow, fs.outBytes())
+	fs.outN += dataBytes(frame)
+	c.sched.Add(fs, &fs.flow, fs.outN)
 	c.signalLocked()
 }
 
@@ -358,15 +360,6 @@ func (c *internodeConn) signalLocked() {
 	case c.wake <- struct{}{}:
 	default:
 	}
-}
-
-// outBytes 是排着的 DATA 载荷字节（持 c.mu 调用）。
-func (fs *fwdStream) outBytes() int {
-	n := 0
-	for _, it := range fs.out {
-		n += dataBytes(it.frame)
-	}
-	return n
 }
 
 // collectLocked 取出这一批要写的帧：全部控制帧，再按调度器给各流出帧；all 为真时取尽（关闭时用）。
@@ -387,13 +380,14 @@ func (c *internodeConn) collectLocked(all bool) []outItem {
 				size += dataBytes(it.frame)
 			}
 			batch = append(batch, fs.out...)
-			fs.out = nil
+			fs.out, fs.outN = nil, 0
 			return size, false
 		}
 		it := fs.out[0]
 		fs.out[0] = outItem{}
 		fs.out = fs.out[1:]
 		batch = append(batch, it)
+		fs.outN -= dataBytes(it.frame)
 		more := len(fs.out) > 0
 		if !more {
 			fs.out = nil
@@ -500,12 +494,15 @@ func (c *internodeConn) receive(msg []byte) bool {
 		fs := c.streams[f.StreamID]
 		dropped := 0
 		var s *tunnel.Stream
+		var afters []func()
 		if fs != nil {
 			dropped = fs.dropLocked()
+			afters = fs.takeOutLocked()
 			s = fs.s
 			delete(c.streams, f.StreamID)
 		}
 		c.mu.Unlock()
+		runAll(afters)
 		if s != nil {
 			s.Consumed(dropped)
 			s.Abort()
@@ -672,6 +669,26 @@ func (fs *fwdStream) dropLocked() int {
 	return n
 }
 
+// takeOutLocked 取走已排进出队列、还没写出的 DATA / END（RST 之后对端不该再收到它们），
+// 返回这些帧的 after（把已扣的信用还给本地隧道），调用方在锁外执行。
+func (fs *fwdStream) takeOutLocked() []func() {
+	var afters []func()
+	for _, it := range fs.out {
+		if it.after != nil {
+			afters = append(afters, it.after)
+		}
+	}
+	fs.out = nil
+	fs.outN = 0
+	return afters
+}
+
+func runAll(list []func()) {
+	for _, f := range list {
+		f()
+	}
+}
+
 // pendingLen 是挂着的下行字节数（持 c.mu 调用）。
 func (fs *fwdStream) pendingLen() int {
 	n := 0
@@ -736,11 +753,13 @@ func (fs *fwdStream) Reset(s *tunnel.Stream, code protocol.RstCode) {
 		return
 	}
 	dropped := fs.dropLocked()
+	afters := fs.takeOutLocked()
 	if c.streams[fs.id] == fs {
 		delete(c.streams, fs.id)
 	}
 	c.sendLocked(encode(protocol.Frame{Type: protocol.FrameRst, StreamID: fs.id, Code: code}), nil)
 	c.mu.Unlock()
+	runAll(afters)
 	s.Consumed(dropped)
 }
 
