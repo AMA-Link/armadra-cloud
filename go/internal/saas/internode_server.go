@@ -608,7 +608,14 @@ func (fs *fwdStream) End(s *tunnel.Stream) {
 
 // Reset 是源 RST 或本地隧道没了：给对端发 RST，入口节点给客户端 4404。挂着的下行字节作废，
 // 信用还给本地隧道（隧道还在、只是这条流被源重置时，不还会永久漏掉隧道级窗口）。
+//
+// 链路上的 refused 只表示「持有节点上的源没报 e2e」（open 里自己判的），入口节点据此答 e2e_unsupported；
+// 源自己发来的 refused 若原样转回，客户端会看到 e2e_unsupported，本地却是 source_offline，
+// 所以这里改成 sourceGone 再转出。
 func (fs *fwdStream) Reset(s *tunnel.Stream, code protocol.RstCode) {
+	if code == protocol.RstRefused {
+		code = protocol.RstSourceGone
+	}
 	c := fs.c
 	c.mu.Lock()
 	if fs.gone {

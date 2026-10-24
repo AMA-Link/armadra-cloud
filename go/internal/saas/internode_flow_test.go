@@ -263,3 +263,30 @@ func TestInternodeCheckEveryComesFromConfig(t *testing.T) {
 		t.Fatalf("配置：%v", s.checkEvery)
 	}
 }
+
+// 审查 G5：源自己发来的 RST refused 不能原样转回入口节点（入口节点把链路上的 refused 当 e2e_unsupported），
+// 改成 sourceGone；其余码原样。持有节点自己判的 refused（源没报 e2e）走 open，不经这里。
+func TestForwardedResetMapsSourceRefused(t *testing.T) {
+	cases := []struct{ in, want protocol.RstCode }{
+		{protocol.RstRefused, protocol.RstSourceGone},
+		{protocol.RstSourceGone, protocol.RstSourceGone},
+		{protocol.RstInternal, protocol.RstInternal},
+		{protocol.RstClientGone, protocol.RstClientGone},
+	}
+	for _, tc := range cases {
+		c := &internodeConn{streams: map[uint32]*fwdStream{}}
+		fs := &fwdStream{c: c, id: 7}
+		c.streams[7] = fs
+		fs.Reset(nil, tc.in)
+		if len(c.queue) != 1 {
+			t.Fatalf("%v：写队列 %d 帧", tc.in, len(c.queue))
+		}
+		f, err := protocol.DecodeView(c.queue[0].frame)
+		if err != nil || f.Type != protocol.FrameRst || f.StreamID != 7 || f.Code != tc.want {
+			t.Fatalf("%v → 想要 %v，实际 %+v（%v）", tc.in, tc.want, f, err)
+		}
+		if len(c.streams) != 0 {
+			t.Fatalf("流没摘掉")
+		}
+	}
+}
