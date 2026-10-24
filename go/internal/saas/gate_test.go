@@ -129,3 +129,50 @@ func TestGateFailOpenIsCountedAndThrottled(t *testing.T) {
 		t.Fatal("事故开关没开")
 	}
 }
+
+// Redis 卡住（连得上、不回话）时，下线不被排队的 ZREM 拖住：排空超时之后放弃还排着的释放，
+// 否则单条队列上 20 条释放各等满读超时（这里 1.5 秒，缺省 3 秒）。进行中的那条由读超时兜底，不再排队的才被放弃。
+func TestGateCloseDropsQueuedReleasesAfterFlushTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	var held []net.Conn
+	var mu sync.Mutex
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, c)
+			mu.Unlock()
+		}
+	}()
+	defer func() {
+		mu.Lock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+		mu.Unlock()
+	}()
+	client := goredis.NewClient(&goredis.Options{Addr: ln.Addr().String(), MaxRetries: -1, ReadTimeout: 1500 * time.Millisecond, PoolSize: 1})
+	defer func() { _ = client.Close() }()
+	errs := &errorList{}
+	g := testGate(t, client, "relay-test:", errs)
+	g.flushTimeout = 100 * time.Millisecond
+	_ = 100 * time.Millisecond
+	for i := 0; i < 20; i++ {
+		g.release.Go("t", func() { g.zrem("k", "m") })
+	}
+	start := time.Now()
+	g.close()
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("下线被卡住的 Redis 拖了 %v", d)
+	}
+	if errs.has("team concurrency release") != 0 {
+		t.Fatalf("放弃的释放不该报错：%v", errs.ops)
+	}
+}

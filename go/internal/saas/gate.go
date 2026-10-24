@@ -84,6 +84,10 @@ type gate struct {
 	fallback int
 	// release 承接名额的 Redis 释放：自己的工作协程，不与边缘的账号并发释放共用队列；出错不重试。
 	release *control.Dispatcher
+	// stop 在 close 的排空超时之后取消：排队与进行中的释放立刻放弃（成员由过期兜底），不拖住下线。
+	stop         context.Context
+	cancelStop   context.CancelFunc
+	flushTimeout time.Duration
 
 	incident atomic.Bool
 	// failOpen 是 Redis 出错时团队并发放行的次数（指标）；lastFailLog 给日志限频。
@@ -99,7 +103,9 @@ type gate struct {
 }
 
 func newGate(client goredis.UniversalClient, prefix, node string, fallback int, limits func() control.Limiter, onError func(string, error)) *gate {
+	stop, cancelStop := context.WithCancel(context.Background())
 	return &gate{
+		stop: stop, cancelStop: cancelStop, flushTimeout: releaseFlushTimeout,
 		client: client, prefix: prefix, node: node, limits: limits, onError: onError, fallback: fallback,
 		release: control.NewDispatcher(1, 0),
 		quotas:  map[string]int{}, live: map[string]map[string]struct{}{},
@@ -177,21 +183,34 @@ func (g *gate) Admit(ctx context.Context, in edge.GateInput) (func(), gen.ErrorC
 			}
 			g.mu.Unlock()
 			// 投递即返回（调用方可能在 epoll 循环上）；只试一次，失败由成员过期兜底。
-			g.release.Go(in.Team, func() {
-				rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := g.client.ZRem(rctx, key, member).Err(); err != nil {
-					g.onError("team concurrency release", err)
-				}
-			})
+			g.release.Go(in.Team, func() { g.zrem(key, member) })
 		})
 	}, "", nil
 }
 
-// close 等已投递的释放做完（最多 5 秒），再停掉工作协程。
+// zrem 释放一个并发成员；下线放弃之后不再碰 Redis。
+func (g *gate) zrem(key, member string) {
+	if g.stop.Err() != nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(g.stop, 5*time.Second)
+	defer cancel()
+	if err := g.client.ZRem(rctx, key, member).Err(); err != nil && g.stop.Err() == nil {
+		g.onError("team concurrency release", err)
+	}
+}
+
+// releaseFlushTimeout 是下线时等已投递的释放做完的最长时间。
+const releaseFlushTimeout = 5 * time.Second
+
+// close 等已投递的释放做完（最多 releaseFlushTimeout）；超时就放弃还排着的释放，
+// 否则 Redis 卡住时每条释放各等满超时，Close 要等的就是队列长度乘 5 秒。
 func (g *gate) close() {
-	g.release.Flush(5 * time.Second)
+	if !g.release.Flush(g.flushTimeout) {
+		g.cancelStop()
+	}
 	g.release.Close()
+	g.cancelStop()
 }
 
 // render 是准入闸的指标（接在原有指标之后）。
