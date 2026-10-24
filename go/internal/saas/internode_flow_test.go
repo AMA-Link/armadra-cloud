@@ -340,7 +340,7 @@ func TestInternodeWriterIsFairAcrossStreams(t *testing.T) {
 	step := func(everything bool) []outItem {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		b := c.collectLocked(everything)
+		b, _, _ := c.collectLocked(everything)
 		all = append(all, b...)
 		return b
 	}
@@ -439,7 +439,7 @@ func TestResetDropsQueuedOutAndReturnsCredit(t *testing.T) {
 			t.Fatalf("%s：归还 %d，应为 500", how, returned)
 		}
 		c.mu.Lock()
-		batch := c.collectLocked(true)
+		batch, _, _ := c.collectLocked(true)
 		c.mu.Unlock()
 		for _, it := range batch {
 			f, err := protocol.DecodeView(it.frame)
@@ -483,7 +483,7 @@ func TestInternodeManySparseStreamsRespectBudget(t *testing.T) {
 	c.mu.Unlock()
 	for i := 0; i < 3; i++ { // 批次号前进，让后面的流算稀疏流
 		c.mu.Lock()
-		c.collectLocked(false)
+		_, _, _ = c.collectLocked(false)
 		c.mu.Unlock()
 	}
 	c.mu.Lock()
@@ -491,7 +491,7 @@ func TestInternodeManySparseStreamsRespectBudget(t *testing.T) {
 		fs := &fwdStream{c: c, id: uint32(100 + i)}
 		c.sendStreamLocked(fs, encode(protocol.Frame{Type: protocol.FrameData, StreamID: fs.id, Data: make([]byte, 8<<10)}), nil)
 	}
-	batch := c.collectLocked(false)
+	batch, _, _ := c.collectLocked(false)
 	c.mu.Unlock()
 	size, olds := 0, 0
 	for _, it := range batch {

@@ -98,3 +98,45 @@ func TestSchedSkipsFinishedAndResets(t *testing.T) {
 		t.Fatalf("重置之后应为空：%v", got)
 	}
 }
+
+// 稀疏流 = 上一帧已经写出之后再就绪：批还没写完时，已写出帧的流再就绪仍是稀疏流（按批判定会让它进老流），
+// 帧还没写出的流进老流（抢在帧与帧之间反复补数据换不到优先）。
+func TestSchedSparseMeansPreviousFrameWritten(t *testing.T) {
+	var q tunnel.Sched[*item]
+	a := &item{name: "a", left: 100, frame: 100}
+	b := &item{name: "b", left: 100, frame: 100}
+	k := &item{name: "k", left: 1, frame: 10}
+	s := &item{name: "s", left: 1, frame: 10}
+	q.Add(k, &k.flow, 10)
+	q.Add(s, &s.flow, 10)
+	q.Add(a, &a.flow, 10000)
+	q.Add(b, &b.flow, 10000)
+	base := q.Drain(1000, func(it *item) (int, bool) {
+		it.left--
+		return it.frame, it.left > 0
+	}) // 帧序：k=1 s=2 a=3 b=4
+	// 写端写到第 1 帧：k 的帧已写出，s、a、b 的还没；这一批还没写完，k 与 s 又各来一个按键。
+	q.NoteSent(base + 1)
+	k.left, s.left = 1, 1
+	q.Add(k, &k.flow, 10)
+	q.Add(s, &s.flow, 10)
+	var order []string
+	q.Drain(1000, func(it *item) (int, bool) {
+		if it.left == 0 {
+			return -1, false
+		}
+		it.left--
+		order = append(order, it.name)
+		return it.frame, it.left > 0
+	})
+	pos := map[string]int{}
+	for i, n := range order {
+		pos[n] = i
+	}
+	if pos["k"] != 0 {
+		t.Fatalf("上一帧已写出的流再就绪应先出：%v", order)
+	}
+	if pos["s"] < pos["a"] {
+		t.Fatalf("上一帧还没写出的流不应抢在老流前面：%v", order)
+	}
+}
