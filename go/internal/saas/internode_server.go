@@ -269,6 +269,12 @@ func (c *internodeConn) serve() {
 		}
 	}
 	c.closeTransport()
+	c.resetAll()
+}
+
+// resetAll 连接断开后重置全部转来的流：挂着的下行字节还给本地隧道，再中止本地隧道上的流
+// （两端都已 END 的流不中止，已排进出队列的上行尾巴与 END 照常写给源，#136）。
+func (c *internodeConn) resetAll() {
 	c.mu.Lock()
 	type dropped struct {
 		s *tunnel.Stream
