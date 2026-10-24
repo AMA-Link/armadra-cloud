@@ -497,9 +497,9 @@ func (c *internodeConn) receive(msg []byte) bool {
 		var afters []func()
 		if fs != nil {
 			dropped = fs.dropLocked()
+			delete(c.streams, f.StreamID)
 			afters = fs.takeOutLocked()
 			s = fs.s
-			delete(c.streams, f.StreamID)
 		}
 		c.mu.Unlock()
 		runAll(afters)
@@ -671,15 +671,29 @@ func (fs *fwdStream) dropLocked() int {
 
 // takeOutLocked 取走已排进出队列、还没写出的 DATA / END（RST 之后对端不该再收到它们），
 // 返回这些帧的 after（把已扣的信用还给本地隧道），调用方在锁外执行。
+// 这些 DATA 入队时扣过链路信用、对端永远收不到，也不会为它们补 WINDOW(0)：连接还开着就当场还回链路信用，
+// 再让因链路信用挂着的流接着发（#134）。写协程已经取走的帧不在 out 里，照常写出、由对端补 WINDOW。
+// 调用方先把 fs 摘出流表，免得它自己被重新排进出队列。
 func (fs *fwdStream) takeOutLocked() []func() {
+	c := fs.c
 	var afters []func()
 	for _, it := range fs.out {
 		if it.after != nil {
 			afters = append(afters, it.after)
 		}
 	}
+	refund := fs.outN
 	fs.out = nil
 	fs.outN = 0
+	if refund > 0 && !c.closed {
+		c.linkCredit += refund
+		for _, other := range c.streams {
+			if c.linkCredit <= 0 {
+				break
+			}
+			c.flushLocked(other)
+		}
+	}
 	return afters
 }
 
@@ -753,10 +767,10 @@ func (fs *fwdStream) Reset(s *tunnel.Stream, code protocol.RstCode) {
 		return
 	}
 	dropped := fs.dropLocked()
-	afters := fs.takeOutLocked()
 	if c.streams[fs.id] == fs {
 		delete(c.streams, fs.id)
 	}
+	afters := fs.takeOutLocked()
 	c.sendLocked(encode(protocol.Frame{Type: protocol.FrameRst, StreamID: fs.id, Code: code}), nil)
 	c.mu.Unlock()
 	runAll(afters)

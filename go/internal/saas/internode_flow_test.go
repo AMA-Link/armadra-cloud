@@ -507,3 +507,74 @@ func TestInternodeManySparseStreamsRespectBudget(t *testing.T) {
 		t.Fatalf("老流这一批应恰好出一帧：%d", olds)
 	}
 }
+
+// #134：转来的流被重置（源 RST 或对端 RST）时，出队列里已扣链路信用、还没写出的 DATA 要把链路信用还回来，
+// 对端永远收不到这些字节、也不会为它们补 WINDOW(0)；还回之后因链路信用挂着的别的流接着发。
+func TestResetReturnsQueuedLinkCredit(t *testing.T) {
+	for _, how := range []string{"source-reset", "peer-rst"} {
+		t.Run(how, func(t *testing.T) {
+			const window = 3000
+			tr := &nullTransport{}
+			tun := tunnel.New("t1", "0123456789abcdef0123456789abcdef", "0.2.0", tr, tunnel.DefaultConfig(), tunnel.Hooks{})
+			t.Cleanup(func() { tun.Close(protocol.CloseNormal, "cleanup") })
+			c := &internodeConn{streams: map[uint32]*fwdStream{}, wake: make(chan struct{}, 1), linkCredit: window}
+			open := func(id uint32) *fwdStream {
+				fs := &fwdStream{c: c, id: id, credit: protocol.StreamWindow, recvLeft: protocol.StreamWindow}
+				s, err := tun.OpenStream(&gen.OpenPayload{Kind: "e2e", Method: "GET", Path: gen.E2EPath, Headers: [][2]string{}}, fs, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fs.s = s
+				c.streams[id] = fs
+				return fs
+			}
+			for round := 0; round < 4; round++ {
+				a, b := open(uint32(4*round+1)), open(uint32(4*round+3))
+				a.Data(a.s, make([]byte, window)) // 扣光链路信用，全部排进 a 的出队列
+				b.Data(b.s, make([]byte, 500))    // 链路信用不够，挂着
+				c.mu.Lock()
+				credit, bPending := c.linkCredit, b.pendingLen()
+				c.mu.Unlock()
+				if credit != 0 || bPending != 500 {
+					t.Fatalf("第 %d 轮：链路信用 %d、b 挂着 %d", round, credit, bPending)
+				}
+				if how == "source-reset" {
+					a.Reset(a.s, protocol.RstInternal)
+				} else {
+					c.receive(encode(protocol.Frame{Type: protocol.FrameRst, StreamID: a.id, Code: protocol.RstClientGone}))
+				}
+				c.mu.Lock()
+				credit, bPending, bOut := c.linkCredit, b.pendingLen(), b.outN
+				c.mu.Unlock()
+				if bPending != 0 || bOut != 500 {
+					t.Fatalf("第 %d 轮：a 还回链路信用后 b 应排进出队列：挂着 %d、出队列 %d", round, bPending, bOut)
+				}
+				if credit != window-500 {
+					t.Fatalf("第 %d 轮：链路信用应为 %d，实际 %d", round, window-500, credit)
+				}
+				// b 的字节写出、对端补 WINDOW(0)；收掉 b，链路信用回到初始窗口。
+				c.mu.Lock()
+				written := c.collectLocked(true)
+				c.linkCredit += 500
+				credit = c.linkCredit
+				c.mu.Unlock()
+				for _, it := range written {
+					if it.after != nil {
+						it.after()
+					}
+				}
+				b.Reset(b.s, protocol.RstInternal)
+				if credit != window {
+					t.Fatalf("第 %d 轮：链路信用应回到 %d，实际 %d", round, window, credit)
+				}
+			}
+		})
+	}
+}
+
+// nullTransport 丢弃隧道写出的帧（只为拿到真实的 tunnel.Stream）。
+type nullTransport struct{}
+
+func (nullTransport) Send([]byte) error                { return nil }
+func (nullTransport) Close(protocol.CloseCode, string) {}
+func (nullTransport) Terminate()                       {}
