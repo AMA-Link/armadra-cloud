@@ -317,7 +317,11 @@ func TestGarbageCollectionJobs(t *testing.T) {
 	e.account("a1", "ann@example.test")
 	e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleEN, To: "ann@example.test", AccountID: "a1"})
 	e.waitMessages(1)
-	e.eventually("已发", func() bool { return e.count("SELECT count(*) FROM outbox_emails WHERE sent_at_ms IS NOT NULL") == 1 })
+	// 作业的完成也要等记进库再推时钟：完成时刻晚于推时钟会被记成推过之后，「完成满 7 天」就差一截。
+	e.eventually("已发", func() bool {
+		return e.count("SELECT count(*) FROM outbox_emails WHERE sent_at_ms IS NOT NULL") == 1 &&
+			e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NOT NULL") == 1
+	})
 	// 令牌 24 小时后过期，过期再满 24 小时才清。
 	e.clock.Advance(25 * time.Hour)
 	time.Sleep(1500 * time.Millisecond)
