@@ -50,7 +50,7 @@ type DB struct {
 // 驱动（modernc）在带取消信号的 context 被取消时会对连接发 interrupt，正在执行的语句会被打断；
 // 写事务中途被打断就是半写，打断还可能落到之后复用这条连接的下一条语句上（#73）。
 // 所以请求的取消只在事务开始之前生效（read / write / snapshot 取得锁后先看 ctx.Err()），
-// 一旦开始，语句跑完为止；等锁的上限是 busy_timeout，不会无限等。context 里的值保留。
+// 一旦开始，语句跑完为止；WithoutCancel 连截止时间也一并去掉，所以已开始的语句以 busy_timeout 为上界，不会无限等。context 里的值保留。
 type safeConn struct{ c *sql.Conn }
 
 func (s *safeConn) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {

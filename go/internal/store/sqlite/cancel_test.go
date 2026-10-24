@@ -107,7 +107,7 @@ func TestCancelledRequestsNeverTearWrites(t *testing.T) {
 	t.Logf("成功 %d / %d", succeeded, rounds)
 }
 
-// 已取消的 context 不开始任何工作；锁等待期间被取消同理。
+// 已取消的 context 不开始任何工作。
 func TestCancelledBeforeStartDoesNothing(t *testing.T) {
 	db := create(t)
 	defer func() { _ = db.Close() }()
