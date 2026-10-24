@@ -6,8 +6,8 @@ import "github.com/AMA-Link/armadra-cloud/go/internal/protocol"
 //
 //   - 轮转：每条就绪的流每批至多出一帧，大流量流不会把别的流挡在整段积压后面；
 //   - 稀疏流优先：刚从空闲转为就绪、排着的字节不多的流进 fresh，先于持续有数据的老流出帧，
-//     终端按键与回显这类交互流因此不必排在大流量流后面；刚出过帧又立刻就绪的流进老流队列，
-//     反复「停一下再发」换不到额外份额；
+//     终端按键与回显这类交互流因此不必排在大流量流后面；刚出过帧、下一批还没开始就又就绪的流进老流队列，
+//     抢在批与批之间反复补数据换不到额外优先；
 //   - 字节预算：一批至多 budget 字节（老流至少出一帧），后到的控制帧与稀疏流的帧最多等
 //     「当前批剩下的 + 一块」，与就绪流的数量无关。
 //
@@ -51,7 +51,7 @@ func (q *Sched[T]) Add(v T, f *Flow, bytes int) {
 	if f.queued != queueNone {
 		return
 	}
-	if f.served+1 < q.round && bytes <= SparseMax {
+	if f.served < q.round && bytes <= SparseMax {
 		f.queued = queueFresh
 		q.fresh = append(q.fresh, entry[T]{v, f})
 		return
