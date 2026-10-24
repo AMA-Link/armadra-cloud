@@ -153,3 +153,75 @@ func TestCloseWithQueuedOutputKeepsCredit(t *testing.T) {
 		t.Fatalf("隧道关闭后不再还信用，实际 %d", got)
 	}
 }
+
+// regate 换上新闸、放开旧闸，等写端再写出一帧并卡在新闸上：一条流每批只出一帧，
+// 所以每放行一次，正好多一帧写出、下一帧被写协程取走卡在新闸上。
+func regate(r *rig, old chan struct{}) chan struct{} {
+	r.t.Helper()
+	before := r.tr.count()
+	gate := make(chan struct{})
+	r.tr.mu.Lock()
+	r.tr.gate = gate
+	r.tr.mu.Unlock()
+	close(old)
+	eventually(r.t, "写端写出一帧并卡在新闸上", func() bool {
+		r.tr.mu.Lock()
+		defer r.tr.mu.Unlock()
+		return len(r.tr.frames) == before+1 && r.tr.gated > 0
+	})
+	return gate
+}
+
+// 写协程已经取走、写出的段不在出队列里：重置只还出队列里剩下的（outN），
+// 已写出的由对端补 WINDOW，补完隧道信用恰好回到初始窗口、不超出（#134）。
+func TestResetRefundsOnlyUnwrittenSegments(t *testing.T) {
+	kills := []struct {
+		name string
+		kill func(r *rig, s *tunnel.Stream)
+	}{
+		{"对端 RST", func(r *rig, s *tunnel.Stream) {
+			r.feed(protocol.Frame{Type: protocol.FrameRst, StreamID: s.ID(), Code: protocol.RstInternal})
+		}},
+		{"本端 Abort", func(_ *rig, s *tunnel.Stream) { s.Abort() }},
+	}
+	for _, k := range kills {
+		t.Run(k.name, func(t *testing.T) {
+			r := newRig(t, leakConfig)
+			r.tr.take()
+			gate := gateWriter(r)
+			s := r.open(&recSink{})
+			const parked = leakChunk / 2
+			if s.Send(make([]byte, leakWindow+parked)) {
+				t.Fatal("信用不够时 Send 应答 false")
+			}
+			// 逐帧放行（PONG、OPEN、第一段），直到第一段写出、第二段被取走卡住，出队列只剩第三段。
+			for i := 0; i < 4 && dataBytesOf(r.tr.takeKeep(), s.ID()) == 0; i++ {
+				gate = regate(r, gate)
+			}
+			if n := dataBytesOf(r.tr.takeKeep(), s.ID()); n != leakChunk {
+				t.Fatalf("重置前应已写出 %d 字节，实际 %d", leakChunk, n)
+			}
+			outN := r.tun.PendingBytes() - parked
+			if outN != leakChunk {
+				t.Fatalf("出队列应只剩第三段 %d 字节，实际 %d", leakChunk, outN)
+			}
+			k.kill(r, s)
+			if got := r.tun.SendCredit(); got != outN {
+				t.Fatalf("重置只应还出队列里的 %d 字节，实际隧道信用 %d", outN, got)
+			}
+			r.tr.mu.Lock()
+			r.tr.gate = nil
+			r.tr.mu.Unlock()
+			close(gate)
+			eventually(t, "被取走的段写出", func() bool { return dataBytesOf(r.tr.takeKeep(), s.ID()) == leakWindow-outN })
+			sent := dataBytesOf(r.tr.take(), s.ID())
+			if sent != leakWindow-outN {
+				t.Fatalf("写出的应是取走的 %d 字节，实际 %d", leakWindow-outN, sent)
+			}
+			r.feed(protocol.Frame{Type: protocol.FrameWindow, StreamID: 0, Credit: uint32(sent)})
+			if got := r.tun.SendCredit(); got != leakWindow {
+				t.Fatalf("对端补完 WINDOW 后隧道信用应恰好回到 %d，实际 %d", leakWindow, got)
+			}
+		})
+	}
+}
