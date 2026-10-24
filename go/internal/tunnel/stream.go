@@ -38,7 +38,8 @@ type Stream struct {
 	pendingBytes    int
 	out             []segment
 	endAfterPending bool
-	inReady         bool
+	queued          queueKind // 在写端的哪条就绪队列里
+	servedRound     uint64    // 最近一次出帧的批次号（判断是不是「稀疏流」）
 	inParked        bool
 	remoteEnded     bool
 	localEnded      bool
@@ -202,4 +203,13 @@ func (s *Stream) popLocked() []byte {
 	frame[0] = byte(protocol.FrameData)
 	binary.BigEndian.PutUint32(frame[1:headroom], s.id)
 	return frame
+}
+
+// outBytes 是已扣信用、排在出队列里的载荷字节（持 t.mu 调用）。
+func (s *Stream) outBytes() int {
+	n := 0
+	for _, sg := range s.out {
+		n += sg.n
+	}
+	return n
 }
