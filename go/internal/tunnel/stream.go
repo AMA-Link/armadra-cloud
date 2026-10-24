@@ -37,8 +37,9 @@ type Stream struct {
 	pending         []pendingChunk
 	pendingBytes    int
 	out             []segment
+	outN            int // out 里的载荷字节（入队 / 出队时增减，调度器判断稀疏流不必遍历）
 	endAfterPending bool
-	inReady         bool
+	flow            Flow // 写端调度器里的状态
 	inParked        bool
 	remoteEnded     bool
 	localEnded      bool
@@ -167,7 +168,7 @@ func (s *Stream) queueEndLocked() {
 // destroyLocked 丢掉没发出去的字节，流不再收发。
 func (s *Stream) destroyLocked() {
 	s.destroyed = true
-	s.pending, s.pendingBytes, s.out = nil, 0, nil
+	s.pending, s.pendingBytes, s.out, s.outN = nil, 0, nil, 0
 	s.unparkLocked()
 }
 
@@ -192,6 +193,7 @@ func (s *Stream) popLocked() []byte {
 	sg := s.out[0]
 	s.out[0] = segment{}
 	s.out = s.out[1:]
+	s.outN -= sg.n
 	if sg.end {
 		b := make([]byte, headroom)
 		b[0] = byte(protocol.FrameEnd)

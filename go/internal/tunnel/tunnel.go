@@ -166,8 +166,7 @@ type Tunnel struct {
 	recvRemaining int
 	recvUnacked   int
 	ctl           [][]byte
-	ready         []*Stream
-	readyNext     []*Stream
+	sched         Sched[*Stream] // 写端的公平调度（sched.go）
 	parked        []*Stream
 }
 
@@ -582,7 +581,8 @@ func (t *Tunnel) finish(code protocol.CloseCode, reason string, wantClose bool) 
 		streams = append(streams, s)
 	}
 	t.streams = map[uint32]*Stream{}
-	t.ready, t.readyNext, t.parked = nil, nil, nil
+	t.sched.Reset()
+	t.parked = nil
 	replaced := t.replaced
 	started := t.started
 	// 写协程还没起来就被关（握手刚完成、Start 之前来了 kick / GOAWAY）：排队的控制帧要自己发出去，
@@ -668,6 +668,7 @@ func (t *Tunnel) flushPendingLocked(s *Stream) bool {
 		t.sendCredit -= n
 		s.bytesOut += int64(n)
 		s.out = append(s.out, segment{buf: p.buf, off: p.off, n: n})
+		s.outN += n
 		s.pendingBytes -= n
 		p.off += n
 		if p.off == len(p.buf) {
@@ -700,11 +701,12 @@ func (t *Tunnel) noteSent(s *Stream, n int) {
 	}
 }
 
+// markReadyLocked 把有数据的流排进写端的调度器。
 func (t *Tunnel) markReadyLocked(s *Stream) {
-	if len(s.out) > 0 && !s.inReady && !s.destroyed {
-		s.inReady = true
-		t.ready = append(t.ready, s)
+	if len(s.out) == 0 || s.destroyed {
+		return
 	}
+	t.sched.Add(s, &s.flow, s.outN)
 }
 
 func (t *Tunnel) parkLocked(s *Stream) {
@@ -779,7 +781,8 @@ func (t *Tunnel) writer() {
 	}
 }
 
-// collect 取出这一轮要写的帧；隧道已关闭时只交出剩下的控制帧。
+// collect 取出这一批要写的帧：先写全部控制帧，再按调度器（sched.go）给各流出帧。
+// 隧道已关闭时只交出剩下的控制帧。
 func (t *Tunnel) collect(batch [][]byte) ([][]byte, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -789,23 +792,18 @@ func (t *Tunnel) collect(batch [][]byte) ([][]byte, bool) {
 	if t.state == StateClosed {
 		return batch, true
 	}
-	cur := t.ready
-	t.ready = t.readyNext[:0]
-	for _, s := range cur {
-		s.inReady = false
+	t.sched.Drain(WriteBudget, func(s *Stream) (int, bool) {
 		if s.destroyed || len(s.out) == 0 {
-			continue
+			return -1, false
 		}
-		batch = append(batch, s.popLocked())
-		if len(s.out) > 0 {
-			s.inReady = true
-			t.ready = append(t.ready, s)
-		} else {
+		f := s.popLocked()
+		batch = append(batch, f)
+		more := len(s.out) > 0
+		if !more {
 			s.out = nil
 		}
-	}
-	clear(cur)
-	t.readyNext = cur[:0]
+		return len(f) - headroom, more
+	})
 	return batch, false
 }
 
