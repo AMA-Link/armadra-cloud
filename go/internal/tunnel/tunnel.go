@@ -251,10 +251,7 @@ func (t *Tunnel) PendingBytes() int {
 	defer t.mu.Unlock()
 	n := 0
 	for _, s := range t.streams {
-		n += s.pendingBytes
-		for _, sg := range s.out {
-			n += sg.n
-		}
+		n += s.pendingBytes + s.outN
 	}
 	return n
 }
@@ -767,12 +764,17 @@ func (t *Tunnel) writer() {
 	var batch [][]byte
 	for {
 		var closing bool
-		batch, closing = t.collect(batch[:0])
-		for _, frame := range batch {
+		var base uint64
+		var ctlN int
+		batch, base, ctlN, closing = t.collect(batch[:0])
+		for i, frame := range batch {
 			if err := t.tr.Send(frame); err != nil {
 				t.finish(protocol.CloseGoingAway, "write_failed", false)
 				t.tr.Terminate()
 				return
+			}
+			if i >= ctlN {
+				t.sched.NoteSent(base + uint64(i-ctlN+1))
 			}
 		}
 		if closing {
@@ -808,16 +810,18 @@ func (t *Tunnel) writer() {
 
 // collect 取出这一批要写的帧：先写全部控制帧，再按调度器（sched.go）给各流出帧。
 // 隧道已关闭时只交出剩下的控制帧。
-func (t *Tunnel) collect(batch [][]byte) ([][]byte, bool) {
+// 返回帧序号的基数与批头控制帧的个数，写端据此逐帧报告写出进度（Sched.NoteSent）。
+func (t *Tunnel) collect(batch [][]byte) (out [][]byte, base uint64, ctlN int, closing bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	batch = append(batch, t.ctl...)
 	clear(t.ctl)
 	t.ctl = t.ctl[:0]
+	ctlN = len(batch)
 	if t.state == StateClosed {
-		return batch, true
+		return batch, 0, ctlN, true
 	}
-	t.sched.Drain(WriteBudget, func(s *Stream) (int, bool) {
+	base = t.sched.Drain(WriteBudget, func(s *Stream) (int, bool) {
 		if s.destroyed || len(s.out) == 0 {
 			return -1, false
 		}
@@ -829,7 +833,7 @@ func (t *Tunnel) collect(batch [][]byte) ([][]byte, bool) {
 		}
 		return len(f) - headroom, more
 	})
-	return batch, false
+	return batch, base, ctlN, false
 }
 
 // tick 是一次心跳：连续 HeartbeatMisses 次没回应就断开，答是否该退出写协程。

@@ -363,14 +363,15 @@ func (c *internodeConn) signalLocked() {
 }
 
 // collectLocked 取出这一批要写的帧：全部控制帧，再按调度器给各流出帧；all 为真时取尽（关闭时用）。
-func (c *internodeConn) collectLocked(all bool) []outItem {
-	batch := c.ctl
+func (c *internodeConn) collectLocked(all bool) (batch []outItem, base uint64, ctlN int) {
+	batch = c.ctl
 	c.ctl = nil
+	ctlN = len(batch)
 	budget := tunnel.WriteBudget
 	if all {
 		budget = int(^uint(0) >> 1)
 	}
-	c.sched.Drain(budget, func(fs *fwdStream) (int, bool) {
+	base = c.sched.Drain(budget, func(fs *fwdStream) (int, bool) {
 		if len(fs.out) == 0 {
 			return -1, false
 		}
@@ -394,13 +395,13 @@ func (c *internodeConn) collectLocked(all bool) []outItem {
 		}
 		return dataBytes(it.frame), more
 	})
-	return batch
+	return batch, base, ctlN
 }
 
 // abandon 连接关了：还没写出的帧不写，只执行它们的 after（把字节的信用还给本地隧道）。
 func (c *internodeConn) abandon() {
 	c.mu.Lock()
-	rest := c.collectLocked(true)
+	rest, _, _ := c.collectLocked(true)
 	c.mu.Unlock()
 	for _, it := range rest {
 		if it.after != nil {
@@ -412,7 +413,7 @@ func (c *internodeConn) abandon() {
 func (c *internodeConn) writer() {
 	for {
 		c.mu.Lock()
-		batch := c.collectLocked(false)
+		batch, base, ctlN := c.collectLocked(false)
 		c.mu.Unlock()
 		if len(batch) == 0 {
 			select {
@@ -436,6 +437,9 @@ func (c *internodeConn) writer() {
 				return
 			}
 			c.s.metrics.addBytes(obs.ToClient, dataBytes(it.frame))
+			if i >= ctlN {
+				c.sched.NoteSent(base + uint64(i-ctlN+1))
+			}
 			if it.after != nil {
 				it.after()
 			}
