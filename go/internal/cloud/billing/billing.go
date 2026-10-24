@@ -10,8 +10,10 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/quota"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
+	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
@@ -22,16 +24,22 @@ const dayMs = int64(24 * time.Hour / time.Millisecond)
 type Options struct {
 	Core  *core.Context
 	Store saas.Store
+	// Relay 给团队用量的同时连接数。
+	Relay relayctl.Control
+	Log   *obs.Logger
 }
 
 // Service 是计划与用量服务。
 type Service struct {
 	c     *core.Context
 	store saas.Store
+	live  *teams.Live
 }
 
 // New 建服务。
-func New(options Options) *Service { return &Service{c: options.Core, store: options.Store} }
+func New(options Options) *Service {
+	return &Service{c: options.Core, store: options.Store, live: teams.NewLive(options.Relay, options.Log)}
+}
 
 func (s *Service) tenant() string { return s.c.TenantID }
 
@@ -47,7 +55,7 @@ func (s *Service) Handlers() map[string]api.Handler {
 	return handlers
 }
 
-// spaceOf 取入参里的空间：个人空间是调用者本人的；团队空间要 owner 或 billing（别的角色 403，不是成员 404）。
+// spaceOf 取入参里的空间：个人空间是调用者本人的；团队空间按 min 收窄（读：owner、admin、billing；写用 teams.MinBilling；别的角色 403，不是成员 404）。
 type space struct {
 	kind   string
 	teamID string
@@ -56,7 +64,7 @@ type space struct {
 	accountID string
 }
 
-func (s *Service) spaceOf(ctx context.Context, call *api.Call) (space, error) {
+func (s *Service) spaceOf(ctx context.Context, call *api.Call, min teams.Min) (space, error) {
 	caller, err := call.Caller(ctx)
 	if err != nil {
 		return space{}, err
@@ -77,7 +85,7 @@ func (s *Service) spaceOf(ctx context.Context, call *api.Call) (space, error) {
 		return space{kind: saas.SpacePersonal, accountID: account.AccountID}, nil
 	case saas.SpaceTeam:
 		id, _ := raw["teamId"].(string)
-		access, err := teams.Require(ctx, s.store.Read(), s.tenant(), account.AccountID, id, teams.MinBilling)
+		access, err := teams.Require(ctx, s.store.Read(), s.tenant(), account.AccountID, id, min)
 		if err != nil {
 			return space{}, err
 		}
@@ -104,7 +112,7 @@ func (sp space) spaceID() string {
 
 // plan 是 billing.plan：计划代号、状态、席位、本周期结束（M1 周期 = UTC 自然月）。没有 entitlements 行 = free / active。
 func (s *Service) plan(ctx context.Context, call *api.Call) (any, error) {
-	sp, err := s.spaceOf(ctx, call)
+	sp, err := s.spaceOf(ctx, call, teams.MinBillingRead)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +146,7 @@ func (s *Service) plan(ctx context.Context, call *api.Call) (any, error) {
 
 // usage 是 billing.usage：当前（或指定）周期的用量对照额度；granularity = day 时另给本周期每天一条的中继字节。
 func (s *Service) usage(ctx context.Context, call *api.Call) (any, error) {
-	sp, err := s.spaceOf(ctx, call)
+	sp, err := s.spaceOf(ctx, call, teams.MinBillingRead)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +162,7 @@ func (s *Service) usage(ctx context.Context, call *api.Call) (any, error) {
 		days    []saas.DayBytes
 	)
 	if sp.kind == saas.SpaceTeam {
-		entries, days, err = teams.TeamUsage(ctx, s.store, s.tenant(), sp.access, start, end, withDays)
+		entries, days, err = teams.TeamUsage(ctx, s.store, s.live, s.tenant(), sp.access, start, end, withDays)
 	} else {
 		entries, days, err = s.personalUsage(ctx, sp.accountID, start, end, withDays)
 	}

@@ -41,6 +41,8 @@ const (
 	MinOwner
 	// MinBilling：owner、billing（计划与用量，契约 §26 的 team:billing）。
 	MinBilling
+	// MinBillingRead：owner、admin、billing（只读计划与用量，控制台设计 §3.3.11）；写过程用 MinBilling。
+	MinBillingRead
 )
 
 func (m Min) allows(role saas.TeamRole) bool {
@@ -57,6 +59,8 @@ func (m Min) allows(role saas.TeamRole) bool {
 		return role == teamscope.Owner
 	case MinBilling:
 		return role == teamscope.Owner || role == teamscope.Billing
+	case MinBillingRead:
+		return role == teamscope.Owner || role == teamscope.Admin || role == teamscope.Billing
 	}
 	return false
 }
@@ -129,6 +133,7 @@ type Service struct {
 	c        *core.Context
 	store    saas.Store
 	relay    relayctl.Control
+	live     *Live
 	verified bool
 	log      *obs.Logger
 	events   *events.Publisher
@@ -140,7 +145,7 @@ func New(options Options) *Service {
 	if log == nil {
 		log = obs.Nop()
 	}
-	return &Service{c: options.Core, store: options.Store, relay: options.Relay, verified: options.RequireEmailVerified, log: log, events: options.Events}
+	return &Service{c: options.Core, store: options.Store, relay: options.Relay, live: NewLive(options.Relay, log), verified: options.RequireEmailVerified, log: log, events: options.Events}
 }
 
 func (s *Service) tenant() string { return s.c.TenantID }

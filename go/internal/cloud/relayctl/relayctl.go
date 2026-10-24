@@ -128,6 +128,8 @@ type Control interface {
 	SetTeamQuota(ctx context.Context, teamID string, quota Quota) error
 	// ClearTeamQuota 删团队的并发额度（团队清除之后；节点缺键时取最严格的缺省）。
 	ClearTeamQuota(ctx context.Context, teamID string) error
+	// TeamConcurrent 答团队此刻跨节点的在线连接数（各节点共用的并发计数，与准入用的是同一份）。
+	TeamConcurrent(ctx context.Context, teamID string) (int, error)
 	// SetIncident 写事故开关。
 	SetIncident(ctx context.Context, incident Incident) error
 	// Relay 是 core 要的中继端口（查在线、关隧道、断开客户端）。

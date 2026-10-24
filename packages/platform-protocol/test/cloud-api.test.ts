@@ -148,8 +148,17 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
     expect(byKey.get("billing.plan")).toMatchObject({
       method: "GET",
       path: "/v1/billing/plan",
-      meta: { scope: ["session", "team:billing"] },
+      meta: { scope: ["session", "team:admin", "team:billing"] },
     });
+    expect(byKey.get("billing.usage")?.meta.scope).toEqual([
+      "session",
+      "team:admin",
+      "team:billing",
+    ]);
+    expect(byKey.get("billing.checkout")?.meta.scope).toEqual([
+      "session",
+      "team:billing",
+    ]);
     expect(byKey.get("billing.webhook")?.meta.scope).toEqual([
       "billing-webhook",
     ]);
@@ -679,6 +688,21 @@ describe("协议 1.4 补充：控制台缺口（G1–G9）", () => {
     };
     for (const request of sample.output.requests)
       expect(request).not.toHaveProperty("sas");
+  });
+
+  it("trustRequest 带可选的 pendingId（0.11.0 起，只加不改）", () => {
+    const sample = readJsonFixture("cloud-api/trust.list.json") as {
+      output: { requests: Record<string, unknown>[] };
+    };
+    const schema = cloudContract.trust.list["~orpc"].outputSchema as z.ZodType;
+    const request = sample.output.requests[0]!;
+    expect(request.pendingId).toBe("pend_01");
+    expect(schema.safeParse({ requests: [request] }).success).toBe(true);
+    const { pendingId: _omitted, ...legacy } = request;
+    expect(schema.safeParse({ requests: [legacy] }).success).toBe(true);
+    expect(
+      schema.safeParse({ requests: [{ ...request, pendingId: 1 }] }).success,
+    ).toBe(false);
   });
 
   it("G9 registrations_paused 是 503，platform.info.registrationsOpen 可缺", () => {

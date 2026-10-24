@@ -462,7 +462,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §26 计费
 
-协议 1.4。接替 §9：按空间，路径 `/v1/billing/…`，输入带 `space`（`{ kind: "personal" }` 或 `{ kind: "team", teamId }`；GET 里写成 `space[kind]=team&space[teamId]=…`）。scope 是 `session`（个人空间）或 `team:billing`（团队空间的 owner 与 billing）。
+协议 1.4。接替 §9：按空间，路径 `/v1/billing/…`，输入带 `space`（`{ kind: "personal" }` 或 `{ kind: "team", teamId }`；GET 里写成 `space[kind]=team&space[teamId]=…`）。scope 是 `session`（个人空间）或 `team:billing`（团队空间的 owner 与 billing）；`billing.plan` / `billing.usage` 只读，团队空间另放开 `team:admin`（owner、admin、billing，协议包 0.11.0 起，只加不改），其余过程（含 invoices、checkout、portal）仍只给 owner 与 billing。
 
 - `billing.plan` / `billing.usage`（M1）：计划代号、状态（`active` / `trialing` / `past_due` / `canceled`）、席位、周期；用量项 `{ metric, value, limit }`，`limit = null` 为不限。
 - `billing.usage` 入参加 `granularity`（`month` 缺省 / `day`，1.4 补充）：`day` 时出参多 `series: { startMs, relayBytes }[]`，本计费周期内每天一条（`startMs` 为当天 UTC 零点）。数据源是中继的 `relay_traffic_buckets` 小时桶按团队汇总到天，口径是入口节点计的端到端字节（`e2e`）；个人空间同一条（`space = personal`）。
@@ -473,14 +473,14 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 <!-- rpc:begin contract=§26 -->
 
-| procedure          | 方法与路径                             | scope                      | 错误码                                                                                                      |
-| ------------------ | -------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `billing.plan`     | `GET /v1/billing/plan`                 | `session` / `team:billing` | `not_found`、`team_role_insufficient`                                                                       |
-| `billing.usage`    | `GET /v1/billing/usage`                | `session` / `team:billing` | `not_found`、`team_role_insufficient`                                                                       |
-| `billing.checkout` | `POST /v1/billing/checkout`            | `session` / `team:billing` | `not_found`、`team_role_insufficient`、`bad_request`、`conflict`、`unavailable`、`plan_feature_unavailable` |
-| `billing.invoices` | `GET /v1/billing/invoices`             | `session` / `team:billing` | `not_found`、`team_role_insufficient`、`unavailable`                                                        |
-| `billing.portal`   | `POST /v1/billing/portal`              | `session` / `team:billing` | `not_found`、`team_role_insufficient`、`conflict`、`unavailable`                                            |
-| `billing.webhook`  | `POST /v1/billing/webhooks/{provider}` | `billing-webhook`          | `webhook_signature_invalid`、`bad_request`、`not_found`                                                     |
+| procedure          | 方法与路径                             | scope                                     | 错误码                                                                                                      |
+| ------------------ | -------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `billing.plan`     | `GET /v1/billing/plan`                 | `session` / `team:admin` / `team:billing` | `not_found`、`team_role_insufficient`                                                                       |
+| `billing.usage`    | `GET /v1/billing/usage`                | `session` / `team:admin` / `team:billing` | `not_found`、`team_role_insufficient`                                                                       |
+| `billing.checkout` | `POST /v1/billing/checkout`            | `session` / `team:billing`                | `not_found`、`team_role_insufficient`、`bad_request`、`conflict`、`unavailable`、`plan_feature_unavailable` |
+| `billing.invoices` | `GET /v1/billing/invoices`             | `session` / `team:billing`                | `not_found`、`team_role_insufficient`、`unavailable`                                                        |
+| `billing.portal`   | `POST /v1/billing/portal`              | `session` / `team:billing`                | `not_found`、`team_role_insufficient`、`conflict`、`unavailable`                                            |
+| `billing.webhook`  | `POST /v1/billing/webhooks/{provider}` | `billing-webhook`                         | `webhook_signature_invalid`、`bad_request`、`not_found`                                                     |
 
 输入与输出的完整 schema 见 [cloud-openapi.json](cloud-openapi.json)。
 
@@ -619,7 +619,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - `trust.list` / `trust.reject` 的 scope 含 `team:member`：成员只看得到、处理得了自己的待信任请求（`memberSelfEndorse` 开着时），主机 owner / 团队 admin 按 `deviceEndorsers` 设置看到团队里的请求，处理器据此收窄；缺省列调用者能背书的全部空间，给 `space` 只列那个空间；`trust.list` 对非背书人答过滤后的空列表；`trust.reject` 不是背书人答 `403 team_role_insufficient`；`device_untrusted` 云端不使用。**guest 的请求只给主机所有者**（成员本人背书与 admin 背书都不适用，core 只认 owner / admin / member）。`device_untrusted` 表示背书要在已受信的设备上做。
 - **校验码（SAS）云端不经手**（1.4 补充：`trustRequest` 删去 `sas`）：校验码只在新设备与主机之间的端到端通道里产生，由新设备显示；背书人把新设备上显示的码输入自己已受信的设备，由端到端通道在主机侧核对，核对通过才批准。`trust.list` 与 me-stream 的 `deviceTrustRequested` 都没有这个字段。
 - 走分享链接进来的访客仍按链接的 `max_devices` 与指纹钉扎，不经这里。
-- **core 的上报**（1.4 补充，scope `source`，`Authorization: Source <jws>`，同 `sources.heartbeatHint`）：core 在团队成员的新设备停在 `device_pending` 时调 `sources.trustRequest`，入参 `{ pendingId, accountId, deviceId, expiresAtMs }`——`pendingId` 是 core 侧待信任条目的 id，兼作幂等键（同一 `pendingId` 重复调答同一个 `requestId`）；`expiresAtMs` 至多比现在晚 24 小时（超出答 `400 bad_request`）；设备名与平台由控制面从自己的设备表填，不由 core 报。答 `{ requestId, status }`：`pending` 表示已登记并通知背书人；刚被背书人拒绝过的设备在冷却期内答 `rejected`，不再通知。（冷却 1 小时；冷却结束后同一个 `pendingId` 重报会重新开成 `pending`，`requestId` 是新的）条目被批准或过期后 core 调 `sources.trustResolve`（`{ result: "trusted" | "expired" }`），控制面撤掉通知并发 `deviceTrustResolved`（§32）。错误码：`source_access_denied`（源已不在团队或账号不是该团队成员）、`not_found`（`pendingId` 或设备不存在）、`conflict`（已解决的请求再次登记 / 解决）、`rate_limited`。已部署的中继不实现这两条（personal 答 `404 not_found`，cloud 实现前答 `501 not_implemented`）。
+- **core 的上报**（1.4 补充，scope `source`，`Authorization: Source <jws>`，同 `sources.heartbeatHint`）：core 在团队成员的新设备停在 `device_pending` 时调 `sources.trustRequest`，入参 `{ pendingId, accountId, deviceId, expiresAtMs }`——`pendingId` 是 core 侧待信任条目的 id，兼作幂等键（同一 `pendingId` 重复调答同一个 `requestId`）；`expiresAtMs` 至多比现在晚 24 小时（超出答 `400 bad_request`）；设备名与平台由控制面从自己的设备表填，不由 core 报。答 `{ requestId, status }`：`pending` 表示已登记并通知背书人；`trust.list` 的每条请求带 `pendingId`（同一个 id，不是秘密，协议包 0.11.0 起，可选字段），控制台背书时用它调 core 的 `devices.approve`；刚被背书人拒绝过的设备在冷却期内答 `rejected`，不再通知。（冷却 1 小时；冷却结束后同一个 `pendingId` 重报会重新开成 `pending`，`requestId` 是新的）条目被批准或过期后 core 调 `sources.trustResolve`（`{ result: "trusted" | "expired" }`），控制面撤掉通知并发 `deviceTrustResolved`（§32）。错误码：`source_access_denied`（源已不在团队或账号不是该团队成员）、`not_found`（`pendingId` 或设备不存在）、`conflict`（已解决的请求再次登记 / 解决）、`rate_limited`。已部署的中继不实现这两条（personal 答 `404 not_found`，cloud 实现前答 `501 not_implemented`）。
 
 <!-- rpc:begin contract=§31 -->
 

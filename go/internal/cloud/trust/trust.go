@@ -363,21 +363,23 @@ type deviceOut struct {
 
 // requestView 是 trustRequestSchema 的线上形状：没有校验码。
 type requestView struct {
-	RequestID     string    `json:"requestId"`
-	SourceID      string    `json:"sourceId"`
-	SourceName    string    `json:"sourceName"`
-	TeamID        *string   `json:"teamId"`
-	Member        memberOut `json:"member"`
-	Device        deviceOut `json:"device"`
-	RequestedAtMs int64     `json:"requestedAtMs"`
-	ExpiresAtMs   int64     `json:"expiresAtMs"`
+	RequestID  string    `json:"requestId"`
+	SourceID   string    `json:"sourceId"`
+	SourceName string    `json:"sourceName"`
+	TeamID     *string   `json:"teamId"`
+	Member     memberOut `json:"member"`
+	Device     deviceOut `json:"device"`
+	// PendingID 是 core 侧待信任条目的 id（不是秘密），背书时调 core 的 devices.approve 用。
+	PendingID     string `json:"pendingId"`
+	RequestedAtMs int64  `json:"requestedAtMs"`
+	ExpiresAtMs   int64  `json:"expiresAtMs"`
 }
 
 func viewOf(v saas.TrustView) requestView {
 	out := requestView{
 		RequestID: v.RequestID, SourceID: v.SourceID, SourceName: v.SourceName,
 		Member: memberOut{AccountID: v.AccountID, DisplayName: v.MemberName}, Device: deviceOut{Name: v.DeviceName, Platform: v.Platform},
-		RequestedAtMs: v.RequestedAtMs, ExpiresAtMs: v.ExpiresAtMs,
+		PendingID: v.PendingID, RequestedAtMs: v.RequestedAtMs, ExpiresAtMs: v.ExpiresAtMs,
 	}
 	if v.TeamID != "" {
 		team := v.TeamID

@@ -17,6 +17,11 @@ const billingScope = {
   scope: ["session", "team:billing"],
   since: SINCE_0_10,
 } as const;
+/** 计划与用量只读：团队空间 owner / admin / billing 都能看（0.11.0 起放开 admin，写过程仍只给 owner / billing）。 */
+const billingReadScope = {
+  scope: ["session", "team:admin", "team:billing"],
+  since: SINCE_0_10,
+} as const;
 const billingErrors = errors.pick("not_found", "team_role_insufficient");
 const space = { space: spaceSchema };
 
@@ -50,13 +55,13 @@ const returnUrl = z.url().max(2048).optional();
 export const billing = {
   plan: base
     .route({ method: "GET", path: "/v1/billing/plan" })
-    .meta(billingScope)
+    .meta(billingReadScope)
     .errors(billingErrors)
     .input(z.object(space))
     .output(billingPlanSchema),
   usage: base
     .route({ method: "GET", path: "/v1/billing/usage" })
-    .meta(billingScope)
+    .meta(billingReadScope)
     .errors(billingErrors)
     .input(
       z.object({

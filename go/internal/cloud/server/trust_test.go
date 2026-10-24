@@ -285,6 +285,7 @@ func TestTrustListNarrowsByEndorser(t *testing.T) {
 		"requestId": idMember, "sourceId": x.host.id, "sourceName": "主机 " + x.host.id[:6], "teamId": x.team,
 		"member":        map[string]any{"accountId": x.member.accountID, "email": memberEmail, "displayName": "测试用户"},
 		"device":        map[string]any{"name": "测试浏览器", "platform": "browser"},
+		"pendingId":     "m1",
 		"requestedAtMs": float64(r.clock.Ms()), "expiresAtMs": float64(r.clock.Ms() + 3600*1000),
 	}
 	if !reflect.DeepEqual(memberItem, want) {

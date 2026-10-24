@@ -902,6 +902,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
             displayName: "Dev",
           },
           device: { name: "Dev iPhone", platform: "ios" },
+          pendingId: "pend_01",
           requestedAtMs: NOW,
           expiresAtMs: NOW + 600_000,
         },
