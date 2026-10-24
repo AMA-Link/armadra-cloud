@@ -15,6 +15,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/testutil/relayenv"
+	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
 const download = 4 << 20
@@ -278,10 +279,10 @@ func TestForwardedResetMapsSourceRefused(t *testing.T) {
 		fs := &fwdStream{c: c, id: 7}
 		c.streams[7] = fs
 		fs.Reset(nil, tc.in)
-		if len(c.queue) != 1 {
-			t.Fatalf("%v：写队列 %d 帧", tc.in, len(c.queue))
+		if len(c.ctl) != 1 {
+			t.Fatalf("%v：写队列 %d 帧", tc.in, len(c.ctl))
 		}
-		f, err := protocol.DecodeView(c.queue[0].frame)
+		f, err := protocol.DecodeView(c.ctl[0].frame)
 		if err != nil || f.Type != protocol.FrameRst || f.StreamID != 7 || f.Code != tc.want {
 			t.Fatalf("%v → 想要 %v，实际 %+v（%v）", tc.in, tc.want, f, err)
 		}
@@ -323,5 +324,92 @@ func TestLinkClosesOnRevokedBroadcastWithoutPolling(t *testing.T) {
 	}
 	if d := time.Since(start); d > 3*time.Second {
 		t.Fatalf("撤销生效用了 %v，应远小于复查间隔", d)
+	}
+}
+
+// 持有节点往入口节点写的下行不是先进先出（#57）：一条流积压再多，别的流的小帧与控制帧也在
+// 下一批最前面写出，等待的字节数有上界（预算 + 一块），与积压的流数无关；流内保持顺序；关闭时只执行 after。
+func TestInternodeWriterIsFairAcrossStreams(t *testing.T) {
+	c := &internodeConn{streams: map[uint32]*fwdStream{}, wake: make(chan struct{}, 1)}
+	data := func(id uint32, n int, tag byte) []byte {
+		p := make([]byte, n)
+		p[0] = tag
+		return encode(protocol.Frame{Type: protocol.FrameData, StreamID: id, Data: p})
+	}
+	var all []outItem
+	step := func(everything bool) []outItem {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		b := c.collectLocked(everything)
+		all = append(all, b...)
+		return b
+	}
+	afters := 0
+	bulk := make([]*fwdStream, 24)
+	c.mu.Lock()
+	for i := range bulk {
+		bulk[i] = &fwdStream{c: c, id: uint32(i + 1)}
+		for k := 0; k < 8; k++ {
+			c.sendStreamLocked(bulk[i], data(bulk[i].id, protocol.MaxDataChunk, byte(k)), func() { afters++ })
+		}
+	}
+	c.mu.Unlock()
+	// 先写几批，让大流量流进入稳态（都是老流）。
+	for i := 0; i < 5; i++ {
+		step(false)
+	}
+	probe := &fwdStream{c: c, id: 100}
+	c.mu.Lock()
+	c.sendStreamLocked(probe, data(100, 1024, 0), nil)
+	c.sendLocked(encode(protocol.Frame{Type: protocol.FramePong, Ts: 1}), nil)
+	c.mu.Unlock()
+	batch := step(false)
+	ahead, pong, seenProbe := 0, -1, false
+	for i, it := range batch {
+		f, err := protocol.DecodeView(it.frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Type == protocol.FramePong {
+			pong = i
+		}
+		if f.StreamID == 100 {
+			seenProbe = true
+			break
+		}
+		ahead += dataBytes(it.frame)
+	}
+	if pong != 0 {
+		t.Fatalf("控制帧应在批首：下标 %d", pong)
+	}
+	if !seenProbe || ahead > tunnel.WriteBudget+protocol.MaxDataChunk {
+		t.Fatalf("探测帧应在下一批里、前面至多一个预算：seen=%v ahead=%d", seenProbe, ahead)
+	}
+	// 取尽：一帧不丢，流内顺序不变，after 全部可执行。
+	step(true)
+	next := map[uint32]byte{}
+	for _, it := range all {
+		f, err := protocol.DecodeView(it.frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Type != protocol.FrameData || f.StreamID == 100 {
+			continue
+		}
+		if f.Data[0] != next[f.StreamID] {
+			t.Fatalf("流 %d 乱序：第 %d 帧的标记是 %d", f.StreamID, next[f.StreamID], f.Data[0])
+		}
+		next[f.StreamID]++
+		if it.after != nil {
+			it.after()
+		}
+	}
+	for _, fs := range bulk {
+		if next[fs.id] != 8 {
+			t.Fatalf("流 %d 丢帧：%d / 8", fs.id, next[fs.id])
+		}
+	}
+	if afters != 24*8 {
+		t.Fatalf("after %d / %d", afters, 24*8)
 	}
 }
