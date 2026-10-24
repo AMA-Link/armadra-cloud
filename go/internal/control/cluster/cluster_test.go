@@ -174,3 +174,20 @@ func TestNodeValueRoundTrip(t *testing.T) {
 		t.Fatal("缺 url 应报错")
 	}
 }
+
+// OnRevoked：新的撤销回调一次 jti；重复的、已过期的不回调；取消订阅后不再回调。
+func TestBaseOnRevoked(t *testing.T) {
+	b := cluster.NewBase(cluster.Options{})
+	var got []string
+	cancel := b.OnRevoked(func(jti string) { got = append(got, jti) })
+	exp := time.Now().Add(time.Hour).UnixMilli()
+	b.ReceiveRevoked("a", exp)
+	b.ReceiveRevoked("a", exp)
+	b.ReceiveRevoked("old", time.Now().Add(-time.Minute).UnixMilli())
+	b.ReceiveRevoked("b", exp)
+	cancel()
+	b.ReceiveRevoked("c", exp)
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("%v", got)
+	}
+}

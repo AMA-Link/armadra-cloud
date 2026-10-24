@@ -340,3 +340,29 @@ func TestMemorySweepAmortized(t *testing.T) {
 		t.Fatalf("6 万个不同的键用了 %v，清扫没有摊还", d)
 	}
 }
+
+// Memory 实现 RevokedNotifier：撤销落表之后回调 jti（锁外），取消订阅后不再回调。
+func TestMemoryOnRevoked(t *testing.T) {
+	m := control.NewMemory(control.MemoryOptions{})
+	var plane control.Plane = m
+	n, ok := plane.(control.RevokedNotifier)
+	if !ok {
+		t.Fatal("Memory 应实现 RevokedNotifier")
+	}
+	var got []string
+	cancel := n.OnRevoked(func(jti string) {
+		// 回调里能再查撤销表（不在锁里）。
+		if revoked, _ := m.Tokens().IsRevoked(context.Background(), jti); !revoked {
+			t.Errorf("%s 回调时应已撤销", jti)
+		}
+		got = append(got, jti)
+	})
+	ctx := context.Background()
+	_ = m.Tokens().Revoke(ctx, "a", time.Now().Add(time.Hour))
+	_ = m.Tokens().Revoke(ctx, "gone", time.Now().Add(-time.Hour))
+	cancel()
+	_ = m.Tokens().Revoke(ctx, "b", time.Now().Add(time.Hour))
+	if len(got) != 1 || got[0] != "a" {
+		t.Fatalf("%v", got)
+	}
+}

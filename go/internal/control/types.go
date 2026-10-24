@@ -150,6 +150,12 @@ type TokenStore interface {
 	Revoke(ctx context.Context, jti string, exp time.Time) error
 }
 
+// RevokedNotifier 是 Plane 可选实现的撤销通知：新的撤销记下之后（本节点写的、别的节点广播来的）回调 jti，
+// 让已建立的连接立即断开，不必等轮询。回调在锁外执行，必须立即返回；cancel 取消订阅。
+type RevokedNotifier interface {
+	OnRevoked(fn func(jti string)) (cancel func())
+}
+
 // NodeCommands 是本节点的命令通道。
 type NodeCommands interface {
 	Subscribe(fn func(NodeCommand)) (cancel func())

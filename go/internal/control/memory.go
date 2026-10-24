@@ -110,6 +110,7 @@ type Memory struct {
 
 	presence bus[PresenceEvent]
 	commands bus[NodeCommand]
+	revokes  bus[string]
 }
 
 // NewMemory 建一个进程内控制面。
@@ -166,6 +167,9 @@ func (m *Memory) Limits() Limiter { return (*memLimits)(m) }
 
 // Tokens 实现 Plane。
 func (m *Memory) Tokens() TokenStore { return (*memTokens)(m) }
+
+// OnRevoked 实现 RevokedNotifier。
+func (m *Memory) OnRevoked(fn func(jti string)) (cancel func()) { return m.revokes.add(fn) }
 
 // NodeCommands 实现 Plane；Memory 总有命令通道。
 func (m *Memory) NodeCommands() NodeCommands { return (*memCommands)(m) }
@@ -354,7 +358,6 @@ func (t *memTokens) IsRevoked(ctx context.Context, jti string) (bool, error) {
 func (t *memTokens) Revoke(_ context.Context, jti string, exp time.Time) error {
 	m := (*Memory)(t)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	at := m.now()
 	if m.revokedGate.due(len(m.revokedTab)) {
 		for k, until := range m.revokedTab {
@@ -364,8 +367,13 @@ func (t *memTokens) Revoke(_ context.Context, jti string, exp time.Time) error {
 		}
 		m.revokedGate.done(len(m.revokedTab))
 	}
-	if exp.After(at) {
+	fresh := exp.After(at)
+	if fresh {
 		m.revokedTab[jti] = exp
+	}
+	m.mu.Unlock()
+	if fresh {
+		m.revokes.emit(jti)
 	}
 	return nil
 }

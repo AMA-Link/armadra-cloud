@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/auth"
+	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
 	"github.com/AMA-Link/armadra-cloud/go/internal/httperr"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
@@ -50,13 +51,38 @@ type internodeServer struct {
 	mu       sync.Mutex
 	conns    map[*internodeConn]struct{}
 	stopping bool
+	// unsubscribe 取消撤销订阅（控制面支持 RevokedNotifier 时）。
+	unsubscribe func()
 }
 
 func newInternodeServer(a *auth.Context, local func(string) *tunnel.Tunnel, log *obs.Logger, m *internodeMetrics, checkEvery time.Duration) *internodeServer {
 	if checkEvery <= 0 {
 		checkEvery = defaultInternodeCheckEvery
 	}
-	return &internodeServer{auth: a, local: local, cfg: linkConfig(), checkEvery: checkEvery, log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
+	s := &internodeServer{auth: a, local: local, cfg: linkConfig(), checkEvery: checkEvery, log: log, metrics: m, conns: map[*internodeConn]struct{}{}}
+	// 撤销广播（relay:revoked）一到就断开持这枚令牌的连接；定时复查（watch）留作兜底（广播丢了、订阅重连之间）。
+	if a != nil {
+		if n, ok := a.Control.(control.RevokedNotifier); ok {
+			s.unsubscribe = n.OnRevoked(s.revoked)
+		}
+	}
+	return s
+}
+
+// revoked 是撤销通知：断开用这枚节点令牌建立的连接。
+func (s *internodeServer) revoked(jti string) {
+	s.mu.Lock()
+	var hit []*internodeConn
+	for c := range s.conns {
+		if c.jti == jti {
+			hit = append(hit, c)
+		}
+	}
+	s.mu.Unlock()
+	for _, c := range hit {
+		s.log.Warn("对端的节点令牌已撤销，断开", obs.Node(c.peer))
+		c.closeTransport()
+	}
 }
 
 // streams 是各入向连接上的流数。
@@ -126,6 +152,11 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 	}
 	s.conns[c] = struct{}{}
 	s.mu.Unlock()
+	// 验令牌与登记之间到达的撤销通知没人收：登记之后补查一次。
+	if revoked, err := s.auth.Control.Tokens().IsRevoked(r.Context(), c.jti); err == nil && revoked {
+		s.log.Warn("对端的节点令牌已撤销，断开", obs.Node(c.peer))
+		c.closeTransport()
+	}
 	s.log.Info("对端节点已连上", obs.Node(c.peer))
 	c.serve()
 	s.mu.Lock()
@@ -139,11 +170,16 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 func (s *internodeServer) close() {
 	s.mu.Lock()
 	s.stopping = true
+	unsubscribe := s.unsubscribe
+	s.unsubscribe = nil
 	list := make([]*internodeConn, 0, len(s.conns))
 	for c := range s.conns {
 		list = append(list, c)
 	}
 	s.mu.Unlock()
+	if unsubscribe != nil {
+		unsubscribe()
+	}
 	for _, c := range list {
 		c.closeTransport()
 	}

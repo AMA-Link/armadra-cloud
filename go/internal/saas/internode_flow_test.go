@@ -290,3 +290,38 @@ func TestForwardedResetMapsSourceRefused(t *testing.T) {
 		}
 	}
 }
+
+// 节点令牌撤销即时生效：定时复查关到 1 小时，仍在撤销广播到达时立刻断开已建立的连接
+// （本节点写的撤销、别的节点经 relay:revoked 广播来的撤销各一次）。
+func TestLinkClosesOnRevokedBroadcastWithoutPolling(t *testing.T) {
+	r := newRig(t)
+	a := r.start("a", func(c *Config) { c.InternodeCheckEvery = time.Hour })
+	jtiLocal, jtiRemote := "n.b."+randomHex(6), "n.c."+randomHex(6)
+	b := r.start("b", func(c *Config) { c.NodeToken = r.nodeToken("b", relayenv.Claims{"jti": jtiLocal}) })
+	c := r.start("c", func(c *Config) { c.NodeToken = r.nodeToken("c", relayenv.Claims{"jti": jtiRemote}) })
+	other := r.start("d", nil)
+	r.env.StartCore(t, a.URL, relayenv.CoreOptions{Capabilities: []string{"e2e"}})
+	r.online(a)
+	viaB := r.channel(b, r.relayToken(nil))
+	viaC := r.channel(c, r.relayToken(nil))
+	if viaB.outcome() != 0 || viaC.outcome() != 0 {
+		t.Fatal("转发的通道应开成")
+	}
+	start := time.Now()
+	ctx := context.Background()
+	if err := a.Plane.Auth.Control.Tokens().Revoke(ctx, jtiLocal, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Plane.Auth.Control.Tokens().Revoke(ctx, jtiRemote, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if code := viaB.wait(t); code != 4404 {
+		t.Fatalf("本节点撤销之后：%d", code)
+	}
+	if code := viaC.wait(t); code != 4404 {
+		t.Fatalf("别的节点广播撤销之后：%d", code)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("撤销生效用了 %v，应远小于复查间隔", d)
+	}
+}
