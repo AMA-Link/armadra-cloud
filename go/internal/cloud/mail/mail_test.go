@@ -317,7 +317,11 @@ func TestGarbageCollectionJobs(t *testing.T) {
 	e.account("a1", "ann@example.test")
 	e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleEN, To: "ann@example.test", AccountID: "a1"})
 	e.waitMessages(1)
-	e.eventually("已发", func() bool { return e.count("SELECT count(*) FROM outbox_emails WHERE sent_at_ms IS NOT NULL") == 1 })
+	// 作业的完成也要等记进库再推时钟：完成时刻晚于推时钟会被记成推过之后，「完成满 7 天」就差一截。
+	e.eventually("已发", func() bool {
+		return e.count("SELECT count(*) FROM outbox_emails WHERE sent_at_ms IS NOT NULL") == 1 &&
+			e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NOT NULL") == 1
+	})
 	// 令牌 24 小时后过期，过期再满 24 小时才清。
 	e.clock.Advance(25 * time.Hour)
 	time.Sleep(1500 * time.Millisecond)
@@ -370,7 +374,12 @@ func TestRetryDoesNotReuseMessageID(t *testing.T) {
 	e.account("a1", "ann@example.test")
 	e.sender.FailNext(1)
 	e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleEN, To: "ann@example.test", AccountID: "a1"})
-	e.eventually("第一次失败", func() bool { return len(e.sender.Attempts()) == 1 })
+	// 等失败记进库（按当时的时钟排到 30 秒后）再推时钟：只看发件方被调用过，运行器可能还没记失败，
+	// 推过的时钟会被记成重试的起点，重试就排到推完之后再 30 秒，永远等不到。
+	e.eventually("第一次失败", func() bool {
+		return len(e.sender.Attempts()) == 1 &&
+			e.count("SELECT count(*) FROM jobs WHERE last_error IS NOT NULL AND locked_by IS NULL AND done_at_ms IS NULL") == 1
+	})
 	e.clock.Advance(31 * time.Second)
 	e.waitMessages(1)
 	attempts := e.sender.Attempts()

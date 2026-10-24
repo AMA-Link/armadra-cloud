@@ -369,12 +369,42 @@ func TestPeriodicReloadCatchesMissedNotifications(t *testing.T) {
 	})
 }
 
+// 活性检查：空闲期间一轮轮发轻查询不把健康的连接判成断线，也不影响收通知。
 func TestLivenessCheckKeepsListenerWorking(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	a := e.node("node-a", func(o *cp.Options) { o.LivenessEvery = 50 * time.Millisecond })
+	// 轻查询超过一个间隔没答就（按设计）判断线；间隔留足余量，否则测的是机器快慢，不是活性检查。
+	a := e.node("node-a", func(o *cp.Options) { o.LivenessEvery = time.Second })
 	b := e.node("node-b", nil)
-	time.Sleep(400 * time.Millisecond)
+	// 等监听连接真的做过活性检查（pg_stat_activity 里它最近一条语句是 SELECT 1），记下它的 pid；
+	// 再等同一条连接又做过两轮（每轮都要等满一个间隔、答上轻查询），不按估计的时长睡：
+	// 哪一轮把健康的连接判成断线，连接就会换掉，这里等不到。
+	type check struct {
+		pid   int
+		start time.Time
+	}
+	listener := func() (check, bool) {
+		var c check
+		err := e.admin.QueryRow(ctx, "SELECT pid, query_start FROM pg_stat_activity WHERE application_name = $1 AND query = 'SELECT 1'", a.app).Scan(&c.pid, &c.start)
+		return c, err == nil
+	}
+	var first check
+	controltest.Eventually(t, "空闲时做过活性检查", func() bool {
+		c, ok := listener()
+		first = c
+		return ok
+	})
+	rounds := map[time.Time]bool{first.start: true}
+	controltest.Eventually(t, "同一条监听连接又做过两轮活性检查", func() bool {
+		c, ok := listener()
+		if ok && c.pid == first.pid {
+			rounds[c.start] = true
+		}
+		return len(rounds) >= 3
+	})
+	if a.errors.has("listener") {
+		t.Fatal("活性检查不该把正常的连接判成断线")
+	}
 	if err := b.Tokens().Revoke(ctx, "after-idle", time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}

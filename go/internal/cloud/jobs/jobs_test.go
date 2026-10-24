@@ -87,6 +87,19 @@ func (e *env) row(id int64) (attempts int, runAt int64, doneAt, failedAt *int64,
 	return
 }
 
+// lockedUntil 是作业的租约到期时刻（毫秒）；没被领着答 0。
+func (e *env) lockedUntil(id int64) int64 {
+	e.t.Helper()
+	var until *int64
+	if err := e.db.Pool().QueryRow(context.Background(), "SELECT locked_until_ms FROM jobs WHERE job_id = $1", id).Scan(&until); err != nil {
+		e.t.Fatal(err)
+	}
+	if until == nil {
+		return 0
+	}
+	return *until
+}
+
 func eventually(t *testing.T, what string, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -405,15 +418,17 @@ func TestCrashedWorkersLeaseExpires(t *testing.T) {
 
 func TestLeaseIsRenewedWhileRunningAndLostLeaseStopsTheJob(t *testing.T) {
 	e := open(t)
-	// 租约 1 秒、每 100 毫秒续一次；时钟随真实时间走，租约才会真的过期。余量留足：慢机器上续租迟到
-	// 超过租约，作业会（按设计）被取消，测试就成了测机器快慢。
-	real := jobs.Options{Store: e.store, TenantID: tenant, Workers: 1, Poll: 20 * time.Millisecond, Lease: time.Second, Renew: 100 * time.Millisecond}
-	a, b := jobs.New(real), jobs.New(real)
+	// 租约 1 分钟，时钟由测试推：每次推半个租约，等续租把 locked_until_ms 推到「现在 + 租约」再推下一次。
+	// 推过的总时长超过租约，不续租的话另一个实例早该接手。续租的节拍仍是真实时间，但只决定多快续上、
+	// 不决定成败：时钟不动，租约就不会因为机器慢而过期。
+	leased := jobs.Options{Store: e.store, TenantID: tenant, Workers: 1, Now: e.clock.Now, Poll: 20 * time.Millisecond, Lease: time.Minute, Renew: 20 * time.Millisecond}
+	a, b := jobs.New(leased), jobs.New(leased)
 	var runs atomic.Int32
+	finish := make(chan struct{})
 	slow := func(ctx context.Context, _ saas.Job) error {
 		runs.Add(1)
 		select {
-		case <-time.After(2500 * time.Millisecond):
+		case <-finish:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -421,21 +436,17 @@ func TestLeaseIsRenewedWhileRunningAndLostLeaseStopsTheJob(t *testing.T) {
 	}
 	a.Handle("t.slow", slow)
 	b.Handle("t.slow", slow)
-	id, _ := func() (int64, bool) {
-		var id int64
-		err := e.store.Tx(context.Background(), func(tx saas.Tx) error {
-			var err error
-			id, _, err = tx.Jobs().Enqueue(context.Background(), tenant, saas.NewJob{Kind: "t.slow", RunAtMs: time.Now().UnixMilli()}, time.Now().UnixMilli())
-			return err
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return id, true
-	}()
+	id, _ := e.enqueue(saas.NewJob{Kind: "t.slow", RunAtMs: e.clock.Now().UnixMilli()})
 	a.Start()
 	b.Start()
 	t.Cleanup(func() { a.Stop(5 * time.Second); b.Stop(5 * time.Second) })
+	eventually(t, "领到", func() bool { return runs.Load() == 1 })
+	for range 4 {
+		e.clock.Advance(30 * time.Second)
+		until := e.clock.Now().Add(time.Minute).UnixMilli()
+		eventually(t, "续租推到现在 + 租约", func() bool { return e.lockedUntil(id) >= until })
+	}
+	close(finish)
 	eventually(t, "跑完", func() bool {
 		_, _, done, _, _ := e.row(id)
 		return done != nil
@@ -444,21 +455,14 @@ func TestLeaseIsRenewedWhileRunningAndLostLeaseStopsTheJob(t *testing.T) {
 		t.Fatalf("续租期间另一个实例不该再领：跑了 %d 次", runs.Load())
 	}
 
-	// 租约被别人拿走：续租推不动，处理器的 ctx 被取消。先停掉 a、b：它们没有 t.lost 的处理器，会把作业领去记失败。
+	// 租约被别人拿走：续租推不动，处理器的 ctx 被取消。时钟不动，租约不会自己到期，取消只能来自续租推不动。
+	// 先停掉 a、b：它们没有 t.lost 的处理器，会把作业领去记失败。
 	a.Stop(5 * time.Second)
 	b.Stop(5 * time.Second)
-	id2, _ := func() (int64, bool) {
-		var id int64
-		_ = e.store.Tx(context.Background(), func(tx saas.Tx) error {
-			var err error
-			id, _, err = tx.Jobs().Enqueue(context.Background(), tenant, saas.NewJob{Kind: "t.lost", RunAtMs: time.Now().UnixMilli()}, time.Now().UnixMilli())
-			return err
-		})
-		return id, true
-	}()
+	id2, _ := e.enqueue(saas.NewJob{Kind: "t.lost", RunAtMs: e.clock.Now().UnixMilli()})
 	started, cancelled := make(chan struct{}), make(chan struct{})
 	// 处理器登记在 Start 之后不安全，所以用新的运行器。
-	c := jobs.New(real)
+	c := jobs.New(leased)
 	c.Handle("t.lost", func(ctx context.Context, _ saas.Job) error {
 		close(started)
 		<-ctx.Done()
@@ -473,7 +477,7 @@ func TestLeaseIsRenewedWhileRunningAndLostLeaseStopsTheJob(t *testing.T) {
 	}
 	select {
 	case <-cancelled:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("租约丢了应取消处理器")
 	}
 }
