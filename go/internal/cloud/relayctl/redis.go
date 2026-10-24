@@ -350,15 +350,15 @@ func (r *Redis) ClearTeamQuota(ctx context.Context, teamID string) error {
 	return sanitize(r.client.Del(ctx, r.quotaKey(teamID)).Err())
 }
 
-// concCount 数 <前缀>conc:team:<teamId> 里还没到期的成员（到期毫秒用 Redis 自己的 TIME，与准入脚本一致）。
-const concCount = `
+// concCountScript 数 <前缀>conc:team:<teamId> 里还没到期的成员（到期毫秒用 Redis 自己的 TIME，与准入脚本一致）。
+var concCountScript = goredis.NewScript(`
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-return redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')`
+return redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')`)
 
 // TeamConcurrent 实现 Control：读各节点准入共用的并发有序集合（只读，不清理到期成员）。
 func (r *Redis) TeamConcurrent(ctx context.Context, teamID string) (int, error) {
-	n, err := goredis.NewScript(concCount).Run(ctx, r.client, []string{r.plane.Prefix() + "conc:team:" + teamID}).Int()
+	n, err := concCountScript.Run(ctx, r.client, []string{r.plane.Prefix() + "conc:team:" + teamID}).Int()
 	if err != nil {
 		return 0, sanitize(err)
 	}
