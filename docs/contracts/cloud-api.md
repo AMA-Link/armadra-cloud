@@ -462,7 +462,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §26 计费
 
-协议 1.4。接替 §9：按空间，路径 `/v1/billing/…`，输入带 `space`（`{ kind: "personal" }` 或 `{ kind: "team", teamId }`；GET 里写成 `space[kind]=team&space[teamId]=…`）。scope 是 `session`（个人空间）或 `team:billing`（团队空间的 owner 与 billing）；`billing.plan` / `billing.usage` 只读，团队空间另放开 `team:admin`（owner、admin、billing，协议包 0.11.0 起，只加不改），写过程仍只给 owner 与 billing。
+协议 1.4。接替 §9：按空间，路径 `/v1/billing/…`，输入带 `space`（`{ kind: "personal" }` 或 `{ kind: "team", teamId }`；GET 里写成 `space[kind]=team&space[teamId]=…`）。scope 是 `session`（个人空间）或 `team:billing`（团队空间的 owner 与 billing）；`billing.plan` / `billing.usage` 只读，团队空间另放开 `team:admin`（owner、admin、billing，协议包 0.11.0 起，只加不改），其余过程（含 invoices、checkout、portal）仍只给 owner 与 billing。
 
 - `billing.plan` / `billing.usage`（M1）：计划代号、状态（`active` / `trialing` / `past_due` / `canceled`）、席位、周期；用量项 `{ metric, value, limit }`，`limit = null` 为不限。
 - `billing.usage` 入参加 `granularity`（`month` 缺省 / `day`，1.4 补充）：`day` 时出参多 `series: { startMs, relayBytes }[]`，本计费周期内每天一条（`startMs` 为当天 UTC 零点）。数据源是中继的 `relay_traffic_buckets` 小时桶按团队汇总到天，口径是入口节点计的端到端字节（`e2e`）；个人空间同一条（`space = personal`）。
