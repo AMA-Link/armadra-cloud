@@ -116,6 +116,7 @@ func (s *Stream) End() {
 }
 
 // Abort 是本地销毁（客户端掉线、协议错误）：发 RST clientGone，没发完的字节作废。
+// 两端都已 END 的流不再中止：END 已排在出队列的尾巴后面，尾巴与 END 照常写出（#136）。
 func (s *Stream) Abort() { s.reset(protocol.RstClientGone) }
 
 func (s *Stream) reset(code protocol.RstCode) {
@@ -125,7 +126,14 @@ func (s *Stream) reset(code protocol.RstCode) {
 		t.mu.Unlock()
 		return
 	}
-	if !s.peerReset && !(s.localEnded && s.remoteEnded) {
+	if s.localEnded && s.remoteEnded {
+		// 已摘出流表，两端都结束了，中止没有意义。localEnded 只表示 END 已排进出队列：
+		// 这时丢掉出队列又不发 RST，对端既收不到尾巴也收不到 END，流一直挂着。
+		// 不动出队列：写协程照常写完，对端为写出的字节补 WINDOW，隧道信用不用在这里还。
+		t.mu.Unlock()
+		return
+	}
+	if !s.peerReset {
 		t.queueCtlLocked(rstFrame(s.id, code))
 	}
 	resume, refunded := t.destroyStreamLocked(s)

@@ -63,6 +63,8 @@
 
 - 流被重置时归还已扣的发送信用（Closes #134）：Go 中继的流在被重置（对端 RST、本端重置、出错中止）时，出队列里已扣隧道信用、还没写出的字节不再随流丢掉信用，而是还给隧道并叫醒因隧道信用挂起的流；持有节点上转来的流被重置时同样把出队列里的 DATA 还给链路信用。改前带积压的流反复被重置会一点点漏光隧道（或节点间链路）的发送窗口，最终停发。Workers 中继扣信用即发出，没有这个问题。线上协议不变。
   Credit already deducted is returned when a stream is reset (Closes #134): when a Go relay stream is reset (peer RST, local reset, abort on error), bytes in its output queue that were charged against the tunnel window but not yet written now give that credit back to the tunnel and wake streams parked on tunnel credit; on the holder node a reset forwarded stream likewise returns its queued DATA to the link window. Before, streams with a backlog being reset repeatedly leaked the tunnel (or inter-node link) send window until it stalled. The Workers relay sends as soon as it takes credit and is unaffected. The wire protocol is unchanged.
+- 两端都已 END 的流再被中止时不再丢掉尾巴（Closes #136）：Go 中继的流本端已 END（END 排在出队列里）、也收到了对端的 END 之后，再被中止（客户端掉线、END 宽限期到、节点间对端 RST 或链路断开）不再丢掉出队列里没写出的 DATA 与 END；改前既丢尾巴又不发 RST，对端收不到剩下的字节，流一直挂到隧道关闭。现在尾巴与 END 照常写出，信用照常由对端补 WINDOW 归还。线上协议不变。
+  Aborting a stream after both sides ended no longer drops its tail (Closes #136): once a Go relay stream has ended locally (END queued in its output) and has received the peer's END, a later abort (client gone, END grace expired, inter-node peer RST or link drop) no longer discards the unwritten DATA and END in its output queue; before, it dropped the tail and sent no RST, so the peer never got the remaining bytes and the stream hung until the tunnel closed. The tail and END are now written as usual, and their credit comes back through the peer's WINDOW as usual. The wire protocol is unchanged.
 
 ### 移除 / Removed
 
