@@ -23,6 +23,8 @@ type fakeTransport struct {
 	gate chan struct{}
 	// delay 非零时每次 Send 睡这么久（模拟写得慢的链路）。
 	delay time.Duration
+	// gated 是正卡在 gate 上的 Send 数。
+	gated int
 }
 
 type closeRec struct {
@@ -35,7 +37,13 @@ func (f *fakeTransport) Send(b []byte) error {
 	gate := f.gate
 	f.mu.Unlock()
 	if gate != nil {
+		f.mu.Lock()
+		f.gated++
+		f.mu.Unlock()
 		<-gate
+		f.mu.Lock()
+		f.gated--
+		f.mu.Unlock()
 	}
 	if f.delay > 0 {
 		time.Sleep(f.delay)

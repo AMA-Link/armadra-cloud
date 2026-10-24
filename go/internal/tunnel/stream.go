@@ -128,12 +128,15 @@ func (s *Stream) reset(code protocol.RstCode) {
 	if !s.peerReset && !(s.localEnded && s.remoteEnded) {
 		t.queueCtlLocked(rstFrame(s.id, code))
 	}
-	s.destroyLocked()
+	resume, refunded := t.destroyStreamLocked(s)
 	closeNow := t.releaseLocked(s)
 	t.mu.Unlock()
 	t.signal()
-	if closeNow {
+	if closeNow || refunded {
 		t.closeDrained()
+	}
+	for _, p := range resume {
+		p.sink.Resume(p)
 	}
 }
 
@@ -165,11 +168,16 @@ func (s *Stream) queueEndLocked() {
 	s.t.markReadyLocked(s)
 }
 
-// destroyLocked 丢掉没发出去的字节，流不再收发。
-func (s *Stream) destroyLocked() {
+// destroyLocked 丢掉没发出去的字节，流不再收发；答出队列里作废的载荷字节。
+// 这些字节在入队时扣过隧道信用、对端永远收不到，调用方要还给隧道（见 Tunnel.destroyStreamLocked）。
+// 写协程已经取走的帧不在 out 里，照常写出、由对端补 WINDOW，不会重复归还；
+// pending 还没扣隧道信用，流级信用随流作废，都不用还。
+func (s *Stream) destroyLocked() int {
+	dropped := s.outN
 	s.destroyed = true
 	s.pending, s.pendingBytes, s.out, s.outN = nil, 0, nil, 0
 	s.unparkLocked()
+	return dropped
 }
 
 func (s *Stream) unparkLocked() {
