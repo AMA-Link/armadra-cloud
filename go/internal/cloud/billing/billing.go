@@ -13,6 +13,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
+	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
@@ -25,18 +26,19 @@ type Options struct {
 	Store saas.Store
 	// Relay 给团队用量的同时连接数。
 	Relay relayctl.Control
+	Log   *obs.Logger
 }
 
 // Service 是计划与用量服务。
 type Service struct {
 	c     *core.Context
 	store saas.Store
-	relay relayctl.Control
+	live  *teams.Live
 }
 
 // New 建服务。
 func New(options Options) *Service {
-	return &Service{c: options.Core, store: options.Store, relay: options.Relay}
+	return &Service{c: options.Core, store: options.Store, live: teams.NewLive(options.Relay, options.Log)}
 }
 
 func (s *Service) tenant() string { return s.c.TenantID }
@@ -160,7 +162,7 @@ func (s *Service) usage(ctx context.Context, call *api.Call) (any, error) {
 		days    []saas.DayBytes
 	)
 	if sp.kind == saas.SpaceTeam {
-		entries, days, err = teams.TeamUsage(ctx, s.store, s.relay, s.tenant(), sp.access, start, end, withDays)
+		entries, days, err = teams.TeamUsage(ctx, s.store, s.live, s.tenant(), sp.access, start, end, withDays)
 	} else {
 		entries, days, err = s.personalUsage(ctx, sp.accountID, start, end, withDays)
 	}

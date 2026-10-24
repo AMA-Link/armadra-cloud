@@ -133,6 +133,7 @@ type Service struct {
 	c        *core.Context
 	store    saas.Store
 	relay    relayctl.Control
+	live     *Live
 	verified bool
 	log      *obs.Logger
 	events   *events.Publisher
@@ -144,7 +145,7 @@ func New(options Options) *Service {
 	if log == nil {
 		log = obs.Nop()
 	}
-	return &Service{c: options.Core, store: options.Store, relay: options.Relay, verified: options.RequireEmailVerified, log: log, events: options.Events}
+	return &Service{c: options.Core, store: options.Store, relay: options.Relay, live: NewLive(options.Relay, log), verified: options.RequireEmailVerified, log: log, events: options.Events}
 }
 
 func (s *Service) tenant() string { return s.c.TenantID }
