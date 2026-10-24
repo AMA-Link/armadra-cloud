@@ -763,7 +763,9 @@ describe("platform.info 的挑战范围（cloud-api §16）", () => {
 
   it("0.11.0 只加不改：drain 的 reason、deviceGet 的 ipPrefix、links.get 的 ownerName、team_hosts_online", () => {
     const drain = input("admin.relayNodeDrain");
-    expect(drain.safeParse({ node: "relay-1", drain: true }).success).toBe(true);
+    expect(drain.safeParse({ node: "relay-1", drain: true }).success).toBe(
+      true,
+    );
     expect(
       drain.safeParse({ node: "relay-1", drain: true, reason: "维护" }).success,
     ).toBe(true);
@@ -776,7 +778,12 @@ describe("platform.info 的挑战范围（cloud-api §16）", () => {
     ).toBe(false);
     const out = (key: string) =>
       byKey.get(key)?.procedure["~orpc"].outputSchema;
-    const device = { platform: "server", name: "n", requestedAtMs: 1, expiresAtMs: 2 };
+    const device = {
+      platform: "server",
+      name: "n",
+      requestedAtMs: 1,
+      expiresAtMs: 2,
+    };
     expect(out("auth.deviceGet").safeParse(device).success).toBe(true);
     expect(
       out("auth.deviceGet").safeParse({ ...device, ipPrefix: "2001:db8::/64" })
@@ -790,9 +797,11 @@ describe("platform.info 的挑战范围（cloud-api §16）", () => {
       requiresAccount: false,
     };
     expect(out("links.get").safeParse(link).success).toBe(true);
-    expect(out("links.get").safeParse({ ...link, ownerName: "Alice" }).success).toBe(
-      true,
+    expect(
+      out("links.get").safeParse({ ...link, ownerName: "Alice" }).success,
+    ).toBe(true);
+    expect(byKey.get("teams.delete")?.errorCodes).toContain(
+      "team_hosts_online",
     );
-    expect(byKey.get("teams.delete")?.errorCodes).toContain("team_hosts_online");
   });
 });
