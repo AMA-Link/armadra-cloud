@@ -218,10 +218,8 @@ func TestBulkStreamsKeepTakingTurnsUnderSparseLoad(t *testing.T) {
 	for _, s := range f.bulk {
 		bulkCounts = append(bulkCounts, counts[s.ID()])
 	}
+	// 饿死在上面的等待里就会以超时失败（每条都要写出 8 帧），这里只比份额。
 	sort.Ints(bulkCounts)
-	if bulkCounts[0] == 0 {
-		t.Fatalf("有大流量流被饿死：%v", bulkCounts)
-	}
 	if bulkCounts[len(bulkCounts)-1] > 2*bulkCounts[0]+4 {
 		t.Fatalf("大流量流之间不公平：%v", bulkCounts)
 	}
