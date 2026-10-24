@@ -114,6 +114,8 @@ type HostSpace struct {
 	TeamSettings json.RawMessage
 	TeamStatus   string
 	TeamDeleted  bool
+	// TeamName 是团队主机所属团队的名字；个人空间为空。
+	TeamName string
 }
 
 // HostPatch 是对 source_spaces 的部分更新：非 nil 的字段才写。

@@ -314,6 +314,15 @@ func TestLinksTeamAnonymousSwitchAndGuests(t *testing.T) {
 	if res.json["requiresAccount"] != true {
 		t.Fatalf("团队主机缺省要求登录：%s", res.body)
 	}
+	// 团队主机的链接给团队名，不给登记主机的成员的显示名。
+	var teamName string
+	if err := r.run.DB.Pool().QueryRow(ctxBackground, "SELECT name FROM teams WHERE team_id = $1", team).Scan(&teamName); err != nil {
+		t.Fatal(err)
+	}
+	r.exec("UPDATE accounts SET display_name = '登记者甲' WHERE account_id = $1", owner.accountID)
+	if res = r.do("GET", linkPathOf(link.id), nil, nil); res.json["ownerName"] != teamName || strings.Contains(string(res.body), "登记者甲") {
+		t.Fatalf("团队链接应给团队名 %q：%s", teamName, res.body)
+	}
 	r.expect(r.acceptLink(link, nil), 403, "anonymous_links_disabled")
 	if uses, _ := r.linkRow(link.id); uses != 0 {
 		t.Fatalf("被拒的匿名接受不消耗次数：%d", uses)
@@ -496,5 +505,31 @@ func TestLinkGuestAssertionRacesRevoke(t *testing.T) {
 				t.Fatalf("索引里还有 %d 枚", n)
 			}
 		})
+	}
+}
+
+// 读主人账号出错时落地页照常，只是不带 ownerName（不答 500）；账号停用同样不带。
+func TestLinkGetOwnerNameOmittedOnFailure(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	owner := r.verified()
+	h := r.addHost(owner, nil, "0.11.0")
+	link := r.mustLink(owner, h.id, nil)
+	r.exec("UPDATE accounts SET display_name = '爱丽丝' WHERE account_id = $1", owner.accountID)
+	if res := r.do("GET", linkPathOf(link.id), nil, nil); res.json["ownerName"] != "爱丽丝" {
+		t.Fatalf("个人空间给主人显示名：%s", res.body)
+	}
+	r.exec("UPDATE accounts SET status = 'disabled' WHERE account_id = $1", owner.accountID)
+	res := r.do("GET", linkPathOf(link.id), nil, nil)
+	r.expect(res, 200, "")
+	if res.json["ownerName"] != nil {
+		t.Fatalf("停用账号不带 ownerName：%s", res.body)
+	}
+	r.exec("UPDATE accounts SET status = 'active' WHERE account_id = $1", owner.accountID)
+	r.exec("ALTER TABLE accounts RENAME TO accounts_gone")
+	res = r.do("GET", linkPathOf(link.id), nil, nil)
+	r.exec("ALTER TABLE accounts_gone RENAME TO accounts")
+	r.expect(res, 200, "")
+	if res.json["label"] == nil || res.json["ownerName"] != nil {
+		t.Fatalf("读取出错时照常答、不带 ownerName：%s", res.body)
 	}
 }
