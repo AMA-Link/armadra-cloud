@@ -437,6 +437,11 @@ export const trustRequestSchema = z.object({
     displayName: z.string(),
   }),
   device: z.object({ name: z.string(), platform: devicePlatformSchema }),
+  /**
+   * core 侧待信任条目的 id（0.11.0 起，只加不改）：背书时调 core 的 `devices.approve(pendingId)`
+   * 用它定位设备。不是秘密；旧服务端不带，客户端缺省时回退按账号与设备名匹配。
+   */
+  pendingId: z.string().optional(),
   requestedAtMs: z.number().int(),
   expiresAtMs: z.number().int(),
 });

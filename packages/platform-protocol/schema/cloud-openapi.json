@@ -18241,6 +18241,9 @@
                               "platform"
                             ]
                           },
+                          "pendingId": {
+                            "type": "string"
+                          },
                           "requestedAtMs": {
                             "type": "integer",
                             "minimum": -9007199254740991,

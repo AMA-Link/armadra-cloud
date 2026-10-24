@@ -21,6 +21,7 @@
           "name": "Dev iPhone",
           "platform": "ios"
         },
+        "pendingId": "pend_01",
         "requestedAtMs": 1760000000000,
         "expiresAtMs": 1760000600000
       }
