@@ -369,12 +369,19 @@ func TestPeriodicReloadCatchesMissedNotifications(t *testing.T) {
 	})
 }
 
+// 活性检查：空闲期间发轻查询不影响收通知。
 func TestLivenessCheckKeepsListenerWorking(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	a := e.node("node-a", func(o *cp.Options) { o.LivenessEvery = 50 * time.Millisecond })
+	// 轻查询超过一个间隔没答就（按设计）判断线；间隔留足余量，否则测的是机器快慢，不是活性检查。
+	a := e.node("node-a", func(o *cp.Options) { o.LivenessEvery = time.Second })
 	b := e.node("node-b", nil)
-	time.Sleep(400 * time.Millisecond)
+	// 等监听连接真的做过活性检查（pg_stat_activity 里它最近一条语句是 SELECT 1），而不是睡一个估计的时长。
+	controltest.Eventually(t, "空闲时做过活性检查", func() bool {
+		var n int
+		err := e.admin.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1 AND query = 'SELECT 1'", a.app).Scan(&n)
+		return err == nil && n > 0
+	})
 	if err := b.Tokens().Revoke(ctx, "after-idle", time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
