@@ -1195,7 +1195,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     output: {
       platform: "server",
       name: "armadra-server",
-      ipPrefix: "203.0.113.0/24",
+      ipPrefix: "203.0.113.7",
       requestedAtMs: NOW,
       expiresAtMs: NOW + 600_000,
     },
