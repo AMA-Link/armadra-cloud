@@ -67,6 +67,7 @@
 ## 排空、下线与事故开关
 
 - 单个节点下线：控制台运营后台（`admin.relayNodeDrain`）或 `SIGTERM`；节点表标 `draining`、`/ready` 不就绪、隧道收 GOAWAY `rebalance`，源按 `heartbeatHint`（已去掉排空节点）重连到别的节点，经该节点转发的通道以 4404 结束，客户端重连。
+- 恢复排空的节点：目前没有「取消排空」，排空后节点一直是 `draining`，要重建这个节点的容器：`docker compose up -d --force-recreate --no-deps relay-a`（只重建 a，不连带别的服务；隧道已经排空，重建很快）；节点表里 a 回到 `draining: false`、`/ready` 为 ok 后，新的隧道与客户端连接会重新分到它上面（已在别的节点上的源不会自动迁回）。用 `SIGTERM` 停掉的节点同样用这条命令起回来。
 - 事故开关（`admin.incidentSet`）：`pauseAssertions`、`pauseRegistrations`、`rejectNewConnections`（节点拒绝新的隧道与端到端升级，在线连接保留）。
 - 停用团队（`admin.teamStatus`）：在线连接被踢，断言答 `403 team_suspended`，审计写 `actor.kind = operator` 与理由。
 
