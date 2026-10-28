@@ -11,15 +11,17 @@
 
 1. 域名与证书：`app.<域>`、`a.edge.<域>`、`b.edge.<域>`、`*.src.<域>` 四类名字，一张证书覆盖（`*.src` 是二级通配：DNS-01 签发，或经 Cloudflare 代理时用高级证书；放在 Cloudflare 后面时按 `nginx.conf.template` 头部的注释取真实 IP）。**证书先于登记**：真证书签好之前不要给客户端登记主机，指纹一换所有人都要重新登记。
 2. 准备文件：`cp .env.example .env` 填域名与版本；`sh init-secrets.sh` 生成 `secrets/` 下的口令与连接串（PostgreSQL 超级用户口令、库属主角色 `armadra_cloud` 与流量角色 `armadra_relay_traffic` 的口令、Redis 口令、主密钥、对应的连接串文件）；`secrets/smtp_password` 写发信口令（没有就留空）。**`secrets/master_key` 必须另存一份**，丢了无法解开签名私钥与 TOTP 种子。
-   - 权限：`secrets/` 目录 0700、文件 0444。容器里的 uid 10002（控制面与节点）、70（postgres）、999（redis）都要能读它们，所以文件对其他人可读，靠目录 0700 挡住宿主上的其他用户；节点令牌文件是 0644（方便 `nodes token` 的输出直接覆盖）。想更严就把文件 `chown` 给对应的 uid 再 0400（控制面、节点共用 10002，postgres 与 redis 各用自己的口令文件）。不要把 `secrets/` 提交进版本库（目录里有 `.gitignore`）。
+   - 权限：`secrets/` 目录 0700、文件 0444。容器里的 uid 10002（控制面与节点）、70（postgres）、999（redis）都要能读它们，所以文件对其他人可读，靠目录 0700 挡住宿主上的其他用户；节点令牌文件是 0644（方便 `nodes token` 的输出直接覆盖）。想更严就把文件 `chown` 给对应的 uid 再 0400（控制面、节点共用 10002，postgres 与 redis 各用自己的口令文件）。不要把 `secrets/` 与 `tls/` 提交进版本库：`init-secrets.sh` 在这两个目录各写一个内容为 `*` 的 `.gitignore`（`tls/` 由它一并建好），本仓的 `.gitignore` 也忽略了 `deploy/saas/secrets/` 与 `deploy/saas/tls/`；部署目录在别处的版本库里时，确认 `git status` 里看不到它们。
    - 超级用户只在 postgres 首次初始化时用（`postgres-init.sh` 建库属主角色、流量角色与库）；`migrate`、`serve`、`db-roles` 都以非超级用户 `armadra_cloud` 连。Redis 要口令（`requirepass`），连接串在 `secrets/redis_url`。
    - 托管 PostgreSQL / Redis：直接把 `cloud_database_url`、`relay_database_url`、`redis_url` 写成托管服务的连接串（`sslmode=verify-full`），并去掉 compose 里的 `postgres`、`redis`、`pg-tls` 服务与依赖。
 3. 控制台页面从哪来：镜像里的 `/app/web` 是构建参数 `WEB_IMAGE` 拷进去的 Armadra 服务器镜像里的 web 产物（发布构建取 `deploy/compat.json` 的 `web` 版本，0.10.0 起带控制台外壳）；没有页面（目录里没有 `index.html`）时控制面照常服务 API，`/` 答 404。要换页面（例如先验收新版本的页面）就把目录挂到 `/app/web`（`compose.yml` 里 `cloud` 的 `volumes` 注释打开，`WEB_DIR` 指向构建产物目录）。
 4. 先起控制面：`docker compose up -d cloud`（顺序 postgres → migrate → cloud；`pg-tls` 首次生成 postgres 的自签证书，控制面用 `sslmode=require` 连）。
 5. 签节点令牌：`docker compose exec cloud armadra-cloud nodes token --node a > secrets/node_token_a`，`--node b` 同理（缺省 30 天，`--days` 最长 365）。令牌只出现在这条命令的 stdout，jti 与到期时间打印在 stderr，记下 jti（撤销要用）。
-6. 起全部：`docker compose up -d`（`db-roles` 给节点的流量角色授权：只有 `relay_traffic_buckets` 的 SELECT / INSERT / UPDATE 与 `cloud_migrations` 的 SELECT）；反向代理用 `--profile proxy`（`nginx.conf.template`，TLS 证书放 `tls/fullchain.pem` 与 `tls/privkey.pem`），或接你自己的——自己的代理要把 `TRUSTED_PROXY` 设成它的地址。
+6. 起全部：`docker compose up -d`（`db-roles` 给节点的流量角色授权：只有 `relay_traffic_buckets` 的 SELECT / INSERT / UPDATE 与 `cloud_migrations` 的 SELECT）；反向代理用 `--profile proxy`（`nginx.conf.template`，TLS 证书放 `tls/fullchain.pem` 与 `tls/privkey.pem`），或接你自己的——自己的代理要把 `TRUSTED_PROXY` 设成它的地址。参考代理缺省绑全部网卡的 80 / 443，只给本机用或换地址、端口时在 `.env` 设 `PROXY_BIND`（如 `127.0.0.1`）、`PROXY_HTTP_PORT`、`PROXY_HTTPS_PORT`。
 7. 运营账号：先在控制台注册并验证一个账号，再 `docker compose exec cloud armadra-cloud operators add --email <地址>` 与 `operators totp --email <地址>`（otpauth 地址只打印这一次，丢了用 `--reset`）。
-8. 验收：`/ready` 三项（postgres、redis、relay）为 ok；`docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli hgetall relay:nodes'` 有 a、b 两项且 `url` 是各自的 `wss://<节点>.edge.<域>/t/v1`。
+   - 临时（AMA-Link/Armadra#580 的修复发布后删除这一条）：当前发布的页面在 HTTPS 的控制台地址上进不了控制台（空白页），注册这一步做不通。替代办法是自己构建 Armadra 的页面，构建时设 `VITE_RUNTIME_URL`（任意一个不会被访问的地址，如 `VITE_RUNTIME_URL=http://127.0.0.1:9 pnpm --filter @armadra/web build`），按第 3 步把产物目录挂到 `/app/web`。
+   - 临时（AMA-Link/Armadra#584 的修复发布后删除这一条）：运营登录目前要先有普通会话，先用这个账号在控制台正常登录，再进运营登录输入 TOTP。
+8. 验收：`/ready` 三项（postgres、redis、relay）为 ok；`docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli hgetall relay:nodes'` 有 a、b 两项且 `url` 是各自的 `wss://<节点>.edge.<域>/t/v1`。`/ready` 的 `relay` 项只表示当前不在从库往 Redis 重放（撤销、签发索引、团队额度），不代表节点在线，也不代表重放成功过；一个节点都没有时也是 ok，节点是否在线以节点表为准。节点间转发还要满足下面「节点间转发」的前提。
 
 网络：`edge`（代理、控制面、节点；代理 IP 固定为 `PROXY_IP`，控制面与节点只信它转发的 `X-Forwarded-For`）与 `backend`（postgres、redis、migrate、db-roles；internal，不出网）。代理够不到数据库与 Redis。
 
@@ -56,6 +58,10 @@
 
 ## 节点间转发
 
+- **前提（绕回代理）**：节点表里每个节点的 `/x/v1` 地址缺省是 `wss://<节点>.edge.<域>/x/v1`（由 `RELAY_TUNNEL_URL` 换路径得到），别的节点按这个地址经反向代理连回来。所以每个节点容器都要：能解析 `<节点>.edge.<域>`（解析到代理的地址，不是容器自己）、能连到代理的 443（宿主或网络要允许这种绕回连接）、信任代理的证书（节点镜像只带系统根证书；自建 CA 时挂一个含该 CA 的证书包进节点并设 `SSL_CERT_FILE` 指向它；它只替换默认的证书包文件，`/etc/ssl/certs` 目录仍会读取，镜像自带的系统根照样生效）。不满足时源连 a、客户端落到 b 的连接无法转发，大约一半的客户端连接答 4404 或 503。`*.localhost` 这类名字在节点里一律解析到回环，连到的是容器自己，不能用作节点间地址。
+- **排查**：节点日志有「连不上对端节点，通道不转发」就是这一步失败；在一个节点的网络里试连另一个节点（节点镜像没有 shell，用临时容器：`docker run --rm --network armadra-saas_edge curlimages/curl -sv -H 'Connection: Upgrade' -H 'Upgrade: websocket' https://b.edge.<域>/x/v1`，自建 CA 时挂进 CA 并加 `--cacert`）：报解析失败是名字没解析到代理，报证书错误是不信任代理的证书，连到了却超时或被拒是代理不接绕回连接；答 401（没带节点令牌）就说明链路通。再看 `relay:nodes` 里各节点的地址是否正确、节点令牌是否已签（`secrets/node_token_*` 非空）且未撤销。
+- **走内部网络**：`RELAY_INTERNODE_URL` 可把 `/x/v1` 地址改成 edge 网络里的直连地址（如 `ws://relay-a:8443/x/v1`），不再绕回代理，但目前节点只监听明文，直连只能是 `ws://`。每个节点各设自己的地址（`relay-a` 设 `ws://relay-a:8443/x/v1`，`relay-b` 设 `ws://relay-b:8443/x/v1`），并且所有节点都要设 `RELAY_ALLOW_INSECURE_TUNNEL=1`（连出的一端靠它接受对端的 `ws://` 地址，只改一个节点会报「对端的 /x/v1 地址不是 wss」）；这个开关只用于开发与本机测试，节点令牌会以明文在网络里传，生产不要用。
+- 参考 nginx 的 `relay_any`（客户端入口）不排除排空中的节点：排空节点仍会接客户端连接，再经 `/x/v1` 转发到源所在的节点，功能正常。
 - 每个账号经节点间连接（`/x/v1`）转发的通道数受 `RELAY_FORWARDED_PER_ACCOUNT`（缺省 64）限制，计数在每个入口节点上、按账号各算各的，不是全集群合计，超出的新通道答 4429 `limit_reached`；链路上的 4096 个流位各租户共用，没有这个上限一个账号就能占满。本地通道不受它限制。
 - 指标：`relay_forward_account_refused_total`（计数器，因账号转发名额满而拒绝的通道数）与 `relay_internode_unwritten_bytes`（仪表，入口节点出向连接上还没写出的转发字节：挂着等信用的加已排队没写进内核的）。建议规则：`relay_internode_unwritten_bytes > 64 * 1024 * 1024` 持续 5 分钟就告警（对端或链路慢，或某个租户在占住链路）；`increase(relay_forward_account_refused_total[10m]) > 0` 作提示，反复出现时看是哪个账号、是否该调高上限。
 - 节点令牌撤销（`armadra-cloud nodes revoke`）经 `relay:revoked` 广播即时断开已建立的节点间连接；5 秒一次的复查留作兜底。
@@ -63,6 +69,7 @@
 ## 排空、下线与事故开关
 
 - 单个节点下线：控制台运营后台（`admin.relayNodeDrain`）或 `SIGTERM`；节点表标 `draining`、`/ready` 不就绪、隧道收 GOAWAY `rebalance`，源按 `heartbeatHint`（已去掉排空节点）重连到别的节点，经该节点转发的通道以 4404 结束，客户端重连。
+- 恢复排空的节点：目前没有「取消排空」，排空后节点一直是 `draining`，要重建这个节点的容器：`docker compose up -d --force-recreate --no-deps relay-a`（只重建 a，不连带别的服务；隧道已经排空，重建很快）；节点表里 a 回到 `draining: false`、`/ready` 为 ok 后，新的隧道与客户端连接会重新分到它上面（已在别的节点上的源不会自动迁回）。用 `SIGTERM` 停掉的节点同样用这条命令起回来。
 - 事故开关（`admin.incidentSet`）：`pauseAssertions`、`pauseRegistrations`、`rejectNewConnections`（节点拒绝新的隧道与端到端升级，在线连接保留）。
 - 停用团队（`admin.teamStatus`）：在线连接被踢，断言答 `403 team_suspended`，审计写 `actor.kind = operator` 与理由。
 

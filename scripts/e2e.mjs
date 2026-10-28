@@ -33,6 +33,8 @@
 //   E2E_RELAY_CLI         容器里中继命令行的写法（缺省 `armadra-relay`，空格分隔）
 //   已有镜像时用 --relay-image <镜像>，不构建。
 //
+// 启动前查协议包的 dist（scripts/e2e/libs.mjs）：没有或比源码旧就先构建，构建后仍旧则退出（#143）。
+//
 // 产物：<输出目录>/result.json（缺省 .data/e2e/，每步耗时与结果）。任一步失败非零退出。
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import {
@@ -49,7 +51,6 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
-import { ed25519SignerFromSeed } from "@armadra/platform-protocol/e2e";
 import { WebSocket } from "ws";
 
 import {
@@ -65,6 +66,7 @@ import {
   secretEntries,
   until,
 } from "./e2e/lib.mjs";
+import { ensureBuiltLibs } from "./e2e/libs.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const USAGE = `用法: pnpm e2e --mode personal [选项]
@@ -123,6 +125,16 @@ function parseArgs(argv) {
 
 const options = parseArgs(process.argv.slice(2));
 const mode = options.values.get("--mode");
+// 用例经 dist 用协议包：检出换了提交而 dist 没重建会拿到旧常量误报失败（#143），先查新鲜度、旧了就构建。
+try {
+  ensureBuiltLibs({ root, log });
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+}
+const { ed25519SignerFromSeed } = await import(
+  "@armadra/platform-protocol/e2e"
+);
 if (mode === "personal-workers") {
   const { runWorkersE2e } = await import("./e2e/workers.mjs");
   const workersReport = new Report();

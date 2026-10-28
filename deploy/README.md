@@ -147,6 +147,23 @@
 
 `saas/compose.yml`：口令与连接串全部是 `secrets/` 下的文件（`init-secrets.sh` 生成；PostgreSQL 用 `POSTGRES_PASSWORD_FILE`，控制面用 `DATABASE_URL_FILE` 与 `REDIS_URL_FILE`，节点用 `RELAY_DATABASE_URL_FILE` 与 `RELAY_REDIS_URL_FILE`）；网络分 `edge` 与 `backend`（internal），代理只进 `edge` 且 IP 固定，Redis 要口令；`postgres`（首次启动生成自签证书，超级用户只用于初始化，控制面用另建的库属主角色 `armadra_cloud` 以 `sslmode=require` 连；生产换托管库并用 `verify-full`）→ `migrate`（跑一次 `armadra-cloud migrate`）→ `db-roles`（节点的流量角色 `armadra_relay_traffic`，只有流量表读写与账本只读）→ `cloud` → `relay-a`、`relay-b`（每个节点有自己的隧道地址 `wss://<节点>.edge.<域>/t/v1`，各自一枚节点令牌）；`redis` 开 AOF（`appendfsync everysec`）、`maxmemory 128mb`、`noeviction`；`--profile proxy` 起参考 nginx（TLS 终止，WebSocket 设置与登录 / 链接接受限流，访问日志用 `$uri` 不记 query）；`compose.mailpit.yml` 把邮件送进 mailpit（开发 / 端到端，不要用在生产）。步骤、节点令牌的签发与撤销、升级与回滚、备份、Redis 故障时登录失败关闭与告警，见 [SaaS 运维手册](../docs/runbooks/saas.md)；变量在 `saas/.env.example`。
 
+`saas/compose.yml` 读的变量（写进 `saas/.env`）：
+
+| 变量                                                                   | 缺省                              | 说明                                                                                                         |
+| ---------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `DOMAIN`                                                               | 必填                              | 根域名：`app.<域>`、`<节点>.edge.<域>`、`*.src.<域>`                                                         |
+| `ARMADRA_CLOUD_VERSION`                                                | 必填                              | 控制面与节点镜像的版本号                                                                                     |
+| `PLATFORM_NAME`                                                        | 空                                | 平台名称（`ARMADRA_CLOUD_NAME`）                                                                             |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_FROM` / `SMTP_TLS` | 空 / `587` / 空 / 空 / `starttls` | 发信；口令在 `secrets/smtp_password`                                                                         |
+| `LOG_LEVEL`                                                            | `info`                            | 控制面日志级别                                                                                               |
+| `CLOUD_PORT` / `RELAY_A_PORT` / `RELAY_B_PORT`                         | `8100` / `8441` / `8442`          | 控制面与节点只发布到 `127.0.0.1` 的端口（排障用）                                                            |
+| `WEB_DIR`                                                              | `./web`                           | 换控制台页面时挂到 `/app/web` 的目录（要先打开 `cloud` 的 `volumes` 注释）                                   |
+| `TLS_DIR`                                                              | `./tls`                           | 参考代理的证书目录（`fullchain.pem`、`privkey.pem`）                                                         |
+| `PROXY_BIND`                                                           | 空                                | 参考代理发布端口绑定的地址；空是全部网卡（IPv4 与 IPv6），只给本机用设 `127.0.0.1`，IPv6 加方括号（`[::1]`） |
+| `PROXY_HTTP_PORT` / `PROXY_HTTPS_PORT`                                 | `80` / `443`                      | 参考代理在宿主上发布的端口                                                                                   |
+| `EDGE_SUBNET` / `PROXY_IP`                                             | `172.29.88.0/24` / `172.29.88.10` | `edge` 网络的网段与参考代理的固定地址                                                                        |
+| `TRUSTED_PROXY`                                                        | `172.29.88.10/32`                 | 控制面与节点信任的代理地址；用自己的代理时改成它的地址                                                       |
+
 - 登录失败计数共享在 Redis，Redis 不可用时登录一律答 `503 unavailable`（失败关闭，不回落到进程内计数）；控制面指标 `armadra_cloud_lockout_unavailable_total` 计这类拒绝，应当告警。
 - 验收：`pnpm e2e --mode saas`（真实控制面 + 两个节点 + 一次性 PostgreSQL / Redis / mailpit，设计 §8.4 的 14 个场景）。
 

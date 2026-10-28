@@ -219,9 +219,11 @@ services:
     volumes:
       - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ${TLS_DIR:-./tls}:/etc/nginx/tls:ro
+    # PROXY_BIND 缺省为空：绑全部网卡（IPv4 与 IPv6）的 80 / 443；只给本机用或换地址、端口时设 PROXY_BIND、
+    # PROXY_HTTP_PORT、PROXY_HTTPS_PORT（IPv6 地址加方括号，如 [::1]）。
     ports:
-      - "80:80"
-      - "443:443"
+      - "${PROXY_BIND:+${PROXY_BIND}:}${PROXY_HTTP_PORT:-80}:80"
+      - "${PROXY_BIND:+${PROXY_BIND}:}${PROXY_HTTPS_PORT:-443}:443"
     networks:
       edge:
         ipv4_address: ${PROXY_IP:-172.29.88.10}

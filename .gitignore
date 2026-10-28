@@ -26,6 +26,9 @@ coverage/
 
 *.log
 deploy/personal/relay_password.txt
+# SaaS 部署：init-secrets.sh 生成的口令、连接串、主密钥与节点令牌，以及 TLS 证书与私钥
+deploy/saas/secrets/
+deploy/saas/tls/
 # Workers 中继：构建产物（scripts/build.mjs 生成），只保留 .assetsignore
 apps/relay-workers/assets/*
 !apps/relay-workers/assets/.assetsignore
