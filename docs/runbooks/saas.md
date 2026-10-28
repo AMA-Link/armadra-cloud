@@ -17,7 +17,7 @@
 3. 控制台页面从哪来：镜像里的 `/app/web` 是构建参数 `WEB_IMAGE` 拷进去的 Armadra 服务器镜像里的 web 产物（发布构建取 `deploy/compat.json` 的 `web` 版本，0.10.0 起带控制台外壳）；没有页面（目录里没有 `index.html`）时控制面照常服务 API，`/` 答 404。要换页面（例如先验收新版本的页面）就把目录挂到 `/app/web`（`compose.yml` 里 `cloud` 的 `volumes` 注释打开，`WEB_DIR` 指向构建产物目录）。
 4. 先起控制面：`docker compose up -d cloud`（顺序 postgres → migrate → cloud；`pg-tls` 首次生成 postgres 的自签证书，控制面用 `sslmode=require` 连）。
 5. 签节点令牌：`docker compose exec cloud armadra-cloud nodes token --node a > secrets/node_token_a`，`--node b` 同理（缺省 30 天，`--days` 最长 365）。令牌只出现在这条命令的 stdout，jti 与到期时间打印在 stderr，记下 jti（撤销要用）。
-6. 起全部：`docker compose up -d`（`db-roles` 给节点的流量角色授权：只有 `relay_traffic_buckets` 的 SELECT / INSERT / UPDATE 与 `cloud_migrations` 的 SELECT）；反向代理用 `--profile proxy`（`nginx.conf.template`，TLS 证书放 `tls/fullchain.pem` 与 `tls/privkey.pem`），或接你自己的——自己的代理要把 `TRUSTED_PROXY` 设成它的地址。
+6. 起全部：`docker compose up -d`（`db-roles` 给节点的流量角色授权：只有 `relay_traffic_buckets` 的 SELECT / INSERT / UPDATE 与 `cloud_migrations` 的 SELECT）；反向代理用 `--profile proxy`（`nginx.conf.template`，TLS 证书放 `tls/fullchain.pem` 与 `tls/privkey.pem`），或接你自己的——自己的代理要把 `TRUSTED_PROXY` 设成它的地址。参考代理缺省绑全部网卡的 80 / 443，只给本机用或换地址、端口时在 `.env` 设 `PROXY_BIND`（如 `127.0.0.1`）、`PROXY_HTTP_PORT`、`PROXY_HTTPS_PORT`。
 7. 运营账号：先在控制台注册并验证一个账号，再 `docker compose exec cloud armadra-cloud operators add --email <地址>` 与 `operators totp --email <地址>`（otpauth 地址只打印这一次，丢了用 `--reset`）。
 8. 验收：`/ready` 三项（postgres、redis、relay）为 ok；`docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli hgetall relay:nodes'` 有 a、b 两项且 `url` 是各自的 `wss://<节点>.edge.<域>/t/v1`。
 
