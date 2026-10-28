@@ -20,7 +20,7 @@ func TestIsAppRoute(t *testing.T) {
 func TestConsoleCSP(t *testing.T) {
 	t.Parallel()
 	want := "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://*.src.example.com https://challenges.cloudflare.com; " +
-		"script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com blob:; img-src 'self' blob: data:; media-src 'self' blob:; " +
+		"script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; img-src 'self' blob: data:; media-src 'self' blob:; " +
 		"frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; " +
 		"require-trusted-types-for 'script'; trusted-types armadra armadra-sanitize default dompurify"
 	if got := ConsoleCSP("example.com"); got != want {
