@@ -65,6 +65,9 @@ export function ensureBuiltLibs({
     log(`构建 ${lib.name}（${reason}）`);
     if (!build(lib)) throw new Error(`构建 ${lib.name} 失败`);
     const after = staleReason(root, lib);
-    if (after !== null) throw new Error(`${lib.name} 构建后仍不新鲜：${after}`);
+    if (after !== null)
+      throw new Error(
+        `${lib.name} 构建后仍不新鲜：${after}（源码修改时间若在未来，例如从时钟快的机器拷来，对该文件 touch 一下再跑）`,
+      );
   }
 }
