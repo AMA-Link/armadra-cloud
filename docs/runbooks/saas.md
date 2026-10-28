@@ -20,6 +20,7 @@
 6. 起全部：`docker compose up -d`（`db-roles` 给节点的流量角色授权：只有 `relay_traffic_buckets` 的 SELECT / INSERT / UPDATE 与 `cloud_migrations` 的 SELECT）；反向代理用 `--profile proxy`（`nginx.conf.template`，TLS 证书放 `tls/fullchain.pem` 与 `tls/privkey.pem`），或接你自己的——自己的代理要把 `TRUSTED_PROXY` 设成它的地址。参考代理缺省绑全部网卡的 80 / 443，只给本机用或换地址、端口时在 `.env` 设 `PROXY_BIND`（如 `127.0.0.1`）、`PROXY_HTTP_PORT`、`PROXY_HTTPS_PORT`。
 7. 运营账号：先在控制台注册并验证一个账号，再 `docker compose exec cloud armadra-cloud operators add --email <地址>` 与 `operators totp --email <地址>`（otpauth 地址只打印这一次，丢了用 `--reset`）。
    - 临时（AMA-Link/Armadra#580 的修复发布后删除这一条）：当前发布的页面在 HTTPS 的控制台地址上进不了控制台（空白页），注册这一步做不通。替代办法是自己构建 Armadra 的页面，构建时设 `VITE_RUNTIME_URL`（任意一个不会被访问的地址，如 `VITE_RUNTIME_URL=http://127.0.0.1:9 pnpm --filter @armadra/web build`），按第 3 步把产物目录挂到 `/app/web`。
+   - 临时（AMA-Link/Armadra#584 的修复发布后删除这一条）：运营登录目前要先有普通会话，先用这个账号在控制台正常登录，再进运营登录输入 TOTP。
 8. 验收：`/ready` 三项（postgres、redis、relay）为 ok；`docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli hgetall relay:nodes'` 有 a、b 两项且 `url` 是各自的 `wss://<节点>.edge.<域>/t/v1`。`/ready` 的 `relay` 项只表示撤销与签发索引已从库重放进 Redis，一个节点都没有时也是 ok，节点是否在线以节点表为准。节点间转发还要满足下面「节点间转发」的前提。
 
 网络：`edge`（代理、控制面、节点；代理 IP 固定为 `PROXY_IP`，控制面与节点只信它转发的 `X-Forwarded-For`）与 `backend`（postgres、redis、migrate、db-roles；internal，不出网）。代理够不到数据库与 Redis。
