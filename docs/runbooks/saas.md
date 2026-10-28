@@ -21,7 +21,7 @@
 7. 运营账号：先在控制台注册并验证一个账号，再 `docker compose exec cloud armadra-cloud operators add --email <地址>` 与 `operators totp --email <地址>`（otpauth 地址只打印这一次，丢了用 `--reset`）。
    - 临时（AMA-Link/Armadra#580 的修复发布后删除这一条）：当前发布的页面在 HTTPS 的控制台地址上进不了控制台（空白页），注册这一步做不通。替代办法是自己构建 Armadra 的页面，构建时设 `VITE_RUNTIME_URL`（任意一个不会被访问的地址，如 `VITE_RUNTIME_URL=http://127.0.0.1:9 pnpm --filter @armadra/web build`），按第 3 步把产物目录挂到 `/app/web`。
    - 临时（AMA-Link/Armadra#584 的修复发布后删除这一条）：运营登录目前要先有普通会话，先用这个账号在控制台正常登录，再进运营登录输入 TOTP。
-8. 验收：`/ready` 三项（postgres、redis、relay）为 ok；`docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli hgetall relay:nodes'` 有 a、b 两项且 `url` 是各自的 `wss://<节点>.edge.<域>/t/v1`。`/ready` 的 `relay` 项只表示撤销与签发索引已从库重放进 Redis，一个节点都没有时也是 ok，节点是否在线以节点表为准。节点间转发还要满足下面「节点间转发」的前提。
+8. 验收：`/ready` 三项（postgres、redis、relay）为 ok；`docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli hgetall relay:nodes'` 有 a、b 两项且 `url` 是各自的 `wss://<节点>.edge.<域>/t/v1`。`/ready` 的 `relay` 项只表示当前不在从库往 Redis 重放（撤销、签发索引、团队额度），不代表节点在线，也不代表重放成功过；一个节点都没有时也是 ok，节点是否在线以节点表为准。节点间转发还要满足下面「节点间转发」的前提。
 
 网络：`edge`（代理、控制面、节点；代理 IP 固定为 `PROXY_IP`，控制面与节点只信它转发的 `X-Forwarded-For`）与 `backend`（postgres、redis、migrate、db-roles；internal，不出网）。代理够不到数据库与 Redis。
 
@@ -58,9 +58,9 @@
 
 ## 节点间转发
 
-- **前提（绕回代理）**：节点表里每个节点的 `/x/v1` 地址缺省是 `wss://<节点>.edge.<域>/x/v1`（由 `RELAY_TUNNEL_URL` 换路径得到），别的节点按这个地址经反向代理连回来。所以每个节点容器都要：能解析 `<节点>.edge.<域>`（解析到代理的地址，不是容器自己）、能连到代理的 443（宿主或网络要允许这种绕回连接）、信任代理的证书（节点镜像只带系统根证书；自建 CA 时挂一个含该 CA 的证书包进节点并设 `SSL_CERT_FILE` 指向它，这个文件会替换系统根证书，包里要带上其他需要信任的根）。不满足时源连 a、客户端落到 b 的连接无法转发，大约一半的客户端连接答 4404 或 503。`*.localhost` 这类名字在节点里一律解析到回环，连到的是容器自己，不能用作节点间地址。
+- **前提（绕回代理）**：节点表里每个节点的 `/x/v1` 地址缺省是 `wss://<节点>.edge.<域>/x/v1`（由 `RELAY_TUNNEL_URL` 换路径得到），别的节点按这个地址经反向代理连回来。所以每个节点容器都要：能解析 `<节点>.edge.<域>`（解析到代理的地址，不是容器自己）、能连到代理的 443（宿主或网络要允许这种绕回连接）、信任代理的证书（节点镜像只带系统根证书；自建 CA 时挂一个含该 CA 的证书包进节点并设 `SSL_CERT_FILE` 指向它；它只替换默认的证书包文件，`/etc/ssl/certs` 目录仍会读取，镜像自带的系统根照样生效）。不满足时源连 a、客户端落到 b 的连接无法转发，大约一半的客户端连接答 4404 或 503。`*.localhost` 这类名字在节点里一律解析到回环，连到的是容器自己，不能用作节点间地址。
 - **排查**：节点日志有「连不上对端节点，通道不转发」就是这一步失败；在一个节点的网络里试连另一个节点（节点镜像没有 shell，用临时容器：`docker run --rm --network armadra-saas_edge curlimages/curl -sv -H 'Connection: Upgrade' -H 'Upgrade: websocket' https://b.edge.<域>/x/v1`，自建 CA 时挂进 CA 并加 `--cacert`）：报解析失败是名字没解析到代理，报证书错误是不信任代理的证书，连到了却超时或被拒是代理不接绕回连接；答 401（没带节点令牌）就说明链路通。再看 `relay:nodes` 里各节点的地址是否正确、节点令牌是否已签（`secrets/node_token_*` 非空）且未撤销。
-- **走内部网络**：`RELAY_INTERNODE_URL` 可把 `/x/v1` 地址改成 edge 网络里的直连地址（如 `ws://relay-a:8443/x/v1`），不再绕回代理，但目前节点只监听明文，直连只能是 `ws://`，要同时设 `RELAY_ALLOW_INSECURE_TUNNEL=1`；这个开关只用于开发与本机测试，节点令牌会以明文在网络里传，生产不要用。
+- **走内部网络**：`RELAY_INTERNODE_URL` 可把 `/x/v1` 地址改成 edge 网络里的直连地址（如 `ws://relay-a:8443/x/v1`），不再绕回代理，但目前节点只监听明文，直连只能是 `ws://`。每个节点各设自己的地址（`relay-a` 设 `ws://relay-a:8443/x/v1`，`relay-b` 设 `ws://relay-b:8443/x/v1`），并且所有节点都要设 `RELAY_ALLOW_INSECURE_TUNNEL=1`（连出的一端靠它接受对端的 `ws://` 地址，只改一个节点会报「对端的 /x/v1 地址不是 wss」）；这个开关只用于开发与本机测试，节点令牌会以明文在网络里传，生产不要用。
 - 参考 nginx 的 `relay_any`（客户端入口）不排除排空中的节点：排空节点仍会接客户端连接，再经 `/x/v1` 转发到源所在的节点，功能正常。
 - 每个账号经节点间连接（`/x/v1`）转发的通道数受 `RELAY_FORWARDED_PER_ACCOUNT`（缺省 64）限制，计数在每个入口节点上、按账号各算各的，不是全集群合计，超出的新通道答 4429 `limit_reached`；链路上的 4096 个流位各租户共用，没有这个上限一个账号就能占满。本地通道不受它限制。
 - 指标：`relay_forward_account_refused_total`（计数器，因账号转发名额满而拒绝的通道数）与 `relay_internode_unwritten_bytes`（仪表，入口节点出向连接上还没写出的转发字节：挂着等信用的加已排队没写进内核的）。建议规则：`relay_internode_unwritten_bytes > 64 * 1024 * 1024` 持续 5 分钟就告警（对端或链路慢，或某个租户在占住链路）；`increase(relay_forward_account_refused_total[10m]) > 0` 作提示，反复出现时看是哪个账号、是否该调高上限。
