@@ -184,7 +184,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	for name, handler := range accounts.New(accounts.Options{
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer, Events: publisher, Stream: stream,
 		Unknown: lockouts, LoginGuard: lockouts.Guard, AppOrigin: cfg.AppOrigin,
-		MFA: &admin.RedisChallenges{Client: redisClient}, Wrapper: db.Wrapper(),
+		MFA: &admin.RedisChallenges{Client: redisClient}, Wrapper: db.Wrapper(), Guests: policy, Hook: deps.GrantsHook,
 	}).Handlers() {
 		handlers[name] = handler
 	}
@@ -205,7 +205,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 		handlers[name] = handler
 	}
 	hostService := hosts.New(hosts.Options{
-		Core: coreCtx, Store: saasStore, Limits: limits, Relay: durable, Directory: policy,
+		Core: coreCtx, Store: saasStore, Limits: limits, Relay: durable, Directory: policy, Guests: policy,
 		RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
 	})
 	for name, handler := range hostService.Handlers() {

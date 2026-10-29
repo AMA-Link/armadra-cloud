@@ -338,17 +338,11 @@ func (s *Service) admit(ctx context.Context, link store.LinkRecord, _ store.Sour
 	if err := guestHostState(space); err != nil {
 		return err
 	}
-	if !hosts.GuestsAllowed(saas.Host{Settings: space.Settings}) {
+	if !grants.GuestsAllowedIn(space) {
 		return core.Fail(gen.ErrLinkInvalid)
 	}
-	if space.TeamID != "" {
-		settings := teamSettings(space)
-		if !settings.AllowGuests {
-			return core.Fail(gen.ErrLinkInvalid)
-		}
-		if !settings.AllowAnonymousLinks && accountID == "" {
-			return core.Fail(gen.ErrAnonymousLinksDisabled)
-		}
+	if space.TeamID != "" && !teamSettings(space).AllowAnonymousLinks && accountID == "" {
+		return core.Fail(gen.ErrAnonymousLinksDisabled)
 	}
 	return nil
 }

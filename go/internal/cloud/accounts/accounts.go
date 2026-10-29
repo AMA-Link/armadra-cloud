@@ -50,6 +50,11 @@ type Options struct {
 	// security.deviceDeny（设计 §4.3）。返回错误会回滚这次决定。
 	// 外部副作用（发邮件、推事件、Redis）一律经 tx.AfterCommit，不能在钩子里直接做：事务可能回滚或重试。
 	OnDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
+	// Guests 判定链接访客（guest:<linkId>:… 主体）此刻是否仍站得住（auth.refresh 用）；生产装配传 grants.Policy。
+	// nil = 访客的刷新一律答 session_revoked。
+	Guests core.GuestHosts
+	// Hook 给测试在访客刷新的两个交错点停住（"refresh.checked"：核过访客、轮换之前；"refresh.rotated"：已轮换、复核之前）。生产不设。
+	Hook func(stage string)
 }
 
 // Service 是账号服务。
@@ -71,6 +76,9 @@ type Service struct {
 
 	appOrigin        string
 	onDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
+
+	guests core.GuestHosts
+	hook   func(stage string)
 }
 
 // New 建账号服务。
@@ -78,7 +86,7 @@ func New(options Options) *Service {
 	s := &Service{
 		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits, mail: options.Mail, events: options.Events,
 		appOrigin: strings.TrimRight(options.AppOrigin, "/"), onDeviceDecision: options.OnDeviceDecision,
-		mfa: options.MFA, wrapper: options.Wrapper,
+		mfa: options.MFA, wrapper: options.Wrapper, guests: options.Guests, hook: options.Hook,
 	}
 	if s.onDeviceDecision == nil {
 		s.onDeviceDecision = s.auditDeviceDecision
@@ -118,12 +126,15 @@ type sessionResult struct {
 
 // respond 把设备换成会话答复：Bearer 传输带 refreshToken；Cookie 传输不带，改写两枚 Cookie
 // （访问令牌仍在体里，但只认从 Cookie 来：对 cookie 设备放进 Authorization 会被拒），并带 csrfToken。
+// account 为 nil 是链接访客：会话里的账号是 core 给的访客主体与显示名（与 links.accept 的 guestSession 同形）。
 func (s *Service) respond(ctx context.Context, call *api.Call, device store.DeviceRecord, refreshToken string, account *saas.Account) (sessionResult, error) {
 	session, err := core.SessionFor(ctx, s.c, device, refreshToken)
 	if err != nil {
 		return sessionResult{}, err
 	}
-	session.Account = accountInfo(account)
+	if account != nil {
+		session.Account = accountInfo(account)
+	}
 	if core.TransportOf(device) != core.TransportCookie {
 		return sessionResult{Session: session}, nil
 	}

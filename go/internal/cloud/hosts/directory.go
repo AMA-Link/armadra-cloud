@@ -224,8 +224,58 @@ func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 	return map[string]any{"sources": out, "nextCursor": next}, nil
 }
 
-// meSources 是 me.sources：调用者能看到的全部未撤销的主机（不分页）。
+// guestSummaryOut 是链接访客看到的 sourceSummary：只有连上那台主机要用的字段，可选的 ownerName、space、tags 都不报
+// （不暴露主人、团队与主机标签；缺省 space = 个人空间，与 personal 的访客同形）。
+type guestSummaryOut struct {
+	SourceID     string `json:"sourceId"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Online       bool   `json:"online"`
+	LastSeenAtMs *int64 `json:"lastSeenAtMs"`
+	Owner        bool   `json:"owner"`
+	Via          string `json:"via"`
+	RelayOrigin  string `json:"relayOrigin"`
+	CoreVersion  string `json:"coreVersion"`
+}
+
+// guestSources 是链接访客的 me.sources：只有链接指向的那一台；访客已站不住（链接撤销、主机撤销、团队停用或在恢复期、
+// 关了 guest）答空列表，与 personal 的访客一致。
+func (s *Service) guestSources(ctx context.Context, caller core.Caller) (any, error) {
+	if s.guests == nil {
+		return nil, core.Fail(gen.ErrForbidden)
+	}
+	source, err := s.guests.GuestHost(ctx, caller)
+	if err != nil {
+		if _, coded := core.CodeOf(err); coded {
+			return map[string]any{"sources": []guestSummaryOut{}}, nil
+		}
+		return nil, err
+	}
+	coreVersion, online, err := s.relay.Route(ctx, source.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	out := guestSummaryOut{
+		SourceID: source.SourceID, Name: source.Name, Kind: source.Kind, Online: online, LastSeenAtMs: source.LastSeenAtMs,
+		Owner: false, Via: "link", RelayOrigin: s.c.RelayOrigin(source.SourceID), CoreVersion: source.CoreVersion,
+	}
+	if online {
+		now := s.nowMs()
+		out.LastSeenAtMs = &now
+		out.CoreVersion = coreVersion
+	}
+	return map[string]any{"sources": []guestSummaryOut{out}}, nil
+}
+
+// meSources 是 me.sources：调用者能看到的全部未撤销的主机（不分页）；链接访客只有链接指向的那一台（guestSources）。
 func (s *Service) meSources(ctx context.Context, call *api.Call) (any, error) {
+	caller, err := call.Caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if caller.Role == core.RoleGuest {
+		return s.guestSources(ctx, caller)
+	}
 	account, err := s.me(ctx, call)
 	if err != nil {
 		return nil, err

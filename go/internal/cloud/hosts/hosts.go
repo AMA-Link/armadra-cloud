@@ -45,6 +45,9 @@ type Options struct {
 	// RequireEmailVerified 为真时未验证邮箱的账号不能要注册令牌（设计 §4.3）。
 	RequireEmailVerified bool
 	Log                  *obs.Logger
+	// Guests 答链接访客（guest:<linkId>:… 主体）此刻仍站得住时链接指向的主机（me.sources 用）；生产装配传 grants.Policy。
+	// nil = 访客调 me.sources 答 forbidden。
+	Guests core.GuestHosts
 }
 
 // Service 是主机服务。
@@ -57,6 +60,7 @@ type Service struct {
 	sources  *core.Sources
 	verified bool
 	log      *obs.Logger
+	guests   core.GuestHosts
 }
 
 // New 建主机服务。
@@ -71,7 +75,7 @@ func New(options Options) *Service {
 	}
 	return &Service{
 		c: options.Core, store: options.Store, limits: options.Limits, relay: options.Relay, dir: dir,
-		sources: core.NewSources(options.Core), verified: options.RequireEmailVerified, log: log,
+		sources: core.NewSources(options.Core), verified: options.RequireEmailVerified, log: log, guests: options.Guests,
 	}
 }
 
