@@ -12,6 +12,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
+	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 )
 
 // ---- 辅助 ----
@@ -345,6 +346,7 @@ func TestAssertionClaimsAndIndex(t *testing.T) {
 }
 
 // 版本门：取在线隧道上报的版本，不在线才用登记时的；团队 0.10.0，个人空间访客 0.11.0，所有者本人不受限。
+// 不够门槛答 403 source_core_outdated（与访问被收回的 source_access_denied 分开），details 是 { coreVersion, minVersion }。
 func TestAssertionVersionGate(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, rigOptions{})
@@ -360,14 +362,14 @@ func TestAssertionVersionGate(t *testing.T) {
 	r.expect(r.assertion(owner, hTeam.id), 200, "")
 	r.expect(r.assertion(friend, hGuest.id), 200, "")
 	// role-only 的门槛是 0.11.0：登记 0.10.5 的访客拿不到；所有者拿得到。
-	r.expect(r.assertion(friend, hOld.id), 403, "source_access_denied")
+	r.expectOutdated(r.assertion(friend, hOld.id), "0.10.5", gen.MinCoreVersionRoleOnlyAssertion)
 	r.expect(r.assertion(owner, hOld.id), 200, "")
 
 	// 在线时取隧道上报的版本：旧 core 连上来就不再签带 team 的断言 / 只带 role 的断言。
 	r.run.Relay.SetRoute(hTeam.id, "0.9.9")
 	r.run.Relay.SetRoute(hGuest.id, "0.10.9")
-	r.expect(r.assertion(owner, hTeam.id), 403, "source_access_denied")
-	r.expect(r.assertion(friend, hGuest.id), 403, "source_access_denied")
+	r.expectOutdated(r.assertion(owner, hTeam.id), "0.9.9", gen.MinCoreVersionTeamAssertion)
+	r.expectOutdated(r.assertion(friend, hGuest.id), "0.10.9", gen.MinCoreVersionRoleOnlyAssertion)
 	r.expect(r.assertion(owner, hGuest.id), 200, "") // 所有者不受门限
 	// 反过来：登记时低、在线时高，放行。
 	r.run.Relay.SetRoute(hOld.id, "0.11.0")
@@ -376,10 +378,20 @@ func TestAssertionVersionGate(t *testing.T) {
 	r.expect(r.assertion(owner, hTeam.id), 200, "")
 	// 解析不了的版本不放行（不签降级断言）。
 	r.run.Relay.SetRoute(hTeam.id, "dev")
-	r.expect(r.assertion(owner, hTeam.id), 403, "source_access_denied")
+	r.expectOutdated(r.assertion(owner, hTeam.id), "dev", gen.MinCoreVersionTeamAssertion)
 	// 下线后回到登记版本。
 	r.run.Relay.SetRoute(hTeam.id, "")
 	r.expect(r.assertion(owner, hTeam.id), 200, "")
+}
+
+// expectOutdated：版本门的答复是 403 source_core_outdated，details 带门槛按的版本与最低版本。
+func (r *rig) expectOutdated(res response, coreVersion, minVersion string) {
+	r.t.Helper()
+	r.expect(res, 403, "source_core_outdated")
+	details, _ := res.json["details"].(map[string]any)
+	if details["coreVersion"] != coreVersion || details["minVersion"] != minVersion {
+		r.t.Fatalf("版本门的 details：%s", res.body)
+	}
 }
 
 // 团队停用 team_suspended；团队删除 / 外人 / 跨团队拿不到；主机撤销 410；事故开关 503；限流 429。

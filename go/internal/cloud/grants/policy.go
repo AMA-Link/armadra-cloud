@@ -237,6 +237,7 @@ func (p *Policy) intent(ctx context.Context, accountID string, source store.Sour
 // versionGate 是版本门（契约 §30、设计 §4.6 步骤 5）：取在线隧道上报的 coreVersion，不在线才用登记时的。
 // 团队主机要求不低于 MIN_CORE_VERSION_TEAM_ASSERTION；个人空间主机上的访客（来路只有 guest 授予）要求不低于
 // MIN_CORE_VERSION_ROLE_ONLY_ASSERTION；所有者本人访问个人空间主机不受门限。解析不了的版本不放行。
+// 不够门槛答 403 source_core_outdated，details 是 { coreVersion, minVersion }。
 func (p *Policy) versionGate(ctx context.Context, source store.SourceRecord, basis saas.AccessBasis, eff Effective) error {
 	var min string
 	switch {
@@ -256,7 +257,8 @@ func (p *Policy) versionGate(ctx context.Context, source store.SourceRecord, bas
 		version = online
 	}
 	if !hosts.AtLeast(version, min) {
-		return core.Fail(gen.ErrSourceAccessDenied)
+		// 独立的码（0.11.0 起）：客户端据此提示「主机版本太旧」，不与访问被收回混同。
+		return core.FailWith(gen.ErrSourceCoreOutdated, map[string]any{"coreVersion": version, "minVersion": min})
 	}
 	return nil
 }
