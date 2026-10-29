@@ -245,7 +245,9 @@ func (s *Service) refresh(ctx context.Context, call *api.Call) (any, error) {
 		if (core.TransportOf(*device) == core.TransportCookie) != viaCookie || core.ScopeOf(*device) != wantScope {
 			return nil, core.Fail(gen.ErrSessionRevoked)
 		}
-		if isGuest(*device) {
+		// 访客的轮换前核对只在令牌是这台设备当前的刷新令牌时做（定时安全比较）：拿着错的或旧的令牌来的，
+		// 不替它查访客状态，直接交给 core.Refresh——旧令牌重放照样撤整台设备，不会被「站不住」提前挡掉。
+		if isGuest(*device) && core.SameHex(core.RefreshHash(token), device.RefreshHash) {
 			if err := s.guestStanding(ctx, *device); err != nil {
 				return nil, err
 			}

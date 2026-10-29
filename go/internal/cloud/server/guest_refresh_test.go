@@ -276,3 +276,28 @@ func TestGuestRefreshRejectsCookieTransport(t *testing.T) {
 		t.Fatalf("Bearer 传输照常刷新、不下发 Cookie：%s", res.body)
 	}
 }
+
+// 站不住时旧令牌重放仍按重放处理：轮换前的访客核对只对当前令牌做，旧令牌直接交给 core，撤整台设备
+// （团队恢复之后新令牌也续不上）。
+func TestGuestRefreshReplayWhileNotStanding(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner := r.verified()
+	team := r.seedTeam("gr-replay", map[string]string{owner.accountID: "owner"})
+	r.expect(r.do("PATCH", teamPath(team, "settings"), map[string]any{"allowAnonymousLinks": true}, owner.bearer()), 200, "")
+	h := r.addHost(owner, teamSpace(team), "0.11.0")
+	link := r.mustLink(owner, h.id, nil)
+	res := r.acceptLink(link, nil)
+	r.expect(res, 200, "")
+	old := r.guestOf(res)
+	res, next := r.refreshGuest(old)
+	r.expect(res, 200, "")
+
+	r.exec("UPDATE teams SET status = 'suspended' WHERE team_id = $1", team)
+	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": old.refresh}, nil), 401, "session_revoked")
+	if n := r.liveGuestDevices(link.id); n != 0 {
+		t.Fatalf("站不住时的重放也该撤设备：%d", n)
+	}
+	r.exec("UPDATE teams SET status = 'active' WHERE team_id = $1", team)
+	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": next.refresh}, nil), 401, "session_revoked")
+}
