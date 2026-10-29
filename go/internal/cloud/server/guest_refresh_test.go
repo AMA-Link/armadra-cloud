@@ -133,6 +133,8 @@ func TestGuestRefreshRevokedWhenGuestNoLongerStands(t *testing.T) {
 		apply    func(r *rig, owner session, team, sourceID, linkID string)
 		undo     func(r *rig, owner session, team, sourceID string)
 		disabled bool // 访客设备随之作废（me.sources 也进不来）
+		// guestsOff 为真时访客再要断言也答 403 source_access_denied（关 guest 的两种）。
+		guestsOff bool
 	}{
 		{name: "撤链接", disabled: true, apply: func(r *rig, owner session, _, _, linkID string) {
 			r.expect(r.do("DELETE", linkPathOf(linkID), nil, owner.bearer()), 200, "")
@@ -150,12 +152,12 @@ func TestGuestRefreshRevokedWhenGuestNoLongerStands(t *testing.T) {
 		}, undo: func(r *rig, _ session, team, _ string) {
 			r.exec("UPDATE teams SET deleted_at_ms = NULL, purge_at_ms = NULL WHERE team_id = $1", team)
 		}},
-		{name: "团队关 guest", apply: func(r *rig, owner session, team, _, _ string) {
+		{name: "团队关 guest", guestsOff: true, apply: func(r *rig, owner session, team, _, _ string) {
 			r.expect(r.do("PATCH", teamPath(team, "settings"), map[string]any{"allowGuests": false}, owner.bearer()), 200, "")
 		}, undo: func(r *rig, owner session, team, _ string) {
 			r.expect(r.do("PATCH", teamPath(team, "settings"), map[string]any{"allowGuests": true}, owner.bearer()), 200, "")
 		}},
-		{name: "主机关 guest", apply: func(r *rig, owner session, _, sourceID, _ string) {
+		{name: "主机关 guest", guestsOff: true, apply: func(r *rig, owner session, _, sourceID, _ string) {
 			r.expect(r.do("PATCH", sourcePath(sourceID), map[string]any{"settings": map[string]any{"allowGuests": false}}, owner.bearer()), 200, "")
 		}, undo: func(r *rig, owner session, _, sourceID string) {
 			r.expect(r.do("PATCH", sourcePath(sourceID), map[string]any{"settings": map[string]any{"allowGuests": true}}, owner.bearer()), 200, "")
@@ -178,6 +180,9 @@ func TestGuestRefreshRevokedWhenGuestNoLongerStands(t *testing.T) {
 
 			tc.apply(r, owner, team, h.id, link.id)
 			r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": guest.refresh}, nil), 401, "session_revoked")
+			if tc.guestsOff {
+				r.expect(r.do("POST", "/v1/sources/"+h.id+"/assertion", map[string]any{}, guest.bearer()), 403, "source_access_denied")
+			}
 			sources := r.do("GET", "/v1/me/sources", nil, guest.bearer())
 			if tc.disabled {
 				r.expect(sources, 401, "unauthenticated")

@@ -15,7 +15,8 @@ import (
 // guestAssertion 是链接访客（guest:<linkId>:… 主体）的 sources.assertion（设计 §4.7）：访客的断言走链接路径——名字、
 // link 声明与范围取自链接（core 的 personal 策略），没有团队与角色声明；同样「签 → 登记签发索引 → 再读库复核」：
 // 撤销链接（或主机、团队状态变化、访客设备失效）在库提交之后才撤索引里的令牌，所以复核看到仍有效，之后的撤销一定撤得到；
-// 复核发现已失效就撤自己签的并答错误。访客断言不受版本门限制（链接路径是旧路径）。
+// 复核发现已失效就撤自己签的并答错误。团队或主机关了 guest 答 source_access_denied（与 GuestHost 一致，#154）。
+// 访客断言不受版本门限制（链接路径是旧路径）。
 func (s *Service) guestAssertion(ctx context.Context, ip string, caller core.Caller, sourceID string, device *core.DeviceInput) (any, error) {
 	source, err := s.c.Ports.Sources.Get(ctx, s.tenant(), sourceID)
 	if err != nil {
@@ -44,6 +45,9 @@ func (s *Service) guestAssertion(ctx context.Context, ip string, caller core.Cal
 	}
 	if err := guestSpaceState(space); err != nil {
 		return nil, err
+	}
+	if !GuestsAllowedIn(space) {
+		return nil, core.Fail(gen.ErrSourceAccessDenied)
 	}
 	extra, err := s.policy.Intent(ctx, caller, *source)
 	if err != nil {
@@ -81,7 +85,7 @@ func (s *Service) guestAssertion(ctx context.Context, ip string, caller core.Cal
 	return grant, nil
 }
 
-// recheckGuest 读库复核：访客设备还活着、主机还在、链接未撤销（Access）、主机所在团队没停用也不在恢复期内。
+// recheckGuest 读库复核：访客设备还活着、主机还在、链接未撤销（Access）、主机所在团队没停用也不在恢复期内、主机与团队仍允许访客。
 func (s *Service) recheckGuest(ctx context.Context, caller core.Caller, sourceID string) error {
 	live, err := s.c.Ports.Devices.Get(ctx, s.tenant(), caller.DeviceID)
 	if err != nil {
@@ -107,7 +111,13 @@ func (s *Service) recheckGuest(ctx context.Context, caller core.Caller, sourceID
 	if err != nil {
 		return err
 	}
-	return guestSpaceState(space)
+	if err := guestSpaceState(space); err != nil {
+		return err
+	}
+	if !GuestsAllowedIn(space) {
+		return core.Fail(gen.ErrSourceAccessDenied)
+	}
+	return nil
 }
 
 // guestSpaceState：团队主机的团队在恢复期内访客进不来（source_access_denied，与账号路径一致），停用答 team_suspended；
