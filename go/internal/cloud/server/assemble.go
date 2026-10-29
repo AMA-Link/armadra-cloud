@@ -205,7 +205,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 		handlers[name] = handler
 	}
 	hostService := hosts.New(hosts.Options{
-		Core: coreCtx, Store: saasStore, Limits: limits, Relay: durable, Directory: policy,
+		Core: coreCtx, Store: saasStore, Limits: limits, Relay: durable, Directory: policy, Guests: policy,
 		RequireEmailVerified: cfg.RequireEmailVerified, Log: logger,
 	})
 	for name, handler := range hostService.Handlers() {
