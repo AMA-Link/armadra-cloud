@@ -2,13 +2,17 @@ package saas
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -194,7 +198,7 @@ func (l *links) dial(node string, call *dialCall) {
 			t.Close(protocol.CloseGoingAway, "shutdown")
 		}
 		if err != nil {
-			l.log.Warn("连不上对端节点，通道不转发", obs.Node(node), obs.Error(err))
+			l.log.Warn("连不上对端节点，通道不转发", dialFields(node, err)...)
 		}
 		close(call.done)
 		return
@@ -207,29 +211,33 @@ func (l *links) dial(node string, call *dialCall) {
 	close(call.done)
 }
 
-// connect 读节点表找对端的 /x/v1，出示节点令牌升级，建一条隧道（本节点是开流方）。
+// connect 读节点表找对端的 /x/v1，出示节点令牌升级，建一条隧道（本节点是开流方）。失败答 *dialFailure（带分类）。
 func (l *links) connect(node string) (*tunnel.Tunnel, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), linkDialTimeout)
 	defer cancel()
 	info, err := ReadNode(ctx, l.client, l.prefix, node)
 	if err != nil {
-		return nil, err
+		return nil, &dialFailure{msg: "读不到节点表", reason: dialNodeLookup, cause: err}
 	}
 	if info == nil {
-		return nil, errors.New("对端不在节点表里")
+		return nil, &dialFailure{msg: "对端不在节点表里", reason: dialNodeUnknown}
 	}
 	target := info.InternodeURL
 	if target == "" {
 		u, err := url.Parse(info.URL)
 		if err != nil {
-			return nil, errors.New("对端的隧道地址不合格式")
+			return nil, &dialFailure{msg: "对端的隧道地址不合格式", reason: dialBadURL}
 		}
 		u.Path, u.RawQuery = gen.PathInternode, ""
 		target = u.String()
 	}
+	host := ""
+	if u, err := url.Parse(target); err == nil {
+		host = u.Host
+	}
 	// 节点表里的地址同样要是 wss（开发时 RELAY_ALLOW_INSECURE_TUNNEL 才许 ws），不往明文或别的协议上送节点令牌。
 	if !wsURL(target, l.insecure) {
-		return nil, errors.New("对端的 /x/v1 地址不是 wss")
+		return nil, &dialFailure{msg: "对端的 /x/v1 地址不是 wss", reason: dialInsecureURL, host: host}
 	}
 	conn, resp, err := l.dialer.DialContext(ctx, target, http.Header{"Authorization": {"Bearer " + l.token}})
 	if resp != nil && resp.Body != nil {
@@ -237,9 +245,9 @@ func (l *links) connect(node string) (*tunnel.Tunnel, error) {
 	}
 	if err != nil {
 		if resp != nil {
-			return nil, errors.New("对端拒绝升级：" + resp.Status)
+			return nil, &dialFailure{msg: "对端拒绝升级：" + resp.Status, reason: dialRejected, status: resp.StatusCode, host: host, cause: err}
 		}
-		return nil, errors.New("连不上对端")
+		return nil, &dialFailure{msg: "连不上对端", reason: classifyDial(err), host: host, cause: err}
 	}
 	sock := tunnel.NewSocket(conn)
 	var t *tunnel.Tunnel
@@ -273,6 +281,83 @@ func (l *links) connect(node string) (*tunnel.Tunnel, error) {
 		}
 	}()
 	return t, nil
+}
+
+// 连对端失败的分类（日志的 reason 字段，取值固定）：排障时据此区分名字解析、拒绝连接、证书、对端拒绝升级等，
+// 不必记错误的 message（message 里可能带着对端给的内容）。
+const (
+	dialNodeLookup  = "node_lookup"  // 读节点表出错（Redis）
+	dialNodeUnknown = "node_unknown" // 节点表里没有这个对端
+	dialBadURL      = "bad_url"      // 节点表里的地址不合格式
+	dialInsecureURL = "insecure_url" // 地址不是 wss（没开 RELAY_ALLOW_INSECURE_TUNNEL）
+	dialDNS         = "dns"          // 名字解析失败
+	dialRefused     = "refused"      // 对端拒绝连接
+	dialReset       = "reset"        // 连接被对端重置
+	dialUnreachable = "unreachable"  // 网络或主机不可达
+	dialTimeout     = "timeout"      // 连接或握手超时
+	dialTLS         = "tls"          // 证书或 TLS 握手失败
+	dialRejected    = "rejected"     // 对端答了 HTTP 状态而不是升级（code 字段是状态码，401 是节点令牌被拒）
+	dialNetwork     = "network"      // 其余网络错误
+)
+
+// dialFailure 是连对端 /x/v1 失败：reason 是上面的分类，status 是对端拒绝升级时的 HTTP 状态，host 是节点表里
+// 对端地址的主机与端口（不含路径与 query），cause 是底层错误（日志只记它的类型）。
+type dialFailure struct {
+	msg    string
+	reason string
+	status int
+	host   string
+	cause  error
+}
+
+func (f *dialFailure) Error() string { return f.msg }
+func (f *dialFailure) Unwrap() error { return f.cause }
+
+// classifyDial 把拨号错误归到固定的分类；只看错误的类型与系统错误码，不看 message。
+func classifyDial(err error) string {
+	var (
+		dnsErr     *net.DNSError
+		verifyErr  *tls.CertificateVerificationError
+		unknownCA  x509.UnknownAuthorityError
+		hostErr    x509.HostnameError
+		invalidErr x509.CertificateInvalidError
+		alertErr   tls.AlertError
+		recordErr  tls.RecordHeaderError
+		netErr     net.Error
+	)
+	switch {
+	case errors.As(err, &dnsErr):
+		return dialDNS
+	case errors.As(err, &verifyErr), errors.As(err, &unknownCA), errors.As(err, &hostErr), errors.As(err, &invalidErr),
+		errors.As(err, &alertErr), errors.As(err, &recordErr):
+		return dialTLS
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return dialRefused
+	case errors.Is(err, syscall.ECONNRESET):
+		return dialReset
+	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH):
+		return dialUnreachable
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return dialTimeout
+	}
+	return dialNetwork
+}
+
+// dialFields 是「连不上对端节点」那一行的字段：节点、分类、拒绝升级时的状态码、对端的主机与端口、底层错误的类型。
+func dialFields(node string, err error) []obs.Field {
+	fields := []obs.Field{obs.Node(node)}
+	var f *dialFailure
+	if !errors.As(err, &f) {
+		return append(fields, obs.Error(err))
+	}
+	fields = append(fields, obs.Reason(f.reason))
+	if f.status != 0 {
+		fields = append(fields, obs.Code(f.status))
+	}
+	if f.host != "" {
+		fields = append(fields, obs.Host(f.host))
+	}
+	return append(fields, obs.Error(f.cause))
 }
 
 // close 关掉全部出向连接（下线时，边缘连接都断了之后）。
