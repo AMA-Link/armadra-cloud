@@ -60,7 +60,8 @@ type Deps struct {
 	Limiter control.Limiter
 	// Mail 换掉发信方（缺省按配置用 SMTP）；测试注入内存发信方。
 	Mail mail.Sender
-	// GrantsHook 让测试在断言签发的交错点（"signed"、"indexed"）停住，验证与并发撤销交错也不漏撤；生产不设。
+	// GrantsHook 让测试在断言签发的交错点（"signed"、"indexed"）与访客刷新的交错点（"refresh.checked"、"refresh.rotated"）停住，
+	// 验证与并发撤销交错也不漏撤；生产不设。
 	GrantsHook func(stage string)
 	// RedisHook 挂在 Redis 客户端上（测试注入故障：让命令失败）；生产不设。
 	RedisHook goredis.Hook

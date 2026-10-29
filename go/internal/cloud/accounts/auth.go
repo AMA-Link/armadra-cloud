@@ -218,6 +218,8 @@ func isNewDevice(known []store.DeviceRecord, device store.DeviceRecord, nowMs in
 
 // refresh 是 auth.refresh：刷新凭据来自请求体（Bearer）或刷新 Cookie（Cookie，要 Origin，免 CSRF）；
 // 设备的传输与范围必须和凭据来路、请求的 scope 对得上；旧令牌重放撤销整台设备。
+// 账号的会话要求账号仍可用；链接访客（guest:<linkId>:…）没有账号，改为要求访客仍站得住（guestStanding），
+// 轮换前后各核一次：轮换前站不住不动令牌，轮换后站不住（与撤链接等交错）撤掉这台访客设备，都答 session_revoked。
 func (s *Service) refresh(ctx context.Context, call *api.Call) (any, error) {
 	var in struct {
 		RefreshToken *string `json:"refreshToken"`
@@ -243,10 +245,31 @@ func (s *Service) refresh(ctx context.Context, call *api.Call) (any, error) {
 		if (core.TransportOf(*device) == core.TransportCookie) != viaCookie || core.ScopeOf(*device) != wantScope {
 			return nil, core.Fail(gen.ErrSessionRevoked)
 		}
+		if isGuest(*device) {
+			if err := s.guestStanding(ctx, *device); err != nil {
+				return nil, err
+			}
+		}
 	}
+	s.stage("refresh.checked")
 	session, err := core.Refresh(ctx, s.c, token)
 	if err != nil {
 		return nil, err
+	}
+	refreshed, err := s.c.Ports.Devices.Get(ctx, s.tenant(), session.Device.DeviceID)
+	if err != nil || refreshed == nil {
+		return nil, core.Fail(gen.ErrSessionRevoked)
+	}
+	if isGuest(*refreshed) {
+		s.stage("refresh.rotated")
+		if err := s.guestStanding(ctx, *refreshed); err != nil {
+			// 新令牌已轮换出来却不会交出去：撤掉这台访客设备，不留一台拿不回的活设备。
+			if _, revokeErr := core.RevokeDevice(context.WithoutCancel(ctx), s.c, refreshed.DeviceID); revokeErr != nil {
+				return nil, revokeErr
+			}
+			return nil, err
+		}
+		return s.respond(ctx, call, *refreshed, session.RefreshToken, nil)
 	}
 	account, err := s.store.Read().Account(ctx, s.tenant(), session.Account.AccountID)
 	if err != nil {
@@ -255,11 +278,38 @@ func (s *Service) refresh(ctx context.Context, call *api.Call) (any, error) {
 	if account == nil || account.Status != saas.AccountActive {
 		return nil, core.Fail(gen.ErrSessionRevoked)
 	}
-	refreshed, err := s.c.Ports.Devices.Get(ctx, s.tenant(), session.Device.DeviceID)
-	if err != nil || refreshed == nil {
-		return nil, core.Fail(gen.ErrSessionRevoked)
-	}
 	return s.respond(ctx, call, *refreshed, session.RefreshToken, account)
+}
+
+// isGuest 报告设备是不是链接访客的（主体 guest:<linkId>:…；账号 id 是 UUID，不会撞上这个形状）。
+func isGuest(device store.DeviceRecord) bool {
+	_, ok := core.GuestLinkID(device.Subject)
+	return ok
+}
+
+// guestStanding 核链接访客此刻仍站得住（Options.Guests，见 grants.Policy.GuestHost）：站不住一律答 session_revoked
+// （链接被撤就是被撤，不区分原因）；库出错原样往上走。
+func (s *Service) guestStanding(ctx context.Context, device store.DeviceRecord) error {
+	if s.guests == nil {
+		return core.Fail(gen.ErrSessionRevoked)
+	}
+	caller, err := core.CallerFor(ctx, s.c, device)
+	if err != nil {
+		return err
+	}
+	if _, err := s.guests.GuestHost(ctx, caller); err != nil {
+		if _, coded := core.CodeOf(err); coded {
+			return core.Fail(gen.ErrSessionRevoked)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) stage(name string) {
+	if s.hook != nil {
+		s.hook(name)
+	}
 }
 
 // logout 是 auth.logout：撤销本设备（经撤销钩子撤已签令牌、踢人）。Cookie 会话在 Origin 通过之后无论成败都清掉该范围的
