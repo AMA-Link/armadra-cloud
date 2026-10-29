@@ -27,11 +27,14 @@ func IsAppRoute(path string) bool {
 
 // ConsoleCSP 是控制台页面的 CSP（SaaS 实施设计 §5.3）；relayDomain 是源地址 `<sourceId>.src.<域>` 的域。
 func ConsoleCSP(relayDomain string) string {
-	// style-src 'unsafe-inline'：0.10.0 的控制台页面（开屏）有内联样式，实测不放行会被拦；图片、字体与 worker 没发现
-	// 要放行的来源（构建产物里没有 data: 字体与图片、控制台代码里没有 worker），沿用 default-src 'self'。
+	// style-src 'unsafe-inline'：0.10.0 的控制台页面（开屏）有内联样式，实测不放行会被拦。
+	// /h/ 打开主机（SaaS 主机打开设计 §5.4）：经中继取回的主机图片、音视频与 Mermaid 预览是 blob:（图表另有 data:），
+	// PDF 在控制台来源上只给下载、不进框架，frame-src 不放行 blob:；页面装了 Trusted Types 策略 armadra / armadra-sanitize / default，Mermaid 自带的净化器建 dompurify。
 	return "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://*.src." + relayDomain + " " + TurnstileOrigin +
 		"; script-src 'self' " + TurnstileOrigin + "; frame-src " + TurnstileOrigin +
-		"; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
+		"; img-src 'self' blob: data:; media-src 'self' blob:" +
+		"; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'" +
+		"; require-trusted-types-for 'script'; trusted-types armadra armadra-sanitize default dompurify"
 }
 
 // HandleApp 只认 GET / HEAD：页面路由回落 index.html，根目录里真实存在的文件（资源）原样给，
