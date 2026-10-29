@@ -7,6 +7,7 @@ import {
   errorStatus,
   isErrorCode,
   limitReachedDetailsSchema,
+  sourceCoreOutdatedDetailsSchema,
   teamHostsOnlineDetailsSchema,
   QUOTAS,
   wireErrorSchema,
@@ -69,5 +70,22 @@ it("limit_reached 的 details 是 { quota, used, limit }，quota 取固定枚举
   });
   expect(
     teamHostsOnlineDetailsSchema.safeParse({ onlineHosts: 0 }).success,
+  ).toBe(false);
+  // 版本门（0.11.0 起）：独立的码，不再与访问被收回同答 source_access_denied。
+  expect(errorStatus("source_core_outdated")).toBe(403);
+  expect(
+    sourceCoreOutdatedDetailsSchema.parse({
+      coreVersion: "0.9.9",
+      minVersion: "0.10.0",
+    }),
+  ).toEqual({ coreVersion: "0.9.9", minVersion: "0.10.0" });
+  expect(
+    sourceCoreOutdatedDetailsSchema.safeParse({
+      coreVersion: "",
+      minVersion: "0.11.0",
+    }).success,
+  ).toBe(true);
+  expect(
+    sourceCoreOutdatedDetailsSchema.safeParse({ coreVersion: "0.9.9" }).success,
   ).toBe(false);
 });

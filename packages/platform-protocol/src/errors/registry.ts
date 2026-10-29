@@ -42,6 +42,11 @@ export const ERRORS = {
   source_offline: { status: 503 },
   source_access_denied: { status: 403 },
   protocol_unsupported: { status: 426 },
+  /**
+   * 主机的 core 版本低于控制面签断言的门槛（版本门，0.11.0 起，只加不改；以前与访问被收回同答
+   * `source_access_denied`）；`details` 是 `{ coreVersion, minVersion }`。
+   */
+  source_core_outdated: { status: 403 },
   // 链接 / 组织
   link_invalid: { status: 404 },
   link_expired: { status: 410 },

@@ -43,6 +43,7 @@ export type {
   ErrorCode,
   LimitReachedDetails,
   Quota,
+  SourceCoreOutdatedDetails,
   TeamHostsOnlineDetails,
   WireError,
 } from "./errors/index.ts";

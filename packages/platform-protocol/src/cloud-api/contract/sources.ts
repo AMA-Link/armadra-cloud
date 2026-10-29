@@ -254,6 +254,7 @@ export const sources = {
         "source_revoked",
         "rate_limited",
         "team_suspended",
+        "source_core_outdated",
       ),
     )
     .input(

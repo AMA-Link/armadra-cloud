@@ -408,6 +408,12 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
       "team_hosts_online",
     );
   });
+
+  it("0.11.0 只加不改：sources.assertion 的版本门答 source_core_outdated", () => {
+    const codes = byKey.get("sources.assertion")?.errorCodes;
+    expect(codes).toContain("source_core_outdated");
+    expect(codes).toContain("source_access_denied");
+  });
 });
 
 describe("me.stream 事件", () => {
