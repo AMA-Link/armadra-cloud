@@ -4,7 +4,9 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 )
@@ -503,6 +505,67 @@ func TestLinkGuestAssertionRacesRevoke(t *testing.T) {
 			}
 			if n := r.guestIssued(link.id); n != 0 {
 				t.Fatalf("索引里还有 %d 枚", n)
+			}
+		})
+	}
+}
+
+// 访客断言的复核看 allowGuests：停在「索引已登记、复核之前」时关掉主机（或团队）的 allowGuests，答 403
+// source_access_denied，这次自己签的两枚令牌都已撤（索引里只剩接受时签的两枚）；关 guest 不撤接受时的令牌。
+func TestLinkGuestAssertionRacesGuestsOff(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []string{"host", "team"} {
+		t.Run(scope, func(t *testing.T) {
+			t.Parallel()
+			g := newGate("indexed")
+			// 接受也会走到 indexed：接受完再上闸，只停访客自己要的那次断言。
+			var armed atomic.Bool
+			r := newRig(t, rigOptions{grantsHook: func(stage string) {
+				if armed.Load() {
+					g.hook(stage)
+				}
+			}})
+			owner := r.verified()
+			team := r.seedTeam("ga-off-"+scope, map[string]string{owner.accountID: "owner"})
+			r.expect(r.do("PATCH", teamPath(team, "settings"), map[string]any{"allowAnonymousLinks": true}, owner.bearer()), 200, "")
+			h := r.addHost(owner, teamSpace(team), "0.11.0")
+			link := r.mustLink(owner, h.id, nil)
+			res := r.acceptLink(link, nil)
+			r.expect(res, 200, "")
+			guest := r.guestOfAccept(res)
+			if n := r.guestIssued(link.id); n != 2 {
+				t.Fatalf("接受时签的两枚应在索引里：%d", n)
+			}
+
+			armed.Store(true)
+			result := make(chan response, 1)
+			go func() { result <- r.assertion(guest, h.id) }()
+			select {
+			case <-g.reached:
+			case res := <-result:
+				t.Fatalf("断言没停在 indexed：%d %s", res.status, res.body)
+			case <-time.After(30 * time.Second):
+				t.Fatal("断言没走到 indexed")
+			}
+			if scope == "host" {
+				r.expect(r.do("PATCH", sourcePath(h.id), map[string]any{"settings": map[string]any{"allowGuests": false}}, owner.bearer()), 200, "")
+			} else {
+				r.expect(r.do("PATCH", teamPath(team, "settings"), map[string]any{"allowGuests": false}, owner.bearer()), 200, "")
+			}
+			close(g.resume)
+			r.expect(<-result, 403, "source_access_denied")
+
+			jtis := r.revokedJTIs()
+			if len(jtis) != 2 {
+				t.Fatalf("这次签出的两枚令牌都该撤：%v", jtis)
+			}
+			for _, jti := range jtis {
+				if !r.run.Relay.IsRevoked(jti) {
+					t.Fatalf("内存撤销表漏了 %s", jti)
+				}
+			}
+			if n := r.guestIssued(link.id); n != 2 {
+				t.Fatalf("索引里只该剩接受时签的两枚：%d", n)
 			}
 		})
 	}
