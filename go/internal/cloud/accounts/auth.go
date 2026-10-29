@@ -219,7 +219,8 @@ func isNewDevice(known []store.DeviceRecord, device store.DeviceRecord, nowMs in
 // refresh 是 auth.refresh：刷新凭据来自请求体（Bearer）或刷新 Cookie（Cookie，要 Origin，免 CSRF）；
 // 设备的传输与范围必须和凭据来路、请求的 scope 对得上；旧令牌重放撤销整台设备。
 // 账号的会话要求账号仍可用；链接访客（guest:<linkId>:…）没有账号，改为要求访客仍站得住（guestStanding），
-// 轮换前后各核一次：轮换前站不住不动令牌，轮换后站不住（与撤链接等交错）撤掉这台访客设备，都答 session_revoked。
+// 轮换前后各核一次：轮换前站不住不动令牌，轮换后站不住（与撤链接等交错）撤掉这台访客设备，都答 session_revoked；
+// 设备本身已过期的先按过期答 session_expired。
 func (s *Service) refresh(ctx context.Context, call *api.Call) (any, error) {
 	var in struct {
 		RefreshToken *string `json:"refreshToken"`
@@ -247,7 +248,8 @@ func (s *Service) refresh(ctx context.Context, call *api.Call) (any, error) {
 		}
 		// 访客的轮换前核对只在令牌是这台设备当前的刷新令牌时做（定时安全比较）：拿着错的或旧的令牌来的，
 		// 不替它查访客状态，直接交给 core.Refresh——旧令牌重放照样撤整台设备，不会被「站不住」提前挡掉。
-		if isGuest(*device) && core.SameHex(core.RefreshHash(token), device.RefreshHash) {
+		// 设备已过期或已撤销同样不查访客状态，交给 core.Refresh 答 session_expired / session_revoked，与账号会话一致。
+		if isGuest(*device) && core.IsLiveDevice(*device, s.nowMs()) && core.SameHex(core.RefreshHash(token), device.RefreshHash) {
 			if err := s.guestStanding(ctx, *device); err != nil {
 				return nil, err
 			}

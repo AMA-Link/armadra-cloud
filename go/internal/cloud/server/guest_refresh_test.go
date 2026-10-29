@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -300,4 +301,37 @@ func TestGuestRefreshReplayWhileNotStanding(t *testing.T) {
 	}
 	r.exec("UPDATE teams SET status = 'active' WHERE team_id = $1", team)
 	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": next.refresh}, nil), 401, "session_revoked")
+}
+
+// 设备已过期时先按过期答 session_expired，访客站不住（团队停用）也不改答 session_revoked；设备没撤销，
+// 主体仍是同一个访客（与账号会话的过期一致，客户端据此提示重新进链接而不是「已被收回」）。
+func TestGuestRefreshExpiredDeviceAnswersExpired(t *testing.T) {
+	t.Parallel()
+	for _, standing := range []bool{true, false} {
+		name := "站得住"
+		if !standing {
+			name = "站不住"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, rigOptions{})
+			owner := r.verified()
+			team := r.seedTeam("gr-exp-"+strconv.FormatBool(standing), map[string]string{owner.accountID: "owner"})
+			r.expect(r.do("PATCH", teamPath(team, "settings"), map[string]any{"allowAnonymousLinks": true}, owner.bearer()), 200, "")
+			h := r.addHost(owner, teamSpace(team), "0.11.0")
+			link := r.mustLink(owner, h.id, nil)
+			res := r.acceptLink(link, nil)
+			r.expect(res, 200, "")
+			guest := r.guestOf(res)
+
+			if !standing {
+				r.exec("UPDATE teams SET status = 'suspended' WHERE team_id = $1", team)
+			}
+			r.exec("UPDATE devices SET expires_at_ms = $1 WHERE device_id = $2", r.clock.Ms()-1, guest.deviceID)
+			r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{"refreshToken": guest.refresh}, nil), 401, "session_expired")
+			if n := r.queryInt("SELECT count(*)::int FROM devices WHERE device_id = $1 AND revoked_at_ms IS NULL", guest.deviceID); n != 1 {
+				t.Fatalf("过期不该撤设备：%d", n)
+			}
+		})
+	}
 }
