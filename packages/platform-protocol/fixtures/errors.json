@@ -98,6 +98,9 @@
   "protocol_unsupported": {
     "status": 426
   },
+  "source_core_outdated": {
+    "status": 403
+  },
   "link_invalid": {
     "status": 404
   },

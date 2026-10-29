@@ -40,6 +40,7 @@ const (
 	ErrSourceOffline            ErrorCode = "source_offline"
 	ErrSourceAccessDenied       ErrorCode = "source_access_denied"
 	ErrProtocolUnsupported      ErrorCode = "protocol_unsupported"
+	ErrSourceCoreOutdated       ErrorCode = "source_core_outdated"
 	ErrLinkInvalid              ErrorCode = "link_invalid"
 	ErrLinkExpired              ErrorCode = "link_expired"
 	ErrLinkExhausted            ErrorCode = "link_exhausted"
@@ -126,6 +127,7 @@ var ErrorCodes = []ErrorCode{
 	ErrSourceOffline,
 	ErrSourceAccessDenied,
 	ErrProtocolUnsupported,
+	ErrSourceCoreOutdated,
 	ErrLinkInvalid,
 	ErrLinkExpired,
 	ErrLinkExhausted,
@@ -212,6 +214,7 @@ var errorStatus = map[ErrorCode]int{
 	ErrSourceOffline:            503,
 	ErrSourceAccessDenied:       403,
 	ErrProtocolUnsupported:      426,
+	ErrSourceCoreOutdated:       403,
 	ErrLinkInvalid:              404,
 	ErrLinkExpired:              410,
 	ErrLinkExhausted:            410,

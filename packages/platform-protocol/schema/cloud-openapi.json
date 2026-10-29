@@ -7911,7 +7911,8 @@
                       "type": "string",
                       "enum": [
                         "source_access_denied",
-                        "team_suspended"
+                        "team_suspended",
+                        "source_core_outdated"
                       ]
                     },
                     "message": {

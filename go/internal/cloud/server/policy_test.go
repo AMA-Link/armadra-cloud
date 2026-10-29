@@ -166,7 +166,7 @@ func TestPolicyIntentAndAccess(t *testing.T) {
 	r.exec("UPDATE teams SET status = 'active' WHERE team_id = $1", team)
 	// 版本门：在线版本低于 0.10.0 不签。
 	r.run.Relay.SetRoute(h.id, "0.9.0")
-	if _, err := policy.Intent(ctx, accountCaller(admin), *source); errCode(err) != "source_access_denied" {
+	if _, err := policy.Intent(ctx, accountCaller(admin), *source); errCode(err) != "source_core_outdated" {
 		t.Fatalf("版本门：%v", err)
 	}
 	r.run.Relay.SetRoute(h.id, "")

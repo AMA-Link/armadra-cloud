@@ -32,6 +32,7 @@
   "source_offline": 503,
   "source_access_denied": 403,
   "protocol_unsupported": 426,
+  "source_core_outdated": 403,
   "link_invalid": 404,
   "link_expired": 410,
   "link_exhausted": 410,

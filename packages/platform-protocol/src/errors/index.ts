@@ -61,3 +61,15 @@ export const teamHostsOnlineDetailsSchema = z.object({
 export type TeamHostsOnlineDetails = z.infer<
   typeof teamHostsOnlineDetailsSchema
 >;
+
+/**
+ * `source_core_outdated` 的 `details`（0.11.0 起）：门槛按的那台主机的 core 版本（在线时取隧道上报的，
+ * 不在线取登记时的；没上报是空串）与签这类断言要求的最低版本。
+ */
+export const sourceCoreOutdatedDetailsSchema = z.object({
+  coreVersion: z.string(),
+  minVersion: z.string().min(1),
+});
+export type SourceCoreOutdatedDetails = z.infer<
+  typeof sourceCoreOutdatedDetailsSchema
+>;
