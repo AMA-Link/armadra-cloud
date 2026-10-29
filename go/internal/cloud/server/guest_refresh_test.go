@@ -257,3 +257,22 @@ func TestGuestRefreshRacesRevoke(t *testing.T) {
 		})
 	}
 }
+
+// 跨传输：访客的会话是 Bearer 传输，把它的刷新令牌塞进刷新 Cookie 发来（带对的 Origin）答 session_revoked，
+// 令牌不轮换（之后照常用请求体刷新）；运营范围的 Cookie 同样被拒。
+func TestGuestRefreshRejectsCookieTransport(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	owner := r.verified()
+	h := r.addHost(owner, nil, "0.11.0")
+	res := r.acceptLink(r.mustLink(owner, h.id, nil), nil)
+	r.expect(res, 200, "")
+	guest := r.guestOf(res)
+	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{}, hdr("Origin", appOrigin, "Cookie", "__Host-armadra-cloud-refresh="+guest.refresh)), 401, "session_revoked")
+	r.expect(r.do("POST", "/v1/auth/refresh", map[string]any{"scope": "operator"}, hdr("Origin", appOrigin, "Cookie", "__Host-armadra-ops-refresh="+guest.refresh)), 401, "session_revoked")
+	res, next := r.refreshGuest(guest)
+	r.expect(res, 200, "")
+	if next.deviceID != guest.deviceID || len(setCookies(res)) != 0 {
+		t.Fatalf("Bearer 传输照常刷新、不下发 Cookie：%s", res.body)
+	}
+}
