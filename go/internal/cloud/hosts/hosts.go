@@ -17,7 +17,6 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
-	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/saas"
 )
 
@@ -48,12 +47,7 @@ type Options struct {
 	Log                  *obs.Logger
 	// Guests 答链接访客（guest:<linkId>:… 主体）此刻仍站得住时链接指向的主机（me.sources 用）；生产装配传 grants.Policy。
 	// nil = 访客调 me.sources 答 forbidden。
-	Guests GuestHosts
-}
-
-// GuestHosts 答链接访客此刻仍站得住时链接指向的主机；站不住答带错误码的错误。grants.Policy 实现它。
-type GuestHosts interface {
-	GuestHost(ctx context.Context, caller core.Caller) (store.SourceRecord, error)
+	Guests core.GuestHosts
 }
 
 // Service 是主机服务。
@@ -66,7 +60,7 @@ type Service struct {
 	sources  *core.Sources
 	verified bool
 	log      *obs.Logger
-	guests   GuestHosts
+	guests   core.GuestHosts
 }
 
 // New 建主机服务。

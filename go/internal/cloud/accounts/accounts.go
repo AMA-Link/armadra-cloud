@@ -52,14 +52,9 @@ type Options struct {
 	OnDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
 	// Guests 判定链接访客（guest:<linkId>:… 主体）此刻是否仍站得住（auth.refresh 用）；生产装配传 grants.Policy。
 	// nil = 访客的刷新一律答 session_revoked。
-	Guests GuestHosts
+	Guests core.GuestHosts
 	// Hook 给测试在访客刷新的两个交错点停住（"refresh.checked"：核过访客、轮换之前；"refresh.rotated"：已轮换、复核之前）。生产不设。
 	Hook func(stage string)
-}
-
-// GuestHosts 答链接访客此刻仍站得住时链接指向的主机；站不住答带错误码的错误。grants.Policy 实现它。
-type GuestHosts interface {
-	GuestHost(ctx context.Context, caller core.Caller) (store.SourceRecord, error)
 }
 
 // Service 是账号服务。
@@ -82,7 +77,7 @@ type Service struct {
 	appOrigin        string
 	onDeviceDecision func(ctx context.Context, tx saas.Tx, decision DeviceDecision) error
 
-	guests GuestHosts
+	guests core.GuestHosts
 	hook   func(stage string)
 }
 

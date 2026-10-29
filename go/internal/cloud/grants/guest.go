@@ -145,6 +145,8 @@ func GuestsAllowedIn(space *saas.HostSpace) bool {
 	return space.TeamID == "" || teams.SettingsOf(saas.Team{Settings: space.TeamSettings}).AllowGuests
 }
 
+var _ core.GuestHosts = (*Policy)(nil)
+
 // GuestHost 答链接访客此刻仍站得住时链接指向的那台主机（auth.refresh 与 me.sources 用，设计 §4.7 的 S6 实现注记）：
 // 链接未撤销且指向一台未撤销的主机（core 的 personal 策略，与访客断言的 Access 同一判断）→ 主机有空间行、团队不在恢复期
 // 也未停用（guestSpaceState，与访客断言一致）→ 主机与团队仍允许访客（GuestsAllowedIn，与 Admit 一致）。

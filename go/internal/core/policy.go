@@ -54,6 +54,12 @@ type AccessPolicy interface {
 	Watch(ctx context.Context, caller Caller) (Watcher, error)
 }
 
+// GuestHosts 答链接访客此刻仍站得住时链接指向的主机；站不住答带错误码的错误。SaaS 的访问策略实现它
+// （访客的刷新与 me.sources 用），personal 不用。
+type GuestHosts interface {
+	GuestHost(ctx context.Context, caller Caller) (store.SourceRecord, error)
+}
+
 // ManageTarget 是管理动作的对象：针对主机填 SourceID，针对链接填 LinkID（links.update / revoke），
 // 不带过滤的 links.list 两者皆空。
 type ManageTarget struct {
