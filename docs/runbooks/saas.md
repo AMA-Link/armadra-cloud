@@ -54,7 +54,7 @@
 ## 登录失败计数与 Redis 故障
 
 - 登录失败计数共享在 Redis。Redis 不可用时**失败关闭**：`auth.login` 对已注册与未注册的邮箱一律答 `503 unavailable`（带 `retryAfterMs`），**登录不可用**，不回落到各实例进程内计数（多实例下计数会分叉，可借此枚举账号）。已登录的会话与不经过登录失败计数的接口不受这条规则影响。
-- 告警：控制面的指标 `armadra_cloud_lockout_unavailable_total`（计数器，每次因 Redis 不可用而拒绝登录加一）。配 `ARMADRA_CLOUD_METRICS_LISTEN`（与 `ARMADRA_CLOUD_METRICS_TOKEN_FILE`）后在该监听的 `/metrics` 读到。建议规则：`increase(armadra_cloud_lockout_unavailable_total[5m]) > 0` 就告警（页面或值班），同时监控 `/ready` 的 `redis` 项。处置：恢复 Redis（`docker compose up -d redis`，AOF 会自己回放）；恢复后登录自动恢复，不需要重启控制面。
+- 告警：控制面的指标 `armadra_cloud_lockout_unavailable_total`（计数器，每次因 Redis 不可用而拒绝登录加一）。配 `ARMADRA_CLOUD_METRICS_LISTEN`（与 `ARMADRA_CLOUD_METRICS_TOKEN_FILE`）后在该监听的 `/metrics` 读到。建议规则：`increase(armadra_cloud_lockout_unavailable_total[5m]) > 0` 就告警（页面或值班，即下文「告警」里的 `ArmadraCloudLoginFailClosed`），同时监控 `/ready` 的 `redis` 项。处置：恢复 Redis（`docker compose up -d redis`，AOF 会自己回放）；恢复后登录自动恢复，不需要重启控制面。
 
 ## 节点间转发
 
@@ -63,7 +63,7 @@
 - **走内部网络**：`RELAY_INTERNODE_URL` 可把 `/x/v1` 地址改成 edge 网络里的直连地址（如 `ws://relay-a:8443/x/v1`），不再绕回代理，但目前节点只监听明文，直连只能是 `ws://`。每个节点各设自己的地址（`relay-a` 设 `ws://relay-a:8443/x/v1`，`relay-b` 设 `ws://relay-b:8443/x/v1`），并且所有节点都要设 `RELAY_ALLOW_INSECURE_TUNNEL=1`（连出的一端靠它接受对端的 `ws://` 地址，只改一个节点会报「对端的 /x/v1 地址不是 wss」）；这个开关只用于开发与本机测试，节点令牌会以明文在网络里传，生产不要用。
 - 参考 nginx 的 `relay_any`（客户端入口）不排除排空中的节点：排空节点仍会接客户端连接，再经 `/x/v1` 转发到源所在的节点，功能正常。
 - 每个账号经节点间连接（`/x/v1`）转发的通道数受 `RELAY_FORWARDED_PER_ACCOUNT`（缺省 64）限制，计数在每个入口节点上、按账号各算各的，不是全集群合计，超出的新通道答 4429 `limit_reached`；链路上的 4096 个流位各租户共用，没有这个上限一个账号就能占满。本地通道不受它限制。
-- 指标：`relay_forward_account_refused_total`（计数器，因账号转发名额满而拒绝的通道数）与 `relay_internode_unwritten_bytes`（仪表，入口节点出向连接上还没写出的转发字节：挂着等信用的加已排队没写进内核的）。建议规则：`relay_internode_unwritten_bytes > 64 * 1024 * 1024` 持续 5 分钟就告警（对端或链路慢，或某个租户在占住链路）；`increase(relay_forward_account_refused_total[10m]) > 0` 作提示，反复出现时看是哪个账号、是否该调高上限。
+- 指标：`relay_forward_account_refused_total`（计数器，因账号转发名额满而拒绝的通道数）与 `relay_internode_unwritten_bytes`（仪表，入口节点出向连接上还没写出的转发字节：挂着等信用的加已排队没写进内核的）。建议规则：`relay_internode_unwritten_bytes > 64 * 1024 * 1024` 持续 5 分钟就告警（对端或链路慢，或某个租户在占住链路）；`increase(relay_forward_account_refused_total[10m]) > 0` 作提示，反复出现时看是哪个账号、是否该调高上限（下文「告警」里的 `ArmadraRelayInternodeBacklog` 与 `ArmadraRelayForwardAccountCapHit`）。
 - 节点令牌撤销（`armadra-cloud nodes revoke`）经 `relay:revoked` 广播即时断开已建立的节点间连接；5 秒一次的复查留作兜底。
 
 ## 排空、下线与事故开关
@@ -72,6 +72,72 @@
 - 恢复排空的节点：目前没有「取消排空」，排空后节点一直是 `draining`，要重建这个节点的容器：`docker compose up -d --force-recreate --no-deps relay-a`（只重建 a，不连带别的服务；隧道已经排空，重建很快）；节点表里 a 回到 `draining: false`、`/ready` 为 ok 后，新的隧道与客户端连接会重新分到它上面（已在别的节点上的源不会自动迁回）。用 `SIGTERM` 停掉的节点同样用这条命令起回来。
 - 事故开关（`admin.incidentSet`）：`pauseAssertions`、`pauseRegistrations`、`rejectNewConnections`（节点拒绝新的隧道与端到端升级，在线连接保留）。
 - 停用团队（`admin.teamStatus`）：在线连接被踢，断言答 `403 team_suspended`，审计写 `actor.kind = operator` 与理由。
+
+## 告警
+
+规则文件 [`deploy/saas/prometheus/armadra-saas.rules.yml`](../../deploy/saas/prometheus/armadra-saas.rules.yml)，接运维自己的 Prometheus（本仓不带 Prometheus 与 Alertmanager）。
+
+1. 打开指标：`docker compose -f compose.yml -f compose.metrics.yml up -d`。叠加文件让控制面与两个节点在容器里监听 `:9100`，只发布到宿主的 `127.0.0.1:9101`（控制面）、`9102`（a）、`9103`（b）（端口见 `.env.example`），要 `Authorization: Bearer <secrets/metrics_token>`（`init-secrets.sh` 生成，已有部署补跑一次即可，不覆盖别的文件）。指标端口不经反向代理。之后的升级命令都要带上这两个 `-f`，否则会把指标监听关掉。
+2. 抓取（宿主上的 Prometheus；任务名要与规则里的 `up{job=…}` 一致，`instance` 写节点名，告警里看得懂）：
+
+   ```yaml
+   rule_files:
+     - /etc/prometheus/armadra-saas.rules.yml
+   scrape_configs:
+     - job_name: armadra-cloud
+       authorization:
+         { credentials_file: /etc/prometheus/armadra_metrics_token }
+       static_configs:
+         - targets: ["127.0.0.1:9101"]
+           labels: { instance: cloud }
+     - job_name: armadra-relay
+       authorization:
+         { credentials_file: /etc/prometheus/armadra_metrics_token }
+       static_configs:
+         - targets: ["127.0.0.1:9102"]
+           labels: { instance: a }
+         - targets: ["127.0.0.1:9103"]
+           labels: { instance: b }
+   ```
+
+3. 改了规则先校验：`docker run --rm -v "$PWD/prometheus:/r:ro" --entrypoint promtool prom/prometheus:v3.7.3 check rules /r/armadra-saas.rules.yml`，再让 Prometheus 重新加载。
+
+| 告警                                         | 指标与条件                                                                                                     | 级别               | 处置                                                     |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------ | -------------------------------------------------------- |
+| `ArmadraCloudDown` / `ArmadraRelayNodeDown`  | `up == 0` 持续 2 分钟                                                                                          | critical           | 容器状态、`/ready`、`relay:nodes`                        |
+| `ArmadraRelayTunnelsDropped`                 | `sum(relay_tunnels)` 比 30 分钟前少一半以上（当时至少 10 条），持续 5 分钟                                     | warning            | 握手失败、JWKS、Redis、是否有节点在排空                  |
+| `ArmadraRelayHandshakeFailures`              | `relay_handshake_total{result!="ok"}` 占比 > 50%（10 分钟至少 20 次），持续 10 分钟                            | warning            | 按 `result` 拆开看；日志「隧道握手失败」                 |
+| `ArmadraRelayHeartbeatMisses`                | 10 分钟的 `relay_heartbeat_miss_total` 增量 > 在线隧道的 20%（至少 5 条），持续 5 分钟                         | warning            | 宿主网络与负载，对照调度延迟                             |
+| `ArmadraRelayForwardFailureRate`             | `relay_routes_remote_failed_total` /（它 + `relay_routes_remote_total`）> 5%（10 分钟至少 5 次），持续 10 分钟 | critical           | 上面「节点间转发」的排查                                 |
+| `ArmadraRelayInternodeBacklog`               | `relay_internode_unwritten_bytes` > 64 MiB 持续 5 分钟                                                         | warning            | 对端负载与链路                                           |
+| `ArmadraRelayForwardAccountCapHit`           | `increase(relay_forward_account_refused_total[10m]) > 0`                                                       | info               | `RELAY_FORWARDED_PER_ACCOUNT`                            |
+| `ArmadraRelayTeamConcurrencyFailOpen`        | `increase(relay_team_concurrency_fail_open_total[5m]) > 0`                                                     | warning            | 节点到 Redis 的连接                                      |
+| `ArmadraRelaySchedLatencyHigh` / `…Critical` | `relay_sched_latency_seconds` 的 p99 > 50 ms 持续 10 分钟 / > 250 ms 持续 5 分钟                               | warning / critical | 宿主 CPU 与容器限额；严重时先排空这个节点                |
+| `ArmadraCloudLoginFailClosed`                | `increase(armadra_cloud_lockout_unavailable_total[5m]) > 0`                                                    | critical           | 上面「登录失败计数与 Redis 故障」                        |
+| `ArmadraCloudMailFailing`                    | 15 分钟内 `armadra_cloud_mail_send_failures_total` 增量 ≥ 3                                                    | warning            | 日志「邮件没发出」的错误类名；SMTP 主机、端口、口令、TLS |
+| `ArmadraCloudMailAbandoned`                  | 1 小时内 `armadra_cloud_mail_abandoned_total` 有增量                                                           | critical           | 修好 SMTP 后让用户重新触发（重发验证、重新邀请）         |
+| `ArmadraCloudMailNotConfigured`              | 1 小时内 `armadra_cloud_mail_backlog_dropped_total` 有增量                                                     | warning            | 配 SMTP 后 `up -d --no-deps cloud`                       |
+
+- 指标的含义：`relay_routes_remote_failed_total` 是路由在别的节点、却拿不到到那个节点的连接（连不上 `/x/v1` 或没配节点令牌）而答 4404 的通道；`relay_sched_latency_seconds` 是 Go 运行时的调度延迟（goroutine 就绪到开始运行，`runtime/metrics` 的 `/sched/latencies:seconds`，自进程启动累计，各桶是偏小的下界估计，没有 `_sum`）；发信的四个计数器（`armadra_cloud_mail_sent_total`、`_send_failures_total`（每次尝试计一次，作业按退避重试，最多 8 次）、`_abandoned_total`、`_backlog_dropped_total`）只有次数，不带地址与正文，每个控制面实例各计各的。
+- 阈值是 0.12 内测的起点，按实际流量调整后在这里与规则文件里同步改。
+
+## 日志保留
+
+- **容器日志**：`compose.yml` 的每个服务都用 json-file 驱动并轮转：单个文件到 `LOG_MAX_SIZE`（缺省 `20m`）换下一个，最多留 `LOG_MAX_FILE`（缺省 `5`）个，所以每个服务的日志在宿主上最多约 100 MB，按流量折算的保留时长随负载变化；改这两个值后 `docker compose up -d`（重建容器才生效，旧容器的日志随容器删掉）。`docker compose down` 或重建容器会连同它的日志一起删掉，要更长的保留就把日志转到外部的日志系统（本仓不带）。
+- **日志里有什么**：控制面与节点的日志只有白名单字段（`internal/obs`：各种 id、结果、计数、错误类名），不记流正文、终端输出、画布内容、口令与令牌明文；参考代理（nginx）的访问日志有客户端 IP、方法、路径（`$uri`，不含 query 串）与状态码，是这里唯一带客户端 IP 的日志。导出或转存日志时按个人信息处理。
+- **库里的数据保留**（控制面的定时作业负责，节点不清理）：
+
+| 数据                                  | 保留                                                                                                                     | 作业                                  |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| 团队审计                              | 按团队此刻的计划：free 7 天、pro 30 天、team 90 天、enterprise 365 天（未知计划按 free）；已清除团队的行只随整月分区删除 | `audit.retention`，每天               |
+| 账号安全日志                          | 固定 90 天                                                                                                               | `audit.retention`，每天               |
+| 审计分区                              | 整月早于 13 个月前的分区整个删除（运营动作只随它删除）；每天补建当月与后两个月                                           | `audit.retention`、`audit.partitions` |
+| 流量统计（`relay_traffic_buckets`）   | `ARMADRA_CLOUD_TRAFFIC_RETENTION_DAYS`，缺省 400 天                                                                      | `traffic.retention`，每天             |
+| 发件箱（`outbox_emails`，含收件地址） | 发出或判失败满 30 天；备份时不导出它的数据（见「备份与恢复」）                                                           | `outbox.gc`，每天                     |
+| 邮件令牌（`email_tokens`，只有哈希）  | 过期满 24 小时                                                                                                           | `emailTokens.gc`，每小时              |
+| 作业（`jobs`）                        | 完成满 7 天、失败满 30 天                                                                                                | `jobs.gc`，每天                       |
+
+- Redis 里只放可重建的状态（见「备份与恢复」），不另做保留。
 
 ## 端到端验收
 
