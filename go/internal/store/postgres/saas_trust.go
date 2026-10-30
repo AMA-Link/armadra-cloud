@@ -115,12 +115,13 @@ func (r trustRepo) LastRejected(ctx context.Context, tenantID, sourceID, deviceI
 	return &t, nil
 }
 
-func (r trustRepo) ExpireStale(ctx context.Context, tenantID, sourceID, deviceID string, nowMs int64) error {
-	_, err := r.q.Exec(ctx,
-		`UPDATE trust_requests SET state = 'expired', resolved_at_ms = $1, resolved_by = 'system'
-		 WHERE tenant_id = $2 AND source_id = $3 AND device_id = $4 AND state = 'pending' AND expires_at_ms <= $1`,
+func (r trustRepo) ExpireStale(ctx context.Context, tenantID, sourceID, deviceID string, nowMs int64) ([]string, error) {
+	return list(ctx, r.q, func(s scanner) (string, error) {
+		var id string
+		return id, s.Scan(&id)
+	}, `UPDATE trust_requests SET state = 'expired', resolved_at_ms = $1, resolved_by = 'system'
+	    WHERE tenant_id = $2 AND source_id = $3 AND device_id = $4 AND state = 'pending' AND expires_at_ms <= $1 RETURNING request_id`,
 		nowMs, tenantID, sourceID, deviceID)
-	return err
 }
 
 func (r trustRepo) Supersede(ctx context.Context, tenantID, sourceID, deviceID string, nowMs int64) ([]string, error) {

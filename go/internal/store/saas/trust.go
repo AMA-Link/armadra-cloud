@@ -78,8 +78,8 @@ type TrustRepo interface {
 	ByPending(ctx context.Context, tenantID, sourceID, pendingID string) (*TrustRequest, error)
 	// LastRejected 是 (源, 设备) 最近一次被拒绝的请求；没有答 nil。
 	LastRejected(ctx context.Context, tenantID, sourceID, deviceID string) (*TrustRequest, error)
-	// ExpireStale 把 (源, 设备) 下已过期的 pending 改成 expired（插新 pending 前同事务先做，否则它会占着部分唯一索引）。
-	ExpireStale(ctx context.Context, tenantID, sourceID, deviceID string, nowMs int64) error
+	// ExpireStale 把 (源, 设备) 下已过期的 pending 改成 expired（插新 pending 前同事务先做，否则它会占着部分唯一索引），答它们的 id（通知要用）。
+	ExpireStale(ctx context.Context, tenantID, sourceID, deviceID string, nowMs int64) ([]string, error)
 	// Supersede 把 (源, 设备) 下仍待处理的请求改成 expired（resolved_by = superseded），答它们的 id。
 	Supersede(ctx context.Context, tenantID, sourceID, deviceID string, nowMs int64) ([]string, error)
 	// Insert 插一条 pending；同 (源, 条目 id) 或同 (源, 设备) 已有 pending 答 ErrConflict。

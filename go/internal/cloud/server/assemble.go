@@ -224,7 +224,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	for name, handler := range links.New(links.Options{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger, Hook: deps.GrantsHook}).Handlers() {
 		handlers[name] = handler
 	}
-	trustService := trust.New(trust.Options{Core: coreCtx, Store: saasStore, Limits: limits, Log: logger})
+	trustService := trust.New(trust.Options{Core: coreCtx, Store: saasStore, Limits: limits, Log: logger, Events: publisher})
 	trustService.Register(runner)
 	for name, handler := range trustService.Handlers() {
 		handlers[name] = handler
