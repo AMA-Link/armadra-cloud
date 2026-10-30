@@ -85,15 +85,15 @@ func TestTrustRepo(t *testing.T) {
 
 	// 取代与过期：先过期的清掉，再把剩下的 pending 取代。
 	err = s.Tx(e.ctx, func(tx saas.Tx) error {
-		if err := tx.Trust().ExpireStale(e.ctx, saasTenant, "h1", "d1", 999); err != nil { // 还没到期
-			return err
+		if ids, err := tx.Trust().ExpireStale(e.ctx, saasTenant, "h1", "d1", 999); err != nil || len(ids) != 0 { // 还没到期
+			t.Fatalf("还没到期不该改：%v %v", ids, err)
 		}
 		got, err := tx.Trust().ByPending(e.ctx, saasTenant, "h1", "p1")
 		if err != nil || got == nil || got.State != saas.TrustPending {
 			t.Fatalf("还没到期应仍是 pending：%+v %v", got, err)
 		}
-		if err := tx.Trust().ExpireStale(e.ctx, saasTenant, "h1", "d1", 1000); err != nil {
-			return err
+		if ids, err := tx.Trust().ExpireStale(e.ctx, saasTenant, "h1", "d1", 1000); err != nil || len(ids) != 1 || ids[0] != "r1" {
+			t.Fatalf("到期应答改掉的请求：%v %v", ids, err)
 		}
 		got, _ = tx.Trust().ByPending(e.ctx, saasTenant, "h1", "p1")
 		if got.State != saas.TrustExpired || got.ResolvedBy != saas.TrustResolvedBySystem {

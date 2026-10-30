@@ -35,7 +35,7 @@ export const meStreamEventSchema = z.discriminatedUnion("type", [
     }),
     atMs: z.number().int(),
   }),
-  // 协议 1.4：SaaS 的团队事件（预留，没有发送方；cloud-api §32）。
+  // 协议 1.4：SaaS 的团队事件（cloud-api §32；accessRequested 与 planChanged 随 M2 才有发送方）。
   z.object({
     type: z.literal("memberChanged"),
     teamId: teamIdSchema,

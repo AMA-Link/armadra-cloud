@@ -3,6 +3,9 @@
 // 云端看不到也改不了背书内容、也没有校验码；这里只做两件事：把待信任请求（成员、设备名、平台、主机、过期时间）
 // 登记下来给背书人看（trust.list），以及记下背书人的拒绝（trust.reject）。主机经 sources.trustRequest 上报、
 // sources.trustResolve 回报（Authorization: Source <jws>）。
+//
+// 每次登记、批准、拒绝、过期（含作废）在事务提交之后发 me-stream 的 deviceTrustRequested / deviceTrustResolved（契约 §32），
+// 受众是这条请求的背书人——与 trust.list、trust.reject 同一个 isEndorser 判断。
 package trust
 
 import (
@@ -11,6 +14,7 @@ import (
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/grants"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/jobs"
@@ -46,6 +50,8 @@ type Options struct {
 	Store  saas.Store
 	Limits *httpx.Limits
 	Log    *obs.Logger
+	// Events 发 deviceTrustRequested / deviceTrustResolved；nil 不发（测试里不装配事件）。
+	Events *events.Publisher
 }
 
 // Service 是信任服务。
@@ -55,6 +61,7 @@ type Service struct {
 	limits  *httpx.Limits
 	sources *core.Sources
 	log     *obs.Logger
+	events  *events.Publisher
 }
 
 // New 建信任服务。
@@ -63,7 +70,7 @@ func New(options Options) *Service {
 	if log == nil {
 		log = obs.Nop()
 	}
-	return &Service{c: options.Core, store: options.Store, limits: options.Limits, sources: core.NewSources(options.Core), log: log}
+	return &Service{c: options.Core, store: options.Store, limits: options.Limits, sources: core.NewSources(options.Core), log: log, events: options.Events}
 }
 
 func (s *Service) tenant() string { return s.c.TenantID }
@@ -104,6 +111,9 @@ func (s *Service) expire(ctx context.Context, _ saas.Job) error {
 		expired, err := tx.Trust().ExpireDue(ctx, s.tenant(), nowMs)
 		if err != nil {
 			return err
+		}
+		for _, request := range expired {
+			s.resolved(tx, request.RequestID, events.TrustOutcomeExpired)
 		}
 		removed, err := tx.Trust().GC(ctx, s.tenant(), nowMs-retention.Milliseconds())
 		if err != nil {
@@ -224,11 +234,16 @@ func (s *Service) request(ctx context.Context, call *api.Call) (any, error) {
 			}
 			reopen = existing.RequestID // 冷却已过的 rejected：同一个条目 id 重新开成 pending
 		}
-		if err := tx.Trust().ExpireStale(ctx, s.tenant(), source.SourceID, in.DeviceID, nowMs); err != nil {
+		stale, err := tx.Trust().ExpireStale(ctx, s.tenant(), source.SourceID, in.DeviceID, nowMs)
+		if err != nil {
 			return err
 		}
-		if _, err := tx.Trust().Supersede(ctx, s.tenant(), source.SourceID, in.DeviceID, nowMs); err != nil {
+		superseded, err := tx.Trust().Supersede(ctx, s.tenant(), source.SourceID, in.DeviceID, nowMs)
+		if err != nil {
 			return err
+		}
+		for _, id := range append(stale, superseded...) {
+			s.resolved(tx, id, events.TrustOutcomeExpired)
 		}
 		requestID := core.NewUUID()
 		if reopen != "" {
@@ -246,6 +261,9 @@ func (s *Service) request(ctx context.Context, call *api.Call) (any, error) {
 			return err
 		}
 		out = requestOut{RequestID: requestID, Status: saas.TrustPending}
+		if s.events != nil {
+			s.events.DeviceTrustRequested(tx, requestID, source.SourceID, space.TeamID, s.endorsers(requestID))
+		}
 		return nil
 	})
 	if err != nil {
@@ -316,7 +334,11 @@ func (s *Service) resolve(ctx context.Context, call *api.Call) (any, error) {
 		if err == nil && !ok {
 			err = core.Fail(gen.ErrConflict)
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		s.resolved(tx, request.RequestID, state)
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -325,6 +347,46 @@ func (s *Service) resolve(ctx context.Context, call *api.Call) (any, error) {
 }
 
 // ---- 背书人 ----
+
+// resolved 登记一条 deviceTrustResolved（提交之后才发，受众是这条请求的背书人）。
+func (s *Service) resolved(tx saas.Tx, requestID, outcome string) {
+	if s.events != nil {
+		s.events.DeviceTrustResolved(tx, requestID, outcome, s.endorsers(requestID))
+	}
+}
+
+// endorsers 是事件的受众：提交之后这条请求的背书人。判断与 trust.list / trust.reject 是同一个 isEndorser（按每个候选人的
+// TrustView 判），不另写一套；候选人是能成为背书人的全部账号——主机所有者、团队 owner / admin 与请求者本人。
+// 请求读不到（主机已撤销、团队在恢复期、请求者已不是成员）就没有受众。
+func (s *Service) endorsers(requestID string) events.Audience {
+	return func(ctx context.Context, r saas.Reader) ([]string, error) {
+		base, err := r.TrustView(ctx, s.tenant(), requestID, "")
+		if err != nil || base == nil {
+			return nil, err
+		}
+		staff, err := r.TeamStaffIDs(ctx, s.tenant(), base.TeamID)
+		if err != nil {
+			return nil, err
+		}
+		candidates := append([]string{base.SourceOwnerID, base.AccountID}, staff...)
+		seen := map[string]bool{}
+		var out []string
+		for _, id := range candidates {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			view, err := r.TrustView(ctx, s.tenant(), requestID, id)
+			if err != nil {
+				return nil, err
+			}
+			if view != nil && isEndorser(*view, id) {
+				out = append(out, id)
+			}
+		}
+		return out, nil
+	}
+}
 
 // isEndorser 按团队设置 deviceEndorsers / memberSelfEndorse 收窄谁是背书人（契约 §31；与 PendingTrust 的 SQL 条件同义）：
 // 主机所有者（仍是 owner / admin / member）总是；团队 owner / admin 在 deviceEndorsers = owner_admin（缺省）时是；
@@ -473,6 +535,7 @@ func (s *Service) reject(ctx context.Context, call *api.Call) (any, error) {
 			}
 			return err
 		}
+		s.resolved(tx, requestID, events.TrustOutcomeRejected)
 		return audit.Write(ctx, tx, s.tenant(), nowMs, saas.AuditEntry{
 			TeamID: request.TeamID, ActorKind: saas.ActorAccount, ActorID: account.AccountID, Action: ActionReject,
 			TargetKind: "trust_request", TargetID: requestID, SourceID: request.SourceID, IPPrefix: audit.IPPrefix(call.IP),

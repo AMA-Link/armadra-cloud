@@ -396,3 +396,31 @@ func TestRemovedInviterGetsNoInvitationEventsAndCascadeAndRestoreEmit(t *testing
 		return e["type"] == "memberChanged" && e["change"] == "added" && e["accountId"] == nil
 	})
 }
+
+// 撤销分享链接：访客自己的 me-stream（访客会话换的票，连在另一个实例上）立刻收到 accessRevoked，
+// 不等 30 秒的设备复核（之后才以 4401 关闭）。
+func TestLinkRevokeNotifiesGuestStreamAtOnce(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{})
+	peer := r.at(r.startPeer().URL)
+	owner, member := r.verified(), r.verified()
+	team := r.seedTeam("guest-revoke", map[string]string{owner.accountID: "owner"})
+	h := r.addHost(owner, teamSpace(team), "0.11.0")
+	link := r.mustLink(owner, h.id, nil)
+	res := r.acceptLink(link, &member) // 登录的账号经链接加入，会话是访客设备
+	r.expect(res, 200, "")
+	guest := peer.stream(r.guestOfAccept(res))
+	accountStream := r.stream(member)
+
+	start := time.Now()
+	r.expect(r.do("DELETE", linkPathOf(link.id), nil, owner.bearer()), 200, "")
+	ev := guest.waitFor("访客收到 accessRevoked", isType("accessRevoked"))
+	if ev["sourceId"] != h.id {
+		t.Fatalf("accessRevoked：%v", ev)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("访客收到 accessRevoked 太慢：%v", took)
+	}
+	// 按链接投递：同一个人的账号会话不是这条链接的访客，收不到。
+	accountStream.quiet(300*time.Millisecond, isType("accessRevoked"), "账号会话不是链接访客")
+}

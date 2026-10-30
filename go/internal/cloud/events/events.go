@@ -16,6 +16,16 @@ const (
 	TypeMemberChanged     = "memberChanged"
 	TypeInvitationChanged = "invitationChanged"
 	TypeGrantChanged      = "grantChanged"
+	// 设备信任（契约 §31、§32）：新设备待背书、待信任请求已处理。
+	TypeDeviceTrustRequested = "deviceTrustRequested"
+	TypeDeviceTrustResolved  = "deviceTrustResolved"
+)
+
+// 待信任请求的处理结果（deviceTrustResolved 的 outcome）。
+const (
+	TrustOutcomeTrusted  = "trusted"
+	TrustOutcomeRejected = "rejected"
+	TrustOutcomeExpired  = "expired"
 )
 
 // 成员变化的种类。
@@ -53,10 +63,29 @@ type GrantChanged struct {
 	AtMs     int64  `json:"atMs"`
 }
 
-// EventSource 实现 core.Event。成员与邀请事件不属于某台主机（受众直接按账号算）。
-func (MemberChanged) EventSource() string     { return "" }
-func (InvitationChanged) EventSource() string { return "" }
-func (e GrantChanged) EventSource() string    { return e.SourceID }
+// DeviceTrustRequested：有新设备待背书（详情用 trust.list，事件里没有校验码）。
+type DeviceTrustRequested struct {
+	Type      string `json:"type"`
+	RequestID string `json:"requestId"`
+	SourceID  string `json:"sourceId"`
+	TeamID    string `json:"teamId,omitempty"`
+	AtMs      int64  `json:"atMs"`
+}
+
+// DeviceTrustResolved：待信任请求已处理（trusted / rejected / expired）。
+type DeviceTrustResolved struct {
+	Type      string `json:"type"`
+	RequestID string `json:"requestId"`
+	Outcome   string `json:"outcome"`
+	AtMs      int64  `json:"atMs"`
+}
+
+// EventSource 实现 core.Event。成员、邀请与设备信任事件按账号投递（受众直接按账号算），不参与主机可见性。
+func (MemberChanged) EventSource() string        { return "" }
+func (InvitationChanged) EventSource() string    { return "" }
+func (e GrantChanged) EventSource() string       { return e.SourceID }
+func (DeviceTrustRequested) EventSource() string { return "" }
+func (DeviceTrustResolved) EventSource() string  { return "" }
 
 // NewMemberChanged 等是带正确 type 的构造函数。
 func NewMemberChanged(teamID, accountID, change string, atMs int64) MemberChanged {
@@ -71,6 +100,16 @@ func NewInvitationChanged(invitationID, teamID, sourceID, state string, atMs int
 // NewGrantChanged 构造 grantChanged。
 func NewGrantChanged(sourceID, grantID, teamID string, atMs int64) GrantChanged {
 	return GrantChanged{Type: TypeGrantChanged, SourceID: sourceID, GrantID: grantID, TeamID: teamID, AtMs: atMs}
+}
+
+// NewDeviceTrustRequested 构造 deviceTrustRequested。
+func NewDeviceTrustRequested(requestID, sourceID, teamID string, atMs int64) DeviceTrustRequested {
+	return DeviceTrustRequested{Type: TypeDeviceTrustRequested, RequestID: requestID, SourceID: sourceID, TeamID: teamID, AtMs: atMs}
+}
+
+// NewDeviceTrustResolved 构造 deviceTrustResolved。
+func NewDeviceTrustResolved(requestID, outcome string, atMs int64) DeviceTrustResolved {
+	return DeviceTrustResolved{Type: TypeDeviceTrustResolved, RequestID: requestID, Outcome: outcome, AtMs: atMs}
 }
 
 // ---- 线上形状：{origin, event, audience} ----
@@ -97,6 +136,9 @@ var decoders = map[string]func([]byte) (core.Event, error){
 	TypeMemberChanged:     decodeAs[MemberChanged],
 	TypeInvitationChanged: decodeAs[InvitationChanged],
 	TypeGrantChanged:      decodeAs[GrantChanged],
+
+	TypeDeviceTrustRequested: decodeAs[DeviceTrustRequested],
+	TypeDeviceTrustResolved:  decodeAs[DeviceTrustResolved],
 }
 
 func decodeAs[E core.Event](data []byte) (core.Event, error) {

@@ -640,7 +640,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 
 ## §32 me-stream 的团队事件
 
-协议 1.4。`GET /v1/me/stream`（§6）的事件多七种，schema 在协议包 `cloud-api` 的 `meStreamEventSchema`。SaaS 控制面（M1）发送 `memberChanged`、`invitationChanged`、`grantChanged`（只发给受众里的账号，`invitationChanged` 只发给邮箱已验证的受邀账号），其余四种预留、还没有发送方；老客户端遇到不认识的 `type` 应忽略。事件只带标识，不带内容，客户端收到后重拉对应列表。
+协议 1.4。`GET /v1/me/stream`（§6）的事件多七种，schema 在协议包 `cloud-api` 的 `meStreamEventSchema`。SaaS 控制面（M1）发送 `memberChanged`、`invitationChanged`、`grantChanged`、`deviceTrustRequested`、`deviceTrustResolved`（只发给受众里的账号，`invitationChanged` 只发给邮箱已验证的受邀账号，两种设备信任事件只发给该请求此刻的背书人——与 `trust.list` 同一条规则，§31）；`accessRequested`（访问申请）与 `planChanged`（付费与订阅）随 M2 的对应功能才有发送方；老客户端遇到不认识的 `type` 应忽略。事件只带标识，不带内容，客户端收到后重拉对应列表。
 
 | `type`                 | 字段                                                                      | 含义                                  |
 | ---------------------- | ------------------------------------------------------------------------- | ------------------------------------- |

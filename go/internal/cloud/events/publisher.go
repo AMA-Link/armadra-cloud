@@ -31,7 +31,7 @@ func (p *Publisher) warn(ctx context.Context, what string, err error) {
 }
 
 // emit 在提交之后算受众并发事件；受众算不出来（库出错）就不发：事件只是提示，客户端重拉。
-func (p *Publisher) emit(tx saas.Tx, event core.Event, audience func(ctx context.Context, r saas.Reader) ([]string, error)) {
+func (p *Publisher) emit(tx saas.Tx, event core.Event, audience Audience) {
 	if !p.enabled() {
 		return
 	}
@@ -158,6 +158,25 @@ func (p *Publisher) GrantChanged(tx saas.Tx, grant saas.Grant) {
 		}
 		return out, nil
 	})
+}
+
+// Audience 在提交之后读库算一个事件的受众账号（重复与空 id 由发事件的一方去掉）。
+type Audience func(ctx context.Context, r saas.Reader) ([]string, error)
+
+// DeviceTrustRequested：有新设备待背书。受众由信任服务给（请求的背书人，与 trust.list 同一个判断）。
+func (p *Publisher) DeviceTrustRequested(tx saas.Tx, requestID, sourceID, teamID string, audience Audience) {
+	if !p.enabled() {
+		return
+	}
+	p.emit(tx, NewDeviceTrustRequested(requestID, sourceID, teamID, p.Core.NowMs()), audience)
+}
+
+// DeviceTrustResolved：待信任请求已处理（批准、拒绝、过期或作废）。受众同上，按处理之后的状态算。
+func (p *Publisher) DeviceTrustResolved(tx saas.Tx, requestID, outcome string, audience Audience) {
+	if !p.enabled() {
+		return
+	}
+	p.emit(tx, NewDeviceTrustResolved(requestID, outcome, p.Core.NowMs()), audience)
 }
 
 func uniqueSorted(ids []string) []string {
