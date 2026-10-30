@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 变更 / Changed
+
+- 个人中转的指标监听同样要求令牌（Closes #165，Refs #163）：`armadra-relay personal serve --metrics-listen`（或 `RELAY_METRICS_LISTEN`）不是回环地址（含 `:端口`、`0.0.0.0`、`[::]`、内网地址）又没配 `RELAY_METRICS_TOKEN` 时，以配置错误退出 64（`--metrics-listen 不是回环地址时必须配 RELAY_METRICS_TOKEN：<地址>`），与 SaaS 控制面、节点同一条规则；`--metrics-listen` 新接受空主机的 `:端口`（监听全部网卡，按非回环对待）。回环地址（`127.0.0.0/8`、`[::1]`、`localhost`）不受影响。**升级影响**：已有个人部署若在非回环地址上开了指标却没设令牌，升级后 `serve` 起不来（`docker compose logs relay` 里是上面那句）——二选一：设 `RELAY_METRICS_TOKEN`（例如 `openssl rand -hex 24`），抓取方改带 `Authorization: Bearer <令牌>`；或把监听改回回环（如 `127.0.0.1:9100`，抓取方在同机；容器里的回环只有容器自己连得到，compose 部署见 `deploy/personal/compose.yml` 的注释）。没开指标、或已经配了令牌的部署不受影响。
+  The personal relay's metrics listener also requires a token (Closes #165, Refs #163): `armadra-relay personal serve --metrics-listen` (or `RELAY_METRICS_LISTEN`) on a non-loopback address (including `:port`, `0.0.0.0`, `[::]` and private addresses) without `RELAY_METRICS_TOKEN` now exits 64 as a configuration error, the same rule as the SaaS control plane and nodes; `--metrics-listen` now accepts an empty-host `:port` (all interfaces, treated as non-loopback). Loopback addresses (`127.0.0.0/8`, `[::1]`, `localhost`) are unaffected. **Upgrade impact**: an existing personal deployment that exposes metrics on a non-loopback address without a token will fail to start `serve` after upgrading — either set `RELAY_METRICS_TOKEN` (e.g. `openssl rand -hex 24`) and have the scraper send `Authorization: Bearer <token>`, or move the listener back to loopback (e.g. `127.0.0.1:9100`, scraper on the same host; inside a container loopback is reachable only from the container itself, see the comments in `deploy/personal/compose.yml` for compose deployments). Deployments without metrics, or with a token already set, are unaffected.
+
 ## 0.11.0（2026-11-01）
 
 ### 新增 / Added
