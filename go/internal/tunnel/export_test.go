@@ -13,3 +13,10 @@ func (t *Tunnel) Tails() int {
 	defer t.mu.Unlock()
 	return t.tails
 }
+
+// CtlQueued 是写端控制帧队列里还没取走的帧数（只给测试看）。
+func (t *Tunnel) CtlQueued() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.ctl)
+}

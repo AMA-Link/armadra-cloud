@@ -22,6 +22,10 @@ var (
 // pingFrame 是 ping 帧（空载荷），所有连接共用，只读。
 var pingFrame = serverFrame(opPing, nil)
 
+// maxPingsPerRound 是一个 ping 轮（WSPing，缺省 30 秒）内接受的客户端 PING 数上限：正常客户端
+// 一秒最多一条，超过就是刷帧。
+const maxPingsPerRound = 128
+
 // edgeConn 是一条已升级的客户端连接，同时是 netpoll 的 Handler 与隧道流的 Sink。
 // 端到端通道的管道语义（cloud-api §20）：
 //
@@ -39,7 +43,10 @@ type edgeConn struct {
 	release  func()
 	started  time.Time
 	lastSeen atomic.Int64
-	bucket   int
+	// pings 是本 ping 轮内客户端发来的 PING 数：每条都直接答 PONG、不等写出，超过 maxPingsPerRound
+	// 就按 1008 关闭，免得慢读的客户端用 PING 把写队列顶爆（#172）。tick 清零。
+	pings  atomic.Int32
+	bucket int
 
 	// 只在所属循环的 OnRead 里读写。
 	partial []byte
@@ -159,7 +166,6 @@ func (ec *edgeConn) OnRead(c netpoll.Conn, p []byte) {
 	if ec.broken {
 		return
 	}
-	ec.lastSeen.Store(time.Now().UnixMilli())
 	data := p
 	if len(ec.partial) > 0 {
 		ec.partial = append(ec.partial, p...)
@@ -191,6 +197,10 @@ func (ec *edgeConn) OnRead(c netpoll.Conn, p []byte) {
 }
 
 func (ec *edgeConn) frame(c netpoll.Conn, f clientFrame) {
+	// 活性只看数据、关闭帧与对我方 ping 的 PONG：客户端自己发的 PING 不算（否则光发 PING 就能一直赖着）。
+	if f.Op != opPing {
+		ec.lastSeen.Store(time.Now().UnixMilli())
+	}
 	switch f.Op {
 	case opContinuation:
 		if !ec.inFrag {
@@ -223,6 +233,11 @@ func (ec *edgeConn) frame(c netpoll.Conn, f clientFrame) {
 	case opClose:
 		ec.onCloseFrame(c, f.Payload)
 	case opPing:
+		if ec.pings.Add(1) > maxPingsPerRound {
+			ec.broken = true
+			ec.protocolError(closePolicyViolation, "ping_flood")
+			return
+		}
 		c.Write(serverFrame(opPong, f.Payload), 0)
 	case opPong:
 	}
@@ -445,5 +460,6 @@ func (ec *edgeConn) tick(nowMs int64, idle time.Duration) {
 		c.Close()
 		return
 	}
+	ec.pings.Store(0)
 	c.Write(pingFrame, 0)
 }
