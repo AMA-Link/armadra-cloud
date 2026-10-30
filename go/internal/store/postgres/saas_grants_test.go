@@ -332,3 +332,63 @@ func TestAccessBasesEqualsPerAccountAccessBasis(t *testing.T) {
 		t.Fatalf("空批：%v %v", got, err)
 	}
 }
+
+// SourceAccessBases（一个账号、一批主机）与逐台 AccessBasis 的答案逐字段一致：个人与团队主机、成员 / 非成员 /
+// 停用 / 不存在的账号、member / guest / team 授予（含别的团队的 team 授予）、已撤销的授予、已删除的团队、
+// 重复与不存在的主机 id；别人的授予不进来。
+func TestSourceAccessBasesEqualsPerSourceAccessBasis(t *testing.T) {
+	e := openSaaS(t)
+	for _, id := range []string{"owner", "u1", "u2", "u3", "u4", "x"} {
+		e.account(id)
+	}
+	e.team("t1", "owner")
+	e.team("t2", "x")
+	e.members("t1", map[string]string{"u1": "member", "u2": "admin", "u4": "guest"})
+	e.members("t2", map[string]string{"u1": "member"})
+	e.seedHost("h1", "t1", "owner", 10)
+	e.seedHost("h2", "t1", "u1", 11)
+	e.seedHost("h3", "t2", "x", 12)
+	e.seedHost("p1", "", "owner", 13)
+	e.seedHost("p2", "", "u3", 14)
+	e.grant("gm", "h1", "t1", saas.GrantSubjectMember, "u1", "editor", []string{"w2", "w1"}, nil)
+	e.grant("gt", "h1", "t1", saas.GrantSubjectTeam, "t1", "viewer", nil, ptr(100))
+	e.grant("gt2", "h3", "t2", saas.GrantSubjectTeam, "t2", "operator", nil, nil)
+	e.grant("gg", "h1", "t1", saas.GrantSubjectGuest, "u4", "viewer", nil, nil)
+	e.grant("gx", "h2", "t1", saas.GrantSubjectMember, "owner", "viewer", nil, nil)
+	e.grant("go", "h2", "t1", saas.GrantSubjectMember, "u2", "driver", nil, nil)
+	e.grant("gr", "h2", "t1", saas.GrantSubjectMember, "u1", "driver", nil, nil)
+	e.must("UPDATE source_grants SET revoked_at_ms = 5 WHERE grant_id = 'gr'")
+	e.grant("gp", "p1", "", saas.GrantSubjectGuest, "u3", "viewer", nil, nil)
+	e.grant("gq", "p2", "", saas.GrantSubjectGuest, "u1", "editor", nil, ptr(50))
+	e.must("UPDATE accounts SET status = 'disabled' WHERE account_id = 'u2'")
+	e.must("UPDATE teams SET deleted_at_ms = 1, purge_at_ms = 2 WHERE team_id = 't2'")
+	r := e.db.SaaS().Read()
+
+	sources := []string{"h1", "h2", "h3", "p1", "p2", "ghost", "h1"}
+	for _, account := range []string{"owner", "u1", "u2", "u3", "u4", "x", "nobody"} {
+		batch, err := r.SourceAccessBases(e.ctx, saasTenant, account, sources)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch) != 6 {
+			t.Fatalf("%s：重复的主机去重后 6 台：%d", account, len(batch))
+		}
+		for _, source := range sources {
+			single, err := r.AccessBasis(e.ctx, saasTenant, account, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(batch[source], single) {
+				t.Errorf("%s / %s：批量 %+v，逐台 %+v", account, source, batch[source], single)
+			}
+			for _, g := range batch[source].Grants {
+				if g.SubjectKind != saas.GrantSubjectTeam && g.SubjectID != account {
+					t.Errorf("%s / %s：带进了别人的授予 %s", account, source, g.GrantID)
+				}
+			}
+		}
+	}
+	if got, err := r.SourceAccessBases(e.ctx, saasTenant, "u1", nil); err != nil || len(got) != 0 {
+		t.Fatalf("空批：%v %v", got, err)
+	}
+}

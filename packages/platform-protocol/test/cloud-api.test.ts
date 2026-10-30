@@ -409,6 +409,47 @@ describe("协议 1.4：团队与 SaaS 的预留 procedure", () => {
     );
   });
 
+  it("0.11.0 只加不改：目录行带可选的 myRole（四档或 null，缺省照旧）", () => {
+    const out = (key: string) =>
+      byKey.get(key)?.procedure["~orpc"].outputSchema;
+    const row = {
+      sourceId: "0123456789abcdef0123456789abcdef",
+      name: "n",
+      kind: "desktop",
+      online: false,
+      lastSeenAtMs: null,
+      owner: false,
+      via: "team",
+      relayOrigin: "https://relay.test",
+      coreVersion: "0.11.0",
+    };
+    for (const key of ["sources.list", "me.sources"]) {
+      const schema = out(key);
+      expect(schema?.safeParse({ sources: [row] }).success).toBe(true);
+      for (const myRole of ["viewer", "editor", "operator", "driver", null]) {
+        expect(
+          schema?.safeParse({ sources: [{ ...row, myRole }] }).success,
+        ).toBe(true);
+      }
+      expect(
+        schema?.safeParse({ sources: [{ ...row, myRole: "owner" }] }).success,
+      ).toBe(false);
+    }
+    const detail = {
+      ...row,
+      trustedOrigins: [],
+      capabilities: [],
+      registeredAtMs: 1,
+    };
+    expect(out("sources.get")?.safeParse(detail).success).toBe(true);
+    expect(
+      out("sources.get")?.safeParse({ ...detail, myRole: "editor" }).success,
+    ).toBe(true);
+    expect(
+      out("sources.get")?.safeParse({ ...detail, myRole: "admin" }).success,
+    ).toBe(false);
+  });
+
   it("0.11.0 只加不改：sources.assertion 的版本门答 source_core_outdated", () => {
     const codes = byKey.get("sources.assertion")?.errorCodes;
     expect(codes).toContain("source_core_outdated");
