@@ -1,14 +1,14 @@
 # 部署
 
-| 文件                                         | 用途                                                                                                                                          |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| [saas/compose.yml](saas/compose.yml)         | SaaS 单机 M1：控制面 + 两个中继节点 + PostgreSQL 17 + Redis 8（AOF）；`--profile proxy` 带参考反向代理，`compose.mailpit.yml` 给开发 / 端到端 |
-| [compose.yml](compose.yml)                   | 个人中转的多节点参考：`personal-cluster` profile（两节点，PostgreSQL 存储与控制面）                                                           |
-| [personal/compose.yml](personal/compose.yml) | 单人中转，一个服务、不带数据库                                                                                                                |
-| [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                                                                                                                 |
-| [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动）                                                                                            |
-| [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本                                                                                                     |
-| [cloudflare/README.md](cloudflare/README.md) | Cloudflare Workers 上的个人中转（wrangler 项目在 `apps/relay-workers`）                                                                       |
+| 文件                                         | 用途                                                                                                                                                                                                           |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [saas/compose.yml](saas/compose.yml)         | SaaS 单机 M1：控制面 + 两个中继节点 + PostgreSQL 17 + Redis 8（AOF）；`--profile proxy` 带参考反向代理，`compose.mailpit.yml` 给开发 / 端到端，`compose.metrics.yml` 打开指标（告警规则在 `saas/prometheus/`） |
+| [compose.yml](compose.yml)                   | 个人中转的多节点参考：`personal-cluster` profile（两节点，PostgreSQL 存储与控制面）                                                                                                                            |
+| [personal/compose.yml](personal/compose.yml) | 单人中转，一个服务、不带数据库                                                                                                                                                                                 |
+| [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                                                                                                                                                                                  |
+| [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动）                                                                                                                                                             |
+| [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本                                                                                                                                                                      |
+| [cloudflare/README.md](cloudflare/README.md) | Cloudflare Workers 上的个人中转（wrangler 项目在 `apps/relay-workers`）                                                                                                                                        |
 
 ## 环境变量
 
@@ -28,7 +28,7 @@
 | `ARMADRA_CLOUD_REQUIRE_EMAIL_VERIFIED`                                                     |      | 缺省 `1`；只在开发环境设 `0`                                                                         |
 | `ARMADRA_CLOUD_TRUSTED_PROXY` / `_TRUSTED_PROXY_PREFER`                                    |      | 受信反向代理的 CIDR 与先读的头，规则同中继                                                           |
 | `ARMADRA_CLOUD_TURNSTILE_SITE_KEY` / `_TURNSTILE_SECRET_FILE` / `_CHALLENGE_SCOPE`         |      | 人机挑战；两个都配才要求，只配一个是配错                                                             |
-| `ARMADRA_CLOUD_METRICS_LISTEN` / `_METRICS_TOKEN_FILE`                                     |      | 指标监听（含 `armadra_cloud_lockout_unavailable_total`）                                             |
+| `ARMADRA_CLOUD_METRICS_LISTEN` / `_METRICS_TOKEN_FILE`                                     |      | 指标监听（只许回环地址或空主机 `:端口`；含 `armadra_cloud_lockout_unavailable_total` 与发信计数）    |
 | `ARMADRA_CLOUD_NAME`、`_JOB_WORKERS`、`_TRAFFIC_RETENTION_DAYS`、`_HIBP_URL`、`_LOG_LEVEL` |      | 见设计 §2.2                                                                                          |
 
 中继（`armadra-relay saas serve`，SaaS 中继节点，Go 设计 §3.6；TLS 在前面的反向代理终止，明文监听）：
@@ -163,8 +163,11 @@
 | `PROXY_HTTP_PORT` / `PROXY_HTTPS_PORT`                                 | `80` / `443`                      | 参考代理在宿主上发布的端口                                                                                   |
 | `EDGE_SUBNET` / `PROXY_IP`                                             | `172.29.88.0/24` / `172.29.88.10` | `edge` 网络的网段与参考代理的固定地址                                                                        |
 | `TRUSTED_PROXY`                                                        | `172.29.88.10/32`                 | 控制面与节点信任的代理地址；用自己的代理时改成它的地址                                                       |
+| `LOG_MAX_SIZE` / `LOG_MAX_FILE`                                        | `20m` / `5`                       | 每个服务的 json-file 日志轮转：单个文件上限与保留的文件数                                                    |
+| `CLOUD_METRICS_PORT` / `RELAY_A_METRICS_PORT` / `RELAY_B_METRICS_PORT` | `9101` / `9102` / `9103`          | 只在叠加 `compose.metrics.yml` 时用：指标发布到 `127.0.0.1` 的端口（令牌在 `secrets/metrics_token`）         |
 
 - 登录失败计数共享在 Redis，Redis 不可用时登录一律答 `503 unavailable`（失败关闭，不回落到进程内计数）；控制面指标 `armadra_cloud_lockout_unavailable_total` 计这类拒绝，应当告警。
+- 告警：`docker compose -f compose.yml -f compose.metrics.yml up -d` 打开控制面与节点的 `/metrics`（只发布到宿主回环，要 Bearer 令牌），宿主上的 Prometheus 加载 `saas/prometheus/armadra-saas.rules.yml`；抓取配置、规则清单与日志保留见 [SaaS 运维手册](../docs/runbooks/saas.md)的「告警」与「日志保留」。
 - 验收：`pnpm e2e --mode saas`（真实控制面 + 两个节点 + 一次性 PostgreSQL / Redis / mailpit，设计 §8.4 的 14 个场景）。
 
 ## 升级顺序

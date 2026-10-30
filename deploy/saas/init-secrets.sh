@@ -33,5 +33,7 @@ put redis_password "$redis_pw"
 put cloud_database_url "postgres://armadra_cloud:${cloud_pw}@postgres:5432/armadra_cloud?sslmode=require"
 put relay_database_url "postgres://armadra_relay_traffic:${traffic_pw}@postgres:5432/armadra_cloud?sslmode=require"
 put redis_url "redis://:${redis_pw}@redis:6379"
+# 指标的 Bearer 令牌（compose.metrics.yml 用；Prometheus 抓取时出示同一个值）。
+put metrics_token "$(rand)"
 put node_token_a "" 644
 put node_token_b "" 644

@@ -6,6 +6,7 @@
 #   docker compose up -d                             # 再起 db-roles 与两个节点
 #   docker compose --profile proxy up -d             # 另起参考反向代理（nginx，TLS 在它终止）
 #   docker compose -f compose.yml -f compose.mailpit.yml up -d    # 开发 / 端到端：邮件进 mailpit，不外发
+#   docker compose -f compose.yml -f compose.metrics.yml up -d    # 打开 /metrics（宿主回环 + 令牌），告警规则在 prometheus/
 #
 # 网络：edge（反向代理、控制面、节点；代理的 IP 固定，控制面与节点只信它的 X-Forwarded-For）与 backend
 # （postgres、redis、migrate、db-roles；internal，不出网）。口令与连接串全部是 secrets 文件，不进环境变量。
@@ -27,6 +28,14 @@ x-cloud-env: &cloud-env
   ARMADRA_CLOUD_REDIS_URL_FILE: /run/secrets/redis_url
   ARMADRA_CLOUD_MASTER_KEY_FILE: /run/secrets/master_key
   ARMADRA_CLOUD_RELAY_DOMAIN: ${DOMAIN}
+
+# 日志：每个服务都用 json-file 并轮转（单个文件到 LOG_MAX_SIZE 换下一个，最多留 LOG_MAX_FILE 个），磁盘上的日志有上界。
+# 控制面与节点的日志只有白名单字段（不含正文与令牌），但带客户端 IP 与账号 id，保留期见 docs/runbooks/saas.md「日志保留」。
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-20m}
+    max-file: ${LOG_MAX_FILE:-5}
 
 x-relay-env: &relay-env
   RELAY_LISTEN: 0.0.0.0:8443
@@ -69,6 +78,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    logging: *logging
     restart: unless-stopped
 
   # 首次启动生成自签证书（已有则跳过），属主 postgres（uid 70）、0600。
@@ -88,6 +98,7 @@ services:
     volumes:
       - pg-tls:/tls
     networks: [backend]
+    logging: *logging
     restart: "no"
 
   redis:
@@ -109,6 +120,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    logging: *logging
     restart: unless-stopped
 
   # 迁移只在这里跑一次（serve 不自动迁移，账本落后会拒绝启动）。
@@ -121,6 +133,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging: *logging
     restart: "no"
 
   # 节点用的流量角色（SaaS 实施设计 §2.3、§10 Q4；角色本身由 postgres 初始化时建）：relay_traffic_buckets 的
@@ -142,6 +155,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    logging: *logging
     restart: "no"
 
   cloud:
@@ -173,6 +187,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    logging: *logging
     restart: unless-stopped
 
   relay-a: &relay
@@ -195,6 +210,7 @@ services:
         condition: service_healthy
       db-roles:
         condition: service_completed_successfully
+    logging: *logging
     restart: unless-stopped
 
   relay-b:
@@ -234,6 +250,7 @@ services:
         condition: service_healthy
       relay-b:
         condition: service_healthy
+    logging: *logging
     restart: unless-stopped
 
 networks:

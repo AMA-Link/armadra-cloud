@@ -9,6 +9,11 @@ services:
     network_mode: "service:cloud"
     depends_on:
       - cloud
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-20m}
+        max-file: ${LOG_MAX_FILE:-5}
     restart: unless-stopped
 
   cloud:
