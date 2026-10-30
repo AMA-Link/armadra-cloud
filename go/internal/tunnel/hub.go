@@ -423,6 +423,9 @@ func (h *Hub) closed(t *Tunnel, info CloseInfo) {
 		delete(h.current, t.SourceID())
 	}
 	h.mu.Unlock()
+	if info.Reason == ReasonCtlQueueOverflow {
+		o.Log.Warn("隧道控制帧队列超限，已关闭", obs.SourceID(t.SourceID()), obs.TunnelID(t.ID()), obs.Code(int(info.Code)), obs.Reason(info.Reason))
+	}
 	o.Log.Info("隧道已关闭", obs.SourceID(t.SourceID()), obs.TunnelID(t.ID()), obs.Code(int(info.Code)), obs.Reason(info.Reason))
 	if !isCurrent || info.Replaced {
 		return
