@@ -185,7 +185,7 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 		Mode: "saas", NodeID: cfg.NodeID, Version: version, Control: ctl,
 		Addressing: edge.HostAddressing(cfg.Domain), Log: log, ClientIP: clientIP, Traffic: meter,
 		Probes: probes, Gate: g, ClientKick: true,
-		Lookup: lookup(ctl.Routes(), cfg.NodeID, local, out),
+		Lookup: lookup(ctl.Routes(), cfg.NodeID, local, out, metrics),
 		UpgradeExtra: func(w http.ResponseWriter, r *http.Request) bool {
 			return in.HandleUpgrade(w, r)
 		},
@@ -194,8 +194,10 @@ func Serve(ctx context.Context, cfg Config, version string, logOut io.Writer, re
 		return err
 	}
 	in = newInternodeServer(plane.Auth, local, log, metrics, cfg.InternodeCheckEvery)
-	// 全部指标：个人中转原有的在前（逐字节不变），再接准入闸与节点间转发的。
-	render := func() string { return plane.Metrics.Render() + g.render() + metrics.render() }
+	// 全部指标：个人中转原有的在前（逐字节不变），再接准入闸、节点间转发与运行时调度延迟的。
+	render := func() string {
+		return plane.Metrics.Render() + g.render() + metrics.render() + obs.RenderSchedLatency()
+	}
 	var planeDown sync.Once
 	shutdownPlane := func(grace time.Duration) { planeDown.Do(func() { plane.Shutdown(grace) }) }
 	defer shutdownPlane(0)

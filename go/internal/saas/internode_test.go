@@ -61,6 +61,12 @@ func TestForwardedChannel(t *testing.T) {
 	if got := metricLine(b.Metrics(), "relay_routes_remote_total"); got != "1" {
 		t.Fatalf("b 的 relay_routes_remote_total：%s", got)
 	}
+	if got := metricLine(b.Metrics(), "relay_routes_remote_failed_total"); got != "0" {
+		t.Fatalf("b 的 relay_routes_remote_failed_total：%s", got)
+	}
+	if !strings.Contains(b.Metrics(), "relay_sched_latency_seconds_count ") {
+		t.Fatal("节点指标要有调度延迟")
+	}
 	if got := metricLine(b.Metrics(), `relay_internode_bytes_total{direction="to_source"}`); got != "3145728" {
 		t.Fatalf("b 的节点间上行字节：%s", got)
 	}
