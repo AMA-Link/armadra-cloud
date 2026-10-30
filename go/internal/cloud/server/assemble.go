@@ -51,6 +51,8 @@ type assembly struct {
 	relay   *relayctl.Memory
 	// lockouts 是未注册邮箱的 Redis 失败计数（因 Redis 不可用而拒绝的次数进指标）。
 	lockouts *httpx.UnknownLockouts
+	// mail 是邮件服务（发信计数进指标）。
+	mail *mail.Service
 	// admin 是运营后台（serve 启动后按库同步事故开关）。
 	admin *admin.Service
 	// jobs 是作业运行器（serve 在监听前启动、关闭时停止领取）。
@@ -300,6 +302,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 		probes["relay"] = out.sync.Ready
 	}
 	out.handler, out.core, out.auth, out.lockouts, out.jobs, out.admin = mux, coreCtx, auth, lockouts, runner, adminService
+	out.mail = mailer
 	return out, nil
 }
 
