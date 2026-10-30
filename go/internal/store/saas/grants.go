@@ -96,6 +96,10 @@ type GrantReader interface {
 	// 固定几条查询，不随账号数增长；每个账号的答案与单个 AccessBasis 完全一致（重复的账号 id 去重，不在库里的账号
 	// AccountActive = false）。主机没有空间行时每个账号都答 SourceFound = false。
 	AccessBases(ctx context.Context, tenantID string, accountIDs []string, sourceID string) (map[string]AccessBasis, error)
+	// SourceAccessBases 是 AccessBasis 的另一种批量：同一个账号、一批主机（目录行的 myRole 用），固定几条查询，
+	// 不随主机数增长；每台主机的答案与单个 AccessBasis 完全一致（重复的主机 id 去重）。没有空间行的主机答零值
+	// （SourceFound = false）；只带这个账号自己适用的授予，不读别人的。
+	SourceAccessBases(ctx context.Context, tenantID, accountID string, sourceIDs []string) (map[string]AccessBasis, error)
 	// AccessAccounts 是可能经由某个来路到达主机的账号：所有者、member / guest 授予的主体、团队主机的全体成员，升序去重。
 	AccessAccounts(ctx context.Context, tenantID, sourceID string) ([]string, error)
 	// TeamAccountIDs 是团队全体成员的账号 id，升序。

@@ -176,6 +176,72 @@ func (r reader) AccessBases(ctx context.Context, tenantID string, accountIDs []s
 	return out, nil
 }
 
+func (r reader) SourceAccessBases(ctx context.Context, tenantID, accountID string, sourceIDs []string) (map[string]saas.AccessBasis, error) {
+	out := make(map[string]saas.AccessBasis, len(sourceIDs))
+	ids := make([]string, 0, len(sourceIDs))
+	for _, id := range sourceIDs {
+		if _, dup := out[id]; !dup {
+			out[id] = saas.AccessBasis{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var status *string
+	err := r.q.QueryRow(ctx, "SELECT status FROM accounts WHERE tenant_id = $1 AND account_id = $2", tenantID, accountID).Scan(&status)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	active := status != nil && *status == saas.AccountActive
+	type hostRow struct {
+		sourceID    string
+		basis       saas.AccessBasis
+		teamStatus  string
+		teamDeleted bool
+		role        string
+	}
+	rows, err := list(ctx, r.q, func(s scanner) (hostRow, error) {
+		var row hostRow
+		err := s.Scan(&row.sourceID, &row.basis.SourceRevoked, &row.basis.CoreVersion, &row.basis.OwnerID, &row.basis.TeamID,
+			&row.teamStatus, &row.teamDeleted, &row.role)
+		return row, err
+	}, `SELECT p.source_id, s.revoked_at_ms IS NOT NULL, s.core_version, p.owner_account_id, COALESCE(p.team_id, ''),
+	        COALESCE(t.status, ''), COALESCE(t.deleted_at_ms IS NOT NULL, false), COALESCE(m.role, '')
+	 FROM source_spaces p
+	 JOIN sources s ON s.tenant_id = p.tenant_id AND s.source_id = p.source_id
+	 LEFT JOIN teams t ON t.tenant_id = p.tenant_id AND t.team_id = p.team_id
+	 LEFT JOIN team_members m ON m.tenant_id = p.tenant_id AND m.team_id = p.team_id AND m.account_id = $3
+	 WHERE p.tenant_id = $1 AND p.source_id = ANY($2)`, tenantID, ids, accountID)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		b := row.basis
+		b.SourceFound, b.AccountActive = true, active
+		b.TeamDeleted, b.TeamSuspended = row.teamDeleted, row.teamStatus == saas.TeamSuspended
+		b.TeamRole = saas.TeamRole(row.role)
+		out[row.sourceID] = b
+	}
+	// 只取以这个账号为主体的 member / guest 授予，与主机所属团队的 team 授予（与 AccessBasis 同一条件）。
+	grants, err := list(ctx, r.q, scanGrant,
+		"SELECT "+grantColumns+` FROM source_grants g WHERE g.tenant_id = $1 AND g.source_id = ANY($2) AND g.revoked_at_ms IS NULL
+		 AND ((g.subject_kind IN ('member', 'guest') AND g.subject_id = $3)
+		   OR (g.subject_kind = 'team' AND g.subject_id = (
+		     SELECT p.team_id FROM source_spaces p WHERE p.tenant_id = g.tenant_id AND p.source_id = g.source_id)))
+		 ORDER BY g.created_at_ms, g.grant_id`, tenantID, ids, accountID)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range grants {
+		if b, ok := out[g.SourceID]; ok && b.SourceFound {
+			b.Grants = append(b.Grants, g)
+			out[g.SourceID] = b
+		}
+	}
+	return out, nil
+}
+
 func (r reader) AccessAccounts(ctx context.Context, tenantID, sourceID string) ([]string, error) {
 	return list(ctx, r.q, func(s scanner) (string, error) {
 		var id string
