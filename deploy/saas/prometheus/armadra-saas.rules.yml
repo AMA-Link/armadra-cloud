@@ -1,0 +1,165 @@
+# SaaS 单机部署（compose.yml）的 Prometheus 告警规则。挂法与抓取配置见 docs/runbooks/saas.md 的「告警」。
+# 校验：docker run --rm -v "$PWD:/r:ro" --entrypoint promtool prom/prometheus:v3.7.3 check rules /r/armadra-saas.rules.yml
+#
+# 约定：控制面的抓取任务名 armadra-cloud，节点的 armadra-relay（规则里只有 up 用到任务名）；
+# 每个节点、每个控制面实例一个 instance。指标名都来自 Go 代码：节点在 internal/obs/metrics.go、internal/obs/runtime.go、
+# internal/saas/gate.go、internal/saas/internode.go，控制面在 internal/cloud/server/server.go 与 internal/cloud/mail/metrics.go。
+# severity：critical 要人马上处理；warning 当天看；info 只是提示，反复出现再查。阈值是 0.12 内测的起点，按实际流量调。
+groups:
+  - name: armadra-saas-availability
+    rules:
+      - alert: ArmadraCloudDown
+        expr: up{job="armadra-cloud"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "控制面 {{ $labels.instance }} 抓不到指标"
+          description: "控制面实例连续 2 分钟没答 /metrics：看容器状态与 /ready。"
+      - alert: ArmadraRelayNodeDown
+        expr: up{job="armadra-relay"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "中继节点 {{ $labels.instance }} 抓不到指标"
+          description: "节点连续 2 分钟没答 /metrics：看容器状态、/ready 与 Redis 里的 relay:nodes。"
+
+  - name: armadra-saas-tunnels
+    rules:
+      # 隧道数：全集群的在线隧道 30 分钟内掉了一半以上（基数至少 10 条，避免小基数抖动）。
+      - alert: ArmadraRelayTunnelsDropped
+        expr: |
+          sum(relay_tunnels) < 0.5 * sum(relay_tunnels offset 30m)
+          and sum(relay_tunnels offset 30m) >= 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "在线隧道 30 分钟内少了一半以上（现 {{ $value }} 条）"
+          description: "源大面积掉线：看节点日志的握手失败、JWKS 与 Redis，以及是否有节点在排空。"
+      # 握手失败率：10 分钟里一半以上的握手没成（至少 20 次），多半是令牌校验、JWKS 或控制面出了问题。
+      - alert: ArmadraRelayHandshakeFailures
+        expr: |
+          sum by (instance) (rate(relay_handshake_total{result!="ok"}[10m]))
+            / sum by (instance) (rate(relay_handshake_total[10m])) > 0.5
+          and sum by (instance) (increase(relay_handshake_total[10m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "节点 {{ $labels.instance }} 的隧道握手失败率超过 50%"
+          description: "按 result 拆开 relay_handshake_total 看是哪一类失败；日志「隧道握手失败」带 result。"
+      # 心跳超时：10 分钟里因心跳超时断开的隧道超过在线隧道的 20%（至少 5 条），网络或节点过载。
+      - alert: ArmadraRelayHeartbeatMisses
+        expr: |
+          sum by (instance) (increase(relay_heartbeat_miss_total[10m]))
+            > 0.2 * sum by (instance) (relay_tunnels)
+          and sum by (instance) (increase(relay_heartbeat_miss_total[10m])) >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "节点 {{ $labels.instance }} 心跳超时断开的隧道偏多"
+          description: "对照 relay_sched_latency_seconds 与宿主的 CPU、网络；节点过载时考虑排空或加节点。"
+
+  - name: armadra-saas-forwarding
+    rules:
+      # 转发失败率：路由在别的节点、却拿不到到那个节点的连接（连不上 /x/v1 或没配节点令牌）的通道占比。
+      - alert: ArmadraRelayForwardFailureRate
+        expr: |
+          sum by (instance) (rate(relay_routes_remote_failed_total[10m]))
+            / (
+              sum by (instance) (rate(relay_routes_remote_total[10m]))
+              + sum by (instance) (rate(relay_routes_remote_failed_total[10m]))
+            ) > 0.05
+          and sum by (instance) (increase(relay_routes_remote_failed_total[10m])) >= 5
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "节点 {{ $labels.instance }} 的节点间转发失败率超过 5%"
+          description: "客户端落到这个节点、源在别的节点上的连接答 4404：按 runbook「节点间转发」排查（日志「连不上对端节点，通道不转发」的 reason）。"
+      # 节点间链路积压：入口节点出向连接上还没写出的转发字节持续超过 64 MiB。
+      - alert: ArmadraRelayInternodeBacklog
+        expr: relay_internode_unwritten_bytes > 64 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "节点 {{ $labels.instance }} 节点间链路积压超过 64 MiB"
+          description: "对端或链路慢，或某个租户占住了链路：看 relay_internode_bytes_total 与对端节点的负载。"
+      # 账号转发名额满（RELAY_FORWARDED_PER_ACCOUNT）：只是提示，反复出现时看是哪个账号、是否该调高上限。
+      - alert: ArmadraRelayForwardAccountCapHit
+        expr: increase(relay_forward_account_refused_total[10m]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "节点 {{ $labels.instance }} 有通道因账号转发名额满被拒（4429）"
+          description: "见 runbook「节点间转发」的 RELAY_FORWARDED_PER_ACCOUNT。"
+      # 团队并发检查因 Redis 失败而放行：节点到 Redis 出了问题，团队并发上限暂时不生效。
+      - alert: ArmadraRelayTeamConcurrencyFailOpen
+        expr: increase(relay_team_concurrency_fail_open_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "节点 {{ $labels.instance }} 的团队并发检查因 Redis 失败放行"
+          description: "看 Redis 的状态与节点日志；恢复后自动回到正常检查。"
+
+  - name: armadra-saas-scheduling
+    rules:
+      # 调度延迟：Go 运行时里 goroutine 就绪到开始运行的 p99。几十毫秒就会直接叠到交互流的往返延迟上
+      # （少核机器上事件循环饿死写协程时出现过秒级）。
+      - alert: ArmadraRelaySchedLatencyHigh
+        expr: |
+          histogram_quantile(0.99, sum by (instance, le) (rate(relay_sched_latency_seconds_bucket[5m]))) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "节点 {{ $labels.instance }} 的调度延迟 p99 超过 50 ms"
+          description: "CPU 不够或被同机的进程挤占：看宿主负载与容器的 CPU 限额，必要时加核或拆机。"
+      - alert: ArmadraRelaySchedLatencyCritical
+        expr: |
+          histogram_quantile(0.99, sum by (instance, le) (rate(relay_sched_latency_seconds_bucket[5m]))) > 0.25
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "节点 {{ $labels.instance }} 的调度延迟 p99 超过 250 ms"
+          description: "交互流已明显卡顿：先排空这个节点（runbook「排空、下线与事故开关」），再查宿主。"
+
+  - name: armadra-saas-cloud
+    rules:
+      # 登录失败计数的 Redis 不可用：登录失败关闭，一律答 503（runbook「登录失败计数与 Redis 故障」）。
+      - alert: ArmadraCloudLoginFailClosed
+        expr: increase(armadra_cloud_lockout_unavailable_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "控制面 {{ $labels.instance }} 因 Redis 不可用拒绝登录"
+          description: "恢复 Redis（docker compose up -d redis）；恢复后登录自动恢复，不需要重启控制面。"
+      # 邮件失败：15 分钟里发信失败 3 次以上（每次尝试计一次，作业按退避重试）。
+      - alert: ArmadraCloudMailFailing
+        expr: sum(increase(armadra_cloud_mail_send_failures_total[15m])) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "15 分钟内发信失败 {{ $value }} 次"
+          description: "看控制面日志「邮件没发出」的错误类名，核对 SMTP 主机、端口、口令与 TLS 设置。"
+      # 用尽重试仍没发出：有用户收不到验证、找回口令或邀请邮件。
+      - alert: ArmadraCloudMailAbandoned
+        expr: sum(increase(armadra_cloud_mail_abandoned_total[1h])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "1 小时内有邮件用尽重试仍没发出"
+          description: "发件箱记了失败（30 天后清走）：修好 SMTP 后让用户重新触发（重发验证、重新邀请）。"
+      # 没配 SMTP，积压超限在丢邮件。
+      - alert: ArmadraCloudMailNotConfigured
+        expr: sum(increase(armadra_cloud_mail_backlog_dropped_total[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "没配 SMTP，发件箱积压超限，在丢最旧的邮件"
+          description: "在 .env 配 SMTP_HOST 等与 secrets/smtp_password，再 docker compose up -d --no-deps cloud。"
