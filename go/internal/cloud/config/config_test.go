@@ -76,7 +76,7 @@ func TestLoadRejects(t *testing.T) {
 		{"只配了 Turnstile 站点钥", map[string]string{"TURNSTILE_SITE_KEY": "k"}, "两个都配"},
 		{"受信代理不合法", map[string]string{"TRUSTED_PROXY": "not-an-ip"}, "TRUSTED_PROXY 不合法"},
 		{"受信代理偏好不合法", map[string]string{"TRUSTED_PROXY": "10.0.0.0/8", "TRUSTED_PROXY_PREFER": "x"}, "TRUSTED_PROXY_PREFER"},
-		{"指标监听非回环", map[string]string{"METRICS_LISTEN": "0.0.0.0:9100"}, "只许回环"},
+		{"指标监听非回环且没有令牌", map[string]string{"METRICS_LISTEN": "0.0.0.0:9100"}, "不是回环地址时必须配"},
 		{"SMTP none 非回环", map[string]string{"SMTP_HOST": "smtp.example.com", "SMTP_FROM": "a@b.c", "SMTP_TLS": "none"}, "只许回环"},
 		{"SMTP 缺 From", map[string]string{"SMTP_HOST": "smtp.example.com"}, "SMTP_FROM 必填"},
 		{"HIBP 不是 https", map[string]string{"HIBP_URL": "http://x"}, "HIBP_URL"},
@@ -223,5 +223,50 @@ func TestConnectionStringsFromFiles(t *testing.T) {
 	}
 	if _, err := config.LoadDatabaseURL(env); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 指标监听：回环地址不要令牌；非回环（空主机 :端口、0.0.0.0、别的地址）必须配 METRICS_TOKEN_FILE，否则拒绝启动。
+// 令牌文件是空的等于没配。
+func TestMetricsListenNeedsTokenOffLoopback(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "metrics_token")
+	if err := os.WriteFile(tokenFile, []byte("metrics-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	emptyFile := filepath.Join(dir, "empty")
+	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		listen, token string
+		ok            bool
+	}{
+		{":9100", "", false},
+		{"0.0.0.0:9100", "", false},
+		{"[::]:9100", "", false},
+		{"10.0.0.5:9100", "", false},
+		{":9100", emptyFile, false},
+		{":9100", tokenFile, true},
+		{"0.0.0.0:9100", tokenFile, true},
+		{"127.0.0.1:9100", "", true},
+		{"[::1]:9100", "", true},
+		{"localhost:9100", "", true},
+		{"127.0.0.1:9100", tokenFile, true},
+	} {
+		changes := map[string]string{"METRICS_LISTEN": c.listen}
+		if c.token != "" {
+			changes["METRICS_TOKEN_FILE"] = c.token
+		}
+		cfg, err := config.Load(with(changes))
+		if c.ok {
+			if err != nil || cfg.MetricsListen != c.listen {
+				t.Errorf("%s（令牌 %q）应放行：%v", c.listen, c.token, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "METRICS_LISTEN 不是回环地址时必须配 ARMADRA_CLOUD_METRICS_TOKEN_FILE") {
+			t.Errorf("%s（令牌 %q）应拒绝：%v", c.listen, c.token, err)
+		}
 	}
 }

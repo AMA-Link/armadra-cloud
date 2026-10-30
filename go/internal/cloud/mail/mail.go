@@ -109,8 +109,9 @@ type Options struct {
 type Service struct {
 	o    Options
 	host string
-	// dropped 是没配 SMTP 时因积压超限丢掉的邮件数（指标的替身，测试与日志用）。
-	dropped atomic.Int64
+	// dropped 是没配 SMTP 时因积压超限丢掉的邮件数；sent、failed、abandoned 是发出、发信失败（每次尝试）、
+	// 用尽重试的次数。只有次数，进控制面的 /metrics（RenderMetrics）。
+	dropped, sent, failed, abandoned atomic.Int64
 }
 
 // Dropped 是没配 SMTP 时因积压超限丢掉的邮件总数。
@@ -255,7 +256,9 @@ func (s *Service) send(ctx context.Context, job saas.Job) error {
 		return err
 	}
 	if err := s.o.Sender.Send(ctx, out.message); err != nil {
+		s.failed.Add(1)
 		if job.Attempts >= job.MaxAttempts {
+			s.abandoned.Add(1)
 			// 最后一次也失败：发件箱记失败，30 天后清走。
 			_ = s.o.Store.Tx(context.WithoutCancel(ctx), func(tx saas.Tx) error {
 				return tx.Jobs().MarkOutboxFailed(ctx, s.o.TenantID, payload.EmailID, s.nowMs())
@@ -264,6 +267,7 @@ func (s *Service) send(ctx context.Context, job saas.Job) error {
 		s.o.Log.Warn("邮件没发出", obs.Template(out.template), obs.EmailID(payload.EmailID), obs.Result("failed"), obs.Error(err))
 		return err
 	}
+	s.sent.Add(1)
 	s.o.Log.Info("邮件已发出", obs.Template(out.template), obs.EmailID(payload.EmailID), obs.Result("sent"))
 	return s.o.Store.Tx(ctx, func(tx saas.Tx) error {
 		return tx.Jobs().MarkOutboxSent(ctx, s.o.TenantID, payload.EmailID, s.nowMs())

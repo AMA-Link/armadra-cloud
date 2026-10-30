@@ -1,0 +1,34 @@
+# 指标的叠加文件：打开控制面与两个节点的 /metrics，只发布到宿主的回环地址，要 Bearer 令牌（secrets/metrics_token）。
+#   docker compose -f compose.yml -f compose.metrics.yml up -d
+# 宿主上的 Prometheus 抓 127.0.0.1:${CLOUD_METRICS_PORT:-9101}（控制面）、${RELAY_A_METRICS_PORT:-9102}（a）、
+# ${RELAY_B_METRICS_PORT:-9103}（b），告警规则在 prometheus/armadra-saas.rules.yml，抓取配置见 docs/runbooks/saas.md「告警」。
+# 指标端口不经反向代理、不进 nginx.conf.template；令牌缺失时 secrets/metrics_token 由 init-secrets.sh 生成。
+services:
+  cloud:
+    environment:
+      # 指标监听不在回环地址上就必须配令牌（否则拒绝启动）；:9100 让容器里的端口能被发布出来，令牌挡住同网络里的其他容器。
+      ARMADRA_CLOUD_METRICS_LISTEN: ":9100"
+      ARMADRA_CLOUD_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    secrets: [metrics_token]
+    ports:
+      - "127.0.0.1:${CLOUD_METRICS_PORT:-9101}:9100"
+
+  relay-a:
+    environment:
+      RELAY_METRICS_LISTEN: 0.0.0.0:9100
+      RELAY_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    secrets: [metrics_token]
+    ports:
+      - "127.0.0.1:${RELAY_A_METRICS_PORT:-9102}:9100"
+
+  relay-b:
+    environment:
+      RELAY_METRICS_LISTEN: 0.0.0.0:9100
+      RELAY_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    secrets: [metrics_token]
+    ports:
+      - "127.0.0.1:${RELAY_B_METRICS_PORT:-9103}:9100"
+
+secrets:
+  metrics_token:
+    file: ./secrets/metrics_token

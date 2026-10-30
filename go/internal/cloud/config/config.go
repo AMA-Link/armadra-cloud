@@ -293,6 +293,10 @@ func Load(env Env) (*Config, error) {
 	} else if ok {
 		c.MetricsToken = token
 	}
+	// 指标监听在回环地址上不要令牌；别的地址（含空主机 :端口 与 0.0.0.0）必须配令牌，否则拒绝启动。
+	if c.MetricsListen != "" && c.MetricsToken == "" && !loopbackListen(c.MetricsListen) {
+		return nil, errorf("%sMETRICS_LISTEN 不是回环地址时必须配 %sMETRICS_TOKEN_FILE：%s", Prefix, Prefix, c.MetricsListen)
+	}
 	if c.LogLevel = r.get("LOG_LEVEL"); c.LogLevel == "" {
 		c.LogLevel = DefaultLogLevel
 	}
@@ -302,6 +306,12 @@ func Load(env Env) (*Config, error) {
 		return nil, errorf("%sLOG_LEVEL 要 debug | info | warn | error：%s", Prefix, c.LogLevel)
 	}
 	return c, nil
+}
+
+// loopbackListen：主机:端口 的主机是回环地址（空主机监听全部网卡，不算）。
+func loopbackListen(text string) bool {
+	host, _, err := net.SplitHostPort(text)
+	return err == nil && host != "" && isLoopback(host)
 }
 
 func isLoopback(host string) bool {
@@ -332,15 +342,12 @@ func origin(r reader, name string) (string, error) {
 }
 
 func checkListen(name, text string) error {
-	host, port, err := net.SplitHostPort(text)
+	_, port, err := net.SplitHostPort(text)
 	if err != nil {
 		return errorf("%s%s 要是 主机:端口：%s", Prefix, name, text)
 	}
 	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
 		return errorf("%s%s 的端口不合法：%s", Prefix, name, text)
-	}
-	if name == "METRICS_LISTEN" && !isLoopback(host) && host != "" {
-		return errorf("%s%s 只许回环地址：%s", Prefix, name, text)
 	}
 	return nil
 }

@@ -240,7 +240,8 @@ func Serve(ctx context.Context, cfg *config.Config, deps Deps) (*Running, error)
 			return "# HELP armadra_cloud_up 控制面在跑。\n# TYPE armadra_cloud_up gauge\narmadra_cloud_up 1\n" +
 				"# HELP armadra_cloud_lockout_unavailable_total 因 Redis 不可用而拒绝登录的次数（失败关闭）。\n" +
 				"# TYPE armadra_cloud_lockout_unavailable_total counter\n" +
-				fmt.Sprintf("armadra_cloud_lockout_unavailable_total %d\n", assembly.lockouts.Unavailable())
+				fmt.Sprintf("armadra_cloud_lockout_unavailable_total %d\n", assembly.lockouts.Unavailable()) +
+				assembly.mail.RenderMetrics()
 		}
 		metricsServer = &http.Server{
 			Handler: obs.MetricsHandler(render, cfg.MetricsToken), ReadHeaderTimeout: httpHeaderWait,

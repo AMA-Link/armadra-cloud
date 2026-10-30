@@ -14,8 +14,11 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
+	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
 // #142：连对端失败的日志要能排障——带分类（reason）、拒绝升级时的状态码（code）与对端的主机与端口（host），
@@ -119,3 +122,41 @@ type timeoutErr struct{}
 func (*timeoutErr) Error() string   { return "timeout" }
 func (*timeoutErr) Timeout() bool   { return true }
 func (*timeoutErr) Temporary() bool { return true }
+
+// fixedRoute 是只答一条固定路由的路由表。
+type fixedRoute struct{ route control.Route }
+
+func (f fixedRoute) Get(context.Context, string) (*control.Route, error) {
+	r := f.route
+	return &r, nil
+}
+func (fixedRoute) Set(context.Context, string, control.Route, time.Duration) error {
+	return nil
+}
+func (fixedRoute) Touch(context.Context, string, time.Duration) error { return nil }
+func (fixedRoute) Delete(context.Context, string, string) error       { return nil }
+
+// 路由指向别的节点却拿不到到那个节点的连接（对端不在节点表、没配节点令牌）：答 nil（边缘 4404），
+// 计进 relay_routes_remote_failed_total，不计 relay_routes_remote_total。
+func TestLookupCountsRemoteFailures(t *testing.T) {
+	r := newRig(t)
+	routes := fixedRoute{control.Route{Node: "ghost", TunnelID: "t1"}}
+	noLocal := func(string) *tunnel.Tunnel { return nil }
+	m := &internodeMetrics{streams: func() int { return 0 }}
+	withLinks := lookup(routes, "self", noLocal, newLinks("self", "tok", false, r.admin, r.prefix, obs.Nop(), m), m)
+	withoutToken := lookup(routes, "self", noLocal, nil, m)
+	for _, find := range []func(context.Context, string) (*tunnel.Tunnel, error){withLinks, withoutToken} {
+		if got, err := find(context.Background(), "src1"); got != nil || err != nil {
+			t.Fatalf("应答 nil：%v %v", got, err)
+		}
+	}
+	text := m.render()
+	if metricLine(text, "relay_routes_remote_failed_total") != "2" || metricLine(text, "relay_routes_remote_total") != "0" {
+		t.Fatal(text)
+	}
+	// 路由指向本节点而本地没有隧道（旧路由）不是转发失败。
+	self := lookup(fixedRoute{control.Route{Node: "self", TunnelID: "t1"}}, "self", noLocal, nil, m)
+	if got, _ := self(context.Background(), "src1"); got != nil || metricLine(m.render(), "relay_routes_remote_failed_total") != "2" {
+		t.Fatal(m.render())
+	}
+}

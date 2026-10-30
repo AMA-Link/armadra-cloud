@@ -240,3 +240,59 @@ func TestLoadConfigRedisURLFile(t *testing.T) {
 		t.Fatalf("%v", issues)
 	}
 }
+
+// 指标监听：回环地址不要令牌；非回环（空主机 :端口、0.0.0.0、[::]、别的地址）必须配 RELAY_METRICS_TOKEN
+// 或 RELAY_METRICS_TOKEN_FILE，否则配置无效、不启动（与控制面同一条规则）。
+func TestMetricsListenNeedsTokenOffLoopback(t *testing.T) {
+	orig := readFile
+	defer func() { readFile = orig }()
+	readFile = func(name string) ([]byte, error) {
+		switch name {
+		case "/run/metrics_token":
+			return []byte("metrics-secret\n"), nil
+		case "/run/empty":
+			return []byte("\n"), nil
+		}
+		return nil, errors.New("no such file")
+	}
+	const want = "RELAY_METRICS_LISTEN：不是回环地址时必须配 RELAY_METRICS_TOKEN 或 RELAY_METRICS_TOKEN_FILE"
+	for _, c := range []struct {
+		listen, tokenKey, token string
+		ok                      bool
+	}{
+		{":9100", "", "", false},
+		{"0.0.0.0:9100", "", "", false},
+		{"[::]:9100", "", "", false},
+		{"10.0.0.5:9100", "", "", false},
+		{":9100", "RELAY_METRICS_TOKEN_FILE", "/run/empty", false},
+		{":9100", "RELAY_METRICS_TOKEN_FILE", "/run/metrics_token", true},
+		{"0.0.0.0:9100", "RELAY_METRICS_TOKEN_FILE", "/run/metrics_token", true},
+		{"0.0.0.0:9100", "RELAY_METRICS_TOKEN", "metrics-secret", true},
+		{"127.0.0.1:9100", "", "", true},
+		{"[::1]:9100", "", "", true},
+		{"localhost:9100", "", "", true},
+	} {
+		env := baseEnv()
+		env["RELAY_METRICS_LISTEN"] = c.listen
+		if c.tokenKey != "" {
+			env[c.tokenKey] = c.token
+		}
+		cfg, issues := LoadConfig(env, host)
+		if c.ok {
+			if len(issues) > 0 || cfg.MetricsListen != c.listen {
+				t.Errorf("%s（%s）应放行：%v", c.listen, c.tokenKey, issues)
+			}
+			continue
+		}
+		if len(issues) != 1 || issues[0] != want || cfg.MetricsListen != "" {
+			t.Errorf("%s（%s）应拒绝：%v", c.listen, c.tokenKey, issues)
+		}
+	}
+	// serve 拒绝启动：报这一句，不回显令牌。
+	var out, errOut bytes.Buffer
+	env := baseEnv()
+	env["RELAY_METRICS_LISTEN"] = "0.0.0.0:9100"
+	if code := Run([]string{"serve"}, env, "dev", "用法: armadra-relay", &out, &errOut); code != 64 || !strings.Contains(errOut.String(), want) {
+		t.Fatalf("code=%d err=%q", code, errOut.String())
+	}
+}

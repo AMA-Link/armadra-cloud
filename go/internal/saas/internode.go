@@ -59,7 +59,9 @@ const (
 type internodeMetrics struct {
 	toSource, toClient atomic.Int64
 	remote             atomic.Int64
-	streams            func() int
+	// remoteFailed 是路由指向别的节点、却拿不到到那个节点的连接（连不上、没配节点令牌）而没转出去的通道。
+	remoteFailed atomic.Int64
+	streams      func() int
 	// unwritten 是入口节点出向连接上还没写出的转发字节（挂着等信用的上行 + 已排队没写进内核的）。
 	unwritten func() int64
 }
@@ -72,7 +74,8 @@ func (m *internodeMetrics) addBytes(d obs.Direction, n int) {
 	}
 }
 
-// render 输出 relay_internode_streams、relay_internode_bytes_total{direction}、relay_routes_remote_total。
+// render 输出 relay_internode_streams、relay_internode_bytes_total{direction}、relay_routes_remote_total、
+// relay_routes_remote_failed_total。
 func (m *internodeMetrics) render() string {
 	var b strings.Builder
 	b.WriteString("# HELP relay_internode_streams Streams on inter-node links of this node.\n")
@@ -90,6 +93,9 @@ func (m *internodeMetrics) render() string {
 	b.WriteString("# HELP relay_routes_remote_total Client channels forwarded to the node holding the tunnel.\n")
 	b.WriteString("# TYPE relay_routes_remote_total counter\n")
 	b.WriteString("relay_routes_remote_total " + itoa(m.remote.Load()) + "\n")
+	b.WriteString("# HELP relay_routes_remote_failed_total Client channels whose tunnel is on another node but could not be forwarded (no link to that node).\n")
+	b.WriteString("# TYPE relay_routes_remote_failed_total counter\n")
+	b.WriteString("relay_routes_remote_failed_total " + itoa(m.remoteFailed.Load()) + "\n")
 	return b.String()
 }
 
@@ -383,8 +389,8 @@ func closeCodeOf(err error) protocol.CloseCode {
 }
 
 // lookup 是 SaaS 节点给边缘的找隧道：路由指向本节点 → 本地隧道；指向别的节点 → 到那个节点的连接
-// （有节点令牌时）；都没有答 nil（4404）。
-func lookup(routes control.RouteTable, self string, local func(string) *tunnel.Tunnel, l *links) func(context.Context, string) (*tunnel.Tunnel, error) {
+// （有节点令牌时）；都没有答 nil（4404）。指向别的节点却没拿到连接的计进 relay_routes_remote_failed_total。
+func lookup(routes control.RouteTable, self string, local func(string) *tunnel.Tunnel, l *links, m *internodeMetrics) func(context.Context, string) (*tunnel.Tunnel, error) {
 	return func(ctx context.Context, sourceID string) (*tunnel.Tunnel, error) {
 		route, err := routes.Get(ctx, sourceID)
 		if err != nil || route == nil {
@@ -397,12 +403,14 @@ func lookup(routes control.RouteTable, self string, local func(string) *tunnel.T
 			}
 			return t, nil
 		}
-		if l == nil {
-			return nil, nil
+		var t *tunnel.Tunnel
+		if l != nil {
+			t = l.get(ctx, route.Node)
 		}
-		t := l.get(ctx, route.Node)
 		if t != nil {
-			l.metrics.remote.Add(1)
+			m.remote.Add(1)
+		} else {
+			m.remoteFailed.Add(1)
 		}
 		return t, nil
 	}

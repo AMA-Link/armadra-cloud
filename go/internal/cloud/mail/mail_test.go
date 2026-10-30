@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -126,6 +127,34 @@ func (e *env) count(sql string, args ...any) (n int) {
 	return
 }
 
+// metric 取 RenderMetrics 里某个计数器的值（没有这一行答 -1）。
+func (e *env) metric(name string) int {
+	e.t.Helper()
+	for _, line := range strings.Split(e.mail.RenderMetrics(), "\n") {
+		if value, ok := strings.CutPrefix(line, name+" "); ok {
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				e.t.Fatalf("%s 的值：%q", name, value)
+			}
+			return n
+		}
+	}
+	return -1
+}
+
+// expectMetrics 断言四个发信计数器。
+func (e *env) expectMetrics(sent, failures, abandoned, dropped int) {
+	e.t.Helper()
+	for name, want := range map[string]int{
+		"armadra_cloud_mail_sent_total": sent, "armadra_cloud_mail_send_failures_total": failures,
+		"armadra_cloud_mail_abandoned_total": abandoned, "armadra_cloud_mail_backlog_dropped_total": dropped,
+	} {
+		if got := e.metric(name); got != want {
+			e.t.Fatalf("%s：%d，要 %d\n%s", name, got, want, e.mail.RenderMetrics())
+		}
+	}
+}
+
 func fragment(t *testing.T, m mail.Message, path string) string {
 	t.Helper()
 	u, err := url.Parse(strings.Fields(m.Text[strings.Index(m.Text, "http"):])[0])
@@ -242,6 +271,8 @@ func TestRetryUsesFreshTokenAndNothingIsSentTwice(t *testing.T) {
 	if n := len(e.sender.Messages()); n != 1 {
 		t.Fatalf("重放不重发：%d", n)
 	}
+	// 指标：失败一次、发出一封；重放不重计。
+	e.expectMetrics(1, 1, 0, 0)
 }
 
 func TestGivingUpMarksTheOutboxFailed(t *testing.T) {
@@ -262,6 +293,11 @@ func TestGivingUpMarksTheOutboxFailed(t *testing.T) {
 	})
 	if len(e.sender.Messages()) != 0 {
 		t.Fatal("一封都没发出")
+	}
+	// 指标：两次尝试都失败，一封用尽重试。
+	e.expectMetrics(0, 2, 1, 0)
+	if text := e.mail.RenderMetrics(); strings.Contains(text, "ann@") || strings.Contains(text, mail.PasswordChanged) {
+		t.Fatalf("指标里不带地址与模板：%s", text)
 	}
 }
 
@@ -427,6 +463,8 @@ func TestWithoutSMTPJobsAreDeferredBacklogIsCappedAndNoTokenIsMinted(t *testing.
 	if e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send'") != 3 {
 		t.Fatal("被丢掉的邮件连同作业一起删")
 	}
+	// 没配 SMTP 不算发信失败，只计丢掉的积压。
+	e.expectMetrics(0, 0, 0, 2)
 }
 
 // 排队期间账号邮箱换了：寄往旧地址的找回口令邮件丢掉，不发。
