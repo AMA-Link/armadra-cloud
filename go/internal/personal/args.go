@@ -46,6 +46,7 @@ var (
 	postgresURL   = regexp.MustCompile(`^postgres(?:ql)?://`)
 	redisURL      = regexp.MustCompile(`^rediss?://`)
 	listenPattern = regexp.MustCompile(`^(?:\[([^\]]+)\]|([^:]+)):(\d{1,5})$`)
+	anyHostListen = regexp.MustCompile(`^:(\d{1,5})$`)
 	linkIDPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
 	sourceIDRe    = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	durationRe    = regexp.MustCompile(`^(\d{1,5})([dhm])$`)
@@ -193,6 +194,29 @@ func listenOf(text, flag string) (ListenAddress, error) {
 	addr, err := ParseListen(text)
 	if err != nil {
 		return ListenAddress{}, Usagef("%s 不是一个地址：%s", flag, text)
+	}
+	return addr, nil
+}
+
+// metricsListenOf 解 --metrics-listen：另收空主机的 `:端口`（监听全部网卡）。回环地址不要令牌；
+// 别的地址（含 `:端口`、`0.0.0.0`、`[::]`）必须配 RELAY_METRICS_TOKEN，否则是配置错误（与 SaaS 控制面、节点同一条规则）。
+func metricsListenOf(text, token string) (ListenAddress, error) {
+	var addr ListenAddress
+	if m := anyHostListen.FindStringSubmatch(text); m != nil {
+		port, err := strconv.Atoi(m[1])
+		if err != nil || port > 65535 {
+			return ListenAddress{}, Usagef("--metrics-listen 不是一个地址：%s", text)
+		}
+		addr = ListenAddress{Port: port}
+	} else {
+		parsed, err := listenOf(text, "--metrics-listen")
+		if err != nil {
+			return ListenAddress{}, err
+		}
+		addr = parsed
+	}
+	if token == "" && !IsLoopback(addr.Host) {
+		return ListenAddress{}, Usagef("--metrics-listen 不是回环地址时必须配 RELAY_METRICS_TOKEN：%s", text)
 	}
 	return addr, nil
 }
@@ -767,14 +791,14 @@ func ParseServe(argv []string, env Env, cwd string) (ServeOptions, error) {
 	if tls == TLSFile {
 		options.TLSCert, options.TLSKey = resolvePath(cwd, tlsCert), resolvePath(cwd, tlsKey)
 	}
+	options.MetricsToken, _ = env.NonEmpty("RELAY_METRICS_TOKEN")
 	if metricsText != "" {
-		metrics, err := listenOf(metricsText, "--metrics-listen")
+		metrics, err := metricsListenOf(metricsText, options.MetricsToken)
 		if err != nil {
 			return ServeOptions{}, err
 		}
 		options.MetricsListen = &metrics
 	}
-	options.MetricsToken, _ = env.NonEmpty("RELAY_METRICS_TOKEN")
 	return options, nil
 }
 

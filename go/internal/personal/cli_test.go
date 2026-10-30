@@ -38,6 +38,7 @@ func TestRunCLIExitCodes(t *testing.T) {
 		{"未知选项", []string{"status", "--data-dir", dir, "--bogus", "1"}, 64, "", "未知选项：--bogus"},
 		{"没初始化", []string{"status", "--data-dir", filepath.Join(dir, "none")}, 64, "", "还没有初始化"},
 		{"serve 缺 host", []string{"serve", "--data-dir", dir}, 64, "", "缺少 --host"},
+		{"serve 指标监听非回环没令牌", []string{"serve", "--data-dir", dir, "--host", "127.0.0.1", "--tls", "plain", "--metrics-listen", ":9100"}, 64, "", "--metrics-listen 不是回环地址时必须配 RELAY_METRICS_TOKEN：:9100"},
 		{"init 成功", []string{"init", "--data-dir", filepath.Join(dir, "d"), "--account", "me", "--password-file", pw, "--host", "127.0.0.1", "--tls", "plain"}, 0, "已初始化：", ""},
 		{"init 再来一次", []string{"init", "--data-dir", filepath.Join(dir, "d"), "--account", "me", "--password-file", pw, "--host", "127.0.0.1", "--tls", "plain"}, 64, "", "已经初始化过"},
 		{"status 成功", []string{"status", "--data-dir", filepath.Join(dir, "d")}, 0, "账号：me", ""},

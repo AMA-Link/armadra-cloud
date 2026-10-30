@@ -591,6 +591,50 @@ func TestArgsPublicOrigin(t *testing.T) {
 	}
 }
 
+// 指标监听：回环地址不要令牌；非回环（空主机 :端口、0.0.0.0、[::]、别的地址）必须配 RELAY_METRICS_TOKEN，
+// 否则是配置错误（CLI 退出 64），与 SaaS 控制面、节点同一条规则。
+func TestArgsMetricsListenNeedsTokenOffLoopback(t *testing.T) {
+	base := args("--data-dir", "d", "--host", "h")
+	for _, c := range []struct {
+		listen, token string
+		want          *ListenAddress
+	}{
+		{":9100", "", nil},
+		{"0.0.0.0:9100", "", nil},
+		{"[::]:9100", "", nil},
+		{"10.0.0.5:9100", "", nil},
+		{"relay.example:9100", "", nil},
+		{":9100", "tok", &ListenAddress{"", 9100}},
+		{"0.0.0.0:9100", "tok", &ListenAddress{"0.0.0.0", 9100}},
+		{"[::]:9100", "tok", &ListenAddress{"::", 9100}},
+		{"127.0.0.1:9100", "", &ListenAddress{"127.0.0.1", 9100}},
+		{"127.0.0.2:9100", "", &ListenAddress{"127.0.0.2", 9100}},
+		{"[::1]:9100", "", &ListenAddress{"::1", 9100}},
+		{"localhost:9100", "", &ListenAddress{"localhost", 9100}},
+	} {
+		env := Env{"RELAY_METRICS_LISTEN": c.listen}
+		if c.token != "" {
+			env["RELAY_METRICS_TOKEN"] = c.token
+		}
+		o, err := ParseServe(base, env, "/w")
+		if c.want == nil {
+			wantUsage(t, err, "--metrics-listen 不是回环地址时必须配 RELAY_METRICS_TOKEN："+c.listen)
+			continue
+		}
+		if err != nil || o.MetricsListen == nil || *o.MetricsListen != *c.want {
+			t.Errorf("%s（令牌 %q）应放行：%+v %v", c.listen, c.token, o.MetricsListen, err)
+		}
+	}
+	// 空令牌当没配；命令行的地址同样检查。
+	_, err := ParseServe(append(append([]string{}, base...), "--metrics-listen", "0.0.0.0:9100"), Env{"RELAY_METRICS_TOKEN": ""}, "/w")
+	wantUsage(t, err, "--metrics-listen 不是回环地址时必须配 RELAY_METRICS_TOKEN：0.0.0.0:9100")
+	// 形状不对照旧报地址错误。
+	for _, bad := range []string{":", ":99999", "9100", "[::]"} {
+		_, err := ParseServe(base, Env{"RELAY_METRICS_LISTEN": bad, "RELAY_METRICS_TOKEN": "tok"}, "/w")
+		wantUsage(t, err, "--metrics-listen 不是一个地址："+bad)
+	}
+}
+
 func TestArgsMetricsAndEnvPrecedence(t *testing.T) {
 	base := args("--data-dir", "d", "--host", "h")
 	o := mustServe(t, append(append([]string{}, base...), "--metrics-listen", "127.0.0.1:9100"), Env{"RELAY_METRICS_LISTEN": "0.0.0.0:1", "RELAY_METRICS_TOKEN": "tok"})
