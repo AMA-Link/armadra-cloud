@@ -171,6 +171,9 @@ func (s *internodeServer) HandleUpgrade(w http.ResponseWriter, r *http.Request) 
 // internodeWriteTimeout 是链路上写一帧的超时：写不动就断开。
 const internodeWriteTimeout = 30 * time.Second
 
+// maxInternodeCtl 是链路控制帧队列的硬上限，与隧道同值：对端慢读又不停发控制帧就断开（#172）。
+const maxInternodeCtl = tunnel.DefaultMaxCtlQueue
+
 // internodeFlushWait 是下线时等入向连接写完已排队帧（转来的流的下行尾巴与 END）的上限。
 const internodeFlushWait = 5 * time.Second
 
@@ -223,7 +226,9 @@ type internodeConn struct {
 	linkCredit  int                      // 还能往对端发多少（对端的链路接收窗口）
 	recvUnacked int                      // 从对端收下、还没补给对端的链路级字节
 	recvLeft    int                      // 对端还能发多少（本节点给的链路窗口）；超了是对端违反流控，断开
-	ctl         []outItem                // 控制帧（WINDOW、PONG、RST）：每批先写
+	ctl         []outItem                // 控制帧（WINDOW、PONG、RST）：每批先写；超过 maxInternodeCtl 整条丢掉并断开
+	pongAt      int                      // ctl 里待发 PONG 的下标（-1 没有）：再来 PING 只替换（RFC 6455 §5.5.3）
+	overflow    bool                     // 控制帧队列超限：receive 据此断开
 	sched       tunnel.Sched[*fwdStream] // 各流的 DATA / END：按流轮转、稀疏流优先、按字节预算分批（#57）
 	queued      int                      // 各流出队列里还没取走的帧数（含已摘表的流）
 	writing     bool                     // 写协程正在写一批
@@ -258,7 +263,7 @@ func newInternodeConn(s *internodeServer, ws *websocket.Conn, peer string) *inte
 	ws.SetReadLimit(protocol.MaxFrameBytes + 16)
 	return &internodeConn{
 		s: s, ws: ws, peer: peer, streams: map[uint32]*fwdStream{}, linkCredit: s.cfg.TunnelWindow, recvLeft: s.cfg.TunnelWindow,
-		wake: make(chan struct{}, 1), done: make(chan struct{}),
+		wake: make(chan struct{}, 1), done: make(chan struct{}), pongAt: -1,
 	}
 }
 
@@ -379,8 +384,45 @@ func (c *internodeConn) sendLocked(frame []byte, after func()) {
 		}
 		return
 	}
+	if c.overflow {
+		if after != nil {
+			after()
+		}
+		return
+	}
+	if len(c.ctl) >= maxInternodeCtl {
+		// 队列顶爆：整条丢掉（after 照常回调，还信用），标记溢出；读协程看到就断开。
+		dropped := c.ctl
+		c.ctl, c.pongAt, c.overflow = nil, -1, true
+		for _, it := range dropped {
+			if it.after != nil {
+				it.after()
+			}
+		}
+		if after != nil {
+			after()
+		}
+		if c.s != nil && c.s.log != nil {
+			c.s.log.Warn("节点间链路控制帧队列超限，断开", obs.Node(c.peer), obs.Reason(tunnel.ReasonCtlQueueOverflow))
+		}
+		return
+	}
 	c.ctl = append(c.ctl, outItem{frame: frame, after: after})
 	c.signalLocked()
+}
+
+// pongLocked 排一条 PONG：队列里已有待发的 PONG 就只换成最新的，对端刷 PING 也至多占一个位置。
+func (c *internodeConn) pongLocked(ts float64) {
+	frame := encode(protocol.Frame{Type: protocol.FramePong, Ts: ts})
+	if c.pongAt >= 0 && c.pongAt < len(c.ctl) {
+		c.ctl[c.pongAt] = outItem{frame: frame}
+		c.signalLocked()
+		return
+	}
+	c.sendLocked(frame, nil)
+	if !c.overflow {
+		c.pongAt = len(c.ctl) - 1
+	}
 }
 
 // sendStreamLocked 把一条流的 DATA / END 排进这条流自己的出队列（持锁调用）：流内保持顺序，
@@ -410,6 +452,7 @@ func (c *internodeConn) signalLocked() {
 func (c *internodeConn) collectLocked(all bool) (batch []outItem, base uint64, ctlN int) {
 	batch = c.ctl
 	c.ctl = nil
+	c.pongAt = -1
 	ctlN = len(batch)
 	budget := tunnel.WriteBudget
 	if all {
@@ -562,11 +605,14 @@ func (c *internodeConn) receive(msg []byte) bool {
 		c.window(f.StreamID, int(f.Credit))
 	case protocol.FramePing:
 		c.mu.Lock()
-		c.sendLocked(encode(protocol.Frame{Type: protocol.FramePong, Ts: f.Ts}), nil)
+		c.pongLocked(f.Ts)
 		c.mu.Unlock()
 	case protocol.FramePong, protocol.FrameGoaway:
 	}
-	return true
+	c.mu.Lock()
+	overflow := c.overflow
+	c.mu.Unlock()
+	return !overflow
 }
 
 // open 接一条转来的流：目标源在 edge.InternodeOpen 的路径里，只认本节点手里的隧道；没有就 RST
