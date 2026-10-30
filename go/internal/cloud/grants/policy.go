@@ -57,6 +57,21 @@ func (p *Policy) Hosts(ctx context.Context, r saas.Reader, filter saas.HostFilte
 
 var _ hosts.Directory = (*Policy)(nil)
 
+// Roles 是主机目录的 myRole 来源（hosts.Directory）：一次读出 viewerID 对这批主机的事实（SourceAccessBases，
+// 固定几条查询，只含它自己适用的授予）再逐台 Compose，与断言的有效权限同一套合成。有效权限为空答空串。
+func (p *Policy) Roles(ctx context.Context, r saas.Reader, viewerID string, sourceIDs []string) (map[string]string, error) {
+	bases, err := r.SourceAccessBases(ctx, p.tenant(), viewerID, sourceIDs)
+	if err != nil {
+		return nil, err
+	}
+	nowMs := p.c.NowMs()
+	out := make(map[string]string, len(bases))
+	for sourceID, basis := range bases {
+		out[sourceID] = Compose(basis, viewerID, nowMs).Role
+	}
+	return out, nil
+}
+
 func viaOf(h saas.Host, viewerID string) string {
 	switch {
 	case h.OwnerAccountID == viewerID:
