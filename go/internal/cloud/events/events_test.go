@@ -55,6 +55,8 @@ func TestCodecRoundTripsEveryEvent(t *testing.T) {
 		{events.NewInvitationChanged("i1", "t1", "", "pending", 7), aud},
 		{events.NewInvitationChanged("i2", "", "s1", "accepted", 8), nil},
 		{events.NewGrantChanged("s1", "g1", "t1", 9), aud},
+		{events.NewDeviceTrustRequested("r1", "s1", "t1", 10), aud},
+		{events.NewDeviceTrustResolved("r1", events.TrustOutcomeRejected, 11), aud},
 		{core.NewSourceRevoked("s1"), nil},
 		{core.NewAccessRevoked("s1"), link},
 		{core.NewSourceOnline("s1", 1, "https://s1.src.example"), nil},
