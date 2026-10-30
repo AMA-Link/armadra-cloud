@@ -254,6 +254,28 @@ export async function echoChannel(
   return all;
 }
 
+/**
+ * 大块字节的比对摘要：长度与第一个不同的下标（相同答 -1）。断言写成
+ * `expect(byteDiff(got, sent)).toEqual({ length: sent.length, firstMismatch: -1 })`。
+ * 几百 KiB 的 `Uint8Array` 直接 `toEqual` 会逐元素走通用的深比较，安静时就要近 1 秒、机器忙时
+ * 五六秒，比被测的转发本身慢两个数量级；这里一遍循环，失败时也只报一个下标。
+ */
+export function byteDiff(
+  actual: Uint8Array,
+  expected: Uint8Array,
+): { length: number; firstMismatch: number } {
+  const shared = Math.min(actual.length, expected.length);
+  let firstMismatch = -1;
+  for (let index = 0; index < shared; index += 1)
+    if (actual[index] !== expected[index]) {
+      firstMismatch = index;
+      break;
+    }
+  if (firstMismatch === -1 && actual.length !== expected.length)
+    firstMismatch = shared;
+  return { length: actual.length, firstMismatch };
+}
+
 /** 等一个 WS 事件。 */
 export function nextMessage(
   ws: WebSocket,

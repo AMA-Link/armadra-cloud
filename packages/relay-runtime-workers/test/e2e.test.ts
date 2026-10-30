@@ -16,6 +16,7 @@ import type { SourceDO } from "../src/source-do.ts";
 
 import {
   assertion,
+  byteDiff,
   call,
   closed,
   heartbeatHint,
@@ -94,7 +95,10 @@ describe("端到端通道", () => {
       joined.set(chunk, offset);
       offset += chunk.length;
     }
-    expect(joined).toEqual(sent);
+    expect(byteDiff(joined, sent)).toEqual({
+      length: total,
+      firstMismatch: -1,
+    });
     expect(core.e2eBytes).toBe(total);
     const done = closed(ws);
     ws.close(1000, "done");
