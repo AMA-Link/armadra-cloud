@@ -47,6 +47,6 @@ export function protocolHeaderValue(
 export const MIN_CORE_VERSION_TEAM_ASSERTION = "0.10.0";
 /**
  * 同上，对只带 `role` / `scp`、不带 `team` 的断言（团队主机上的 guest 授予）。Armadra 的
- * 对应准入（AMA-Link/Armadra#483）不在 0.10.0 里，先占位为下一个 minor；它发版前按实际版本填定。
+ * 对应准入（AMA-Link/Armadra#483）随 Armadra 0.11.0 发布，定为 0.11.0。
  */
 export const MIN_CORE_VERSION_ROLE_ONLY_ASSERTION = "0.11.0";
