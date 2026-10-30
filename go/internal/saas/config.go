@@ -14,6 +14,7 @@
 package saas
 
 import (
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -76,7 +77,8 @@ type Config struct {
 }
 
 var (
-	listenPattern = regexp.MustCompile(`^(?:\[([^\]]+)\]|([^:]+)):(\d{1,5})$`)
+	metricsAnyHost = regexp.MustCompile(`^:(\d{1,5})$`)
+	listenPattern  = regexp.MustCompile(`^(?:\[([^\]]+)\]|([^:]+)):(\d{1,5})$`)
 	// nodePattern 与契约的 relayNodeIdSchema 同一条（节点令牌的 sub、节点表的字段、命令频道的 id）。
 	nodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 	nodeUnsafe  = regexp.MustCompile(`[^a-z0-9-]`)
@@ -221,8 +223,12 @@ func LoadConfig(env map[string]string, hostname func() (string, error)) (Config,
 	}
 	cfg.MetricsToken = secret("RELAY_METRICS_TOKEN")
 	if v, ok := get("RELAY_METRICS_LISTEN"); ok {
-		if listenPattern.FindStringSubmatch(v) == nil {
+		// 空主机（:端口）监听全部网卡，与 0.0.0.0 一样按非回环对待。
+		if listenPattern.FindStringSubmatch(v) == nil && metricsAnyHost.FindStringSubmatch(v) == nil {
 			bad("RELAY_METRICS_LISTEN", "不是合法的 host:port")
+		} else if cfg.MetricsToken == "" && !loopbackListen(v) {
+			// 回环地址不要令牌；别的地址（含 :端口 与 0.0.0.0）必须配令牌，否则拒绝启动。
+			bad("RELAY_METRICS_LISTEN", "不是回环地址时必须配 RELAY_METRICS_TOKEN 或 RELAY_METRICS_TOKEN_FILE")
 		} else {
 			cfg.MetricsListen = v
 		}
@@ -298,4 +304,17 @@ func wsURL(v string, insecure bool) bool {
 		return false
 	}
 	return u.Scheme == "wss" || (insecure && u.Scheme == "ws")
+}
+
+// loopbackListen：主机:端口 的主机是回环地址（localhost、127.0.0.0/8、::1）；空主机监听全部网卡，不算（ParseIP 认不出空串）。
+func loopbackListen(text string) bool {
+	host, _, err := net.SplitHostPort(text)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
