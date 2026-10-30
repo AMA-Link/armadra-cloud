@@ -973,7 +973,7 @@ type Watcher interface {
 - **链接 `list` / `update` / `revoke`**：`list` 的 `sourceId` 要管理权（看不到 `404`、管不了 `403`），`space` 过滤（团队空间调用者不是成员 `404`；个人空间 = 团队 id 为空的主机），不带过滤是调用者管得了的全部主机名下的链接（`LinksForSources` 一次查，主机 ≤ 2000、链接 ≤ 2000）；`update` 只改备注，管理权由 `Policy.CanManage` 按链接所属主机判；`revoke` 一个事务：`ManageHost` → `core.RevokeLink`（绑定到事务，撤销钩子经 `AfterCommit`）→ 审计 `link.revoke`，提交后撤访客令牌（钩子）、按 `guest:<linkId>:` 前缀踢人、发 `accessRevoked`。签链接的 driver 没有管理权，所以撤不了也改不了自己签的链接（要主机管理者来）。
 - **链接访客的 `sources.assertion`**（`grants/guest.go`）：事故开关与 `assert.acct` 限流（键是访客主体）→ 主机已撤销 `410` → 链接有效且指向这台主机（`personalPolicy.Access`）否则 `403 source_access_denied` → 团队主机的团队在恢复期内 `403 source_access_denied`、停用 `403 team_suspended` → 主机或团队关了 guest `403 source_access_denied`（#154） → 断言取 `Intent` 的名字 / `link` 声明 / 范围（没有 `team` 与 `role`；链接路径是旧路径，不过版本门）→ 签 → 登记签发索引 → 复核（设备、主机、链接、团队、`allowGuests`）→ 审计 `assertion.issue`（行动者记 `system`，`actor_id` 是访客主体）。交错用例用 `Options.Hook` 在 `signed` / `indexed` 两点停住，撤销链接之后接受答 `link_invalid`、自己签的令牌都已撤、没有留下活着的访客设备。
 - **链接访客的 `auth.refresh` 与 `me.sources`**（#154）：访客没有账号，`auth.refresh` 不查账号，改问 `grants.Policy.GuestHost`——链接未撤销且指向未撤销的主机（`personalPolicy.Visible`，与访客断言的 `Access` 同一判断）→ 空间行存在、团队不在恢复期也未停用（`guestSpaceState`）→ 主机与团队的 `allowGuests`（`GuestsAllowedIn`，与 `links.accept` 的 `Admit` 共用）。传输 / 范围检查在前、与账号路径相同；轮换前核一次（只在令牌与设备当前的刷新哈希定时安全比较相等时核，站不住答 `session_revoked`、不动令牌；旧令牌直接交给 `core.Refresh`，重放照样撤整台设备），轮换后再核一次（与撤链接、停用等交错时撤掉这台访客设备再答 `session_revoked`，`Options.Hook` 在 `refresh.checked` / `refresh.rotated` 两点停住的交错用例守住）；答复的会话仍是访客主体，账号过程照旧 `403`。`me.sources` 对访客只给 `GuestHost` 那一台、最小字段（不带 `ownerName` / `space` / `tags`），站不住答空；其余 `me.*` 对访客仍 `403`（`me.streamTicket` 照旧允许）。访客的 `sources.assertion` 同样看 `allowGuests`（签前与复核都核，关了答 `403 source_access_denied`），关 guest 之后已签的访问令牌也要不到新断言。
-- **事件**：`deviceTrustRequested` / `deviceTrustResolved`、`grantChanged` 等团队事件的发送随 S8 的事件总线（`MeStream` 要先有跨节点受众），本批客户端靠 `trust.list` 拉取；`AccessChanged`（Watcher 可见集合）同样随 S8。
+- **事件**：`deviceTrustRequested` / `deviceTrustResolved`、`grantChanged` 等团队事件的发送随 S8 的事件总线（`MeStream` 要先有跨节点受众），本批客户端靠 `trust.list` 拉取；`AccessChanged`（Watcher 可见集合）同样随 S8。**S8 之后补上（#166）**：`trust` 服务在登记（含冷却后重开）、主机回报（trusted / expired）、`trust.reject`、作废（同设备换条目 id、插新请求前清掉已过期的）与 `trust.expire` 作业的事务里登记事件，提交后才发；受众是这条请求此刻的背书人，候选人（主机所有者、团队 owner / admin、请求者本人）逐个读 `TrustView` 再过 `isEndorser`，与 `trust.list` / `trust.reject` 同一个判断；读不到请求（主机撤销、团队恢复期、请求者已离队）就不发。
 - **没做 / 已知差异**：`GuestHost`（链接访客的刷新与 `me.sources`）不看团队的 `allowAnonymousLinks`：访客设备上没有记下接受时是否带了账号，所以团队之后关掉匿名链接，已经匿名进来的访客仍能续会话（#154）；邀请自身的有效期不暴露授予到期（协议包 `invitationSchema` 没有该字段，UI 想显示要加字段，另开）；`links.create` 的 `team_join` 与 `links.accept` 的 `link_frozen` 分别随 M2 与 S7；撤销主机时不逐条撤待处理的主机邀请，预览 / 接受 / 收件箱各自核主机状态。
 
 ### 4.8 撤销即生效（两道门，能力设计 §11.2、§11.7）
@@ -1220,15 +1220,15 @@ type Tx interface {
 - 事件源：领域服务在事务提交后 `events.Publish(event, audience)` → `PUBLISH cloud:events` → 每个实例按受众投递给本机连接（自己 `origin` 的消息本机已投递，不再投一次）。在线事件不经 `cloud:events`：每个实例都经 `relayctl` 的 `Plane.Presence().Subscribe` 收 `relay:presence`。
 - 受众与过滤：
 
-| 事件                                               | 受众                                                                                         |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `sourceOnline` / `sourceOffline` / `sourceRevoked` | 对该主机有有效权限的账号（连接上缓存可见集合，收到 `grantChanged` / `memberChanged` 时重算） |
-| `accessRevoked`、`linkUsed`                        | 现有（链接访客 / 主机管理者）                                                                |
-| `memberChanged`                                    | 该团队全部成员                                                                               |
-| `invitationChanged`                                | 邀请人、团队 admin 以上、被邀请邮箱对应的账号                                                |
-| `grantChanged`                                     | 主机 owner、团队 admin 以上、授予主体涉及的账号                                              |
-| `deviceTrustRequested` / `deviceTrustResolved`     | 按团队设置 `deviceEndorsers` / `memberSelfEndorse` 算出的背书人 + 请求者本人                 |
-| `planChanged`                                      | 空间的 owner / admin / billing（个人空间是本人）                                             |
+| 事件                                               | 受众                                                                                            |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `sourceOnline` / `sourceOffline` / `sourceRevoked` | 对该主机有有效权限的账号（连接上缓存可见集合，收到 `grantChanged` / `memberChanged` 时重算）    |
+| `accessRevoked`、`linkUsed`                        | 现有（链接访客 / 主机管理者）                                                                   |
+| `memberChanged`                                    | 该团队全部成员                                                                                  |
+| `invitationChanged`                                | 邀请人、团队 admin 以上、被邀请邮箱对应的账号                                                   |
+| `grantChanged`                                     | 主机 owner、团队 admin 以上、授予主体涉及的账号                                                 |
+| `deviceTrustRequested` / `deviceTrustResolved`     | 按团队设置 `deviceEndorsers` / `memberSelfEndorse` 算出的背书人（请求者本人只在自助背书开着时） |
+| `planChanged`                                      | 空间的 owner / admin / billing（个人空间是本人）                                                |
 
 - `invitationChanged` 推给被邀请邮箱对应的账号时，**只推邮箱已验证的账号**（与 `invitations.list` 的 `received` 同一条规则，§4.4）。
 
