@@ -43,7 +43,7 @@ export const SINCE_0_3_10 = "0.3.10";
 export const SINCE_0_5 = "0.5.0";
 /** 协议 1.4 随的协议包版本。 */
 export const SINCE_0_10 = "0.10.0";
-/** 协议 1.4 发布后的只加不改补充（暂记，发版时按实际版本改）。 */
+/** 协议 1.4 发布后的只加不改补充，随协议包 0.11.0 发布。 */
 export const SINCE_0_11 = "0.11.0";
 
 /** 契约构建器：每条 procedure 都必须 `.meta({ scope, since })`。 */
