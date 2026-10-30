@@ -110,6 +110,17 @@ func TestConfigErrorsExit64WithoutSecrets(t *testing.T) {
 	if code != 64 || !strings.Contains(errOut, "ARMADRA_CLOUD_ISSUER 必填") {
 		t.Fatalf("serve 缺配置：%d %q", code, errOut)
 	}
+	// 指标监听不是回环地址又没配令牌：拒绝启动（配置错误，同样 64）。
+	env = config.MapEnv{
+		"ARMADRA_CLOUD_ISSUER": "https://app.armadra.test", "ARMADRA_CLOUD_APP_ORIGIN": "https://app.armadra.test",
+		"ARMADRA_CLOUD_DATABASE_URL": "postgres://u:p@127.0.0.1:5432/db", "ARMADRA_CLOUD_REDIS_URL": "redis://127.0.0.1:6379",
+		"ARMADRA_CLOUD_MASTER_KEY":   "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+		"ARMADRA_CLOUD_RELAY_DOMAIN": "armadra.test", "ARMADRA_CLOUD_METRICS_LISTEN": ":9100",
+	}
+	code, _, errOut = run(t, env, "serve")
+	if code != 64 || !strings.Contains(errOut, "METRICS_LISTEN 不是回环地址时必须配 ARMADRA_CLOUD_METRICS_TOKEN_FILE") {
+		t.Fatalf("serve 指标监听没令牌：%d %q", code, errOut)
+	}
 	code, _, errOut = run(t, config.MapEnv{}, "keys", "rotate")
 	if code != 64 || !strings.Contains(errOut, "DATABASE_URL 必填") {
 		t.Fatalf("keys rotate 缺配置：%d %q", code, errOut)
