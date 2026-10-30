@@ -31,6 +31,9 @@ const (
 // 可见性（所有者、团队角色、授予）由实现决定；r 可以是只读连接，也可以是事务。grants.Policy 实现它。
 type Directory interface {
 	Hosts(ctx context.Context, r saas.Reader, filter saas.HostFilter) ([]saas.Host, error)
+	// Roles 是 viewerID 自己对一批主机的有效角色（目录行的 myRole，与断言同一套合成）：一次批量读、批量合成，
+	// 不逐台查。有效权限为空的主机答空串；答 nil map 表示不知道（不报这个字段）。
+	Roles(ctx context.Context, r saas.Reader, viewerID string, sourceIDs []string) (map[string]string, error)
 }
 
 // Options 是主机服务的装配。
@@ -189,4 +192,9 @@ type storeDirectory struct {
 func (d storeDirectory) Hosts(ctx context.Context, r saas.Reader, filter saas.HostFilter) ([]saas.Host, error) {
 	filter.NowMs = d.now()
 	return r.ListHosts(ctx, d.tenant, filter)
+}
+
+// Roles：缺省目录没有授予合成，不报 myRole。
+func (storeDirectory) Roles(context.Context, saas.Reader, string, []string) (map[string]string, error) {
+	return nil, nil
 }

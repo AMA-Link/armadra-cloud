@@ -21,6 +21,7 @@
     "via": "owner",
     "relayOrigin": "https://relay.armadra.test",
     "coreVersion": "0.2.0",
+    "myRole": "driver",
     "trustedOrigins": [
       "https://app.armadra.test"
     ],

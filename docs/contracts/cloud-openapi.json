@@ -4453,6 +4453,22 @@
                               "type": "string",
                               "pattern": "^[a-z0-9][a-z0-9._-]{0,31}$"
                             }
+                          },
+                          "myRole": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "viewer",
+                                  "editor",
+                                  "operator",
+                                  "driver"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -7206,6 +7222,22 @@
                               "type": "string",
                               "pattern": "^[a-z0-9][a-z0-9._-]{0,31}$"
                             }
+                          },
+                          "myRole": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "viewer",
+                                  "editor",
+                                  "operator",
+                                  "driver"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -7353,6 +7385,22 @@
                         "type": "string",
                         "pattern": "^[a-z0-9][a-z0-9._-]{0,31}$"
                       }
+                    },
+                    "myRole": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "viewer",
+                            "editor",
+                            "operator",
+                            "driver"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "trustedOrigins": {
                       "type": "array",
@@ -7617,6 +7665,22 @@
                         "type": "string",
                         "pattern": "^[a-z0-9][a-z0-9._-]{0,31}$"
                       }
+                    },
+                    "myRole": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "viewer",
+                            "editor",
+                            "operator",
+                            "driver"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "trustedOrigins": {
                       "type": "array",

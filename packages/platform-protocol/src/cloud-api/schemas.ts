@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   devicePlatformSchema,
   ed25519PublicJwkSchema,
+  grantRoleSchema,
   orgRoleSchema,
 } from "../assertion/claims.ts";
 import { hex32Schema, protocolVersionSchema } from "../tunnel/handshake.ts";
@@ -110,6 +111,13 @@ export const sourceSummarySchema = z.object({
   space: spaceSchema.optional(),
   /** 1.4 起：标签（筛选与成组授予）。 */
   tags: hostTagsSchema.optional(),
+  /**
+   * 调用者自己对这台主机的有效角色（0.11.0 起，只加不改）：与断言 `role` 同一套合成（授予的并集，不放大，
+   * 已撤销与已到期的授予不算）。所有者行是 `driver`（是不是所有者仍看 `owner`）；`null` = 看得到但没有
+   * 有效权限（团队 owner / admin 看得到全部团队主机，没有授予覆盖时就是它）。只反映调用者本人，不含别人的授予。
+   * 缺省 = 服务端不报：旧服务端、personal、链接访客的 `me.sources`。
+   */
+  myRole: grantRoleSchema.nullable().optional(),
 });
 
 export const sourceDetailSchema = sourceSummarySchema.extend({

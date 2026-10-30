@@ -37,6 +37,7 @@ const sourceSummary = {
   via: "owner",
   relayOrigin: RELAY_ORIGIN,
   coreVersion: "0.2.0",
+  myRole: "driver",
 };
 const sourceDetail = {
   ...sourceSummary,

@@ -80,6 +80,18 @@ type summaryOut struct {
 	CoreVersion  string   `json:"coreVersion"`
 	Space        spaceOut `json:"space"`
 	Tags         []string `json:"tags"`
+	// MyRole 是调用者自己的有效角色（0.11.0 起）：nil = 不报（目录不知道），指向空串 = null（看得到但没有有效权限）。
+	MyRole *myRole `json:"myRole,omitempty"`
+}
+
+// myRole 是 sourceSummary.myRole：空串编码成 null。
+type myRole string
+
+func (r myRole) MarshalJSON() ([]byte, error) {
+	if r == "" {
+		return []byte("null"), nil
+	}
+	return json.Marshal(string(r))
 }
 
 // detailOut 是 sourceDetail 的线上形状。
@@ -91,7 +103,37 @@ type detailOut struct {
 	Settings       hostSettings `json:"settings"`
 }
 
-func (s *Service) summary(ctx context.Context, viewerID string, h saas.Host) (summaryOut, error) {
+// roles 一次取调用者对这批主机的有效角色（Directory.Roles，批量，不逐台查）；r 可以是事务。
+func (s *Service) roles(ctx context.Context, r saas.Reader, viewerID string, rows []saas.Host) (map[string]string, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.SourceID)
+	}
+	return s.dir.Roles(ctx, r, viewerID, ids)
+}
+
+// summaries 是一批行的 sourceSummary：有效角色一次批量合成。
+func (s *Service) summaries(ctx context.Context, r saas.Reader, viewerID string, rows []saas.Host) ([]summaryOut, error) {
+	roles, err := s.roles(ctx, r, viewerID, rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]summaryOut, 0, len(rows))
+	for _, row := range rows {
+		summary, err := s.summary(ctx, viewerID, row, roles)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, summary)
+	}
+	return out, nil
+}
+
+// summary 是一行 sourceSummary；roles 为 nil 时不报 myRole。
+func (s *Service) summary(ctx context.Context, viewerID string, h saas.Host, roles map[string]string) (summaryOut, error) {
 	coreVersion, online, err := s.relay.Route(ctx, h.SourceID)
 	if err != nil {
 		return summaryOut{}, err
@@ -103,6 +145,10 @@ func (s *Service) summary(ctx context.Context, viewerID string, h saas.Host) (su
 	}
 	if h.TeamID != "" {
 		out.Space = spaceOut{Kind: saas.SpaceTeam, TeamID: h.TeamID}
+	}
+	if roles != nil {
+		role := myRole(roles[h.SourceID])
+		out.MyRole = &role
 	}
 	if !out.Owner {
 		out.Via = "link" // 个人空间里被授予的访客：契约的来路枚举没有 guest，按分享给他的人算 link
@@ -118,8 +164,12 @@ func (s *Service) summary(ctx context.Context, viewerID string, h saas.Host) (su
 	return out, nil
 }
 
-func (s *Service) detail(ctx context.Context, viewerID string, h saas.Host) (detailOut, error) {
-	summary, err := s.summary(ctx, viewerID, h)
+func (s *Service) detail(ctx context.Context, r saas.Reader, viewerID string, h saas.Host) (detailOut, error) {
+	roles, err := s.roles(ctx, r, viewerID, []saas.Host{h})
+	if err != nil {
+		return detailOut{}, err
+	}
+	summary, err := s.summary(ctx, viewerID, h, roles)
 	if err != nil {
 		return detailOut{}, err
 	}
@@ -209,13 +259,9 @@ func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]summaryOut, 0, len(rows))
-	for _, row := range rows {
-		summary, err := s.summary(ctx, account.AccountID, row)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, summary)
+	out, err := s.summaries(ctx, s.store.Read(), account.AccountID, rows)
+	if err != nil {
+		return nil, err
 	}
 	var next any
 	if more != nil {
@@ -224,8 +270,9 @@ func (s *Service) list(ctx context.Context, call *api.Call) (any, error) {
 	return map[string]any{"sources": out, "nextCursor": next}, nil
 }
 
-// guestSummaryOut 是链接访客看到的 sourceSummary：只有连上那台主机要用的字段，可选的 ownerName、space、tags 都不报
-// （不暴露主人、团队与主机标签；缺省 space = 个人空间，与 personal 的访客同形）。
+// guestSummaryOut 是链接访客看到的 sourceSummary：只有连上那台主机要用的字段，可选的 ownerName、space、tags、myRole
+// 都不报（不暴露主人、团队与主机标签；缺省 space = 个人空间，与 personal 的访客同形）。myRole 不报：访客的权限是链接
+// 签的（links.get / accept 已给出），不经授予合成，目录行不另给一份。
 type guestSummaryOut struct {
 	SourceID     string `json:"sourceId"`
 	Name         string `json:"name"`
@@ -287,13 +334,11 @@ func (s *Service) meSources(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, row := range rows {
-			summary, err := s.summary(ctx, account.AccountID, row)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, summary)
+		batch, err := s.summaries(ctx, s.store.Read(), account.AccountID, rows)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, batch...)
 		if len(rows) < batchSize {
 			break
 		}
@@ -330,7 +375,7 @@ func (s *Service) get(ctx context.Context, call *api.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.detail(ctx, account.AccountID, h)
+	return s.detail(ctx, s.store.Read(), account.AccountID, h)
 }
 
 // manage 在事务里核管理权：团队主机先锁团队行（团队 → 账号 → 其余的顺序），再重读主机，
@@ -444,7 +489,7 @@ func (s *Service) update(ctx context.Context, call *api.Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		out, err = s.detail(ctx, account.AccountID, fresh)
+		out, err = s.detail(ctx, tx, account.AccountID, fresh)
 		return err
 	})
 	if err != nil {
