@@ -14,22 +14,22 @@
 
 控制面（`armadra-cloud serve`，Go；镜像由 `go/Dockerfile.cloud` 构建；命令 `serve`、`migrate`、`keys rotate`、`nodes token|revoke`、`operators add|totp`、`health`、`version`；完整说明见 [SaaS 实施设计](../docs/design/saas-m1-implementation.md) §2）。秘密用 `*_FILE` 或环境变量给，不进日志：
 
-| 变量                                                                                       | 必填 | 说明                                                                                                 |
-| ------------------------------------------------------------------------------------------ | ---- | ---------------------------------------------------------------------------------------------------- |
-| `ARMADRA_CLOUD_ISSUER`                                                                     | 是   | 断言与令牌的 `iss`，`https` 来源（回环地址可用 `http`）                                              |
-| `ARMADRA_CLOUD_APP_ORIGIN`                                                                 | 是   | 控制台来源（Cookie 与 CSP）；M1 必须等于 `ISSUER`                                                    |
-| `ARMADRA_CLOUD_LISTEN`                                                                     |      | 缺省 `0.0.0.0:8100`，明文，TLS 由前面的反向代理终止                                                  |
-| `ARMADRA_CLOUD_DATABASE_URL`                                                               | 是   | `postgres://…`；非回环地址必须 `sslmode=verify-full` 或 `require`                                    |
-| `ARMADRA_CLOUD_REDIS_URL`                                                                  | 是   | 与中继节点共用的那一个 Redis，要求 ≥ 7.4                                                             |
-| `ARMADRA_CLOUD_MASTER_KEY` / `_FILE`                                                       | 是   | 32 字节 hex；包裹签名私钥与 TOTP 种子（**另存一份**）                                                |
-| `ARMADRA_CLOUD_RELAY_DOMAIN`                                                               | 是   | `<sourceId>.src.<域>` 的 `<域>`，与节点的 `RELAY_DOMAIN` 一致                                        |
-| `ARMADRA_CLOUD_WEB_ROOT`                                                                   |      | 控制台页面（Armadra `apps/web` 的构建产物）；镜像里缺省 `/app/web`；目录里没有 `index.html` 就不托管 |
-| `ARMADRA_CLOUD_SMTP_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD_FILE` / `_FROM` / `_TLS`    |      | 发信；`_TLS` 取 `starttls`（缺省）/ `tls` / `none`，`none` 只许回环（mailpit）                       |
-| `ARMADRA_CLOUD_REQUIRE_EMAIL_VERIFIED`                                                     |      | 缺省 `1`；只在开发环境设 `0`                                                                         |
-| `ARMADRA_CLOUD_TRUSTED_PROXY` / `_TRUSTED_PROXY_PREFER`                                    |      | 受信反向代理的 CIDR 与先读的头，规则同中继                                                           |
-| `ARMADRA_CLOUD_TURNSTILE_SITE_KEY` / `_TURNSTILE_SECRET_FILE` / `_CHALLENGE_SCOPE`         |      | 人机挑战；两个都配才要求，只配一个是配错                                                             |
-| `ARMADRA_CLOUD_METRICS_LISTEN` / `_METRICS_TOKEN_FILE`                                     |      | 指标监听（只许回环地址或空主机 `:端口`；含 `armadra_cloud_lockout_unavailable_total` 与发信计数）    |
-| `ARMADRA_CLOUD_NAME`、`_JOB_WORKERS`、`_TRAFFIC_RETENTION_DAYS`、`_HIBP_URL`、`_LOG_LEVEL` |      | 见设计 §2.2                                                                                          |
+| 变量                                                                                       | 必填 | 说明                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------ | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARMADRA_CLOUD_ISSUER`                                                                     | 是   | 断言与令牌的 `iss`，`https` 来源（回环地址可用 `http`）                                                                                                          |
+| `ARMADRA_CLOUD_APP_ORIGIN`                                                                 | 是   | 控制台来源（Cookie 与 CSP）；M1 必须等于 `ISSUER`                                                                                                                |
+| `ARMADRA_CLOUD_LISTEN`                                                                     |      | 缺省 `0.0.0.0:8100`，明文，TLS 由前面的反向代理终止                                                                                                              |
+| `ARMADRA_CLOUD_DATABASE_URL`                                                               | 是   | `postgres://…`；非回环地址必须 `sslmode=verify-full` 或 `require`                                                                                                |
+| `ARMADRA_CLOUD_REDIS_URL`                                                                  | 是   | 与中继节点共用的那一个 Redis，要求 ≥ 7.4                                                                                                                         |
+| `ARMADRA_CLOUD_MASTER_KEY` / `_FILE`                                                       | 是   | 32 字节 hex；包裹签名私钥与 TOTP 种子（**另存一份**）                                                                                                            |
+| `ARMADRA_CLOUD_RELAY_DOMAIN`                                                               | 是   | `<sourceId>.src.<域>` 的 `<域>`，与节点的 `RELAY_DOMAIN` 一致                                                                                                    |
+| `ARMADRA_CLOUD_WEB_ROOT`                                                                   |      | 控制台页面（Armadra `apps/web` 的构建产物）；镜像里缺省 `/app/web`；目录里没有 `index.html` 就不托管                                                             |
+| `ARMADRA_CLOUD_SMTP_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD_FILE` / `_FROM` / `_TLS`    |      | 发信；`_TLS` 取 `starttls`（缺省）/ `tls` / `none`，`none` 只许回环（mailpit）                                                                                   |
+| `ARMADRA_CLOUD_REQUIRE_EMAIL_VERIFIED`                                                     |      | 缺省 `1`；只在开发环境设 `0`                                                                                                                                     |
+| `ARMADRA_CLOUD_TRUSTED_PROXY` / `_TRUSTED_PROXY_PREFER`                                    |      | 受信反向代理的 CIDR 与先读的头，规则同中继                                                                                                                       |
+| `ARMADRA_CLOUD_TURNSTILE_SITE_KEY` / `_TURNSTILE_SECRET_FILE` / `_CHALLENGE_SCOPE`         |      | 人机挑战；两个都配才要求，只配一个是配错                                                                                                                         |
+| `ARMADRA_CLOUD_METRICS_LISTEN` / `_METRICS_TOKEN_FILE`                                     |      | 指标监听（含 `armadra_cloud_lockout_unavailable_total` 与发信计数）；回环地址不要令牌，非回环（含 `:端口`、`0.0.0.0`）必须配 `_METRICS_TOKEN_FILE`，否则拒绝启动 |
+| `ARMADRA_CLOUD_NAME`、`_JOB_WORKERS`、`_TRAFFIC_RETENTION_DAYS`、`_HIBP_URL`、`_LOG_LEVEL` |      | 见设计 §2.2                                                                                                                                                      |
 
 中继（`armadra-relay saas serve`，SaaS 中继节点，Go 设计 §3.6；TLS 在前面的反向代理终止，明文监听）：
 
@@ -46,7 +46,7 @@
 | `RELAY_NODE_WEIGHT`                                       |      | 节点表里的权重（rendezvous 加权），1–1000，缺省 1                                                                                                             |
 | `RELAY_NODE_TOKEN` / `RELAY_NODE_TOKEN_FILE`              |      | 本节点的节点令牌（`armadra-cloud nodes token`），节点间转发时出示；没有就不向别的节点转发                                                                     |
 | `RELAY_DATABASE_URL` / `RELAY_DATABASE_URL_FILE`          |      | 流量统计的 PostgreSQL（`armadra_relay_traffic` 角色）；账本要有 0009，没有就拒绝启动；不配就不记流量                                                          |
-| `RELAY_METRICS_LISTEN`                                    |      | 指标监听（`/metrics`）                                                                                                                                        |
+| `RELAY_METRICS_LISTEN`                                    |      | 指标监听（`/metrics`，可写 `:端口`）；回环地址不要令牌，非回环（含 `:端口`、`0.0.0.0`）必须配 `RELAY_METRICS_TOKEN` 或 `_FILE`，否则配置无效、不启动          |
 | `RELAY_METRICS_TOKEN` / `RELAY_METRICS_TOKEN_FILE`        |      | 指标的 Bearer 令牌                                                                                                                                            |
 | `RELAY_TRUSTED_PROXY` / `RELAY_TRUSTED_PROXY_PREFER`      |      | 受信反向代理的 IP / CIDR（逗号分隔）与先读的头（`forwarded-for` 缺省 / `real-ip`），规则同 personal                                                           |
 | `RELAY_TEAM_CONCURRENT` / `RELAY_TEAM_CONNECT_PER_MINUTE` |      | 控制面没写额度（或额度坏了）时的团队并发与建连速率，缺省 10 与 600 / 分钟（最严格的套餐）                                                                     |

@@ -6,7 +6,7 @@
 services:
   cloud:
     environment:
-      # 控制面只许回环或空主机（:端口）；空主机让容器里的端口能被发布出来，令牌挡住同网络里的其他容器。
+      # 指标监听不在回环地址上就必须配令牌（否则拒绝启动）；:9100 让容器里的端口能被发布出来，令牌挡住同网络里的其他容器。
       ARMADRA_CLOUD_METRICS_LISTEN: ":9100"
       ARMADRA_CLOUD_METRICS_TOKEN_FILE: /run/secrets/metrics_token
     secrets: [metrics_token]

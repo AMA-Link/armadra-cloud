@@ -77,7 +77,7 @@
 
 规则文件 [`deploy/saas/prometheus/armadra-saas.rules.yml`](../../deploy/saas/prometheus/armadra-saas.rules.yml)，接运维自己的 Prometheus（本仓不带 Prometheus 与 Alertmanager）。
 
-1. 打开指标：`docker compose -f compose.yml -f compose.metrics.yml up -d`。叠加文件让控制面与两个节点在容器里监听 `:9100`，只发布到宿主的 `127.0.0.1:9101`（控制面）、`9102`（a）、`9103`（b）（端口见 `.env.example`），要 `Authorization: Bearer <secrets/metrics_token>`（`init-secrets.sh` 生成，已有部署补跑一次即可，不覆盖别的文件）。指标端口不经反向代理。之后的升级命令都要带上这两个 `-f`，否则会把指标监听关掉。
+1. 打开指标：`docker compose -f compose.yml -f compose.metrics.yml up -d`。叠加文件让控制面与两个节点在容器里监听 `:9100`，只发布到宿主的 `127.0.0.1:9101`（控制面）、`9102`（a）、`9103`（b）（端口见 `.env.example`），要 `Authorization: Bearer <secrets/metrics_token>`（`init-secrets.sh` 生成，已有部署补跑一次即可，不覆盖别的文件）。指标端口不经反向代理。规则（控制面与节点相同）：指标监听在回环地址上不要令牌；不是回环地址（含空主机 `:9100` 与 `0.0.0.0`）就必须配指标令牌（控制面 `ARMADRA_CLOUD_METRICS_TOKEN_FILE`，节点 `RELAY_METRICS_TOKEN` 或 `RELAY_METRICS_TOKEN_FILE`），否则配置无效、拒绝启动；叠加文件两样都配了。之后的升级命令都要带上这两个 `-f`，否则会把指标监听关掉。
 2. 抓取（宿主上的 Prometheus；任务名要与规则里的 `up{job=…}` 一致，`instance` 写节点名，告警里看得懂）：
 
    ```yaml
