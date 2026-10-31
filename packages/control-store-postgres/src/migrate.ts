@@ -28,8 +28,11 @@ import { PostgresStoreError } from "./errors.ts";
 export const LEDGER_DDL =
   "CREATE TABLE cloud_migrations (id integer PRIMARY KEY, name text NOT NULL, sha384 text NOT NULL, applied_at_ms bigint NOT NULL)";
 
-/** `pg_advisory_xact_lock` 的键：「ARMD」。 */
-const MIGRATION_LOCK = 0x41524d44;
+/**
+ * 迁移锁的名字。键是 `hashtextextended(current_schema() || ':' || 名字, 0)`，与 Go 一侧
+ * （`go/internal/store/postgres` 的 `schemaLock`）逐字相同：同一 schema 的两种实现互斥，同库不同 schema 互不排队。
+ */
+const MIGRATION_LOCK = "migrate";
 
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
 
@@ -93,7 +96,7 @@ export async function migratePostgres(
 ): Promise<number> {
   try {
     return await transaction(sql, async (tx) => {
-      await tx`SELECT pg_advisory_xact_lock(${MIGRATION_LOCK})`;
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':' || ${MIGRATION_LOCK}::text, 0))`;
       const [schema] = await tx`SELECT current_schema() AS name`;
       if (!schema?.name)
         throw new PostgresStoreError(
