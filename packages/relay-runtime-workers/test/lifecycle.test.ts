@@ -7,7 +7,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { sourceObjectName } from "../src/env.ts";
 import type { SourceDO } from "../src/source-do.ts";
@@ -166,19 +166,11 @@ describe("隧道替换与身份", { timeout: REQUESTS_TIMEOUT_MS }, () => {
 });
 
 /**
- * 撤销后，已签出的令牌要等源对象收到 `invalidate` 才作废：控制面把「断开隧道」「断开客户端」「作废缓存」
- * 三个 RPC 各自丢到后台，彼此不保证先后，所以看到隧道 4492、客户端 4403 的时候，缓存里那条「令牌没被
- * 撤销」可能还没清（机器忙时会撞上，开通道答 4404 而不是 4401）。这里探测到 4401 为止，最多等
- * REVOKE_SETTLE_MS：正常几毫秒，缓存自己要 10 s 才过期，所以 5 s 内等不到就是 `invalidate` 没送到，
- * 照样失败，并报出最后一次探测的结果。
+ * 撤销后已签出的令牌立即答 4401：源对象在断开 / 关隧道前先作废撤销判断的缓存（#180），所以不用等，
+ * 撤销请求一答 200 就该成立；答 4404 说明隧道先关了、缓存还没作废。
  */
-const REVOKE_SETTLE_MS = 5_000;
-
-const tokenRejected = (sourceId: string, token: string) =>
-  vi.waitFor(
-    async () => expect(await channelOutcome(sourceId, token)).toBe(4401),
-    { timeout: REVOKE_SETTLE_MS, interval: 50 },
-  );
+const tokenRejected = async (sourceId: string, token: string) =>
+  expect(await channelOutcome(sourceId, token)).toBe(4401);
 
 describe("撤销即时生效", { timeout: REQUESTS_TIMEOUT_MS }, () => {
   it("撤销源：隧道 4492、经中继的通道 4403、已签出的中继令牌 4401", async () => {
