@@ -14,13 +14,9 @@ import (
 )
 
 // 启动期的两件事（SaaS 实现方案 §2.1）：租户引导与审计分区。都在 advisory lock 下做，多个实例同时
-// 启动时只有一个真正写，其余等它提交后看到结果。
+// 启动时只有一个真正写，其余等它提交后看到结果。锁见 schemaLock（"bootstrap" 租户引导、"audit" 审计分区，建分区的函数文档要求调用方持有后者）。
 
 const (
-	// bootstrapLock 是租户引导的 advisory lock 键：「CLBS」。
-	bootstrapLock = 0x434c4253
-	// auditLock 是审计分区维护的 advisory lock 键：「AUDT」，建分区的函数文档要求调用方持有它。
-	auditLock = 0x41554454
 	// auditMonthsAhead 是启动时同步建出的分区数：当月与后两个月。
 	auditMonthsAhead = 3
 	// auditLockTimeout 是摘 / 挂兜底分区要父表排他锁时最多等多久。
@@ -35,7 +31,7 @@ func (d *DB) BootstrapTenant(ctx context.Context, tenantID, issuer string, nowMs
 	}
 	err = d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		created = false
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(bootstrapLock)); err != nil {
+		if err := schemaLock(ctx, tx, "bootstrap"); err != nil {
 			return err
 		}
 		existing, err := readTenant(ctx, tx, tenantID)
@@ -87,7 +83,7 @@ func (d *DB) EnsureAuditPartitions(ctx context.Context, now time.Time) ([]string
 	var names []string
 	err := d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		names = names[:0]
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(auditLock)); err != nil {
+		if err := schemaLock(ctx, tx, "audit"); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '"+auditLockTimeout+"'"); err != nil {
@@ -124,7 +120,7 @@ func (d *DB) DropAuditPartitionsBefore(ctx context.Context, cutoff time.Time) ([
 	var dropped []string
 	err := d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		dropped = dropped[:0]
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(auditLock)); err != nil {
+		if err := schemaLock(ctx, tx, "audit"); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '"+auditLockTimeout+"'"); err != nil {

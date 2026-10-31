@@ -12,8 +12,13 @@ import (
 // ledgerDDL 是账本的建表语句（迁移器在空 schema 上先建它）；与 TypeScript 一侧逐字相同。
 const ledgerDDL = "CREATE TABLE cloud_migrations (id integer PRIMARY KEY, name text NOT NULL, sha384 text NOT NULL, applied_at_ms bigint NOT NULL)"
 
-// migrationLock 是 pg_advisory_xact_lock 的键：「ARMD」。
-const migrationLock = 0x41524d44
+// schemaLock 在事务里拿「当前 schema 内」的 advisory lock，事务结束自动放。
+// advisory lock 是整个数据库共用的键空间，而它保护的迁移、租户引导与审计分区都是 schema 内的东西：
+// 键里带上 current_schema()，同一个库里的不同 schema（测试每个用例一个）互不排队；同一 schema 的多个节点仍然互斥。
+func schemaLock(ctx context.Context, tx pgx.Tx, name string) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':' || $1::text, 0))", name)
+	return err
+}
 
 // migrate 在一个事务里对账 cloud_migrations 并补跑没跑过的。事务开头拿 advisory lock，
 // 多个节点同时启动时只有一个真正执行，其余等它提交后对账为最新。
@@ -25,7 +30,7 @@ const migrationLock = 0x41524d44
 func (d *DB) migrate(ctx context.Context, migrations []store.Migration, now func() int64, apply bool) (int, error) {
 	count := 0
 	err := d.tx(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(migrationLock)); err != nil {
+		if err := schemaLock(ctx, tx, "migrate"); err != nil {
 			return err
 		}
 		var schema *string
