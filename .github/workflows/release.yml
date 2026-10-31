@@ -55,7 +55,7 @@ jobs:
           v="${{ steps.version.outputs.version }}"
           for app in cloud relay; do
             image="ghcr.io/ama-link/armadra-${app}"
-            # 两个镜像都是 Go 构建（TS apps/cloud 不再构建镜像）。
+            # 两个镜像都是 Go 构建。
             dockerfile="go/Dockerfile"
             [ "$app" = cloud ] && dockerfile="go/Dockerfile.cloud"
             args=()

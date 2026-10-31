@@ -1,6 +1,6 @@
 # armadra-cloud
 
-Armadra 平台的服务端：控制面 `apps/cloud`、中继 `go/`（Go，`armadra-relay`）与 `apps/relay-workers`（Cloudflare Workers），以及两仓共用的协议包 `@armadra/platform-protocol`。MIT 许可。
+Armadra 平台的服务端：控制面与中继（`go/`，Go：`armadra-cloud`、`armadra-relay`）与 `apps/relay-workers`（Cloudflare Workers），以及两仓共用的协议包 `@armadra/platform-protocol`。MIT 许可。
 
 中继有两种运行模式：
 
@@ -11,7 +11,6 @@ Armadra 平台的服务端：控制面 `apps/cloud`、中继 `go/`（Go，`armad
 
 | 路径                             | 内容                                                                                                          |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `apps/cloud`                     | 控制面（`armadra-cloud`）                                                                                     |
 | `packages/platform-protocol`     | 协议包：隧道帧、断言、`/v1` 契约、错误码、身份参数、夹具                                                      |
 | `packages/relay-kernel`          | 中继内核：隧道、边缘判定、限流、令牌校验（运行时无关）                                                        |
 | `packages/e2e-fake-core`         | 端到端的假 core（Node `http` + `ws` 的隧道客户端），给 `pnpm e2e` 的 saas / workers 模式用                    |

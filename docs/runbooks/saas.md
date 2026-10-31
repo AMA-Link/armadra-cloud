@@ -5,7 +5,7 @@
 ## 当前状态
 
 - 控制面是 Go 实现（`go/cmd/armadra-cloud`），镜像由 `go/Dockerfile.cloud` 构建；S8 起生产装配走 Redis 实现的跨节点约定（`relayctl.Redis`），内存实现只在测试里用，所以此前「S8 之前不部署」的限制已经解除。
-- TS 的 `apps/cloud` 不再构建镜像，源码留到下一个版本删除（设计 §10 Q9）；它的迁移目录 `packages/control-store-postgres/migrations/` 仍是 PostgreSQL 迁移的唯一来源。
+- TS 的 `apps/cloud` 已删除（#177，设计 §10 Q9）；`packages/control-store-postgres/migrations/` 仍是 PostgreSQL 迁移的唯一来源。
 
 ## 首次部署
 
