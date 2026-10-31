@@ -24,7 +24,7 @@ var RouteInputs = map[string]*schema.Schema{
 			{Name: "email", Schema: &schema.Schema{
 				Type:          "string",
 				Format:        "email",
-				FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+				FormatPattern: "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
 			}},
 			{Name: "password", Schema: &schema.Schema{
 				Type: "string",
@@ -373,7 +373,7 @@ var RouteInputs = map[string]*schema.Schema{
 			{Name: "email", Schema: &schema.Schema{
 				Type:          "string",
 				Format:        "email",
-				FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+				FormatPattern: "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
 			}},
 			{Name: "challenge", Schema: &schema.Schema{
 				Type: "object",
@@ -526,7 +526,7 @@ var RouteInputs = map[string]*schema.Schema{
 			{Name: "newEmail", Schema: &schema.Schema{
 				Type:          "string",
 				Format:        "email",
-				FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+				FormatPattern: "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
 			}},
 			{Name: "password", Schema: &schema.Schema{
 				Type: "string",
@@ -1452,7 +1452,7 @@ var RouteInputs = map[string]*schema.Schema{
 					{Name: "email", Schema: &schema.Schema{
 						Type:          "string",
 						Format:        "email",
-						FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+						FormatPattern: "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
 					}},
 					{Name: "role", Schema: &schema.Schema{
 						Type: "string",
@@ -1475,7 +1475,7 @@ var RouteInputs = map[string]*schema.Schema{
 					{Name: "email", Schema: &schema.Schema{
 						Type:          "string",
 						Format:        "email",
-						FormatPattern: "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+						FormatPattern: "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
 					}},
 					{Name: "role", Schema: &schema.Schema{
 						Type: "string",

@@ -226,7 +226,9 @@ var OpenPayloadSchema = &schema.Schema{
 		{Name: "headers", Schema: &schema.Schema{
 			Type: "array",
 			Items: &schema.Schema{
-				Type: "array",
+				Type:     "array",
+				MinItems: schema.Int(2),
+				MaxItems: schema.Int(2),
 				PrefixItems: []*schema.Schema{
 					&schema.Schema{
 						Type:      "string",
