@@ -58,7 +58,13 @@ export const STEPS = [
   },
   step("vet", "go", ["vet", "./..."]),
   step("staticcheck", "go", ["run", STATICCHECK, "./..."]),
-  step("test", "go", ["test", "-race", "-count=1", `-timeout=${TEST_TIMEOUT}`, "./..."]),
+  step("test", "go", [
+    "test",
+    "-race",
+    "-count=1",
+    `-timeout=${TEST_TIMEOUT}`,
+    "./...",
+  ]),
   {
     name: "generate",
     run() {
