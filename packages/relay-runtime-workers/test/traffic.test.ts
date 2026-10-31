@@ -8,7 +8,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   ConfigError,
@@ -26,6 +26,8 @@ import {
   login,
   openChannel,
   registerSource,
+  REQUESTS_TIMEOUT_MS,
+  scryptTimeout,
   type Session,
   type TestSource,
 } from "./api.ts";
@@ -46,12 +48,18 @@ interface Bucket {
 const stubOf = (sourceId: string) =>
   env.SOURCE.get(env.SOURCE.idFromName(sourceObjectName(sourceId)));
 
+// 登录只是铺垫（这里测的是流量统计）：整个文件做一次，不让每条用例各付一次 scrypt。
+let session: Session;
+
+beforeAll(async () => {
+  session = await login();
+}, scryptTimeout(1));
+
 async function online(capabilities: string[] = ["e2e"]): Promise<{
   session: Session;
   source: TestSource;
   relayToken: string;
 }> {
-  const session = await login();
   const source = await registerSource(session);
   const hint = await heartbeatHint(source);
   const core = new FakeCore(source);
@@ -82,7 +90,9 @@ const range = (sourceId: string) =>
 const sum = (rows: Bucket[], field: keyof Bucket) =>
   rows.reduce((total, row) => total + Number(row[field]), 0);
 
-describe("流量统计", () => {
+// 每条用例要登记源、接隧道、换中继令牌、开通道，登录已在 `beforeAll` 里做掉；这一串往返在机器忙时
+// 超过缺省的 5 s（实测与上限见 api.ts 的 `REQUESTS_TIMEOUT_MS`）。
+describe("流量统计", { timeout: REQUESTS_TIMEOUT_MS }, () => {
   it("通道按 e2e 记到源的对象里，/v1/me/traffic 合并答出；明文请求不记；不记路径", async () => {
     const { session, source, relayToken } = await online();
     for (let index = 0; index < 3; index += 1) {
