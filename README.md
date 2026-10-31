@@ -20,7 +20,7 @@ Armadra 平台的服务端：控制面 `apps/cloud`、中继 `go/`（Go，`armad
 | `packages/control-store-sql`     | SQLite 迁移与账本判定（Go 中继与 DO SQLite 共用）                                                             |
 | `packages/control-store-sqlite`  | 控制核端口的 SQLite 实现（`node:sqlite`，可移植部分 Workers 复用）                                            |
 | `packages/control-core`          | 控制核：存储端口、账号 / 会话 / 源 / 链接服务、`/v1` 路由                                                     |
-| `packages/cloud-shared`          | 内部共享：配置、日志、健康检查、HTTP、JWS、PostgreSQL 与 Redis                                                |
+| `packages/cloud-shared`          | 内部共享：日志、JWS、中继页面、PostgreSQL 客户端                                                              |
 | `deploy/`                        | compose 与部署说明（[deploy/README.md](deploy/README.md)）                                                    |
 | `docs/`                          | 契约与运维文档（[索引](docs/README.md)）                                                                      |
 | `tools/`                         | 仓库校验、契约生成、工作流校验、第三方声明                                                                    |
