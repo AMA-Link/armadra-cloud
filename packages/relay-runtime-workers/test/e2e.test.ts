@@ -24,6 +24,8 @@ import {
   nextMessage,
   openClientWs,
   registerSource,
+  REQUESTS_TIMEOUT_MS,
+  scryptTimeout,
   type Session,
   type TestSource,
 } from "./api.ts";
@@ -53,9 +55,11 @@ function e2e(source: TestSource, token: string, protocols = ["armadra-e2e.1"]) {
 
 beforeAll(async () => {
   session = await login();
-});
+}, scryptTimeout(1));
 
-describe("端到端通道", () => {
+// 每条用例要登记源、接隧道、开通道，1 MiB 那条还要经信用窗口来回；整套并行、load 100 时最慢
+// 4.5 s，逼近缺省的 5 s（实测与上限见 api.ts 的 `REQUESTS_TIMEOUT_MS`）。
+describe("端到端通道", { timeout: REQUESTS_TIMEOUT_MS }, () => {
   it("源报 e2e：选 armadra-e2e.1，OPEN kind e2e 不带头，二进制字节双向原样（1 MiB）", async () => {
     const { source, core, relayToken } = await online(["e2e"]);
     const { response, ws } = await e2e(source, relayToken);
