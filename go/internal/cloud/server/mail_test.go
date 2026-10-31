@@ -120,6 +120,7 @@ func (r *rig) verifyEmail(token string) response {
 func (r *rig) me(s session) response { return r.do("GET", "/v1/me", nil, s.bearer()) }
 
 func TestRegisterVerifyEmailFlow(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	s := r.registerBearer(email)
@@ -141,11 +142,13 @@ func TestRegisterVerifyEmailFlow(t *testing.T) {
 	r.noPlaintext(token)
 
 	// 发件箱：发出后记 sent_at_ms，邮件头用 <email_id@控制台主机>。
+	// 信先到信箱、发件箱的 sent_at_ms 随后才落库，所以要等。
 	var sentAt *int64
 	var messageID string
-	if err := r.run.DB.Pool().QueryRow(context.Background(), "SELECT sent_at_ms, message_id FROM outbox_emails WHERE to_email = $1", email).Scan(&sentAt, &messageID); err != nil || sentAt == nil {
-		t.Fatalf("发件箱应记已发：%v %v", sentAt, err)
-	}
+	eventuallyDB(t, "发件箱应记已发", func() bool {
+		sentAt = nil
+		return r.run.DB.Pool().QueryRow(context.Background(), "SELECT sent_at_ms, message_id FROM outbox_emails WHERE to_email = $1", email).Scan(&sentAt, &messageID) == nil && sentAt != nil
+	})
 	// 发件箱里存基础 id；每次尝试的邮件头带尝试序号。
 	if letters[0].MessageID != strings.Replace(messageID, "@", ".1@", 1) || !strings.HasSuffix(messageID, "@127.0.0.1:8100") {
 		t.Fatalf("Message-ID：%s", messageID)
@@ -191,6 +194,7 @@ func TestRegisterVerifyEmailFlow(t *testing.T) {
 }
 
 func TestEnglishLocaleFollowsAcceptLanguage(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.expect(r.register(email, hdr("Accept-Language", "en-US,en;q=0.9")), 200, "")
@@ -205,6 +209,7 @@ func TestEnglishLocaleFollowsAcceptLanguage(t *testing.T) {
 }
 
 func TestResendInvalidatesOldLinkAndIsRateLimited(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	s := r.registerBearer(email)
@@ -231,6 +236,7 @@ func TestResendInvalidatesOldLinkAndIsRateLimited(t *testing.T) {
 }
 
 func TestEmailTokenExpiry(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -240,6 +246,7 @@ func TestEmailTokenExpiry(t *testing.T) {
 }
 
 func TestVerifyTokenRaceHasOneWinner(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -278,6 +285,7 @@ func (r *rig) resetFinish(token, pw string) response {
 const newPassword = "gravel-marmot-ember-77"
 
 func TestPasswordResetFlowRevokesOtherSessions(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	a := r.registerBearer(email)
@@ -328,6 +336,7 @@ func TestPasswordResetFlowRevokesOtherSessions(t *testing.T) {
 }
 
 func TestPasswordResetClearsLockoutAndExpires(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -347,6 +356,7 @@ func TestPasswordResetClearsLockoutAndExpires(t *testing.T) {
 }
 
 func TestPasswordResetStartDoesNotEnumerate(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	known := r.email()
 	r.registerBearer(known)
@@ -396,6 +406,7 @@ func TestPasswordResetStartDoesNotEnumerate(t *testing.T) {
 }
 
 func TestPasswordResetStartRateLimitsAreUniform(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	known := r.email()
 	r.registerBearer(known)
@@ -414,6 +425,7 @@ func TestPasswordResetStartRateLimitsAreUniform(t *testing.T) {
 }
 
 func TestEmailChangeRejections(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	oldEmail := r.email()
 	s := r.registerBearer(oldEmail)
@@ -431,6 +443,7 @@ func TestEmailChangeRejections(t *testing.T) {
 }
 
 func TestEmailChangeFlow(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	oldEmail, newEmail := r.email(), r.email()
 	s := r.registerBearer(oldEmail)
@@ -477,6 +490,7 @@ func TestEmailChangeFlow(t *testing.T) {
 }
 
 func TestNewDeviceReminder(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -509,6 +523,7 @@ func TestNewDeviceReminder(t *testing.T) {
 }
 
 func TestChangePasswordNotifiesAndLogs(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	s := r.registerBearer(email)
@@ -527,7 +542,8 @@ func TestChangePasswordNotifiesAndLogs(t *testing.T) {
 
 func eventuallyDB(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+	// 15 秒在整包并行、机器吃紧时会误报：作业靠真实时间的一秒轮询推进。上限放宽到 60 秒，条件一成立就返回，不拖慢通过的测试。
+	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if ok() {
 			return
 		}
@@ -536,6 +552,7 @@ func eventuallyDB(t *testing.T, what string, ok func() bool) {
 }
 
 func TestSendFailureRetriesWithFreshTokenAndSendsOnce(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	r.mail.FailNext(1)
 	email := r.email()
@@ -565,6 +582,7 @@ func TestSendFailureRetriesWithFreshTokenAndSendsOnce(t *testing.T) {
 }
 
 func TestMailSendReplayIsIdempotent(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -587,6 +605,7 @@ func TestMailSendReplayIsIdempotent(t *testing.T) {
 }
 
 func TestGarbageCollectionJobs(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -631,6 +650,7 @@ func (r *rig) startEmailChange(s session, newEmail string) response {
 
 // 改邮箱的确认链接在找回口令或改口令之后作废（账号接管：拿到旧邮件的人不能在口令变了之后把邮箱改走）。
 func TestEmailChangeLinkDiesAfterPasswordResetOrChange(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email, newEmail := r.email(), r.email()
 	s := r.registerBearer(email)
@@ -655,6 +675,7 @@ func TestEmailChangeLinkDiesAfterPasswordResetOrChange(t *testing.T) {
 }
 
 func TestUnsentEmailChangeMailIsCancelledByPasswordReset(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email, newEmail := r.email(), r.email()
 	s := r.registerBearer(email)
@@ -671,6 +692,7 @@ func TestUnsentEmailChangeMailIsCancelledByPasswordReset(t *testing.T) {
 }
 
 func TestEmailChangeConfirmationKillsResetLinkToOldAddress(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email, newEmail := r.email(), r.email()
 	s := r.registerBearer(email)
@@ -683,6 +705,7 @@ func TestEmailChangeConfirmationKillsResetLinkToOldAddress(t *testing.T) {
 }
 
 func TestResetTokenForAnotherAddressIsRejected(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	s := r.registerBearer(r.email())
 	r.insertToken(s.accountID, "reset", r.email(), "stale-address-token")
@@ -690,6 +713,7 @@ func TestResetTokenForAnotherAddressIsRejected(t *testing.T) {
 }
 
 func TestNewDeviceReminderFollowsIPPrefix(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -722,6 +746,7 @@ func (r *rig) noMail2(to string, n int) {
 }
 
 func TestDeviceCodeRedemptionWritesLoginLogAndReminds(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	browser := r.registerCookie(email)
@@ -745,6 +770,7 @@ func TestDeviceCodeRedemptionWritesLoginLogAndReminds(t *testing.T) {
 
 // 显示名是注册者自己填的任意文字：邮箱没验证的账号，通知邮件不带它；验证之后才带。
 func TestNotificationsCarryDisplayNameOnlyWhenEmailIsVerified(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)

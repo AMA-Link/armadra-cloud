@@ -573,6 +573,7 @@ func TestLinkGuestAssertionRacesGuestsOff(t *testing.T) {
 
 // 读主人账号出错时落地页照常，只是不带 ownerName（不答 500）；账号停用同样不带。
 func TestLinkGetOwnerNameOmittedOnFailure(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	h := r.addHost(owner, nil, "0.11.0")

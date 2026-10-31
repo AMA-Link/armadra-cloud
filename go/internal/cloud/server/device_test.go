@@ -59,6 +59,7 @@ func (s session) cookieRead() headers {
 }
 
 func TestDeviceCodeFullFlow(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	browser := r.registerCookie(r.email())
 
@@ -160,6 +161,7 @@ func TestDeviceCodeFullFlow(t *testing.T) {
 }
 
 func TestDeviceCodeDeny(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	browser := r.registerCookie(r.email())
 
@@ -191,6 +193,7 @@ func TestDeviceCodeDeny(t *testing.T) {
 }
 
 func TestDeviceCodeExpiry(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	browser := r.registerCookie(r.email())
 
@@ -233,6 +236,7 @@ func TestDeviceCodeExpiry(t *testing.T) {
 }
 
 func TestDeviceCodeUserCodeInput(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	browser := r.registerCookie(r.email())
 	deviceCode, userCode := r.startDevice(nil)
@@ -247,6 +251,7 @@ func TestDeviceCodeUserCodeInput(t *testing.T) {
 }
 
 func TestDeviceCodeUserCodeReuseAfterExpiry(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	_, userCode := r.startDevice(nil)
 	// 过期但还停在 pending 的行占着唯一索引：新的发起撞上同一个用户码时，旧行先落成 expired 再插入。
@@ -279,6 +284,7 @@ func TestDeviceCodeUserCodeReuseAfterExpiry(t *testing.T) {
 }
 
 func TestDeviceCodeSecurity(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	browser := r.registerCookie(r.email())
 	deviceCode, userCode := r.startDevice(nil)
@@ -317,6 +323,7 @@ func TestDeviceCodeSecurity(t *testing.T) {
 }
 
 func TestDeviceCodeApproverDisabledBeforeRedeem(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	browser := r.registerCookie(email)
@@ -334,6 +341,7 @@ func TestDeviceCodeApproverDisabledBeforeRedeem(t *testing.T) {
 }
 
 func TestDeviceCodeRateLimits(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	browser := r.registerCookie(r.email())
 
@@ -371,6 +379,7 @@ func TestDeviceCodeRateLimits(t *testing.T) {
 }
 
 func TestDeviceCodeGuessLimitPerAccount(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	s := r.registerCookie(r.email())
 	_, real := r.startDevice(nil)
@@ -404,6 +413,7 @@ func TestDeviceCodeGuessLimitPerAccount(t *testing.T) {
 }
 
 func TestDeviceCodeApproveNeedsCookieOrElevatedBearer(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	native := r.registerBearer(r.email())
 	deviceCode, userCode := r.startDevice(nil)
@@ -431,6 +441,7 @@ func TestDeviceCodeApproveNeedsCookieOrElevatedBearer(t *testing.T) {
 }
 
 func TestDevicePollIPLimit(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	// 每 IP 每分钟 120 次，在开事务之前就判；未知码本身不触发别的限速。
 	for i := 0; i < 120; i++ {
@@ -447,6 +458,7 @@ func TestDevicePollIPLimit(t *testing.T) {
 }
 
 func TestDeviceCodeRedeemOnceUnderConcurrency(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	browser := r.registerCookie(r.email())
 	deviceCode, userCode := r.startDevice(nil)
@@ -481,6 +493,7 @@ func TestDeviceCodeRedeemOnceUnderConcurrency(t *testing.T) {
 }
 
 func TestDeviceCodeStartValidation(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	r.expect(r.do("POST", "/v1/auth/device/start", map[string]any{"device": map[string]any{"platform": "toaster", "name": "x"}}, nil), 400, "bad_request")
 	r.expect(r.do("POST", "/v1/auth/device/start", map[string]any{"device": map[string]any{"platform": "desktop", "name": "   "}}, nil), 400, "bad_request")

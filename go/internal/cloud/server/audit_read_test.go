@@ -28,6 +28,7 @@ func eventIDs(t *testing.T, res response) []string {
 
 // audit.list 只给团队 owner / admin；跨团队、非成员一律 404；筛选、分页与形状。
 func TestAuditListRolesScopeAndFilters(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, member, billing, outsider := r.verified(), r.verified(), r.verified(), r.verified(), r.verified()
 	t1 := r.seedTeam("t1", map[string]string{owner.accountID: "owner", admin.accountID: "admin", member.accountID: "member", billing.accountID: "billing"})
@@ -107,6 +108,7 @@ func TestAuditListRolesScopeAndFilters(t *testing.T) {
 
 // me.securityLog 只给本人的 security.*；设备名是当时的快照；分页与时间范围。
 func TestSecurityLogIsOwnerOnly(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	a := r.registerBearer(r.email())
 	b := r.registerBearer(r.email())
@@ -162,6 +164,7 @@ func TestSecurityLogIsOwnerOnly(t *testing.T) {
 
 // 审计与安全日志里没有敏感数据：库里只有白名单的列，一轮真实流程之后行里没有口令、令牌、邮箱与完整 IP。
 func TestAuditHoldsNoSensitiveData(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	cols := r.queryString(`SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns
 	  WHERE table_schema = current_schema() AND table_name = 'audit_log'`)
@@ -202,6 +205,7 @@ func (r *rig) auditCount(where string, args ...any) int {
 
 // 每天的保留期作业：按团队计划删团队审计（只动本团队）、安全日志 90 天、过 13 个月的整月分区 DROP、流量桶按配置的天数。
 func TestRetentionJobsDeleteOnlyTheirScope(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{env: map[string]string{"TRAFFIC_RETENTION_DAYS": "30"}})
 	owner, other := r.verified(), r.verified()
 	free := r.seedTeam("free", map[string]string{owner.accountID: "owner"})
@@ -247,14 +251,16 @@ func TestRetentionJobsDeleteOnlyTheirScope(t *testing.T) {
 	}
 	// 同一天的时间槽只跑一次：三个作业各一行。
 	for _, kind := range []string{"audit.partitions", "audit.retention", "traffic.retention"} {
-		if n := r.queryInt("SELECT count(*)::int FROM jobs WHERE kind = $1 AND done_at_ms IS NOT NULL", kind); n < 1 {
-			t.Fatalf("%s 没跑过", kind)
-		}
+		// 作业的完成时间在删除之后才落库，所以要等。
+		eventuallyDB(t, kind+" 没跑过", func() bool {
+			return r.queryInt("SELECT count(*)::int FROM jobs WHERE kind = $1 AND done_at_ms IS NOT NULL", kind) >= 1
+		})
 	}
 }
 
 // 团队清除后 entitlements 随之删掉，但审计行按设计保留：不能按 free 的 7 天删，只随 13 个月的整月分区 DROP。
 func TestRetentionKeepsAuditOfPurgedTeams(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	gone := r.seedTeam("gone", map[string]string{owner.accountID: "owner"})

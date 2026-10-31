@@ -38,6 +38,7 @@ func adminIDs(res response, list, key string) string {
 // 运营后台只读：搜索（账号与团队混排、ILIKE、字面量通配符）、列表筛选与游标、详情（席位、本月流量、最近运营动作），
 // 字段只有元数据，不含任何内容与令牌。
 func TestAdminReadsAreMetadataOnly(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op, _ := r.ops()
 	alice, bob := r.verified(), r.verified()
@@ -146,6 +147,7 @@ func TestAdminReadsAreMetadataOnly(t *testing.T) {
 
 // 停用账号：拒绝登录、撤销全部设备、已签令牌进撤销表并逐主机按人踢；写审计（operator、reason、无团队）；恢复只改状态。
 func TestAdminAccountStatusKicksAndAudits(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op, _ := r.ops()
 	owner, member := r.verified(), r.verified()
@@ -211,6 +213,7 @@ func TestAdminAccountStatusKicksAndAudits(t *testing.T) {
 
 // 停用团队：拒绝断言（team_suspended）、撤销每台主机已签的令牌并踢掉全部连接、隧道保留；写审计带对象团队；恢复后断言可用。
 func TestAdminTeamStatusKicksHostsKeepsTunnels(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op, _ := r.ops()
 	owner, member := r.verified(), r.verified()
@@ -283,6 +286,7 @@ func TestAdminTeamStatusKicksHostsKeepsTunnels(t *testing.T) {
 
 // 中继节点：列出（含排空中）、排空发 drain 命令并写审计；没有的节点 404；取消排空是空操作（节点只能重启）。
 func TestAdminRelayNodes(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op, _ := r.ops()
 	r.run.Relay.SetNode(relayctl.Node{ID: "b", URL: "wss://b.edge.test/t/v1", Version: "0.10.0", Connections: 5, Tunnels: 2, Draining: true})
@@ -334,6 +338,7 @@ func TestAdminRelayNodes(t *testing.T) {
 
 // 事故开关三项：停签断言、停注册、中继拒绝新连接——各自独立生效，只改给出的项，写审计带理由。
 func TestAdminIncidentSwitches(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op, _ := r.ops()
 	owner, member := r.verified(), r.verified()
@@ -403,6 +408,7 @@ func TestAdminIncidentSwitches(t *testing.T) {
 
 // 别的实例改了库：各实例每隔一段时间按库把事故开关同步给节点，不靠 Redis 保活；Redis 里的键丢了也会重写。
 func TestIncidentIsSyncedFromTheDatabase(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{incidentEvery: 30 * time.Millisecond})
 	// 启动时就写过一遍（全关）。
 	eventuallyDB(t, "启动同步", func() bool { return r.run.Relay.CurrentIncident().AtMs == 0 })
@@ -418,6 +424,7 @@ func TestIncidentIsSyncedFromTheDatabase(t *testing.T) {
 
 // 运营会话对应的账号被摘掉运营范围或停用：会话没到期也立刻不能用；非运营账号的普通会话永远调不了。
 func TestAdminRequiresALiveOperatorAccount(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op, _ := r.ops()
 	r.expect(r.do("GET", "/v1/admin/incident", nil, op.bearer()), 200, "")

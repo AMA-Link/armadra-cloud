@@ -73,6 +73,7 @@ func (s session) opsWrite() headers {
 }
 
 func TestCSRFValueDerivation(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	if c.csrf != expectedCSRF(t, c.deviceID) {
@@ -91,6 +92,7 @@ func TestCSRFValueDerivation(t *testing.T) {
 }
 
 func TestCSRFOnCookieWrites(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	patch := func(h headers) response {
@@ -114,6 +116,7 @@ func TestCSRFOnCookieWrites(t *testing.T) {
 }
 
 func TestOriginChecks(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	patch := func(origins ...string) response {
@@ -149,6 +152,7 @@ func TestOriginChecks(t *testing.T) {
 }
 
 func TestCORSNeverAllowsCredentials(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	for _, origin := range []string{"https://evil.example", appOrigin, "https://abc.src.localhost"} {
 		pre := r.do("OPTIONS", "/v1/me", nil, hdr("Origin", origin, "Access-Control-Request-Method", "GET"))
@@ -171,6 +175,7 @@ func TestCORSNeverAllowsCredentials(t *testing.T) {
 }
 
 func TestCookieAttributesAndScopes(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -209,6 +214,7 @@ func TestCookieAttributesAndScopes(t *testing.T) {
 }
 
 func TestDuplicateCookiesRejectedAndCleared(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	access := c.cookies["__Host-armadra-cloud"]
@@ -234,6 +240,7 @@ func TestDuplicateCookiesRejectedAndCleared(t *testing.T) {
 }
 
 func TestCookieAndBearerNeverMixed(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	b := r.registerBearer(r.email())
@@ -244,6 +251,7 @@ func TestCookieAndBearerNeverMixed(t *testing.T) {
 }
 
 func TestTransportBinding(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	b := r.registerBearer(r.email())
@@ -261,6 +269,7 @@ func TestTransportBinding(t *testing.T) {
 }
 
 func TestOperatorIsolation(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{extra: stubHandlers()})
 	normalCookie := r.registerCookie(r.email())
 	normalBearer := r.registerBearer(r.email())
@@ -289,6 +298,7 @@ func TestOperatorIsolation(t *testing.T) {
 }
 
 func TestOperatorCookieCSRFUsesOwnValue(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{extra: map[string]api.Handler{
 		"admin.accountStatus": func(ctx context.Context, call *api.Call) (any, error) {
 			if _, err := call.Caller(ctx); err != nil {
@@ -320,6 +330,7 @@ func TestOperatorCookieCSRFUsesOwnValue(t *testing.T) {
 }
 
 func TestOperatorSessionHasOneHourAbsoluteLifetime(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op, _ := r.operator(core.TransportCookie)
 	refresh := func() response {
@@ -340,6 +351,7 @@ func TestOperatorSessionHasOneHourAbsoluteLifetime(t *testing.T) {
 }
 
 func TestOperatorLoginScope(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	normalEmail := r.email()
 	r.registerBearer(normalEmail)
@@ -384,6 +396,7 @@ func TestOperatorLoginScope(t *testing.T) {
 }
 
 func TestDisabledAccountCannotRefreshOrUseSession(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	s := r.registerBearer(email)
@@ -393,6 +406,7 @@ func TestDisabledAccountCannotRefreshOrUseSession(t *testing.T) {
 }
 
 func TestNoSecretsInLogsOrStorage(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	b := r.registerBearer(email)

@@ -7,6 +7,7 @@ import (
 
 // 设备码批准 / 拒绝写账号安全日志（S3 留的钩子，设计 §4.3）：设备名是发起设备报的名字的快照。
 func TestDeviceDecisionWritesSecurityLog(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	browser := r.registerCookie(r.email())
 

@@ -33,6 +33,7 @@ func usageMap(t *testing.T, res response) map[string][2]any {
 
 // billing.plan：个人空间本人看；团队空间 owner、admin、billing 只读，member 与 guest 403、非成员 404。
 func TestBillingPlanSpacesAndRoles(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, billing, admin, member, outsider := r.verified(), r.verified(), r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("bill", map[string]string{owner.accountID: "owner", billing.accountID: "billing", admin.accountID: "admin", member.accountID: "member"})
@@ -71,6 +72,7 @@ func TestBillingPlanSpacesAndRoles(t *testing.T) {
 
 // billing.usage：个人与团队的用量对照额度，按天序列补零，period 取别的月份；团队的与 teams.usage 同一个统计。
 func TestBillingUsageMonthAndDay(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, billing, member := r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("usage", map[string]string{owner.accountID: "owner", billing.accountID: "billing", member.accountID: "member"})
@@ -151,6 +153,7 @@ func TestBillingUsageMonthAndDay(t *testing.T) {
 
 // billing.usage 对 admin 只读放开，guest 与 member 仍 403；团队的同时连接取中继的在线计数，不再恒为 0。
 func TestBillingUsageAdminReadAndConcurrent(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, member, guest := r.verified(), r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("conc", map[string]string{owner.accountID: "owner", admin.accountID: "admin", member.accountID: "member", guest.accountID: "guest"})

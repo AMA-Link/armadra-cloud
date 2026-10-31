@@ -41,6 +41,7 @@ func (r *rig) registerWith(email string, challenge any) response {
 }
 
 func TestRegisterChallenge(t *testing.T) {
+	t.Parallel()
 	r := challengeRig(t)
 	info := r.do("GET", "/.well-known/armadra-platform", nil, nil)
 	r.expect(info, 200, "")
@@ -64,6 +65,7 @@ func TestRegisterChallenge(t *testing.T) {
 }
 
 func TestFailedChallengeDoesNotCountAsLoginFailure(t *testing.T) {
+	t.Parallel()
 	r := challengeRig(t)
 	email := r.email()
 	r.expect(r.registerWith(email, token("ok-1")), 200, "")
@@ -86,6 +88,7 @@ func TestFailedChallengeDoesNotCountAsLoginFailure(t *testing.T) {
 }
 
 func TestPasswordResetStartChallenge(t *testing.T) {
+	t.Parallel()
 	r := challengeRig(t)
 	email := r.email()
 	r.expect(r.registerWith(email, token("ok-r")), 200, "")

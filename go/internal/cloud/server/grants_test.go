@@ -798,6 +798,7 @@ func (r *rig) revokedJTIs() (out []string) {
 // 照 §4.5 的顺序「签令牌 → 登记签发索引 → 复核」：撤销落在签发的任何两步之间，签出的令牌都不漏撤。
 // 收窄为无权限时答 403；收窄为较低角色时撤掉旧的、按新权限重签。
 func TestAssertionInterleavedWithNarrowing(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"signed", "indexed"} {
 		for _, mode := range []string{"revoke", "downgrade"} {
 			t.Run(stage+"/"+mode, func(t *testing.T) {
@@ -854,6 +855,7 @@ func TestAssertionInterleavedWithNarrowing(t *testing.T) {
 
 // 主机在签发中间被撤销：断言答 410，签出的令牌也撤掉。
 func TestAssertionInterleavedWithSourceRevoke(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"signed", "indexed"} {
 		t.Run(stage, func(t *testing.T) {
 			t.Parallel()
@@ -1156,6 +1158,7 @@ func TestIssuedGCJobDeletesExpiredRows(t *testing.T) {
 
 // 签发中途登出 / 撤设备：复核发现设备不再有效，撤掉自己签的令牌并答 401。
 func TestAssertionInterleavedWithLogout(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"signed", "indexed"} {
 		t.Run(stage, func(t *testing.T) {
 			t.Parallel()

@@ -93,6 +93,7 @@ func teamPath(id string, rest ...string) string {
 }
 
 func TestTeamsCreateQuotaAndViews(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	// 未验证邮箱不能建团队。
 	raw := r.registerBearer(r.email())
@@ -175,6 +176,7 @@ func TestTeamsCreateQuotaAndViews(t *testing.T) {
 
 // 并发建团队不越过个人账号的 Free 额度（锁账号行后计数）。
 func TestTeamsCreateConcurrentRespectsQuota(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	var wg sync.WaitGroup
@@ -225,6 +227,7 @@ var (
 // 角色矩阵：5 个角色 × 每个带 teamId 的过程。每个格子一个全新的团队，互不影响。
 // 团队里除了五个被测角色，还有一个可被改动的 member（x）和一个可接任 owner 的 admin（y）。
 func TestTeamsRoleMatrix(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	cases := []matrixCase{
 		{name: "teams.get", method: "GET", path: func(id string) string { return teamPath(id) }, allowed: anyRole},
@@ -319,6 +322,7 @@ func fixAccounts(body any, people map[string]session) any {
 
 // 跨团队读不到：T2 的 owner 调 T1 的每个带 teamId 的过程，都答 404 not_found，不泄露存在。
 func TestTeamsCrossTeamIsNotFound(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	a, b := r.verified(), r.verified()
 	t1 := r.seedTeam("cross-1", map[string]string{a.accountID: "owner"})
@@ -356,6 +360,7 @@ func TestTeamsCrossTeamIsNotFound(t *testing.T) {
 
 // 最后一个 owner：两个 owner 同时各自离开（或各自把自己降级），恰好一个成功，团队留一个 owner。
 func TestTeamsLastOwnerConcurrent(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	for round, mode := range []string{"leave", "demote", "leave", "demote", "leave"} {
 		o1, o2 := r.verified(), r.verified()
@@ -399,6 +404,7 @@ func TestTeamsLastOwnerConcurrent(t *testing.T) {
 }
 
 func TestTeamsMemberRules(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, member, guest, outsider := r.verified(), r.verified(), r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("rules", map[string]string{
@@ -476,6 +482,7 @@ func TestTeamsMemberRules(t *testing.T) {
 
 // 移除 / 离开 / 收窄走撤销流程：授予撤销、此人登记的主机改归团队 owner、已签令牌撤销并踢人。
 func TestTeamsRemovalRevokesAccess(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, member := r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("revoke", map[string]string{owner.accountID: "owner", admin.accountID: "admin", member.accountID: "member"})
@@ -552,6 +559,7 @@ func TestTeamsRemovalRevokesAccess(t *testing.T) {
 }
 
 func TestTeamsSettings(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, member := r.verified(), r.verified()
 	team := r.seedTeam("settings", map[string]string{owner.accountID: "owner", member.accountID: "member"})
@@ -583,6 +591,7 @@ func TestTeamsSettings(t *testing.T) {
 }
 
 func TestTeamsUsage(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, member, guest := r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("usage", map[string]string{owner.accountID: "owner", member.accountID: "member", guest.accountID: "guest"})
@@ -621,6 +630,7 @@ func TestTeamsUsage(t *testing.T) {
 
 // 删除 / 恢复 / 清除：在线主机挡删除；恢复期内其余调用 410；恢复撤掉清除作业；到期后清除作业清走一切。
 func TestTeamsDeleteRestorePurge(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin := r.verified(), r.verified()
 	team := r.seedTeam("purge", map[string]string{owner.accountID: "owner", admin.accountID: "admin"})

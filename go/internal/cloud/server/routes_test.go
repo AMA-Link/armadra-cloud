@@ -46,6 +46,7 @@ var enabledS7 = map[string]bool{
 }
 
 func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	seen := 0
 	for _, route := range gen.Routes {
@@ -81,6 +82,7 @@ func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 
 // 发现入口 /.well-known/* 是启用的过程，不是预留路由：200、带协议头，且与 platform.info / platform.jwks 一致（#118）。
 func TestWellKnownPathsAreServed(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	for _, path := range []string{gen.PathPlatformWellKnown, gen.PathJwksWellKnown} {
 		res := r.do("GET", path, nil, nil)
