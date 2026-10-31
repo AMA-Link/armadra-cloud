@@ -13,6 +13,7 @@ import { sourceObjectName } from "../src/env.ts";
 import type { SourceDO } from "../src/source-do.ts";
 import {
   assertion,
+  byteDiff,
   call,
   channelOutcome,
   closed,
@@ -51,7 +52,16 @@ async function online(): Promise<{
   return { session, source, core, relayToken };
 }
 
+/**
+ * 唤醒到接上（还原隧道与流表、答第一条消息、代答 ping）的上限。本地 workerd 实测：安静时约
+ * 10 ms，load 110–180 时不到 100 ms；给 2 秒是二十倍以上的余量，机器忙不会误报，而唤醒路径真慢到
+ * 秒级（例如还原时多了一轮存储往返或等待）就失败。
+ */
+const WAKE_BUDGET_MS = 2_000;
+
 describe("休眠", () => {
+  // 整条用例的成本主要不在唤醒：登录走一次 scrypt（N=2^15）、600 KiB 过信用窗口回显、
+  // `channelOutcome` 固定等 200 ms。load 110 时合计约 2.5 秒、load 180 时近 5 秒，给 15 秒；唤醒那段另有 WAKE_BUDGET_MS。
   it("对象换出内存后唤醒：隧道、流表与客户端通道原样接上，信用不漏", async () => {
     const { source, core, relayToken } = await online();
     const { ws } = await openChannel(source.sourceId, relayToken);
@@ -64,21 +74,29 @@ describe("休眠", () => {
     await evictDurableObject(stubOf(source.sourceId), {
       webSockets: "hibernate",
     });
+    const wakeStarted = performance.now();
     expect(
       await runInDurableObject(stubOf(source.sourceId), (instance: SourceDO) =>
         instance.stats(),
       ),
     ).toMatchObject({ tunnels: 1, streams: 1, clients: 1 });
-
     const after = Uint8Array.of(4, 5, 6);
     expect(await echoChannel(ws, after)).toEqual(after);
     await core.ping();
+    expect(
+      performance.now() - wakeStarted,
+      "唤醒到接上的耗时（ms）",
+    ).toBeLessThan(WAKE_BUDGET_MS);
+
     // 多来几轮（> 半个窗口）：唤醒后补窗口的账照样对得上；隧道还能开新通道。
     const big = new Uint8Array(600 * 1024).map((_, index) => index & 0xff);
-    expect(await echoChannel(ws, big)).toEqual(big);
+    expect(byteDiff(await echoChannel(ws, big), big)).toEqual({
+      length: big.length,
+      firstMismatch: -1,
+    });
     expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
     ws.close(1000, "done");
-  });
+  }, 15_000);
 });
 
 describe("检查周期（alarm）", () => {
