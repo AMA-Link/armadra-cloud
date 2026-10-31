@@ -3,7 +3,7 @@
 //   1. gofmt -l 必须为空；
 //   2. go vet ./...；
 //   3. staticcheck ./...（固定版本，经 go run 调用，不进 go.mod）；
-//   4. go test -race ./...；
+//   4. go test -race -timeout 20m ./...（超时见 TEST_TIMEOUT）；
 //   5. go generate ./... 之后生成物与已提交的一致（git diff 为空、没有未跟踪的新文件）。
 //
 //   node scripts/go-check.mjs [--only <步骤,步骤>]   步骤名：fmt、vet、staticcheck、test、generate
@@ -38,6 +38,14 @@ function step(name, command, args, cwd = goDir) {
   };
 }
 
+/**
+ * go test 的单包超时（每个测试二进制各算一次）。显式写出来，不靠默认的 10 分钟：
+ * 最重的包 internal/cloud/server 是真 PostgreSQL + Redis 的集成测试，-race 下并行跑完约几分钟；
+ * 20 分钟是它的数倍余量，挂住时在 CI 作业的 30 分钟上限之前就带着 goroutine 堆栈失败，
+ * 又不至于在负载高的机器上因抖动误报。该包真变慢到逼近这个值，要查原因，不是再加大它（#174）。
+ */
+export const TEST_TIMEOUT = "20m";
+
 export const STEPS = [
   {
     name: "fmt",
@@ -50,7 +58,7 @@ export const STEPS = [
   },
   step("vet", "go", ["vet", "./..."]),
   step("staticcheck", "go", ["run", STATICCHECK, "./..."]),
-  step("test", "go", ["test", "-race", "-count=1", "./..."]),
+  step("test", "go", ["test", "-race", "-count=1", `-timeout=${TEST_TIMEOUT}`, "./..."]),
   {
     name: "generate",
     run() {
