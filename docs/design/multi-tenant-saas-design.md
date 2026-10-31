@@ -1,6 +1,7 @@
 # 多端入口、多中继、多租户与 SaaS：审查与设计（2026-10-10）
 
 > **2026-10-22 起由 [SaaS 能力设计](saas-design.md) 与 [中继 Go 重写](go-relay-design.md) 取代，只留作追溯。** §1、§2.3、§2.4、§3.4 的客户端与 core 部分已实现；§3.1–§3.2 的「组织 → 团队」、§4.5 的语言结论、§5 的 49 服务器部署、§6 的 C8-x 工作包都已作废；仍有效的细节已合并进新文档（见 SaaS 设计 §12、Go 重写 §10）。
+> **2026-11：** 下文的 TypeScript `apps/cloud` 已删除（AMA-Link/armadra-cloud#177），只作追溯。
 > 状态：设计稿（只审查与设计，不改代码）。输入：用户需求（2026-10-10）；Armadra `docs/design/platform-saas-architecture.md`（§4、§9、§17）、`docs/design/platform/{relay,cloud-control-plane,client-packages,core-packages}.md`、`docs/design/platform-implementation-plan.md` §12、`docs/design/server-accounts-and-sharing.md`、`docs/contracts/core-json-api.md` §31–§33；armadra-cloud `docs/contracts/cloud-api.md`、`CHANGELOG.md`、`deploy/`；两仓源码（行号以 2026-10-10 两仓 `main` 为准：Armadra `9cd38293`，armadra-cloud `1e9c959`）。
 > 现状（2026-10-11）：中继只部署在 Cloudflare 正式环境（`relay.armadra.com`），不再有 staging 与 49 服务器部署；人机验证缺省关闭。运维以 [runbooks/relay-on-cloudflare.md](../runbooks/relay-on-cloudflare.md) 为准，文中个人域名已换成 `example.org`。
 > 编号基线（核对自 main）：Armadra 契约最大节号 §54，契约 minor 最大 `1.26`，SQLite 迁移最大 `0043`；armadra-cloud 协议包与两个 app 均为 `0.2.1`，协议 `1.0`，PostgreSQL 迁移目录为空（下一个 `0001`）。

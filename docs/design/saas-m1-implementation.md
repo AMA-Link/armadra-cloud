@@ -1,6 +1,7 @@
 # SaaS 控制面 M1 实施设计（G6-M1）
 
 > 状态：已审（2026-10-23，PR #71 设计审查的决定已并入，§10 全部已定）。实施跟踪 AMA-Link/armadra-cloud#60（SaaS 能力）与 #59（Go 重写的 G6）。
+> **2026-11：** TypeScript 的 `apps/cloud` 已删除（AMA-Link/armadra-cloud#177），下文对它的描述只作追溯；控制面是 Go 的 `go/cmd/armadra-cloud`。
 >
 > - 能力、角色、分期与规范细节以 [SaaS 能力设计](saas-design.md)（下称「能力设计」）为准；架构、目录、节点与部署拓扑以 [中继 Go 重写](go-relay-design.md)（下称「Go 设计」）为准；线上形状以契约 `cloud-api.md` §1–§32（协议 1.4）与协议包为准。
 > - 本文只定**怎么落地**：进程与部署、迁移 DDL、Go 包与端口、HTTP 层、邮件与作业、跨节点约定、测试、分批。与上面三份冲突的地方已在 §10 定下，需要改协议与契约的项由协议补缺 PR「P1d」（AMA-Link/armadra-cloud#72）完成，本文引用的名字都以它为准。

@@ -4,14 +4,10 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "armadra-cloud 内部共享：配置、日志、健康检查、极小 HTTP、JWS 校验、中继自有页面、PostgreSQL 与 Redis 客户端（不发布）",
+  "description": "armadra-cloud 内部共享：日志、JWS 校验、中继自有页面、PostgreSQL 客户端（不发布）",
   "exports": {
-    "./config": "./src/config.ts",
     "./log": "./src/log.ts",
-    "./health": "./src/health.ts",
-    "./http": "./src/http/index.ts",
     "./db": "./src/db/client.ts",
-    "./redis": "./src/redis.ts",
     "./jwt": "./src/jwt.ts",
     "./pages": "./src/pages.ts"
   },
@@ -23,7 +19,6 @@
   "dependencies": {
     "@armadra/platform-protocol": "workspace:*",
     "postgres": "3.4.9",
-    "redis": "5.12.1",
     "zod": "4.6.6"
   },
   "devDependencies": {

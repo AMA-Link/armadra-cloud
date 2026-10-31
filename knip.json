@@ -5,10 +5,6 @@
       "entry": ["tools/**/*.mjs", "scripts/**/*.mjs"],
       "project": ["tools/**/*.mjs", "scripts/**/*.mjs"]
     },
-    "apps/cloud": {
-      "entry": ["src/cli.ts", "scripts/build.mjs"],
-      "project": ["src/**/*.ts"]
-    },
     "apps/relay-workers": {
       "project": ["src/**/*.ts", "test/**/*.ts"],
       "ignoreDependencies": ["cloudflare"]

@@ -1,6 +1,7 @@
 # 中继 Go 重写：设计与分批计划
 
 > 状态：定稿（2026-10-22），§9 已按建议定下；实施跟踪 AMA-Link/armadra-cloud#59。
+> **2026-11：** TypeScript 的 `apps/cloud` 已删除（AMA-Link/armadra-cloud#177），下文对它的描述只作追溯；控制面是 Go 的 `go/cmd/armadra-cloud`。
 > 与旧方案的关系见 §10。草稿在工作区 `docs/cloud/drafts/go-relay-rewrite-design.md`，只留作追溯。
 > 输入：
 >

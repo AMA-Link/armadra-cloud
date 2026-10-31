@@ -57,9 +57,7 @@ it("内核清单不依赖控制核与 SaaS 专有的包", () => {
     .sort();
   expect(
     names.filter((name) =>
-      ["@armadra/control-core", "@armadra/cloud", "postgres", "redis"].includes(
-        name,
-      ),
+      ["@armadra/control-core", "postgres", "redis"].includes(name),
     ),
   ).toEqual([]);
 });

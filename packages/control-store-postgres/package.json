@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "控制面端口的 PostgreSQL 实现：编号迁移与账本、全部存储端口、签名钥、租户导入导出（cloud 与 Node 中继 `--store postgres` 共用，不发布）",
+  "description": "控制面端口的 PostgreSQL 实现：编号迁移与账本、全部存储端口、签名钥、租户导入导出（Go 兼容夹具与端口合同测试用，迁移是 PostgreSQL 迁移的唯一源，不发布）",
   "exports": {
     "./package.json": "./package.json",
     "./migrations/*": "./migrations/*",

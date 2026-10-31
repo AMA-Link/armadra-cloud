@@ -38,7 +38,7 @@ body:
       options:
         - 个人中转 / Personal relay
         - 中继 SaaS 模式 / Relay SaaS mode
-        - 控制面 / Control plane (apps/cloud)
+        - 控制面 / Control plane (go/cmd/armadra-cloud)
         - 协议包 / Protocol package (@armadra/platform-protocol)
         - 契约 / Contract (cloud-api.md)
         - 部署与镜像 / Deployment and images
