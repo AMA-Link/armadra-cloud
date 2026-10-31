@@ -975,14 +975,19 @@ export class SourceDO extends DurableObject<RelayEnv> {
       : null;
   }
 
-  /** 撤销源：先以 4403 断开经它的客户端 WS，再关隧道（4492）。 */
+  /** 撤销源：先以 4403 断开经它的客户端 WS（同时作废撤销判断缓存，见 {@link SourceDO.disconnect}），再关隧道（4492）。 */
   closeTunnel(): void {
     if (this.sourceId) this.disconnect({ sourceId: this.sourceId });
     this.current?.tunnel.close(CLOSE.tunnelGoaway, "closed_by_control");
   }
 
-  /** 断开匹配的客户端 WS（撤销源 / 访客），答断开了几条。 */
+  /**
+   * 断开匹配的客户端 WS（撤销源 / 访客），答断开了几条。只在撤销时被调（控制面已先落库），所以先作废撤销判断
+   * 的缓存：`ControlDO` 自己的 `invalidate` 要等一次查询后才发，跟这里不保证先后；不先作废的话，被断开的一端
+   * 马上拿旧令牌重连会按缓存放行或答 4404（隧道已关），而不是 4401（#180）。
+   */
   disconnect(filter: EdgeConnectionFilter): number {
+    this.invalidate();
     const sockets = this.policy.take(filter);
     for (const ws of sockets)
       this.bridges.get(ws)?.bridge.disconnect(CLOSE.forbidden, "revoked");
