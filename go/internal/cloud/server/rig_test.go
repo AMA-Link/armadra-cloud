@@ -23,6 +23,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/server"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
+	"github.com/AMA-Link/armadra-cloud/go/internal/identity"
 	"github.com/AMA-Link/armadra-cloud/go/internal/obs"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/pgtest"
 	"github.com/AMA-Link/armadra-cloud/go/internal/store/postgres"
@@ -35,6 +36,13 @@ const (
 	password  = "plover-quartz-lantern-41"
 	masterHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 )
+
+// TestMain 把口令派生的 scrypt 成本降下来：本包几百个测试各自注册、登录，协议成本（-race 下每次约 0.5 秒）
+// 占掉了整包的大部分时间。协议成本由 internal/identity 的向量测试守；记录按自带的成本校验，所以不影响行为。
+func TestMain(m *testing.M) {
+	identity.UseScryptCostForTests(1 << 10)
+	os.Exit(m.Run())
+}
 
 // clock 是可控的时钟：整个控制面（令牌、会话寿命、锁定、提权）都读它。
 type clock struct {
