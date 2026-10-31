@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### 修复 / Fixed
+
+- 中继控制帧队列加硬上限（Closes #172）：隧道与节点间链路的写端控制帧队列至多 4096 帧（`tunnel.Config.MaxCtlQueue`，缺省 `DefaultMaxCtlQueue`），待发 PONG 只保留最新一条（RFC 6455 §5.5.3），超限整条丢掉、以 4429 `ctl_queue_overflow` 关连接并记一条 warn；边缘每个 ping 轮至多接受 128 条客户端 PING，超过以 1008 `ping_flood` 关闭，客户端 PING 不再刷新空闲活性（只看数据、关闭帧与对我方 ping 的 PONG）。此前对端只要读得慢又不停发 PING，一条连接就能把节点内存耗尽。设计 §3.3 补上控制帧的约束。
+  The relay's control-frame queues are now hard-capped (Closes #172): the writer-side queue of a tunnel or an inter-node link holds at most 4096 frames (`tunnel.Config.MaxCtlQueue`, default `DefaultMaxCtlQueue`), only the newest pending PONG is kept (RFC 6455 §5.5.3), and exceeding the cap drops the queue, closes the connection with 4429 `ctl_queue_overflow` and logs a warning; the edge accepts at most 128 client PINGs per ping round, closes with 1008 `ping_flood` beyond that, and client PINGs no longer refresh idle liveness (only data, close frames and PONGs to our pings do). Previously a peer that read slowly while flooding PINGs could exhaust the node's memory from a single connection. Design §3.3 gains the control-frame constraint.
+
 ### 变更 / Changed
 
 - 个人中转的指标监听同样要求令牌（Closes #165，Refs #163）：`armadra-relay personal serve --metrics-listen`（或 `RELAY_METRICS_LISTEN`）不是回环地址（含 `:端口`、`0.0.0.0`、`[::]`、内网地址）又没配 `RELAY_METRICS_TOKEN` 时，以配置错误退出 64（`--metrics-listen 不是回环地址时必须配 RELAY_METRICS_TOKEN：<地址>`），与 SaaS 控制面、节点同一条规则；`--metrics-listen` 新接受空主机的 `:端口`（监听全部网卡，按非回环对待）。回环地址（`127.0.0.0/8`、`[::1]`、`localhost`）不受影响。**升级影响**：已有个人部署若在非回环地址上开了指标却没设令牌，升级后 `serve` 起不来（`docker compose logs relay` 里是上面那句）——二选一：设 `RELAY_METRICS_TOKEN`（例如 `openssl rand -hex 24`），抓取方改带 `Authorization: Bearer <令牌>`；或把监听改回回环（如 `127.0.0.1:9100`，抓取方在同机；容器里的回环只有容器自己连得到，compose 部署见 `deploy/personal/compose.yml` 的注释）。没开指标、或已经配了令牌的部署不受影响。

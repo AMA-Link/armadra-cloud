@@ -34,7 +34,17 @@ type Config struct {
 	Heartbeat       time.Duration
 	HeartbeatMisses int
 	GoawayGrace     time.Duration
+	// MaxCtlQueue 是写端控制帧队列的硬上限（OPEN / WINDOW / RST / PING / PONG / GOAWAY）。
+	// 对端只要读得慢又不停发 PING，队列就能无限积压；超过上限整条队列丢掉、隧道以
+	// CloseLimitReached 关闭。0 取 DefaultMaxCtlQueue。
+	MaxCtlQueue int
 }
+
+// DefaultMaxCtlQueue 是控制帧队列的缺省上限：满流时 OPEN、两条 WINDOW、RST 各一，再留裕量。
+const DefaultMaxCtlQueue = 4096
+
+// ReasonCtlQueueOverflow 是控制帧队列超限关隧道时的关闭原因。
+const ReasonCtlQueueOverflow = "ctl_queue_overflow"
 
 // DefaultConfig 返回协议规定的限制。
 func DefaultConfig() Config {
@@ -46,6 +56,7 @@ func DefaultConfig() Config {
 		Heartbeat:       time.Duration(protocol.HeartbeatMs) * time.Millisecond,
 		HeartbeatMisses: protocol.HeartbeatMisses,
 		GoawayGrace:     time.Duration(protocol.GoawayGraceMs) * time.Millisecond,
+		MaxCtlQueue:     DefaultMaxCtlQueue,
 	}
 }
 
@@ -166,8 +177,12 @@ type Tunnel struct {
 	recvRemaining int
 	recvUnacked   int
 	ctl           [][]byte
-	sched         Sched[*Stream] // 写端的公平调度（sched.go）
-	parked        []*Stream
+	// pongAt 是 ctl 里待发 PONG 的下标（-1 没有）：再来 PING 只替换它，不再追加（RFC 6455 §5.5.3）。
+	pongAt int
+	// ctlOverflow 为真表示控制帧队列超过上限、已整条丢掉，等着关隧道。
+	ctlOverflow bool
+	sched       Sched[*Stream] // 写端的公平调度（sched.go）
+	parked      []*Stream
 	// tails 是已摘出流表、出队列还没写空的流数（两端都已 END，尾巴 DATA 与 END 待写）。
 	// 排空要等它归零才发关闭帧，否则尾巴被丢掉（#138）。
 	tails int
@@ -175,7 +190,11 @@ type Tunnel struct {
 
 // New 建一条隧道。写协程与心跳到 Start 才开始。
 func New(id, sourceID, coreVersion string, tr Transport, cfg Config, hooks Hooks) *Tunnel {
+	if cfg.MaxCtlQueue <= 0 {
+		cfg.MaxCtlQueue = DefaultMaxCtlQueue
+	}
 	return &Tunnel{
+		pongAt:        -1,
 		id:            id,
 		sourceID:      sourceID,
 		coreVersion:   coreVersion,
@@ -311,9 +330,9 @@ func (t *Tunnel) OpenStream(open *gen.OpenPayload, sink Sink, counter *traffic.C
 		recvRemaining: t.cfg.StreamWindow,
 	}
 	t.streams[id] = s
-	t.ctl = append(t.ctl, frame)
+	t.queueCtlLocked(frame)
 	t.mu.Unlock()
-	t.signal()
+	t.closeIfOverflow()
 	return s, nil
 }
 
@@ -340,7 +359,7 @@ func (t *Tunnel) Receive(msg []byte) {
 	case protocol.FrameWindow:
 		t.receiveWindow(f.StreamID, int(f.Credit))
 	case protocol.FramePing:
-		t.queueCtl(mustEncode(protocol.Frame{Type: protocol.FramePong, Ts: f.Ts}))
+		t.queuePong(mustEncode(protocol.Frame{Type: protocol.FramePong, Ts: f.Ts}))
 	case protocol.FramePong:
 		t.missed.Store(0)
 		if t.hooks.OnPong != nil {
@@ -647,15 +666,53 @@ func (t *Tunnel) queueCtl(frame []byte) {
 	t.mu.Lock()
 	t.queueCtlLocked(frame)
 	t.mu.Unlock()
-	t.signal()
+	t.closeIfOverflow()
 }
 
+// queueCtlLocked 排一条控制帧。队列已到上限就整条丢掉并标记溢出：持锁的调用方释放锁后调
+// closeIfOverflow 关隧道，写协程每批也兜底查一次。
 func (t *Tunnel) queueCtlLocked(frame []byte) {
-	if t.state == StateClosed {
+	if t.state == StateClosed || t.ctlOverflow {
+		return
+	}
+	if len(t.ctl) >= t.cfg.MaxCtlQueue {
+		clear(t.ctl)
+		t.ctl = t.ctl[:0]
+		t.pongAt = -1
+		t.ctlOverflow = true
+		t.signal()
 		return
 	}
 	t.ctl = append(t.ctl, frame)
 	t.signal()
+}
+
+// queuePong 排一条 PONG：队列里已有待发的 PONG 就只换成最新的（RFC 6455 §5.5.3），
+// 所以对端再怎么刷 PING，队列里至多一条 PONG。
+func (t *Tunnel) queuePong(frame []byte) {
+	t.mu.Lock()
+	if t.pongAt >= 0 && t.pongAt < len(t.ctl) {
+		t.ctl[t.pongAt] = frame
+		t.mu.Unlock()
+		t.signal()
+		return
+	}
+	t.queueCtlLocked(frame)
+	if !t.ctlOverflow {
+		t.pongAt = len(t.ctl) - 1
+	}
+	t.mu.Unlock()
+	t.closeIfOverflow()
+}
+
+// closeIfOverflow 控制帧队列溢出过就关隧道（对端慢读还不停发控制帧，#172）。
+func (t *Tunnel) closeIfOverflow() {
+	t.mu.Lock()
+	overflow := t.ctlOverflow && t.state != StateClosed
+	t.mu.Unlock()
+	if overflow {
+		t.Close(protocol.CloseLimitReached, ReasonCtlQueueOverflow)
+	}
 }
 
 func (t *Tunnel) signal() {
@@ -796,6 +853,9 @@ func (t *Tunnel) writer() {
 		var base uint64
 		var ctlN int
 		batch, base, ctlN, closing, drained = t.collect(batch[:0])
+		if !closing {
+			t.closeIfOverflow() // 持锁的调用方（WINDOW、RST）把队列顶爆了：这里兜底关
+		}
 		for i, frame := range batch {
 			if err := t.tr.Send(frame); err != nil {
 				t.finish(protocol.CloseGoingAway, "write_failed", false)
@@ -851,6 +911,7 @@ func (t *Tunnel) collect(batch [][]byte) (out [][]byte, base uint64, ctlN int, c
 	batch = append(batch, t.ctl...)
 	clear(t.ctl)
 	t.ctl = t.ctl[:0]
+	t.pongAt = -1
 	ctlN = len(batch)
 	if t.state == StateClosed {
 		return batch, 0, ctlN, true, false
