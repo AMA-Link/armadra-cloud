@@ -21,9 +21,10 @@ const (
 
 // 关闭码（RFC 6455 §7.4.1 里边缘会用到的）。
 const (
-	closeProtocolError = 1002
-	closeInvalidData   = 1007
-	closeTooBig        = 1009
+	closeProtocolError   = 1002
+	closePolicyViolation = 1008
+	closeInvalidData     = 1007
+	closeTooBig          = 1009
 )
 
 // clientFrame 是解出的一帧；Payload 已解掩码，指向输入缓冲（原地解掩码）。
