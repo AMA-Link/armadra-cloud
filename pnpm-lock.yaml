@@ -215,37 +215,6 @@ importers:
         specifier: 4.6.6
         version: 4.6.6
 
-  apps/cloud:
-    dependencies:
-      '@armadra/cloud-shared':
-        specifier: workspace:*
-        version: link:../../packages/cloud-shared
-      '@armadra/control-core':
-        specifier: workspace:*
-        version: link:../../packages/control-core
-      '@armadra/control-store-postgres':
-        specifier: workspace:*
-        version: link:../../packages/control-store-postgres
-      '@armadra/platform-protocol':
-        specifier: workspace:*
-        version: link:../../packages/platform-protocol
-      zod:
-        specifier: 4.6.6
-        version: 4.6.6
-    devDependencies:
-      '@types/node':
-        specifier: 24.3.0
-        version: 24.3.0
-      esbuild:
-        specifier: 0.28.2
-        version: 0.28.2
-      typescript:
-        specifier: 5.9.2
-        version: 5.9.2
-      vitest:
-        specifier: 4.1.11
-        version: 4.1.11(@types/node@24.3.0)(@vitest/coverage-v8@4.1.11)(vite@8.3.1(@types/node@24.3.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
-
   apps/relay-workers:
     dependencies:
       '@armadra/relay-runtime-workers':
@@ -3602,6 +3571,7 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.2
       '@esbuild/win32-ia32': 0.28.2
       '@esbuild/win32-x64': 0.28.2
+    optional: true
 
   escape-string-regexp@4.0.0: {}
 

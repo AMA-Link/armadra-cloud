@@ -50,16 +50,8 @@ const armadraSourcePattern = {
     "不得 import Armadra 仓的源码；只经 @armadra/platform-protocol 与容器镜像往来。",
 };
 
-/** 中继的 TS 包（relay-kernel、relay-runtime-workers）不得 import apps/cloud，也不直接碰数据库驱动。 */
+/** 中继的 TS 包（relay-kernel、relay-runtime-workers）不直接碰数据库驱动。 */
 const relayPatterns = [
-  {
-    group: ["@armadra/cloud", "@armadra/cloud/*"],
-    message: "中继的包不得 import apps/cloud；两者只共享 packages/*。",
-  },
-  {
-    regex: "^(\\.\\./)+cloud/",
-    message: "中继的包不得 import apps/cloud；两者只共享 packages/*。",
-  },
   {
     group: ["postgres", "@armadra/cloud-shared/db"],
     message:
@@ -81,8 +73,6 @@ const controlStorePostgresPatterns = [
       "@armadra/relay-kernel/*",
       "@armadra/relay-runtime-workers",
       "@armadra/relay-runtime-workers/*",
-      "@armadra/cloud",
-      "@armadra/cloud/*",
     ],
     message:
       "control-store-postgres 只实现控制核的端口：不带 Redis、网络、中继与别的存储实现。",
@@ -144,8 +134,6 @@ const workersRuntimePatterns = [
       "@armadra/cloud-shared/config",
       "@armadra/control-store-sqlite/open",
       "@armadra/control-store-sqlite/migrate",
-      "@armadra/cloud",
-      "@armadra/cloud/*",
     ],
     message:
       "relay-runtime-workers 只装配内核、控制核与可移植的 SQLite 端口；Node 专有的部分不进 Worker。",
@@ -179,12 +167,7 @@ const controlCorePatterns = [
     message: "control-core 与传输无关：HTTP / WebSocket 外壳在 app 里。",
   },
   {
-    group: [
-      "@armadra/relay-kernel",
-      "@armadra/relay-kernel/*",
-      "@armadra/cloud",
-      "@armadra/cloud/*",
-    ],
+    group: ["@armadra/relay-kernel", "@armadra/relay-kernel/*"],
     message: "control-core 不 import 中继内核与 app。",
   },
 ];
