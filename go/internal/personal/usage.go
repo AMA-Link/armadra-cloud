@@ -51,7 +51,7 @@ serve:
   --password-file F        首次启动自动初始化的口令文件（或 RELAY_PERSONAL_PASSWORD_FILE）
   --listen HOST:PORT       监听地址（或 RELAY_LISTEN），默认回环 --host 用 127.0.0.1，否则 0.0.0.0
   --log-level LEVEL        debug | info | warn | error，默认 info
-  --metrics-listen H:P     指标监听（或 RELAY_METRICS_LISTEN），默认不开；RELAY_METRICS_TOKEN 设访问令牌
+  --metrics-listen H:P     指标监听（或 RELAY_METRICS_LISTEN），默认不开；非回环地址必须配 RELAY_METRICS_TOKEN
   --limit-anonymous N      无令牌或令牌无效的请求按 IP 每分钟上限（或 RELAY_LIMIT_ANONYMOUS），默认 60
   --limit-preflight N      0.5.0 起不再使用（或 RELAY_LIMIT_PREFLIGHT）
   --limit-token N          有效令牌每分钟上限（或 RELAY_LIMIT_TOKEN），默认 1200
