@@ -14,6 +14,7 @@ import {
   openChannel,
   openClientWs,
   registerSource,
+  scryptTimeout,
   viaRelay,
   type Session,
   type TestSource,
@@ -36,7 +37,7 @@ beforeAll(async () => {
   );
   if (!outcome.ready) throw new Error(`没连上：${JSON.stringify(outcome)}`);
   relayToken = (await assertion(session, source.sourceId)).relayToken;
-});
+}, scryptTimeout(1));
 
 describe("隧道", () => {
   it("节点地址带 ?src=<sourceId>；ready 下发 45 秒心跳，中继不主动 PING、源的 PING 立即回 PONG", async () => {

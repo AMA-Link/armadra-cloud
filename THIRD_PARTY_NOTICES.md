@@ -10,13 +10,7 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | @orpc/standard-server | 1.15.4 | MIT |
 | @orpc/standard-server-fetch | 1.15.4 | MIT |
 | @orpc/standard-server-peer | 1.15.4 | MIT |
-| @redis/bloom | 5.12.1 | MIT |
-| @redis/client | 5.12.1 | MIT |
-| @redis/json | 5.12.1 | MIT |
-| @redis/search | 5.12.1 | MIT |
-| @redis/time-series | 5.12.1 | MIT |
 | @standard-schema/spec | 1.1.0 | MIT |
-| cluster-key-slot | 1.1.2 | Apache-2.0 |
 | github.com/cespare/xxhash/v2 | v2.3.0 | MIT |
 | github.com/dustin/go-humanize | v1.1.0 | MIT |
 | github.com/google/uuid | v1.6.0 | BSD-3-Clause |
@@ -43,7 +37,6 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | openapi-types | 12.1.3 | MIT |
 | postgres | 3.4.9 | Unlicense |
 | radash | 12.1.1 | MIT |
-| redis | 5.12.1 | MIT |
 | tagged-tag | 1.0.0 | MIT |
 | type-fest | 5.10.0 | (MIT OR CC0-1.0) |
 | ws | 8.21.0 | MIT |
@@ -223,41 +216,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @redis/bloom@5.12.1
-
-License: MIT
-Homepage: https://github.com/redis/node-redis/tree/master/packages/bloom
-
-（包内没有附带许可证文件）
-
-## @redis/client@5.12.1
-
-License: MIT
-Homepage: https://github.com/redis/node-redis/tree/master/packages/client
-
-（包内没有附带许可证文件）
-
-## @redis/json@5.12.1
-
-License: MIT
-Homepage: https://github.com/redis/node-redis/tree/master/packages/json
-
-（包内没有附带许可证文件）
-
-## @redis/search@5.12.1
-
-License: MIT
-Homepage: https://github.com/redis/node-redis/tree/master/packages/search
-
-（包内没有附带许可证文件）
-
-## @redis/time-series@5.12.1
-
-License: MIT
-Homepage: https://github.com/redis/node-redis/tree/master/packages/time-series
-
-（包内没有附带许可证文件）
-
 ## @standard-schema/spec@1.1.0
 
 License: MIT
@@ -285,27 +243,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
-
-## cluster-key-slot@1.1.2
-
-License: Apache-2.0
-Homepage: https://github.com/Salakar/cluster-key-slot#readme
-
-```text
-Copyright (c) 2018 Mike Diarmid (Salakar) <mike.diarmid@gmail.com>
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this library except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
 ```
 
 ## github.com/cespare/xxhash/v2@v2.3.0
@@ -3292,13 +3229,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-
-## redis@5.12.1
-
-License: MIT
-Homepage: https://github.com/redis/node-redis
-
-（包内没有附带许可证文件）
 
 ## tagged-tag@1.0.0
 

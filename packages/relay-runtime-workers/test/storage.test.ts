@@ -23,7 +23,7 @@ import {
   BUNDLED_MIGRATION_FILES,
   bundledMigrations,
 } from "../src/store-do-sqlite/migrations.ts";
-import { call, json, login } from "./api.ts";
+import { call, json, warmUp } from "./api.ts";
 
 const control = () =>
   env.CONTROL.get(env.CONTROL.idFromName(CONTROL_OBJECT_NAME));
@@ -88,7 +88,8 @@ describe("DoSqlDatabase", () => {
           .digest("hex"),
       ).toBe(recorded[file]),
     );
-    await login();
+    // 只要控制面的对象起来（建库、跑迁移），不需要登录，也就不付登录的 scrypt。
+    await warmUp();
     const ledger = await runInDurableObject(control(), (_instance, state) =>
       state.storage.sql
         .exec<{
@@ -107,7 +108,7 @@ describe("DoSqlDatabase", () => {
 
 describe("签名私钥的包裹", () => {
   it("库里是 AES-256-GCM 密文；换主密钥解不开；主密钥格式不对直接拒绝", async () => {
-    await login();
+    await warmUp();
     const row = await runInDurableObject(control(), (_instance, state) =>
       state.storage.sql
         .exec<{
@@ -155,7 +156,7 @@ describe("初始化的前置条件", () => {
 
 describe("存储认不出就拒绝服务", () => {
   it("账本的 SHA-384 被改：/v1 与 /ready 答 503 storage_unavailable，数据一行不动", async () => {
-    await login();
+    await warmUp();
     await runInDurableObject(control(), (_instance, state) => {
       state.storage.sql.exec(
         "UPDATE relay_migrations SET sha384 = 'tampered' WHERE id = 1",

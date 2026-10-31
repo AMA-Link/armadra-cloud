@@ -60,13 +60,7 @@ it("控制核清单不依赖中继内核与存储客户端", () => {
     .sort();
   expect(
     names.filter((name) =>
-      [
-        "@armadra/relay-kernel",
-        "@armadra/cloud",
-        "postgres",
-        "redis",
-        "ws",
-      ].includes(name),
+      ["@armadra/relay-kernel", "postgres", "redis", "ws"].includes(name),
     ),
   ).toEqual([]);
 });

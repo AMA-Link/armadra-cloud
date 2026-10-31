@@ -7,7 +7,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { sourceObjectName } from "../src/env.ts";
 import type { SourceDO } from "../src/source-do.ts";
@@ -25,6 +25,8 @@ import {
   openChannel,
   postJson,
   registerSource,
+  REQUESTS_TIMEOUT_MS,
+  scryptTimeout,
   type Session,
   type TestSource,
 } from "./api.ts";
@@ -33,13 +35,19 @@ import { FakeCore } from "./fake-core.ts";
 const stubOf = (sourceId: string) =>
   env.SOURCE.get(env.SOURCE.idFromName(sourceObjectName(sourceId)));
 
+// 登录只是铺垫（这里测的是对象的生命周期）：整个文件做一次，不让每条用例各付一次 scrypt。
+let session: Session;
+
+beforeAll(async () => {
+  session = await login();
+}, scryptTimeout(1));
+
 async function online(): Promise<{
   session: Session;
   source: TestSource;
   core: FakeCore;
   relayToken: string;
 }> {
-  const session = await login();
   const source = await registerSource(session);
   const hint = await heartbeatHint(source);
   const core = new FakeCore(source);
@@ -60,8 +68,8 @@ async function online(): Promise<{
 const WAKE_BUDGET_MS = 2_000;
 
 describe("休眠", () => {
-  // 整条用例的成本主要不在唤醒：登录走一次 scrypt（N=2^15）、600 KiB 过信用窗口回显、
-  // `channelOutcome` 固定等 200 ms。load 110 时合计约 2.5 秒、load 180 时近 5 秒，给 15 秒；唤醒那段另有 WAKE_BUDGET_MS。
+  // 整条用例的成本主要不在唤醒：登记源、接隧道、600 KiB 过信用窗口回显、`channelOutcome` 固定等
+  // 200 ms（登录已在文件的 `beforeAll` 里做掉）。load 110 时约 2.5 秒、load 180 时近 5 秒，给 15 秒；唤醒那段另有 WAKE_BUDGET_MS。
   it("对象换出内存后唤醒：隧道、流表与客户端通道原样接上，信用不漏", async () => {
     const { source, core, relayToken } = await online();
     const { ws } = await openChannel(source.sourceId, relayToken);
@@ -99,7 +107,7 @@ describe("休眠", () => {
   }, 15_000);
 });
 
-describe("检查周期（alarm）", () => {
+describe("检查周期（alarm）", { timeout: REQUESTS_TIMEOUT_MS }, () => {
   it("超过 2 × heartbeatMs 没收到源的帧：以 1001 关闭隧道，源变离线", async () => {
     const { session, source, core } = await online();
     await runInDurableObject(stubOf(source.sourceId), (instance: SourceDO) => {
@@ -126,7 +134,7 @@ describe("检查周期（alarm）", () => {
   });
 });
 
-describe("隧道替换与身份", () => {
+describe("隧道替换与身份", { timeout: REQUESTS_TIMEOUT_MS }, () => {
   it("同源第二条隧道就绪：旧的收 GOAWAY replaced、以 4491 关闭，新的接着服务", async () => {
     const { source, core, relayToken } = await online();
     const hint = await heartbeatHint(source);
@@ -140,7 +148,6 @@ describe("隧道替换与身份", () => {
   });
 
   it("?src= 指向别的源而令牌是这个源的：拒绝 tunnel_token_invalid（4490）", async () => {
-    const session = await login();
     const mine = await registerSource(session);
     const other = await registerSource(session);
     const hint = await heartbeatHint(mine);
@@ -158,7 +165,22 @@ describe("隧道替换与身份", () => {
   });
 });
 
-describe("撤销即时生效", () => {
+/**
+ * 撤销后，已签出的令牌要等源对象收到 `invalidate` 才作废：控制面把「断开隧道」「断开客户端」「作废缓存」
+ * 三个 RPC 各自丢到后台，彼此不保证先后，所以看到隧道 4492、客户端 4403 的时候，缓存里那条「令牌没被
+ * 撤销」可能还没清（机器忙时会撞上，开通道答 4404 而不是 4401）。这里探测到 4401 为止，最多等
+ * REVOKE_SETTLE_MS：正常几毫秒，缓存自己要 10 s 才过期，所以 5 s 内等不到就是 `invalidate` 没送到，
+ * 照样失败，并报出最后一次探测的结果。
+ */
+const REVOKE_SETTLE_MS = 5_000;
+
+const tokenRejected = (sourceId: string, token: string) =>
+  vi.waitFor(
+    async () => expect(await channelOutcome(sourceId, token)).toBe(4401),
+    { timeout: REVOKE_SETTLE_MS, interval: 50 },
+  );
+
+describe("撤销即时生效", { timeout: REQUESTS_TIMEOUT_MS }, () => {
   it("撤销源：隧道 4492、经中继的通道 4403、已签出的中继令牌 4401", async () => {
     const { session, source, core, relayToken } = await online();
     const { ws } = await openChannel(source.sourceId, relayToken);
@@ -172,7 +194,7 @@ describe("撤销即时生效", () => {
     expect(revoked.status).toBe(200);
     expect((await core.closed()).code).toBe(4492);
     expect((await wsClosed).code).toBe(4403);
-    expect(await channelOutcome(source.sourceId, relayToken)).toBe(4401);
+    await tokenRejected(source.sourceId, relayToken);
     // 撤销后的源换不到隧道令牌。
     expect(
       await heartbeatHint(source).catch((error: Error) => error.message),
@@ -209,7 +231,7 @@ describe("撤销即时生效", () => {
     });
     expect(revoked.status).toBe(200);
     expect((await guestClosed).code).toBe(4403);
-    expect(await channelOutcome(source.sourceId, guest.relayToken)).toBe(4401);
+    await tokenRejected(source.sourceId, guest.relayToken);
     expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
   });
 });

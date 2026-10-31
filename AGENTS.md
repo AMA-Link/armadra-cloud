@@ -2,8 +2,8 @@
 
 ## 代码边界
 
-- 中继与 SaaS 控制面的运行时实现是 Go（`go/`，镜像由 `go/Dockerfile`（中继）与 `go/Dockerfile.cloud`（控制面 `armadra-cloud`）构建）；TypeScript 只剩 `apps/cloud`（不再构建镜像，下一个版本删除，设计 §10 Q9）与 Cloudflare Workers 中继 `apps/relay-workers`（TS 版 Node 中继 `apps/relay` 与 `packages/relay-runtime-node` 已随 #59 的 G4.1 删除）。包与 app 不得 import `apps/cloud`，`apps/*` 不得 import Armadra 仓的源码；与 Armadra 的全部往来只经 `@armadra/platform-protocol` 与容器镜像。
-- 共享内核两个包（Workers 中继用；Go 中继另有自己的实现，行为以协议包夹具对齐）：`packages/relay-kernel`（隧道帧流与信用窗口、握手、心跳、隧道表、边缘判定、限流、媒体票、令牌校验、`ControlPlane` 接口与内存实现；HTTP/1.1 与 WebSocket 帧的纯编解码在协议包的 `http1` / `ws-frames`）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 运行时无关：源码只许 `node:crypto` / `node:buffer`，不 import `ws`、`node:http` / `net` / `stream` / `fs` 与 `control-core`，不带 PostgreSQL / Redis；Cloudflare Workers 部分（Worker 入口与闸、`SourceDO` / `ControlDO`、Hibernation 粘合、DO 内的 HTTP / WS 转发、DO SQLite 适配）在 `packages/relay-runtime-workers`，源码只许 `node:crypto` / `node:buffer`，复用 `control-store-sqlite` 的可移植模块（不碰它的 `open` / `migrate`），wrangler 项目是 `apps/relay-workers`（只 re-export 运行时）。`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与中继内核；端口的存储实现是 `packages/control-store-sqlite`（`node:sqlite`，Workers 的 DO SQLite 适配复用它的可移植部分）与 `packages/control-store-postgres`（cloud 用，同一套端口合同与服务合同）；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
+- 中继与 SaaS 控制面的运行时实现是 Go（`go/`，镜像由 `go/Dockerfile`（中继）与 `go/Dockerfile.cloud`（控制面 `armadra-cloud`）构建）；TypeScript 只剩 Cloudflare Workers 中继 `apps/relay-workers`（TS 版 Node 中继 `apps/relay` 与 `packages/relay-runtime-node` 已随 #59 的 G4.1 删除，TS 控制面 `apps/cloud` 已随 #177 删除）。`apps/*` 不得 import Armadra 仓的源码；与 Armadra 的全部往来只经 `@armadra/platform-protocol` 与容器镜像。
+- 共享内核两个包（Workers 中继用；Go 中继另有自己的实现，行为以协议包夹具对齐）：`packages/relay-kernel`（隧道帧流与信用窗口、握手、心跳、隧道表、边缘判定、限流、媒体票、令牌校验、`ControlPlane` 接口与内存实现；HTTP/1.1 与 WebSocket 帧的纯编解码在协议包的 `http1` / `ws-frames`）与 `packages/control-core`（存储端口、账号 / 会话 / 签发 / 源 / 链接 / me-stream 服务、`createCloudRouter`）。`relay-kernel` 运行时无关：源码只许 `node:crypto` / `node:buffer`，不 import `ws`、`node:http` / `net` / `stream` / `fs` 与 `control-core`，不带 PostgreSQL / Redis；Cloudflare Workers 部分（Worker 入口与闸、`SourceDO` / `ControlDO`、Hibernation 粘合、DO 内的 HTTP / WS 转发、DO SQLite 适配）在 `packages/relay-runtime-workers`，源码只许 `node:crypto` / `node:buffer`，复用 `control-store-sqlite` 的可移植模块（不碰它的 `open` / `migrate`），wrangler 项目是 `apps/relay-workers`（只 re-export 运行时）。`control-core` 只经端口读写状态，不 import `node:fs`、存储客户端、HTTP / WS 与中继内核；端口的存储实现是 `packages/control-store-sqlite`（`node:sqlite`，Workers 的 DO SQLite 适配复用它的可移植部分）与 `packages/control-store-postgres`（PostgreSQL 迁移的唯一源；运行代码现在只给 `go/testdata/compat` 的夹具生成与读回、以及端口合同的集成测试用，同一套端口合同与服务合同）；包不 import app。边界由各包的 `boundaries.test.ts`、ESLint 与 `repo.rules.json` 的 `packageDependencies` 守。
 - `packages/e2e-fake-core` 只给 `scripts/e2e` 的 saas / workers 模式当假 core（Node `http` + `ws` 的隧道客户端），不发布，也不进任何镜像。
 - `/v1/*` 的路由表只有 `control-core` 的 `createCloudRouter` 一份：personal 给处理器、其余答 404；cloud 未实现的统一答 501。
 - `@orpc/*` 只能出现在 `packages/platform-protocol/src/cloud-api/`、`packages/control-core/src/router.ts`、`tools/contract/`（ESLint `no-restricted-imports` 守）。
@@ -15,7 +15,7 @@
 ## 范围与优先级
 
 - 个人中转与 SaaS 按 #59（中继 Go 重写）、#60（SaaS 能力）推进；Workers 版冻结功能，只修缺陷。
-- SaaS 服务端（控制面的账号、团队、授予、计费等）在 `apps/cloud` 的业务路由在路由表里统一答 501 `not_implemented`（测试守住），实现时逐条拿掉；`/v1` 的新增 procedure 同样先预留再实现。
+- SaaS 服务端（控制面的账号、团队、授予、计费等）由 Go 的 `armadra-cloud` 实现；`control-core` 路由表里 saas 模式未实现的业务路由统一答 501 `not_implemented`（测试守住），实现时逐条拿掉；`/v1` 的新增 procedure 同样先预留再实现。
 - 个人中转的缺省入口（`pnpm relay:personal`、`deploy/personal/compose.yml`）不得依赖 PostgreSQL / Redis；多节点是显式选项（`deploy/compose.yml` 的 `relay-personal` profile）。
 
 ## Go 代码
@@ -61,7 +61,7 @@
 ## Review guidelines
 
 - 简体中文，先结论，每条写文件与行号、会出什么错、怎么修。
-- 包 import `apps/cloud`、app import Armadra 源码、`@orpc/*` 出现在门面之外：P1；Go 的 `internal/core` import `internal/tunnel` / `internal/edge`、`go/` import 未登记的模块或 Armadra 源码：P1。
+- app import Armadra 源码、`@orpc/*` 出现在门面之外：P1；Go 的 `internal/core` import `internal/tunnel` / `internal/edge`、`go/` import 未登记的模块或 Armadra 源码：P1。
 - 修改已发布迁移、编号不连续、lock 未同步、任何自动清库：P0。
 - 正文 / 令牌 / 口令进入日志、持久化或响应：P0；Go 日志字段不在白名单、把这些放进字段：P0。
 - 令牌校验少了 `aud` / `exp` / `jti` 任一项、中继把流转给非令牌 `src` 的源：P0；Go 的 `internal/jose` 少了验证步骤、改了顺序（typ → kid → 签名 → schema → aud → iss → 时间 → jti）、口令或令牌哈希不用定时安全比较：P0。
