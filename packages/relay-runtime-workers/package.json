@@ -20,7 +20,7 @@
     "@armadra/control-store-sqlite": "workspace:*",
     "@armadra/platform-protocol": "workspace:*",
     "@armadra/relay-kernel": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.3.6",

@@ -133,7 +133,7 @@ const (
 	IdentityThrottleIPBucketWindowMs         = 60000
 	IdentityTokenHashPrefix                  = "armadra/identity/v1/"
 	IdentityTunnelTokenTTLMs                 = 3600000
-	ValidationEmailPattern                   = "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+	ValidationEmailPattern                   = "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
 )
 
 var IdentityTokenHashKinds = []string{"bootstrap", "access", "refresh", "csrf", "reset"}

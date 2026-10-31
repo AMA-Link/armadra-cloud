@@ -48,6 +48,9 @@ func readOrdered(dir, name string) (*value, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s：%w", name, err)
 	}
+	if err := normalize(v); err != nil {
+		return nil, fmt.Errorf("%s：%w", name, err)
+	}
 	return v, nil
 }
 

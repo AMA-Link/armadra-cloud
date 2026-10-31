@@ -47,7 +47,7 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | tagged-tag | 1.0.0 | MIT |
 | type-fest | 5.10.0 | (MIT OR CC0-1.0) |
 | ws | 8.21.0 | MIT |
-| zod | 4.4.3 | MIT |
+| zod | 4.6.6 | MIT |
 
 ## @orpc/client@1.15.4
 
@@ -3486,7 +3486,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## zod@4.4.3
+## zod@4.6.6
 
 License: MIT
 Homepage: https://zod.dev

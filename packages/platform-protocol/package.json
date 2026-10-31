@@ -81,7 +81,7 @@
     "@types/node": "24.3.0",
     "typescript": "5.9.2",
     "vitest": "4.1.11",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "publishConfig": {
     "access": "public",

@@ -19,7 +19,7 @@
     "@armadra/control-core": "workspace:*",
     "@armadra/control-store-postgres": "workspace:*",
     "@armadra/platform-protocol": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/node": "24.3.0",

@@ -139,3 +139,50 @@ func TestGenInputsHandlesFormatsAndRecords(t *testing.T) {
 		}
 	}
 }
+
+// zod 4.6 的等价写法（可空的 type 数组、startsWith 带的 format、元组的 items: false）
+// 归一后与旧写法生成同样的规则；认不出的 type 数组照旧报错。
+func TestNormalizeZodEquivalents(t *testing.T) {
+	parse := func(src string) *value {
+		t.Helper()
+		v, err := parseOrdered([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := normalize(v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	lit := func(v *value) string {
+		t.Helper()
+		out, err := literal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	newer := parse(`{"type":"object","properties":{
+		"o":{"type":["string","null"]},
+		"p":{"type":"string","format":"starts_with","pattern":"^\\/.*"},
+		"h":{"type":"array","items":{"type":"array","prefixItems":[{"type":"string"},{"type":"string"}],"items":false}}},
+		"required":["o","p","h"]}`)
+	older := parse(`{"type":"object","properties":{
+		"o":{"anyOf":[{"type":"string"},{"type":"null"}]},
+		"p":{"type":"string","pattern":"^\\/.*"},
+		"h":{"type":"array","items":{"type":"array","prefixItems":[{"type":"string"},{"type":"string"}]}}},
+		"required":["o","p","h"]}`)
+	if got, want := lit(newer), lit(older); got != want {
+		t.Fatalf("归一后的规则不同：\n%s\n应为\n%s", got, want)
+	}
+	if err := newStructGen().add("X", "x.json", newer); err != nil {
+		t.Fatal(err)
+	}
+	bad, err := parseOrdered([]byte(`{"type":["string","integer"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := normalize(bad); err == nil {
+		t.Fatal("type 数组 [string, integer] 应报错")
+	}
+}
