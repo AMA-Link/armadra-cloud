@@ -20,6 +20,55 @@ export const ACCOUNT = "owner";
 export const PASSWORD = "plover-quartz-lantern-41";
 export const DEVICE = { platform: "desktop", name: "test" } as const;
 
+/**
+ * 带 scrypt 的请求（登录、改口令）是这组用例里最重、也最受机器负载影响的一段。账号口令用 `SCRYPT`
+ * （N=2^15 r=8 p=1，参数由协议包与身份向量钉死，变了会在那边先失败）派生，一次是约 55 ms 的纯 CPU
+ * 活。本地 workerd 实测一次登录的整个往返：安静时 55–65 ms；10 核机上另压 50 / 100 / 200 个空转进程
+ * （环境里还有别的测试在跑）时，中位 0.65 / 0.94 / 1.5 s，最慢 0.9 / 1.1 / 2.0 s；整套并行、load 100
+ * 时单次最慢 2.6 s。一次派生给 5 s，比最慢实测高一倍：机器再忙也不会误报，派生真卡住（或慢出一个
+ * 数量级）则在那一段就报出是哪个请求，而不是整条用例笼统地超时。
+ */
+export const DERIVE_BUDGET_MS = 5_000;
+
+/**
+ * 控制面的对象第一次被请求时才起：建库、跑迁移、生成签名钥，并为种子账号做 1 次 scrypt。安静时
+ * 约 80 ms，另压 100 / 200 个进程时 1.1–2.6 s。单独限 10 s，不混进后面的登录里。
+ */
+export const COLD_START_BUDGET_MS = 10_000;
+
+/**
+ * 不含 scrypt 的一串往返（登记源、接隧道、换中继令牌、开通道、回显几个字节等）的用例上限。整套并行、
+ * load 100 时这类用例实测 0.3–4.5 s，另压 200 个空转进程（load 190–240）时最慢 10.1 s（1 MiB 回显），
+ * 缺省的 5 s 不够；给 20 s，约两倍余量。
+ */
+export const REQUESTS_TIMEOUT_MS = 20_000;
+
+/**
+ * 整条用例的上限：`REQUESTS_TIMEOUT_MS` 加 `derives` 次 scrypt 各按 `DERIVE_BUDGET_MS`。登录算 1 次，
+ * 改口令（校验旧口令 + 派生新口令）算 2 次，口令错的登录也做 1 次等价派生。
+ */
+export function scryptTimeout(derives: number): number {
+  return REQUESTS_TIMEOUT_MS + derives * DERIVE_BUDGET_MS;
+}
+
+/**
+ * 一段限时：做完后核对这一段的耗时，超了抛出带标签的错误，说明是哪一段慢、慢了多少。不用定时器去
+ * 抢：scrypt 在这个 isolate 里占着线程，定时器要等它做完才轮得到，抢不过；事后核对在 CPU 忙时也量得出。
+ * 这一段真卡死不返回的话，由整条用例的上限兜住。
+ */
+export async function within<T>(
+  label: string,
+  budgetMs: number,
+  work: Promise<T>,
+): Promise<T> {
+  const started = performance.now();
+  const result = await work;
+  const elapsed = Math.round(performance.now() - started);
+  if (elapsed > budgetMs)
+    throw new Error(`${label}用了 ${elapsed} ms，超过 ${budgetMs} ms`);
+  return result;
+}
+
 let ipCounter = 10;
 /** 每个用例一个客户端 IP（按 IP 的闸互不干扰）。 */
 export function nextIp(): string {
@@ -45,19 +94,31 @@ export async function json<T = Record<string, unknown>>(
 export async function postJson(
   path: string,
   body: unknown,
-  options: { token?: string; ip?: string; authorization?: string } = {},
+  options: {
+    token?: string;
+    ip?: string;
+    authorization?: string;
+    /** 这个请求要做几次 scrypt 派生；给了就按 `DERIVE_BUDGET_MS` 单独限时。 */
+    derives?: number;
+  } = {},
 ): Promise<Response> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
   };
   if (options.token) headers.authorization = `Bearer ${options.token}`;
   if (options.authorization) headers.authorization = options.authorization;
-  return call(path, {
+  const sent = call(path, {
     method: "POST",
     body: JSON.stringify(body),
     headers,
     ip: options.ip,
   });
+  if (!options.derives) return sent;
+  return within(
+    `POST ${path}（${options.derives} 次 scrypt）`,
+    options.derives * DERIVE_BUDGET_MS,
+    sent,
+  );
 }
 
 export interface Session {
@@ -65,11 +126,26 @@ export interface Session {
   refreshToken?: string;
 }
 
+let warmed: Promise<void> | undefined;
+
+/** 唤醒控制面的对象并等它起好，冷启动单独限时；每个测试文件只做一次。 */
+export function warmUp(): Promise<void> {
+  warmed ??= within(
+    "控制面冷启动",
+    COLD_START_BUDGET_MS,
+    call("/.well-known/armadra-platform").then((response) =>
+      response.arrayBuffer().then(() => undefined),
+    ),
+  );
+  return warmed;
+}
+
 export async function login(ip = nextIp()): Promise<Session> {
+  await warmUp();
   const response = await postJson(
     "/v1/auth/login",
     { account: ACCOUNT, password: PASSWORD, device: DEVICE },
-    { ip },
+    { ip, derives: 1 },
   );
   if (response.status !== 200)
     throw new Error(`login ${response.status} ${await response.text()}`);

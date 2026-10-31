@@ -20,53 +20,62 @@ import {
   channelOutcome,
   login,
   registerSource,
+  scryptTimeout,
   viaRelay,
 } from "./api.ts";
 import { FakeCore } from "./fake-core.ts";
 
-it("超了日配额：源地址 429 limit_reached；/v1 照常；清掉计数后恢复", async () => {
-  const session = await login();
-  const source = await registerSource(session);
-  const hint = await heartbeatHint(source);
-  const core = new FakeCore(source);
-  expect(
-    (await core.connect(hint.nodes[0]?.url ?? "", hint.tunnelToken)).ready,
-  ).toBeTruthy();
-  const { relayToken } = await assertion(session, source.sourceId);
-  expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
+// 成本：1 次 scrypt 登录（外加控制面冷启动，各自限时，见 api.ts）、登记源 / 接隧道 / 换中继令牌的几个
+// 往返、`channelOutcome` 两次各固定等 200 ms。load 100 时登录约 1–2.6 s、其余约 1.7 s，逼近缺省的 5 s。
+it(
+  "超了日配额：源地址 429 limit_reached；/v1 照常；清掉计数后恢复",
+  { timeout: scryptTimeout(1) },
+  async () => {
+    const session = await login();
+    const source = await registerSource(session);
+    const hint = await heartbeatHint(source);
+    const core = new FakeCore(source);
+    expect(
+      (await core.connect(hint.nodes[0]?.url ?? "", hint.tunnelToken)).ready,
+    ).toBeTruthy();
+    const { relayToken } = await assertion(session, source.sourceId);
+    expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
 
-  const control = env.CONTROL.get(env.CONTROL.idFromName(CONTROL_OBJECT_NAME));
-  const sourceStub = env.SOURCE.get(
-    env.SOURCE.idFromName(sourceObjectName(source.sourceId)),
-  );
-  await runInDurableObject(control, (instance: ControlDO) =>
-    instance.budgetAdd({ requests: 2_000_000, bytes: 0 }),
-  );
-  // 源的对象攒着的计数在检查周期里报上去，顺便拿回「超了」。
-  expect(await runDurableObjectAlarm(sourceStub)).toBe(true);
-  const refused = await viaRelay(source.sourceId, "/echo-request", {
-    token: relayToken,
-  });
-  expect(refused.status).toBe(429);
-  expect((await json(refused)).code).toBe("limit_reached");
-  const tunnel = await call(`/t/v1?src=${source.sourceId}`, {
-    headers: { upgrade: "websocket" },
-  });
-  expect(tunnel.status).toBe(429);
-  await tunnel.arrayBuffer();
-  const api = await call("/.well-known/armadra-platform");
-  expect(api.status).toBe(200);
-  await api.arrayBuffer();
-  const metrics = await call("/metrics", {
-    headers: { authorization: "Bearer test-metrics-token" },
-  });
-  expect(await metrics.text()).toMatch(
-    /relay_budget_used\{kind="requests"\} 2000\d{3}/,
-  );
+    const control = env.CONTROL.get(
+      env.CONTROL.idFromName(CONTROL_OBJECT_NAME),
+    );
+    const sourceStub = env.SOURCE.get(
+      env.SOURCE.idFromName(sourceObjectName(source.sourceId)),
+    );
+    await runInDurableObject(control, (instance: ControlDO) =>
+      instance.budgetAdd({ requests: 2_000_000, bytes: 0 }),
+    );
+    // 源的对象攒着的计数在检查周期里报上去，顺便拿回「超了」。
+    expect(await runDurableObjectAlarm(sourceStub)).toBe(true);
+    const refused = await viaRelay(source.sourceId, "/echo-request", {
+      token: relayToken,
+    });
+    expect(refused.status).toBe(429);
+    expect((await json(refused)).code).toBe("limit_reached");
+    const tunnel = await call(`/t/v1?src=${source.sourceId}`, {
+      headers: { upgrade: "websocket" },
+    });
+    expect(tunnel.status).toBe(429);
+    await tunnel.arrayBuffer();
+    const api = await call("/.well-known/armadra-platform");
+    expect(api.status).toBe(200);
+    await api.arrayBuffer();
+    const metrics = await call("/metrics", {
+      headers: { authorization: "Bearer test-metrics-token" },
+    });
+    expect(await metrics.text()).toMatch(
+      /relay_budget_used\{kind="requests"\} 2000\d{3}/,
+    );
 
-  await runInDurableObject(control, (_instance, state) => {
-    state.storage.kv.delete(`budget:${dayOf(Date.now())}`);
-  });
-  await runDurableObjectAlarm(sourceStub);
-  expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
-});
+    await runInDurableObject(control, (_instance, state) => {
+      state.storage.kv.delete(`budget:${dayOf(Date.now())}`);
+    });
+    await runDurableObjectAlarm(sourceStub);
+    expect(await channelOutcome(source.sourceId, relayToken)).toBeNull();
+  },
+);
