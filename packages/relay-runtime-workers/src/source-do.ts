@@ -166,6 +166,11 @@ export class SourceDO extends DurableObject<RelayEnv> {
     { revoked: boolean; atMs: number }
   >();
   private cors: { origins: string[]; atMs: number } | null = null;
+  /**
+   * 撤销判断缓存的版本：每次 {@link SourceDO.invalidate} 加一。跨 await 的判断在开头记下它，回来发现变了就说明
+   * 期间有撤销落库并作废过缓存，手里的结果可能早于撤销，不能写回缓存、也不能据此放行（#180）。
+   */
+  private revocationEpoch = 0;
   private persistQueued = false;
   private readonly traffic: TrafficMeter | undefined;
   /** 本对象的 DO SQLite 里的流量表；undefined = 还没开，null = 开不了（不统计，不影响转发）。 */
@@ -572,7 +577,19 @@ export class SourceDO extends DurableObject<RelayEnv> {
     request: Request,
     edgeRequest: EdgeRequest,
   ): Promise<Response> {
-    const decision = await this.policy.decideUpgrade(edgeRequest);
+    // 判定跨 await（验令牌、限流、找隧道）。期间若有撤销作废了缓存，这次判定可能用的是撤销前的结果，而断开
+    // 时这条连接还没登记、躲过了断开：放掉并重判，最多 3 次（之后的步骤都是同步的，登记前不会再有撤销插进来）。
+    let epoch = this.revocationEpoch;
+    let decision = await this.policy.decideUpgrade(edgeRequest);
+    for (
+      let retry = 0;
+      decision.kind !== "refuse" && epoch !== this.revocationEpoch && retry < 2;
+      retry++
+    ) {
+      this.policy.releaseUpgrade(decision.subject);
+      epoch = this.revocationEpoch;
+      decision = await this.policy.decideUpgrade(edgeRequest);
+    }
     if (decision.kind === "refuse")
       return this.refuseUpgrade(
         request,
@@ -915,15 +932,23 @@ export class SourceDO extends DurableObject<RelayEnv> {
     const cached = this.revocations.get(jti);
     if (cached && (cached.revoked || now - cached.atMs < REVOCATION_CACHE_MS))
       return cached.revoked;
-    let revoked = true;
-    try {
-      revoked = await this.controlStub().isRevoked(jti);
-    } catch {
-      revoked = true;
+    // 查询期间若缓存被作废过，答复可能是撤销落库之前的：重问，最多 3 次；仍在变就不写缓存，照最后一次答。
+    for (let attempt = 1; ; attempt++) {
+      const epoch = this.revocationEpoch;
+      let revoked = true;
+      try {
+        revoked = await this.controlStub().isRevoked(jti);
+      } catch {
+        revoked = true;
+      }
+      const stale = epoch !== this.revocationEpoch;
+      if (stale && !revoked && attempt < 3) continue;
+      if (!stale) {
+        if (this.revocations.size > 4096) this.revocations.clear();
+        this.revocations.set(jti, { revoked, atMs: now });
+      }
+      return revoked;
     }
-    if (this.revocations.size > 4096) this.revocations.clear();
-    this.revocations.set(jti, { revoked, atMs: now });
-    return revoked;
   }
 
   private async refreshCors(): Promise<void> {
@@ -982,7 +1007,8 @@ export class SourceDO extends DurableObject<RelayEnv> {
   }
 
   /**
-   * 断开匹配的客户端 WS（撤销源 / 访客），答断开了几条。只在撤销时被调（控制面已先落库），所以先作废撤销判断
+   * 断开匹配的客户端 WS（撤销源 / 访客），答断开了几条。**前置条件：撤销已落库**（控制面在 `revoke` 里先写库再调；
+   * 落库之前调会把「未撤销」重新缓存回来）。所以先作废撤销判断
    * 的缓存：`ControlDO` 自己的 `invalidate` 要等一次查询后才发，跟这里不保证先后；不先作废的话，被断开的一端
    * 马上拿旧令牌重连会按缓存放行或答 4404（隧道已关），而不是 4401（#180）。
    */
@@ -996,6 +1022,7 @@ export class SourceDO extends DurableObject<RelayEnv> {
 
   /** 撤销或设置变了：作废撤销判断与可信来源的缓存。 */
   invalidate(): void {
+    this.revocationEpoch++;
     this.revocations.clear();
     this.cors = null;
   }
