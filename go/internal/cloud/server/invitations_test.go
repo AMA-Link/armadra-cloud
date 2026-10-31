@@ -76,6 +76,7 @@ func (r *rig) verifiedAs(email string, h headers) session {
 
 // 邀请全流程：创建 → 邮件（令牌只在片段、库里只有哈希）→ 匿名摘要 → 接受 → 成员 → 幂等。
 func TestInvitationFlow(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	team := r.seedTeam("flow", map[string]string{owner.accountID: "owner"})
@@ -181,6 +182,7 @@ func TestInvitationFlow(t *testing.T) {
 }
 
 func TestInvitationMailFollowsInviteeLocale(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	team := r.seedTeam("lang", map[string]string{owner.accountID: "owner"})
@@ -206,6 +208,7 @@ func TestInvitationMailFollowsInviteeLocale(t *testing.T) {
 }
 
 func TestInvitationEmailMismatchDeclineAndRevoke(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, other := r.verified(), r.verified()
 	team := r.seedTeam("neg", map[string]string{owner.accountID: "owner"})
@@ -254,6 +257,7 @@ func TestInvitationEmailMismatchDeclineAndRevoke(t *testing.T) {
 
 // 过期：读时按过期答 410；重新邀请前先把过期的 pending 落成 expired，不挡新邀请；过期的可重发，旧链接作废。
 func TestInvitationExpiryReinviteAndResend(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	ownerEmail := r.queryString("SELECT email FROM accounts WHERE account_id = $1", owner.accountID)
@@ -308,6 +312,7 @@ func TestInvitationExpiryReinviteAndResend(t *testing.T) {
 
 // 角色、跨团队与额度。
 func TestInvitationPermissionsAndQuotas(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, member, billing, guest, outsider := r.verified(), r.verified(), r.verified(), r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("perm", map[string]string{
@@ -373,6 +378,7 @@ func TestInvitationPermissionsAndQuotas(t *testing.T) {
 
 // 接受时再核额度：待处理的邀请占着席位，自己那条不重复计。
 func TestInvitationAcceptChecksQuotaAndTeamState(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	team := r.seedTeam("acc", map[string]string{owner.accountID: "owner"})
@@ -420,6 +426,7 @@ func TestInvitationAcceptChecksQuotaAndTeamState(t *testing.T) {
 
 // 限流：创建按邀请人每小时 50 次，重发按邀请每小时 5 次，匿名摘要按 IP 每分钟 30 次。
 func TestInvitationRateLimits(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	team := r.seedTeam("rate", map[string]string{owner.accountID: "owner"})
@@ -450,6 +457,7 @@ func TestInvitationRateLimits(t *testing.T) {
 
 // 发信失败重试换新令牌；邀请在发信前被撤销则不发信。
 func TestInvitationMailSkipsRevokedAndRetries(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	team := r.seedTeam("mailskip", map[string]string{owner.accountID: "owner"})
@@ -490,6 +498,7 @@ func TestInvitationMailSkipsRevokedAndRetries(t *testing.T) {
 
 // 并发创建 / 接受不越过成员额度（锁团队行后计数）：剩一个席位，四个并发邀请恰好一个成功。
 func TestInvitationConcurrentCreateRespectsQuota(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, member := r.verified(), r.verified()
 	team := r.seedTeam("race", map[string]string{owner.accountID: "owner", member.accountID: "member"})
@@ -550,6 +559,7 @@ func TestInvitationConcurrentCreateRespectsQuota(t *testing.T) {
 
 // 收件箱一律要求邮箱已验证（不看开关）：未验证的账号看不到发给那个地址的邀请。
 func TestInvitationReceivedBoxNeedsVerifiedEmail(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{env: map[string]string{"REQUIRE_EMAIL_VERIFIED": "0"}})
 	owner := r.verified()
 	team := r.seedTeam("inbox", map[string]string{owner.accountID: "owner"})
@@ -569,6 +579,7 @@ func TestInvitationReceivedBoxNeedsVerifiedEmail(t *testing.T) {
 
 // 邀请人被移除或不再是 admin：他发出的待处理邀请同事务撤销；兜底——邀请人身份变了而邀请还在，接受答 409。
 func TestInvitationsDieWithTheirInviter(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner, admin, admin2 := r.verified(), r.verified(), r.verified()
 	team := r.seedTeam("inviter", map[string]string{owner.accountID: "owner", admin.accountID: "admin", admin2.accountID: "admin"})
@@ -607,6 +618,7 @@ func TestInvitationsDieWithTheirInviter(t *testing.T) {
 
 // 过期重发也受 allowGuests 约束；团队名与邀请人显示名里的域名形态不进邮件。
 func TestInvitationResendExpiredGuestAndLabelSanitizing(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
 	team := r.seedTeam("g-resend", map[string]string{owner.accountID: "owner"})

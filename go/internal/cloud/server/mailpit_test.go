@@ -87,6 +87,7 @@ func mailpitRig(t *testing.T) (*rig, *mailpitClient) {
 }
 
 func TestMailpitRegisterVerifyAndReset(t *testing.T) {
+	t.Parallel()
 	r, mailpit := mailpitRig(t)
 	email := r.email()
 	first := r.register(email, hdr("Accept-Language", "en"))
@@ -127,6 +128,7 @@ func TestMailpitRegisterVerifyAndReset(t *testing.T) {
 }
 
 func TestMailpitChineseMessageAndNewDevice(t *testing.T) {
+	t.Parallel()
 	r, mailpit := mailpitRig(t)
 	email := r.email()
 	r.registerBearer(email)

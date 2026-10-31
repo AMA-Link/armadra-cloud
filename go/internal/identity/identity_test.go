@@ -230,3 +230,26 @@ func TestCommonPasswordsMatchControlCore(t *testing.T) {
 		t.Errorf("常见口令表应有 10000 条，实际 %d", n)
 	}
 }
+
+// 降成本只影响之后新写的记录；之前的记录按自带的成本照样能验，恢复协议成本后也一样。
+func TestUseScryptCostForTests(t *testing.T) {
+	t.Cleanup(func() { identity.UseScryptCostForTests(gen.IdentityScryptCost) })
+	protocol, err := identity.HashPassword("plover-quartz-lantern-41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if protocol.Cost != gen.IdentityScryptCost {
+		t.Fatalf("缺省应取协议成本：%d", protocol.Cost)
+	}
+	identity.UseScryptCostForTests(1 << 4)
+	fast, err := identity.HashPassword("plover-quartz-lantern-41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fast.Cost != 1<<4 || !identity.VerifyPassword("plover-quartz-lantern-41", fast) || identity.VerifyPassword("wrong-password", fast) {
+		t.Fatalf("降成本的记录应按自带成本校验：%+v", fast)
+	}
+	if !identity.VerifyPassword("plover-quartz-lantern-41", protocol) {
+		t.Fatal("协议成本的旧记录仍应能验")
+	}
+}

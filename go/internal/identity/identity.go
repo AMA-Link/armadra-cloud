@@ -30,7 +30,7 @@ type PasswordRecord struct {
 // Derive 按协议参数（N=2^15、r=8、p=1、32 字节）派生密钥。
 func Derive(password string, salt []byte) ([]byte, error) {
 	return scrypt.Key([]byte(password), salt,
-		gen.IdentityScryptCost, gen.IdentityScryptBlock, gen.IdentityScryptParallel, gen.IdentityScryptLength)
+		scryptCost(), gen.IdentityScryptBlock, gen.IdentityScryptParallel, gen.IdentityScryptLength)
 }
 
 // HashPassword 用随机盐派生口令记录。
@@ -50,7 +50,7 @@ func HashPasswordWithSalt(password string, salt []byte) (PasswordRecord, error) 
 	}
 	return PasswordRecord{
 		KDF:      "scrypt",
-		Cost:     gen.IdentityScryptCost,
+		Cost:     scryptCost(),
 		Block:    gen.IdentityScryptBlock,
 		Parallel: gen.IdentityScryptParallel,
 		Length:   gen.IdentityScryptLength,

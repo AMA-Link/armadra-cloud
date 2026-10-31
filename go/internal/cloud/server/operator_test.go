@@ -91,6 +91,7 @@ func challengeOf(res response) string {
 
 // 命令行 operators add / totp：幂等加范围、种子只打印一次、已登记要 --reset、非运营账号拒绝。
 func TestOperatorsCommandLine(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	env := config.MapEnv{"ARMADRA_CLOUD_DATABASE_URL": r.cfg.DatabaseURL, "ARMADRA_CLOUD_MASTER_KEY": masterHex}
 	run := func(args ...string) (int, string, string) {
@@ -161,6 +162,7 @@ func TestOperatorsCommandLine(t *testing.T) {
 
 // 运营登录：非运营账号 403、没有 TOTP operator_mfa_required；挑战 → 验证码 → 运营会话（Cookie 与 Bearer）。
 func TestOperatorLoginAndMFAVerify(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	// 非运营账号：口令对了也是 403 forbidden；口令错仍是 credentials_invalid（不借此枚举运营账号）。
 	plainEmail := r.email()
@@ -221,6 +223,7 @@ func TestOperatorLoginAndMFAVerify(t *testing.T) {
 
 // TOTP 防重放：同一个码（同一时间步）不能用第二次，更早的步也不行；±1 步内的码都认；±2 步不认。
 func TestMFAVerifyReplayAndWindow(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op := r.operatorAccount()
 	attempt := func(code string) response {
@@ -258,6 +261,7 @@ func TestMFAVerifyReplayAndWindow(t *testing.T) {
 
 // 挑战：每个最多错 5 次（之后连对的码也不认）；5 分钟过期；账号被停用 / 摘掉运营范围后失效。
 func TestMFAChallengeLimitsAndExpiry(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op := r.operatorAccount()
 	id := challengeOf(r.login2(op, nil))
@@ -282,6 +286,7 @@ func TestMFAChallengeLimitsAndExpiry(t *testing.T) {
 
 // auth.mfaVerify 按账号限流：10 分钟 10 次（跨挑战累计），超限 429 且连对的码也不认；窗口过后恢复。
 func TestMFAVerifyIsRateLimitedPerAccount(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op := r.operatorAccount()
 	attempts := 0
@@ -305,6 +310,7 @@ func TestMFAVerifyIsRateLimitedPerAccount(t *testing.T) {
 
 // 运营会话 1 小时绝对寿命：刷新不延长，到点 admin.* 与刷新都失败。
 func TestOperatorSessionExpiresAfterOneHour(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op := r.operatorAccount()
 	s := r.operatorLogin(op, true)
@@ -326,6 +332,7 @@ func TestOperatorSessionExpiresAfterOneHour(t *testing.T) {
 
 // 运营账号的普通会话可以用 TOTP 做 auth.stepUp；非运营账号没有可验的凭据；同一个码不能用两次。
 func TestStepUpWithTOTPForOperators(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op := r.operatorAccount()
 	normal := r.do("POST", "/v1/auth/login", map[string]any{"account": op.email, "password": password, "device": device}, nil)
@@ -343,6 +350,7 @@ func TestStepUpWithTOTPForOperators(t *testing.T) {
 
 // auth.stepUp 的 totpCode 另按账号计 mfa.acct（与 auth.mfaVerify 共用一个桶）：换设备猜码也逃不掉。
 func TestStepUpTOTPIsRateLimitedPerAccount(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op := r.operatorAccount()
 	var sessions []session
@@ -364,6 +372,7 @@ func TestStepUpTOTPIsRateLimitedPerAccount(t *testing.T) {
 
 // operators totp --reset 换种子的同一事务里撤销该账号的运营会话；普通会话不受影响；首次登记不撤。
 func TestResetTOTPRevokesOperatorSessions(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	op := r.operatorAccount()
 	ops := r.operatorLogin(op, false)

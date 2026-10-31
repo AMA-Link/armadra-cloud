@@ -28,6 +28,7 @@ func (a *acceptAll) Verify(_ context.Context, request core.VerifyRequest) (core.
 }
 
 func TestPlatformInfoAndJWKS(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	res := r.do("GET", "/.well-known/armadra-platform", nil, nil)
 	r.expect(res, 200, "")
@@ -83,6 +84,7 @@ func TestPlatformInfoAndJWKS(t *testing.T) {
 }
 
 func TestPlatformInfoReportsChallenge(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{turnstile: true, verifier: &acceptAll{}})
 	res := r.do("GET", "/.well-known/armadra-platform", nil, nil)
 	r.expect(res, 200, "")
@@ -105,6 +107,7 @@ func TestPlatformInfoReportsChallenge(t *testing.T) {
 }
 
 func TestRegister(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	res := r.register(strings.ToUpper(email), nil)
@@ -144,6 +147,7 @@ func TestRegister(t *testing.T) {
 }
 
 func TestRegisterPasswordPolicyAndInput(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	post := func(email, pw, name string) response {
 		return r.do("POST", "/v1/auth/register", map[string]any{"email": email, "password": pw, "displayName": name, "device": device}, nil)
@@ -163,6 +167,7 @@ func TestRegisterPasswordPolicyAndInput(t *testing.T) {
 }
 
 func TestRegisterRateLimitPerIP(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	for i := 0; i < 10; i++ {
 		r.expect(r.register(r.email(), nil), 200, "")
@@ -175,6 +180,7 @@ func TestRegisterRateLimitPerIP(t *testing.T) {
 }
 
 func TestLogin(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -203,6 +209,7 @@ func TestLogin(t *testing.T) {
 }
 
 func TestLoginLockoutDisabledAndRateLimit(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
@@ -241,6 +248,7 @@ func (r *rig) fillLimit(kind control.LimitKind, key string, count int) {
 }
 
 func TestRefreshBearerRotatesAndReplayRevokes(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	s := r.registerBearer(r.email())
 	// 先给这台设备记两枚已签令牌，重放时应被撤销。
@@ -273,6 +281,7 @@ func TestRefreshBearerRotatesAndReplayRevokes(t *testing.T) {
 }
 
 func TestRefreshCookieNeedsOriginNotCSRFAndKeepsCSRFValue(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	s := r.registerCookie(r.email())
 	refreshCookie := s.cookieHeader("__Host-armadra-cloud-refresh")
@@ -306,6 +315,7 @@ func TestRefreshCookieNeedsOriginNotCSRFAndKeepsCSRFValue(t *testing.T) {
 }
 
 func TestLogoutBearerAndCookie(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	b := r.registerBearer(r.email())
 	r.expect(r.do("POST", "/v1/auth/logout", map[string]any{}, b.bearer()), 200, "")
@@ -333,6 +343,7 @@ func TestLogoutBearerAndCookie(t *testing.T) {
 }
 
 func TestChangePassword(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	a := r.registerBearer(email)
@@ -379,6 +390,7 @@ func TestChangePassword(t *testing.T) {
 }
 
 func TestChangePasswordCookieSessionRotatesCookies(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	res := r.do("POST", "/v1/auth/password", map[string]any{"password": password, "newPassword": "kestrel-ember-orchard-77"}, c.write())
@@ -392,6 +404,7 @@ func TestChangePasswordCookieSessionRotatesCookies(t *testing.T) {
 }
 
 func TestStepUp(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	s := r.registerBearer(r.email())
 	step := func(body map[string]any) response { return r.do("POST", "/v1/auth/step-up", body, s.bearer()) }
@@ -422,6 +435,7 @@ func TestStepUp(t *testing.T) {
 }
 
 func TestStepUpFailuresCountTowardsRateLimit(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	s := r.registerBearer(r.email())
 	step := func(pw string) response {
@@ -438,6 +452,7 @@ func TestStepUpFailuresCountTowardsRateLimit(t *testing.T) {
 }
 
 func TestMeGetUpdateDevices(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	s := r.registerBearer(email)
@@ -516,6 +531,7 @@ func TestMeGetUpdateDevices(t *testing.T) {
 }
 
 func TestMeCookieSessionCSRFAndSelfRevoke(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	res := r.do("GET", "/v1/me", nil, hdr("Cookie", c.cookieHeader("__Host-armadra-cloud")))
@@ -533,6 +549,7 @@ func TestMeCookieSessionCSRFAndSelfRevoke(t *testing.T) {
 
 // 锁定不暴露邮箱有没有注册：未注册的邮箱同样计失败、同样在第 6 次答 account_locked，形状一致。
 func TestUnregisteredEmailLocksLikeRegistered(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	registered := r.email()
 	r.registerBearer(registered)
@@ -566,6 +583,7 @@ func TestUnregisteredEmailLocksLikeRegistered(t *testing.T) {
 
 // 访问 Cookie 过期后，用刷新 Cookie 也能登出并撤销设备；无论成败都清两枚 Cookie。
 func TestLogoutWithExpiredAccessCookieUsesRefreshCookie(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	r.clock.Advance(20 * time.Minute) // 访问令牌 15 分钟到期
@@ -608,6 +626,7 @@ func TestLogoutWithExpiredAccessCookieUsesRefreshCookie(t *testing.T) {
 
 // 登出先过 Origin 再清 Cookie：错的 Origin（兄弟子域、缺失、重复）只答 403，不清 Cookie，不撤设备。
 func TestLogoutWithWrongOriginDoesNotClearCookies(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	c := r.registerCookie(r.email())
 	for name, h := range map[string]headers{
@@ -626,6 +645,7 @@ func TestLogoutWithWrongOriginDoesNotClearCookies(t *testing.T) {
 
 // SaaS 装配用 Redis 版未知邮箱计数（不是进程内存缺省）：失败的计数落在 cloud:lockout: 键下，邮箱不以明文出现。
 func TestUnregisteredFailuresAreCountedInRedis(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, rigOptions{})
 	ghost := "ghost-" + r.email()
 	r.expect(r.login(ghost, "wrong-password-123", nil), 401, "credentials_invalid")

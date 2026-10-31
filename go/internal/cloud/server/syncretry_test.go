@@ -24,6 +24,7 @@ func (f *fakeSync) Run(context.Context) error {
 }
 
 func TestRunSyncWithRetry(t *testing.T) {
+	t.Parallel()
 	unstable := relayctl.ErrQuotaUnstable
 	cases := []struct {
 		name  string
