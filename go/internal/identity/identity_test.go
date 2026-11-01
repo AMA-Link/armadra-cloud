@@ -162,6 +162,16 @@ func TestPasswordRecordRoundTrip(t *testing.T) {
 			t.Errorf("%s：不该通过", name)
 		}
 	}
+	// 没有口令的记录：任何口令（含空串）都比不过，IsSet 为假；真实记录 IsSet 为真。
+	none := identity.NoPassword()
+	if none.IsSet() || !rec.IsSet() || none.KDF != identity.KDFNone {
+		t.Error("NoPassword 不该算已设置口令")
+	}
+	for _, guess := range []string{"", "none", "correct horse battery staple"} {
+		if identity.VerifyPassword(guess, none) {
+			t.Errorf("没有口令的记录不该通过：%q", guess)
+		}
+	}
 	identity.BurnPasswordCheck("whatever")
 	identity.BurnPasswordCheck(strings.Repeat("x", 5000))
 }

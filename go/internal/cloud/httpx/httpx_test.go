@@ -280,24 +280,26 @@ func TestLimitsCheckReturnsRetryAfter(t *testing.T) {
 
 func TestRulesMatchDesignTable(t *testing.T) {
 	want := map[control.LimitKind]control.LimitRule{
-		httpx.LimitLoginIP:      {Max: 20, Window: time.Minute},
-		httpx.LimitRegisterIP:   {Max: 10, Window: time.Hour},
-		httpx.LimitResetEmail:   {Max: 3, Window: time.Hour},
-		httpx.LimitStepUpDevice: {Max: 10, Window: 10 * time.Minute},
-		httpx.LimitMFAAcct:      {Max: 10, Window: 10 * time.Minute},
-		httpx.LimitAssertAcct:   {Max: 60, Window: time.Minute},
-		httpx.LimitDeviceStart:  {Max: 30, Window: time.Hour},
-		httpx.LimitDevicePoll:   {Max: 120, Window: time.Minute},
-		httpx.LimitDeviceGuess:  {Max: 10, Window: time.Hour},
-		httpx.LimitInviteResend: {Max: 5, Window: time.Hour},
+		httpx.LimitLoginIP:       {Max: 20, Window: time.Minute},
+		httpx.LimitRegisterIP:    {Max: 10, Window: time.Hour},
+		httpx.LimitResetEmail:    {Max: 3, Window: time.Hour},
+		httpx.LimitStepUpDevice:  {Max: 10, Window: 10 * time.Minute},
+		httpx.LimitMFAAcct:       {Max: 10, Window: 10 * time.Minute},
+		httpx.LimitAssertAcct:    {Max: 60, Window: time.Minute},
+		httpx.LimitDeviceStart:   {Max: 30, Window: time.Hour},
+		httpx.LimitDevicePoll:    {Max: 120, Window: time.Minute},
+		httpx.LimitDeviceGuess:   {Max: 10, Window: time.Hour},
+		httpx.LimitInviteResend:  {Max: 5, Window: time.Hour},
+		httpx.LimitOAuthStartIP:  {Max: 20, Window: time.Minute},
+		httpx.LimitOAuthFinishIP: {Max: 20, Window: time.Minute},
 	}
 	for kind, rule := range want {
 		if httpx.Rules[kind] != rule {
 			t.Errorf("%s：%+v", kind, httpx.Rules[kind])
 		}
 	}
-	if len(httpx.Rules) != 18 {
-		t.Errorf("§5.4 共 18 种：%d", len(httpx.Rules))
+	if len(httpx.Rules) != 20 {
+		t.Errorf("§5.4 共 20 种：%d", len(httpx.Rules))
 	}
 }
 
@@ -340,5 +342,41 @@ func TestIPv6RateKeysUseSlash64(t *testing.T) {
 	}
 	if err := limits.Check(ctx, httpx.LimitResetEmail, "2001:db8:1:2::d"); err != nil {
 		t.Fatalf("邮箱键原样：%v", err)
+	}
+}
+
+// 第三方登录的浏览器绑定 Cookie：Lax（回跳是跨站顶层导航），其余属性同会话 Cookie；读取时同名重复当没有。
+func TestOAuthCookie(t *testing.T) {
+	t.Parallel()
+	line := httpx.SetOAuth("nonce-value", httpx.OAuthCookieMaxAge)
+	for _, want := range []string{"__Host-armadra-oauth=nonce-value", "Path=/", "Max-Age=600", "HttpOnly", "Secure", "SameSite=Lax"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("Set-Cookie 缺 %q：%s", want, line)
+		}
+	}
+	if strings.Contains(line, "Domain") || strings.Contains(line, "Strict") {
+		t.Errorf("__Host- 前缀不许带 Domain，也不是 Strict：%s", line)
+	}
+	if cleared := httpx.SetOAuth("", 0); !strings.Contains(cleared, "Max-Age=0") || !strings.Contains(cleared, "SameSite=Lax") {
+		t.Errorf("清除：%s", cleared)
+	}
+	cases := []struct {
+		name    string
+		cookies []string
+		want    string
+		ok      bool
+	}{
+		{"一枚", []string{"__Host-armadra-oauth=abc"}, "abc", true},
+		{"夹在别的 Cookie 里", []string{"a=1; __Host-armadra-oauth=abc; b=2"}, "abc", true},
+		{"没有", []string{"a=1"}, "", false},
+		{"空值", []string{"__Host-armadra-oauth="}, "", false},
+		{"重复", []string{"__Host-armadra-oauth=abc", "__Host-armadra-oauth=abc"}, "", false},
+		{"名字相近", []string{"armadra-oauth=abc"}, "", false},
+	}
+	for _, c := range cases {
+		got, ok := httpx.OAuthNonce(request("POST", nil, c.cookies...))
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("%s：%q %v", c.name, got, ok)
+		}
 	}
 }

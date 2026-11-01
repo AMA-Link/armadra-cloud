@@ -344,6 +344,20 @@ func SetPasswordNames(ctx context.Context, c *Context, accountID string, names [
 	return nil
 }
 
+// ClearPassword 把账号改成没有口令（identity.NoPassword）并撤销它的全部设备（经撤销钩子通知）：
+// 第三方登录绑定到一个邮箱尚未验证的本地账号时用，免得先前抢注的人手里的口令与会话继续有效。
+func ClearPassword(ctx context.Context, c *Context, accountID string, nowMs int64) error {
+	found, err := c.Ports.Accounts.ResetPassword(ctx, c.TenantID, accountID, identity.NoPassword(), nowMs, "")
+	if err != nil {
+		return err
+	}
+	if !found {
+		return Fail(gen.ErrNotFound)
+	}
+	c.devicesRevoked(ctx, accountID, "")
+	return nil
+}
+
 // ChangePasswordByName 是运维改口令（personal passwd）：按账号名找到账号，撤销本人的全部设备。
 func ChangePasswordByName(ctx context.Context, c *Context, name, password string, nowMs int64) error {
 	if err := CheckPassword(c, password, name); err != nil {

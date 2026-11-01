@@ -27,6 +27,15 @@ type PasswordRecord struct {
 	Hash string `json:"hash"`
 }
 
+// KDFNone 标记没有口令的账号（第三方登录建的账号）：记录里没有盐与哈希，任何口令都比不过。
+const KDFNone = "none"
+
+// NoPassword 是「没有口令」的记录：password_json 不允许为空，用它占位。
+func NoPassword() PasswordRecord { return PasswordRecord{KDF: KDFNone} }
+
+// IsSet 报告记录是不是一个真实的口令（没有口令的账号答 false）。
+func (r PasswordRecord) IsSet() bool { return r.KDF != KDFNone }
+
 // Derive 按协议参数（N=2^15、r=8、p=1、32 字节）派生密钥。
 func Derive(password string, salt []byte) ([]byte, error) {
 	return scrypt.Key([]byte(password), salt,
@@ -61,6 +70,11 @@ func HashPasswordWithSalt(password string, salt []byte) (PasswordRecord, error) 
 
 // VerifyPassword 按记录里的参数派生并定时安全地比较。超过 maxBytes 的口令直接判否。
 func VerifyPassword(password string, record PasswordRecord) bool {
+	if !record.IsSet() {
+		// 没有口令的账号也做一次同样成本的派生，答复时延不暴露「这个账号没有口令」。
+		BurnPasswordCheck(password)
+		return false
+	}
 	if len(password) > gen.IdentityPasswordPolicyMaxBytes || record.KDF != "scrypt" {
 		return false
 	}

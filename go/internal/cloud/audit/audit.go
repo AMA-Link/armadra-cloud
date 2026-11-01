@@ -24,6 +24,8 @@ const (
 	SecurityEmailChanged     = "security.emailChanged"
 	SecurityDeviceApprove    = "security.deviceApprove"
 	SecurityDeviceDeny       = "security.deviceDeny"
+	SecurityOAuthLogin       = "security.oauthLogin"
+	SecurityOAuthUnlink      = "security.oauthUnlink"
 	deviceNameMax            = 128
 )
 
