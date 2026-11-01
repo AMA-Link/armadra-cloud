@@ -8,7 +8,7 @@ func TestIsAppRoute(t *testing.T) {
 		"/": true, "/login": true, "/verify": true, "/reset": true, "/device": true,
 		"/t/x": true, "/t": true, "/h/x/y": true, "/j/abc": true, "/invite/i1": true, "/ops/teams": true, "/ops": true,
 		"/register": true, "/me": true, "/me/": true, "/me/hosts": true, "/me/hosts/h1": true, "/me/links": true, "/me/account": true, "/me/tokens": true,
-		"/t/x/hosts/h1": true, "/t/x/members": true, "/t/x/billing": true, "/ops/tenants/t1": true, "/ops/nodes": true,
+		"/login/oauth/github": true, "/login/oauth/google": true, "/t/x/hosts/h1": true, "/t/x/members": true, "/t/x/billing": true, "/ops/tenants/t1": true, "/ops/nodes": true,
 		"/v1/me": false, "/v1/auth/login": false, "/v1/unknown": false, "/.well-known/armadra-platform": false, "/me2": false, "/register/x": false, "/assets/a.js": false, "/login/x": false, "/team": false, "/tx": false, "/health": false,
 	} {
 		if got := IsAppRoute(path); got != want {
