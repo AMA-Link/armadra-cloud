@@ -101,6 +101,8 @@ type rigOptions struct {
 	flushEvery time.Duration
 	// incidentEvery 缩短事故开关按库同步的间隔。
 	incidentEvery time.Duration
+	// oauth 是假的第三方登录提供方：配了就把它的提供方写进配置、地址指向它。
+	oauth *fakeOAuth
 }
 
 // rig 是一套真实的控制面：PostgreSQL（随机 schema）+ Redis + 完整路由，经 HTTP 访问。
@@ -170,6 +172,9 @@ func newRig(t *testing.T, options rigOptions) *rig {
 		env["ARMADRA_CLOUD_TURNSTILE_SECRET_FILE"] = secret
 		env["ARMADRA_CLOUD_CHALLENGE_SCOPE"] = "auth.login,auth.changePassword"
 	}
+	if options.oauth != nil {
+		options.oauth.configure(t, env)
+	}
 	for name, value := range options.env {
 		env["ARMADRA_CLOUD_"+name] = value
 	}
@@ -193,7 +198,12 @@ func newRig(t *testing.T, options rigOptions) *rig {
 	// 领域事件的频道与 me-stream 票的键前缀每个测试随机，互不串台。
 	eventsID := fmt.Sprintf("%012x", rand.Uint64N(1<<48))
 	deps.EventsChannel, deps.TicketPrefix = "cloud-test-events:"+eventsID, "cloud-test-ticket:"+eventsID+":"
-	t.Cleanup(func() { wipePrefixes(t, deps.TicketPrefix) })
+	// 第三方登录的授权状态键前缀同样每个测试随机。
+	deps.OAuthPrefix = "cloud-test-oauth:" + eventsID + ":"
+	if options.oauth != nil {
+		deps.OAuthEndpoints = options.oauth.endpoints()
+	}
+	t.Cleanup(func() { wipePrefixes(t, deps.TicketPrefix, deps.OAuthPrefix) })
 	if options.redisRelay {
 		deps.RelayPrefix, deps.IssuedPrefix = randomPrefixes(t)
 	} else {

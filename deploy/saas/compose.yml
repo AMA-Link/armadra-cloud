@@ -173,9 +173,25 @@ services:
       ARMADRA_CLOUD_SMTP_PASSWORD_FILE: /run/secrets/smtp_password
       ARMADRA_CLOUD_SMTP_FROM: ${SMTP_FROM:-}
       ARMADRA_CLOUD_SMTP_TLS: ${SMTP_TLS:-starttls}
+      # 第三方登录（可选）：ID 与密钥文件路径都填了才开这个提供方（密钥文件路径填 /run/secrets/oauth_github_secret
+      # 等，文件在 secrets/ 下，内容由你放）；空 = 不开。回调地址见运维手册。
+      ARMADRA_CLOUD_OAUTH_GITHUB_CLIENT_ID: ${OAUTH_GITHUB_CLIENT_ID:-}
+      ARMADRA_CLOUD_OAUTH_GITHUB_CLIENT_SECRET_FILE: ${OAUTH_GITHUB_CLIENT_SECRET_FILE:-}
+      ARMADRA_CLOUD_OAUTH_GOOGLE_CLIENT_ID: ${OAUTH_GOOGLE_CLIENT_ID:-}
+      ARMADRA_CLOUD_OAUTH_GOOGLE_CLIENT_SECRET_FILE: ${OAUTH_GOOGLE_CLIENT_SECRET_FILE:-}
+      # 普通账号的口令登录：on（缺省）或 off；off 时只剩第三方登录（运营登录不受影响）。
+      ARMADRA_CLOUD_PASSWORD_AUTH: ${PASSWORD_AUTH:-on}
       ARMADRA_CLOUD_LOG_LEVEL: ${LOG_LEVEL:-info}
       # 控制台页面：镜像里的 /app/web 来自构建参数 WEB_IMAGE；要换页面就把目录挂到 /app/web（见下面的 volumes 注释）。
-    secrets: [master_key, smtp_password, cloud_database_url, redis_url]
+    secrets:
+      [
+        master_key,
+        smtp_password,
+        oauth_github_secret,
+        oauth_google_secret,
+        cloud_database_url,
+        redis_url,
+      ]
     # volumes:
     #   - ${WEB_DIR:-./web}:/app/web:ro
     ports:
@@ -268,6 +284,11 @@ secrets:
     file: ./secrets/master_key
   smtp_password:
     file: ./secrets/smtp_password
+  # 第三方登录的客户端密钥（可选；init-secrets.sh 放空文件，要开哪个提供方就把密钥写进去，并在 .env 填对应变量）。
+  oauth_github_secret:
+    file: ./secrets/oauth_github_secret
+  oauth_google_secret:
+    file: ./secrets/oauth_google_secret
   postgres_password:
     file: ./secrets/postgres_password
   cloud_db_password:

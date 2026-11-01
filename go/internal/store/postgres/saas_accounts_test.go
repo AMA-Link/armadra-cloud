@@ -292,3 +292,78 @@ func TestSaaSPortsDoNotTouchTenantsRow(t *testing.T) {
 		t.Fatalf("不加租户修订号：%d → %d", before, after)
 	}
 }
+
+func TestSaaSOAuthIdentities(t *testing.T) {
+	e := openSaaS(t)
+	ctx := e.ctx
+	s := e.db.SaaS()
+	e.account("a1")
+	e.account("a2")
+	bind := func(id, account, provider, subject string) error {
+		return s.Tx(ctx, func(tx saas.Tx) error {
+			return tx.Accounts().InsertOAuthIdentity(ctx, saasTenant, saas.OAuthIdentity{
+				CredentialID: id, AccountID: account, Provider: provider, Subject: subject,
+				Email: "ann@example.com", Login: "ann-gh", Name: "Ann", CreatedAtMs: 7,
+			})
+		})
+	}
+	if err := bind("c1", "a1", "github", "100"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Read().OAuthIdentity(ctx, saasTenant, "github", "100")
+	want := saas.OAuthIdentity{CredentialID: "c1", AccountID: "a1", Provider: "github", Subject: "100", Email: "ann@example.com", Login: "ann-gh", Name: "Ann", CreatedAtMs: 7}
+	if err != nil || got == nil || *got != want {
+		t.Fatalf("按提供方与主体读：%+v %v", got, err)
+	}
+	if none, err := s.Read().OAuthIdentity(ctx, saasTenant, "google", "100"); err != nil || none != nil {
+		t.Fatalf("别的提供方同一主体不是同一个身份：%+v %v", none, err)
+	}
+	// 库里存的是 external_id 与只有展示字段的 public_json，没有令牌类字段。
+	var externalID string
+	var public map[string]any
+	if err := e.pool.QueryRow(ctx, "SELECT external_id, public_json FROM account_credentials WHERE credential_id = 'c1'").Scan(&externalID, &public); err != nil {
+		t.Fatal(err)
+	}
+	if externalID != "github:100" || len(public) != 4 || public["provider"] != "github" || public["email"] != "ann@example.com" || public["login"] != "ann-gh" {
+		t.Fatalf("库里的形状：%q %v", externalID, public)
+	}
+	// 同一身份不能绑到第二个账号；同账号同提供方不能绑第二个身份：都映射成 conflict。
+	if err := bind("c2", "a2", "github", "100"); !errors.Is(err, saas.ErrConflict) {
+		t.Fatalf("同一身份绑两个账号：%v", err)
+	}
+	if err := bind("c3", "a1", "github", "101"); !errors.Is(err, saas.ErrConflict) {
+		t.Fatalf("同账号同提供方绑两个身份：%v", err)
+	}
+	if err := bind("c4", "a1", "google", "g1"); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := s.Read().OAuthIdentities(ctx, saasTenant, "a1")
+	if err != nil || len(ids) != 2 || ids[0].Provider != "github" || ids[1].Provider != "google" {
+		t.Fatalf("账号的全部身份：%+v %v", ids, err)
+	}
+	if ok, err := s.Read().HasCredential(ctx, saasTenant, "a1", "oauth"); err != nil || !ok {
+		t.Fatalf("HasCredential(oauth)：%v %v", ok, err)
+	}
+	// 解绑只删这个提供方的身份。
+	var removed bool
+	if err := s.Tx(ctx, func(tx saas.Tx) error {
+		removed, err = tx.Accounts().DeleteOAuthIdentity(ctx, saasTenant, "a1", "github")
+		return err
+	}); err != nil || !removed {
+		t.Fatalf("解绑：%v %v", removed, err)
+	}
+	if err := s.Tx(ctx, func(tx saas.Tx) error {
+		removed, err = tx.Accounts().DeleteOAuthIdentity(ctx, saasTenant, "a1", "github")
+		return err
+	}); err != nil || removed {
+		t.Fatalf("再解绑一次应没有可删的：%v %v", removed, err)
+	}
+	ids, _ = s.Read().OAuthIdentities(ctx, saasTenant, "a1")
+	if len(ids) != 1 || ids[0].Provider != "google" {
+		t.Fatalf("解绑后：%+v", ids)
+	}
+	// 解绑之后，别的账号可以绑这个身份。
+	if err := bind("c5", "a2", "github", "100"); err != nil {
+		t.Fatalf("解绑后别的账号可以绑：%v", err)
+	}
+}

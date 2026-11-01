@@ -21,6 +21,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/config"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/oauth"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
@@ -70,6 +71,10 @@ type Deps struct {
 	// TicketPrefix 与 EventsChannel 换掉 me-stream 票的键前缀和领域事件的频道（缺省 cloud:ticket: 与 cloud:events；测试用随机值隔离）。
 	TicketPrefix  string
 	EventsChannel string
+	// OAuthEndpoints 换掉第三方登录提供方的地址（按提供方名；测试指向 httptest 的假提供方），空项取官方地址；生产不设。
+	OAuthEndpoints map[string]oauth.Endpoints
+	// OAuthPrefix 换掉授权状态的 Redis 键前缀（缺省 cloud:oauth:；测试用随机值隔离）。
+	OAuthPrefix string
 	// FlushEvery 缩短设备最近使用与主机最近在线的落盘间隔（缺省 5 分钟；测试用）。
 	FlushEvery time.Duration
 	// Relay 用内存实现代替 Redis 实现（测试断言发出的撤销与节点命令）；生产不设。

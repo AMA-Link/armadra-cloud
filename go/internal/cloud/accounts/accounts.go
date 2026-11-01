@@ -14,6 +14,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/events"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/oauth"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
@@ -53,6 +54,11 @@ type Options struct {
 	// Guests 判定链接访客（guest:<linkId>:… 主体）此刻是否仍站得住（auth.refresh 用）；生产装配传 grants.Policy。
 	// nil = 访客的刷新一律答 session_revoked。
 	Guests core.GuestHosts
+	// PasswordOff 关闭普通账号的口令登录（ARMADRA_CLOUD_PASSWORD_AUTH=off）：auth.register、普通的 auth.login、
+	// auth.changePassword 答 403 forbidden；auth.passwordResetStart 照常答成功但不发信；运营登录（scope: "operator"）不受影响。
+	PasswordOff bool
+	// OAuth 是第三方登录（auth.oauthStart / oauthFinish / oauthUnlink）；nil = 没配任何提供方。
+	OAuth *OAuth
 	// Hook 给测试在访客刷新的两个交错点停住（"refresh.checked"：核过访客、轮换之前；"refresh.rotated"：已轮换、复核之前）。生产不设。
 	Hook func(stage string)
 }
@@ -79,6 +85,9 @@ type Service struct {
 
 	guests core.GuestHosts
 	hook   func(stage string)
+
+	passwordOff bool
+	oauth       *OAuth
 }
 
 // New 建账号服务。
@@ -87,6 +96,10 @@ func New(options Options) *Service {
 		c: options.Core, store: options.Store, gate: options.Gate, limits: options.Limits, mail: options.Mail, events: options.Events,
 		appOrigin: strings.TrimRight(options.AppOrigin, "/"), onDeviceDecision: options.OnDeviceDecision,
 		mfa: options.MFA, wrapper: options.Wrapper, guests: options.Guests, hook: options.Hook,
+		passwordOff: options.PasswordOff, oauth: options.OAuth,
+	}
+	if s.oauth == nil {
+		s.oauth = &OAuth{Client: oauth.New(oauth.Options{})}
 	}
 	if s.onDeviceDecision == nil {
 		s.onDeviceDecision = s.auditDeviceDecision
@@ -213,6 +226,10 @@ func (s *Service) Handlers() map[string]api.Handler {
 	if s.stream != nil {
 		handlers["me.streamTicket"] = s.meStreamTicket
 	}
+	// 第三方登录的三个过程总是启用；没配的提供方 oauthStart 答 404、oauthFinish 答 401。
+	handlers["auth.oauthStart"] = s.oauthStart
+	handlers["auth.oauthFinish"] = s.oauthFinish
+	handlers["auth.oauthUnlink"] = s.oauthUnlink
 	for name, handler := range handlers {
 		handlers[name] = wrap(handler)
 	}

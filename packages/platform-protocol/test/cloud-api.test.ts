@@ -644,6 +644,39 @@ describe("挑战（§16）与节点回报（§17）", () => {
     expect(PLATFORM_CAPABILITIES).toContain("me.traffic");
   });
 
+  it("第三方登录与口令开关：能力位、错误表与会话分支的 csrfToken（只加不改）", () => {
+    expect(PLATFORM_CAPABILITIES).toEqual(
+      expect.arrayContaining([
+        "auth.oauth",
+        "auth.oauth.github",
+        "auth.oauth.google",
+      ]),
+    );
+    const codes = (key: string) =>
+      listProcedures().find((one) => one.key === key)?.errorCodes ?? [];
+    // 口令关闭时这三个过程答 403 forbidden；oauthFinish 在注册暂停时答 503。
+    for (const key of ["auth.register", "auth.login", "auth.changePassword"])
+      expect(codes(key)).toContain("forbidden");
+    expect(codes("auth.oauthFinish")).toEqual(
+      expect.arrayContaining([
+        "conflict",
+        "email_unverified",
+        "registrations_paused",
+      ]),
+    );
+    const finish = output("auth.oauthFinish");
+    const sample = readJsonFixture("cloud-api/auth.oauthFinish.json") as {
+      outputs: { csrfToken?: string }[];
+    };
+    // 夹具三个分支：Bearer 会话、Cookie 会话（带 csrfToken）、MFA 挑战，都要过输出 schema。
+    expect(sample.outputs).toHaveLength(3);
+    for (const one of sample.outputs)
+      expect(finish.safeParse(one).success).toBe(true);
+    expect(sample.outputs.some((one) => one.csrfToken !== undefined)).toBe(
+      true,
+    );
+  });
+
   it("platform.info.challenge 可选，scope 至少一条", () => {
     const info = output("platform.info");
     const base = {

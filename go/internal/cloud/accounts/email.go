@@ -211,7 +211,8 @@ func (s *Service) passwordResetStart(ctx context.Context, call *api.Call) (any, 
 		return nil, err
 	}
 	letter := mail.Mail{Template: mail.PasswordReset, Locale: localeOf(call.Request), To: email, Params: mail.Params{Decoy: true}}
-	if account != nil && account.Status == saas.AccountActive {
+	// 口令登录关闭时照常答成功、做同样的库读写，但只插占位发件：不发信，也不泄露邮箱是否注册。
+	if !s.passwordOff && account != nil && account.Status == saas.AccountActive {
 		letter = mail.Mail{
 			Template: mail.PasswordReset, Locale: account.Locale, To: account.Email, AccountID: account.AccountID,
 			Params: mail.Params{DisplayName: greetName(account)},

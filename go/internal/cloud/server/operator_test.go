@@ -44,7 +44,12 @@ func seedFromURI(t *testing.T, uri string) []byte {
 func (r *rig) operatorAccount() opAccount {
 	r.t.Helper()
 	email := r.email()
-	s := r.registerBearer(email)
+	return r.operatorFrom(email, r.registerBearer(email).accountID)
+}
+
+// operatorFrom 把已有的账号（邮箱、账号 id）经命令行升成运营账号并登记两步验证。
+func (r *rig) operatorFrom(email, accountID string) opAccount {
+	r.t.Helper()
 	env := config.MapEnv{"ARMADRA_CLOUD_DATABASE_URL": r.cfg.DatabaseURL, "ARMADRA_CLOUD_MASTER_KEY": masterHex}
 	run := func(args ...string) (int, string, string) {
 		var out, errOut bytes.Buffer
@@ -59,7 +64,7 @@ func (r *rig) operatorAccount() opAccount {
 		r.t.Fatalf("operators totp：%d %s %s", code, out, errOut)
 	}
 	uri := out[strings.Index(out, "otpauth://"):]
-	return opAccount{email: email, accountID: s.accountID, seed: seedFromURI(r.t, uri)}
+	return opAccount{email: email, accountID: accountID, seed: seedFromURI(r.t, uri)}
 }
 
 // operatorLogin 走完整的 login → mfaVerify；cookie = true 用控制台来源（Cookie 传输），否则 Bearer。

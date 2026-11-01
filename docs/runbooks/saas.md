@@ -27,6 +27,34 @@
 
 开发或端到端用 `docker compose -f compose.yml -f compose.mailpit.yml up -d`，邮件进 mailpit，不外发（不要用在生产）。
 
+## 第三方登录与口令开关
+
+控制面支持 GitHub 与 Google 登录（授权码 + PKCE），配了哪个才开哪个；`ARMADRA_CLOUD_PASSWORD_AUTH=off` 可以关掉普通账号的口令登录。契约见 [cloud-api §29](../contracts/cloud-api.md)。
+
+**回调地址**固定是 `<APP_ORIGIN>/login/oauth/<provider>`，即 `https://app.<域>/login/oauth/github` 与 `https://app.<域>/login/oauth/google`；`auth.oauthStart` 的 `redirectUri` 必须与它完全相等，多一个斜杠、多一个参数都会被拒绝。这条路由由控制台页面（Armadra `apps/web`）提供，页面版本要先于这里开启（发布顺序：先控制台，后开配置）。
+
+**GitHub OAuth App**
+
+1. GitHub 账号或组织的 Settings → Developer settings → OAuth Apps → New OAuth App。
+2. Homepage URL 填 `https://app.<域>`；Authorization callback URL 填 `https://app.<域>/login/oauth/github`。
+3. 创建后记下 Client ID，点 Generate a new client secret，把密钥写进 `secrets/oauth_github_secret`（只写密钥本身，末尾换行无妨）。
+4. 申请的范围是 `read:user user:email`；控制面只认 `/user/emails` 里 `primary` 且 `verified` 的邮箱，用户在 GitHub 上没有已验证的主邮箱会答 `403 email_unverified`。
+
+**Google OAuth 客户端**
+
+1. Google Cloud Console 选或建一个项目 → APIs & Services → OAuth consent screen，用户类型按需选 Internal / External，范围勾 `openid`、`email`、`profile`。External 且未发布（Testing）时只有列在测试用户里的账号能登录，正式用要发布。
+2. Credentials → Create credentials → OAuth client ID → 类型 Web application；Authorized redirect URIs 填 `https://app.<域>/login/oauth/google`。
+3. 记下 Client ID 与 Client secret，把密钥写进 `secrets/oauth_google_secret`。
+4. 控制面走 OpenID Connect（范围 `openid email profile`，每次让用户选账号），只认 userinfo 里 `email_verified = true` 的邮箱。
+
+**打开**：在 `.env` 里填 `OAUTH_GITHUB_CLIENT_ID` 与 `OAUTH_GITHUB_CLIENT_SECRET_FILE=/run/secrets/oauth_github_secret`（Google 同理），然后 `docker compose up -d --no-deps cloud`。ID 与密钥文件要成对给，只给一个会拒绝启动；密钥文件是空的也拒绝启动。`GET /.well-known/armadra-platform` 的 `capabilities` 里出现 `auth.oauth` 与 `auth.oauth.github` / `auth.oauth.google` 就是开了。
+
+**登录规则**：已绑定的身份直接登录；没绑定且本地没有同邮箱账号则建账号（邮箱已验证、没有口令，显示名取提供方给的名字；事故开关关了注册时答 `503 registrations_paused`）；本地已有同邮箱账号时，口令登录开着答 `409 conflict`（`details.reason = "account_exists"`，不自动合并，用户先用原方式登录），口令登录关闭时绑定并登录。绑定到一个邮箱还没验证过的本地账号时，控制面把邮箱记成已验证，同时清掉它的口令并撤销它的全部设备（防止先前抢注的人留着口令与会话）。库里只存 `<提供方>:<主体>`、邮箱和展示名，不存访问令牌；授权状态在 Redis 的 `cloud:oauth:*` 下，10 分钟、一次性。
+
+**关闭口令登录**（`ARMADRA_CLOUD_PASSWORD_AUTH=off`，`.env` 里 `PASSWORD_AUTH=off`）：`auth.register`、普通的 `auth.login`、`auth.changePassword` 答 `403 forbidden`；`auth.passwordResetStart` 照常答成功但不发信；能力里不再有 `auth.password` 与 `auth.password-change`；运营登录（`scope: "operator"`，口令 + 两步验证）不受影响，运营账号的口令靠命令行维护。先配好并验证至少一个第三方登录再关，否则普通账号全部登不进来（配了 off 却没有任何提供方时启动日志会警告）。已有口令账号的口令记录保留，只是登录不再接受；切回 `on` 即恢复。
+
+**排障**：授权地址的 `redirect_uri` 不匹配提供方里登记的回调地址，是提供方页面报错，控制面看不到；换 code 失败（过期、已用、密钥不对）控制面答 `401 credentials_invalid`，提供方不可达或答复异常答 `503 unavailable`，同时记一条警告日志「第三方登录提供方请求失败」（只带提供方名和错误类名，不带 code 与令牌）。限流：`oauth.start.ip`、`oauth.finish.ip` 每 IP 每分钟 20 次。
+
 ## 节点令牌：签发、轮换与撤销
 
 - 节点令牌（头 `typ = armadra-node`，`aud = relay-node`，`sub` = 节点名）只在节点间 `/x/v1` 转发时出示；没有它的节点照常服务本节点的隧道与通道，只是不向别的节点转发，也不接受别的节点转来的通道。

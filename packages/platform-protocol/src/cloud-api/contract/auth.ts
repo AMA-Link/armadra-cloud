@@ -73,6 +73,7 @@ export const auth = {
         "registrations_paused",
         "challenge_required",
         "challenge_invalid",
+        "forbidden",
       ),
       ...passwordErrors,
     })
@@ -344,7 +345,12 @@ export const auth = {
     .errors({ ...tokenErrors, ...passwordErrors })
     .input(z.object({ token: z.string().min(1), newPassword: z.string() }))
     .output(empty),
-  /** 第三方登录（M2）：答授权地址，页面或系统浏览器跳过去，回来后 `oauthFinish`。 */
+  /**
+   * 第三方登录（cloud-api §29）：答授权地址，页面或系统浏览器跳过去，回来后 `oauthFinish`。
+   * `redirectUri` 必须严格等于控制台来源 + `/login/oauth/<provider>`，否则 `400 bad_request`；
+   * 没配的提供方答 `404 not_found`。Cookie 传输（带控制台 `Origin` 且不带 `Authorization`）时
+   * 另下发短命 Cookie `__Host-armadra-oauth`（浏览器绑定随机数），Bearer 传输不发。
+   */
   oauthStart: base
     .route({ method: "POST", path: "/v1/auth/oauth/{provider}/start" })
     .meta(since10("anonymous"))
@@ -362,6 +368,12 @@ export const auth = {
         expiresAtMs: z.number().int(),
       }),
     ),
+  /**
+   * 用回调的 `code` 换会话（cloud-api §29）：`state` 一次性、10 分钟；Cookie 传输时 `__Host-armadra-oauth` 要与
+   * 发起时的一致。已绑定则登录；未绑定且本地没有同邮箱账号则建账号（邮箱已验证、无口令）；本地有同邮箱账号时，
+   * 服务端关了口令登录（`auth.password` 不在能力里）就绑定并登录，否则 `409 conflict`（`details.reason = "account_exists"`）。
+   * 提供方给的邮箱未验证答 `403 email_unverified`。Cookie 会话多带 `csrfToken`。
+   */
   oauthFinish: base
     .route({ method: "POST", path: "/v1/auth/oauth/{provider}/finish" })
     .meta(since10("anonymous"))
@@ -372,6 +384,7 @@ export const auth = {
         "account_disabled",
         "rate_limited",
         "conflict",
+        "registrations_paused",
       ),
     )
     .input(
@@ -382,7 +395,7 @@ export const auth = {
         device: deviceInputSchema,
       }),
     )
-    .output(z.union([sessionResultSchema, mfaChallengeResultSchema])),
+    .output(z.union([cookieSessionResultSchema, mfaChallengeResultSchema])),
   /** 解绑第三方登录；至少要留一种登录方式。 */
   oauthUnlink: base
     .route({ method: "DELETE", path: "/v1/auth/oauth/{provider}" })

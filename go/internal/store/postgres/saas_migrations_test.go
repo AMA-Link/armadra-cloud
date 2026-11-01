@@ -129,7 +129,7 @@ func (e *saasEnv) source(id string) {
 	}
 }
 
-// 空库连续跑 0001–0010：账本连续，SaaS 的表都在。
+// 空库连续跑 0001–0011：账本连续，SaaS 的表都在。
 func TestSaaSMigrationsFromEmpty(t *testing.T) {
 	e := openSaaS(t)
 	rows, err := e.pool.Query(e.ctx, "SELECT id, name FROM cloud_migrations ORDER BY id")
@@ -140,6 +140,7 @@ func TestSaaSMigrationsFromEmpty(t *testing.T) {
 	want := []string{
 		"0001_control_init", "0002_relay_control", "0003_traffic", "0004_saas_accounts", "0005_saas_teams",
 		"0006_saas_hosts", "0007_saas_grants", "0008_saas_audit", "0009_saas_ops", "0010_saas_audit_security_index",
+		"0011_saas_oauth_identity",
 	}
 	var got []string
 	for rows.Next() {
@@ -167,7 +168,7 @@ func TestSaaSMigrationsFromEmpty(t *testing.T) {
 	}
 }
 
-// 对停在 0003 的库补跑 0004–0010：老行取缺省，现有端口照常读写。
+// 对停在 0003 的库补跑 0004–0011：老行取缺省，现有端口照常读写。
 func TestSaaSMigrationsOnOldDatabase(t *testing.T) {
 	url, schema := pgtest.Schema(t)
 	ctx := context.Background()
@@ -175,8 +176,8 @@ func TestSaaSMigrationsOnOldDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 10 {
-		t.Fatalf("随包迁移应有 10 条：%d", len(all))
+	if len(all) != 11 {
+		t.Fatalf("随包迁移应有 11 条：%d", len(all))
 	}
 	old, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, Migrations: all[:3]})
 	if err != nil {
@@ -214,8 +215,8 @@ func TestSaaSMigrationsOnOldDatabase(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 	var n int
-	if err := db.Pool().QueryRow(ctx, "SELECT count(*)::int FROM cloud_migrations").Scan(&n); err != nil || n != 10 {
-		t.Fatalf("账本应有 10 条：%d %v", n, err)
+	if err := db.Pool().QueryRow(ctx, "SELECT count(*)::int FROM cloud_migrations").Scan(&n); err != nil || n != 11 {
+		t.Fatalf("账本应有 11 条：%d %v", n, err)
 	}
 	var email, reason *string
 	var verified *int64
@@ -821,4 +822,94 @@ func TestFreezeReviewAdditions(t *testing.T) {
 			t.Error("cloud_issued_tokens 主键应含 tenant_id")
 		}
 	})
+}
+
+// 迁移 0011：对停在 0010 的库升级，老凭据行的 external_id 是 NULL、TOTP 的唯一约束照旧；
+// 新的部分唯一索引保证一个第三方身份只属于一个账号、一个账号在同一提供方至多一个身份。
+func TestSaaSMigration0011OAuthIdentityOnOldDatabase(t *testing.T) {
+	url, schema := pgtest.Schema(t)
+	ctx := context.Background()
+	all, err := postgres.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) < 11 || !strings.HasPrefix(all[10].Name, "0011_") {
+		t.Fatalf("第 11 条迁移应是 0011：%v", all)
+	}
+	old, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, Migrations: all[:10]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := old.CreateTenant(ctx, saasTenant, store.Tenant{TenantSettings: store.TenantSettings{
+		Issuer: "https://cloud.armadra.test", TrustedOrigins: []string{},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"a1", "a2"} {
+		if _, err := old.Pool().Exec(ctx, `INSERT INTO accounts (tenant_id, account_id, name, password_json, failures, locked_until_ms,
+		  last_failure_at_ms, created_at_ms, updated_at_ms, email) VALUES ($1, $2, $2, '{}', 0, 0, 0, 1, 1, $2 || '@x.test')`, saasTenant, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := old.Pool().Exec(ctx, `INSERT INTO account_credentials (tenant_id, credential_id, account_id, kind, secret_wrap, created_at_ms)
+	  VALUES ($1, 'c-totp', 'a1', 'totp', 'x', 1), ($1, 'c-pk', 'a1', 'passkey', NULL, 1)`, saasTenant); err != nil {
+		t.Fatal(err)
+	}
+	_ = old.Close()
+
+	e := &saasEnv{t: t, ctx: ctx}
+	db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	e.db, e.pool = db, db.Pool()
+
+	if n := e.count("SELECT count(*)::int FROM cloud_migrations"); n != 11 {
+		t.Fatalf("账本应有 11 条：%d", n)
+	}
+	if n := e.count("SELECT count(*)::int FROM account_credentials WHERE external_id IS NULL"); n != 2 {
+		t.Fatalf("老凭据行的 external_id 应为 NULL：%d", n)
+	}
+	// 老的 TOTP 约束与读取照旧。
+	reject(t, e.exec(`INSERT INTO account_credentials (tenant_id, credential_id, account_id, kind, created_at_ms) VALUES ($1, 'c-totp2', 'a1', 'totp', 1)`, saasTenant), "23505", "account_credentials_totp")
+	if ok, err := db.SaaS().Read().HasCredential(ctx, saasTenant, "a1", "totp"); err != nil || !ok {
+		t.Fatalf("老 TOTP 行应仍可读：%v %v", ok, err)
+	}
+
+	oauth := func(id, account, externalID string) error {
+		return e.exec(`INSERT INTO account_credentials (tenant_id, credential_id, account_id, kind, external_id, public_json, created_at_ms)
+		  VALUES ($1, $2, $3, 'oauth', NULLIF($4, ''), '{"provider":"github"}', 1)`, saasTenant, id, account, externalID)
+	}
+	if err := oauth("o1", "a1", "github:100"); err != nil {
+		t.Fatal(err)
+	}
+	// 同一第三方身份不能绑到第二个账号。
+	reject(t, oauth("o2", "a2", "github:100"), "23505", "account_credentials_external")
+	// 同一账号在同一提供方至多一个身份；别的提供方、别的账号的同名主体不受限。
+	reject(t, oauth("o3", "a1", "github:101"), "23505", "account_credentials_oauth_provider")
+	if err := oauth("o4", "a1", "google:100"); err != nil {
+		t.Fatalf("同账号绑另一个提供方应可以：%v", err)
+	}
+	if err := oauth("o5", "a2", "github:200"); err != nil {
+		t.Fatalf("别的账号绑别的身份应可以：%v", err)
+	}
+	// 第三方凭据必须带形如 <提供方>:<主体> 的 external_id。
+	reject(t, oauth("o6", "a2", ""), "23514", "account_credentials_oauth_external")
+	reject(t, oauth("o7", "a2", "nocolon"), "23514", "account_credentials_oauth_external")
+	// 别的类型的 external_id 同样受唯一索引约束（passkey 的凭据 id）。
+	pk := func(id, account string) error {
+		return e.exec(`INSERT INTO account_credentials (tenant_id, credential_id, account_id, kind, external_id, created_at_ms)
+		  VALUES ($1, $2, $3, 'passkey', 'cred-1', 1)`, saasTenant, id, account)
+	}
+	if err := pk("p1", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	reject(t, pk("p2", "a2"), "23505", "account_credentials_external")
+	// 账号删除时凭据随之删除。
+	e.must("DELETE FROM account_credentials WHERE account_id = 'a2'")
+	e.must("DELETE FROM accounts WHERE account_id = 'a1'")
+	if n := e.count("SELECT count(*)::int FROM account_credentials"); n != 0 {
+		t.Fatalf("账号删除后凭据应清空：%d", n)
+	}
 }

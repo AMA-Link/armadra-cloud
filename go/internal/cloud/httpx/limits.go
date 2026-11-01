@@ -31,6 +31,9 @@ const (
 	LimitInviteAcct   control.LimitKind = "invite.acct"
 	LimitInviteResend control.LimitKind = "invite.resend"
 	LimitLinkAccept   control.LimitKind = "link.accept.ip"
+	// 第三方登录：发起与完成各按 IP 限流。
+	LimitOAuthStartIP  control.LimitKind = "oauth.start.ip"
+	LimitOAuthFinishIP control.LimitKind = "oauth.finish.ip"
 )
 
 // LimitPrefix 是 Redis 里限流桶的键前缀。
@@ -56,6 +59,9 @@ var Rules = map[control.LimitKind]control.LimitRule{
 	LimitInviteAcct:   {Max: 50, Window: time.Hour},
 	LimitInviteResend: {Max: 5, Window: time.Hour},
 	LimitLinkAccept:   {Max: 20, Window: time.Minute},
+
+	LimitOAuthStartIP:  {Max: 20, Window: time.Minute},
+	LimitOAuthFinishIP: {Max: 20, Window: time.Minute},
 }
 
 // Limits 是控制面的限流器：包一个 control.Limiter（Redis 版或测试用的内存版），既满足 core.RateLimiter

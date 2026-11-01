@@ -455,6 +455,35 @@
               }
             }
           },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "forbidden"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
           "409": {
             "description": "409",
             "content": {
@@ -3798,6 +3827,10 @@
                             "account",
                             "device"
                           ]
+                        },
+                        "csrfToken": {
+                          "type": "string",
+                          "minLength": 1
                         }
                       },
                       "required": [
@@ -3938,6 +3971,35 @@
                       "type": "string",
                       "enum": [
                         "rate_limited"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "503",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "registrations_paused"
                       ]
                     },
                     "message": {

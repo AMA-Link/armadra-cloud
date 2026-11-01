@@ -29,6 +29,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/links"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mestream"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/oauth"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/platform"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/teams"
@@ -184,6 +185,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 
 	handlers := map[string]api.Handler{}
 	for name, handler := range accounts.New(accounts.Options{
+		PasswordOff: !cfg.PasswordAuth, OAuth: oauthOf(cfg, redisClient, logger, deps),
 		Core: coreCtx, Store: saasStore, Gate: gate, Limits: limits, Mail: mailer, Events: publisher, Stream: stream,
 		Unknown: lockouts, LoginGuard: lockouts.Guard, AppOrigin: cfg.AppOrigin,
 		MFA: &admin.RedisChallenges{Client: redisClient}, Wrapper: db.Wrapper(), Guests: policy, Hook: deps.GrantsHook,
@@ -259,7 +261,10 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 			logger.Warn("WEB_ROOT 里没有 index.html，不托管页面", obs.Operation("web"))
 		}
 	}
-	for name, handler := range platform.Handlers(platform.Options{Core: coreCtx, Store: saasStore, Name: cfg.Name, WebApp: webApp}) {
+	for name, handler := range platform.Handlers(platform.Options{
+		Core: coreCtx, Store: saasStore, Name: cfg.Name, WebApp: webApp,
+		PasswordOff: !cfg.PasswordAuth, OAuthProviders: cfg.OAuth.Providers(),
+	}) {
 		handlers[name] = handler
 	}
 
@@ -312,6 +317,27 @@ func (a *assembly) close() {
 		a.closers[i]()
 	}
 	a.closers = nil
+}
+
+// oauthOf 按配置建第三方登录：一个提供方都没配返回 nil（三个 oauth 过程继续答 501）。
+func oauthOf(cfg *config.Config, redisClient goredis.UniversalClient, logger *obs.Logger, deps Deps) *accounts.OAuth {
+	providers := map[string]oauth.Provider{}
+	if p := cfg.OAuth.GitHub; p != nil {
+		providers[oauth.GitHub] = oauth.Provider{ClientID: p.ClientID, ClientSecret: p.ClientSecret, Endpoints: deps.OAuthEndpoints[oauth.GitHub]}
+	}
+	if p := cfg.OAuth.Google; p != nil {
+		providers[oauth.Google] = oauth.Provider{ClientID: p.ClientID, ClientSecret: p.ClientSecret, Endpoints: deps.OAuthEndpoints[oauth.Google]}
+	}
+	if len(providers) == 0 {
+		return nil
+	}
+	return &accounts.OAuth{
+		Client: oauth.New(oauth.Options{Providers: providers}),
+		States: &oauth.RedisStates{Client: redisClient, Prefix: deps.OAuthPrefix},
+		OnError: func(provider string, err error) {
+			logger.Warn("第三方登录提供方请求失败", obs.Operation("oauth"), obs.Provider(provider), obs.Error(err), obs.Reason(err.Error()))
+		},
+	}
 }
 
 // challengeGate 按配置建人机挑战（Turnstile）；校验的主机名只认控制台自己的。

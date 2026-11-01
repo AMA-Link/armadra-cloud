@@ -47,6 +47,9 @@ func TestLoadDefaults(t *testing.T) {
 	if c.SMTP != nil || c.Turnstile != nil || c.TrustedProxy != nil || len(c.MasterKey) != 32 || len(c.Warnings) != 0 {
 		t.Fatalf("可选项缺省为空：%+v", c)
 	}
+	if !c.PasswordAuth || c.OAuth.GitHub != nil || c.OAuth.Google != nil || len(c.OAuth.Providers()) != 0 {
+		t.Fatalf("口令登录缺省开、没有第三方登录：%+v", c)
+	}
 }
 
 func TestLoadRejects(t *testing.T) {
@@ -178,7 +181,7 @@ func TestChallengeScopes(t *testing.T) {
 
 func TestTrustedProxyAndUnknownVariables(t *testing.T) {
 	env := with(map[string]string{"TRUSTED_PROXY": "10.0.0.0/8, 127.0.0.1/32", "TRUSTED_PROXY_PREFER": "real-ip"})
-	env["ARMADRA_CLOUD_OAUTH_GITHUB_ID"] = "x"
+	env["ARMADRA_CLOUD_OAUTH_GITHUB_ID"] = "x" // 不是 CLIENT_ID：仍是未知变量
 	env["UNRELATED"] = "y"
 	c, err := config.Load(env)
 	if err != nil {
@@ -268,5 +271,75 @@ func TestMetricsListenNeedsTokenOffLoopback(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "METRICS_LISTEN 不是回环地址时必须配 ARMADRA_CLOUD_METRICS_TOKEN_FILE") {
 			t.Errorf("%s（令牌 %q）应拒绝：%v", c.listen, c.token, err)
 		}
+	}
+}
+
+// 第三方登录：CLIENT_ID 与 CLIENT_SECRET_FILE 成对给；配了哪个才开哪个；密钥从文件读，不进 String。
+func TestOAuthProviders(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte("s3cret-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte("  \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(with(map[string]string{"OAUTH_GITHUB_CLIENT_ID": "gh-id", "OAUTH_GITHUB_CLIENT_SECRET_FILE": secret}))
+	if err != nil || c.OAuth.GitHub == nil || c.OAuth.GitHub.ClientID != "gh-id" || c.OAuth.GitHub.ClientSecret != "s3cret-value" || c.OAuth.Google != nil {
+		t.Fatalf("只配 GitHub：%+v %v", c.OAuth, err)
+	}
+	if got := c.OAuth.Providers(); !reflect.DeepEqual(got, []string{"github"}) {
+		t.Fatalf("提供方：%v", got)
+	}
+	if strings.Contains(c.String(), "s3cret") || strings.Contains(c.String(), "gh-id") {
+		t.Fatalf("String 不该带凭据：%s", c.String())
+	}
+	c, err = config.Load(with(map[string]string{
+		"OAUTH_GITHUB_CLIENT_ID": "gh-id", "OAUTH_GITHUB_CLIENT_SECRET_FILE": secret,
+		"OAUTH_GOOGLE_CLIENT_ID": "g-id", "OAUTH_GOOGLE_CLIENT_SECRET_FILE": secret,
+	}))
+	if err != nil || !reflect.DeepEqual(c.OAuth.Providers(), []string{"github", "google"}) || len(c.Warnings) != 0 {
+		t.Fatalf("两个都配：%+v %v", c.OAuth, err)
+	}
+	for name, changes := range map[string]map[string]string{
+		"只给 ID":        {"OAUTH_GOOGLE_CLIENT_ID": "g-id"},
+		"只给密钥文件":       {"OAUTH_GITHUB_CLIENT_SECRET_FILE": secret},
+		"密钥文件不存在":      {"OAUTH_GITHUB_CLIENT_ID": "x", "OAUTH_GITHUB_CLIENT_SECRET_FILE": filepath.Join(dir, "none")},
+		"密钥文件是空的":      {"OAUTH_GITHUB_CLIENT_ID": "x", "OAUTH_GITHUB_CLIENT_SECRET_FILE": empty},
+		"Google 密钥是空的": {"OAUTH_GOOGLE_CLIENT_ID": "x", "OAUTH_GOOGLE_CLIENT_SECRET_FILE": empty},
+	} {
+		if _, err := config.Load(with(changes)); err == nil {
+			t.Errorf("%s 应拒绝", name)
+		} else if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("%s 的错误不该回显密钥：%v", name, err)
+		}
+	}
+}
+
+// 口令登录开关：缺省 on；off 且没配第三方登录时警告（普通账号登不进来）。
+func TestPasswordAuthSwitch(t *testing.T) {
+	for value, want := range map[string]bool{"-": true, "on": true, "ON": true, "off": false, "Off": false} {
+		c, err := config.Load(with(map[string]string{"PASSWORD_AUTH": value}))
+		if err != nil || c.PasswordAuth != want {
+			t.Errorf("PASSWORD_AUTH=%s：%v %v", value, c, err)
+		}
+	}
+	for _, value := range []string{"false", "0", "no", "disabled"} {
+		if _, err := config.Load(with(map[string]string{"PASSWORD_AUTH": value})); err == nil || !strings.Contains(err.Error(), "on | off") {
+			t.Errorf("PASSWORD_AUTH=%s 应拒绝：%v", value, err)
+		}
+	}
+	c, err := config.Load(with(map[string]string{"PASSWORD_AUTH": "off"}))
+	if err != nil || len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "没有配置任何第三方登录") {
+		t.Fatalf("off 且没有第三方登录应警告：%v %v", c.Warnings, err)
+	}
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = config.Load(with(map[string]string{"PASSWORD_AUTH": "off", "OAUTH_GOOGLE_CLIENT_ID": "g", "OAUTH_GOOGLE_CLIENT_SECRET_FILE": secret}))
+	if err != nil || len(c.Warnings) != 0 || c.PasswordAuth {
+		t.Fatalf("off 且配了第三方登录不警告：%v %v", c.Warnings, err)
 	}
 }

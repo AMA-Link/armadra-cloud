@@ -42,6 +42,9 @@ func (s *Service) register(ctx context.Context, call *api.Call) (any, error) {
 	if err := call.Bind(&in); err != nil {
 		return nil, err
 	}
+	if s.passwordOff {
+		return nil, core.Fail(gen.ErrForbidden)
+	}
 	if err := s.limits.Check(ctx, httpx.LimitRegisterIP, call.IP); err != nil {
 		return nil, err
 	}
@@ -109,6 +112,10 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 	if err := call.Bind(&in); err != nil {
 		return nil, err
 	}
+	// 口令登录关闭时只放行运营登录（口令 + 两步验证），普通账号一律 403。
+	if s.passwordOff && in.Scope != "operator" {
+		return nil, core.Fail(gen.ErrForbidden)
+	}
 	if err := s.limits.Check(ctx, httpx.LimitLoginIP, call.IP); err != nil {
 		return nil, err
 	}
@@ -147,13 +154,48 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 		// 运营登录不在这里建会话：口令对了答两步验证挑战，auth.mfaVerify 通过才建运营会话（mfa.go）。
 		return s.operatorLogin(ctx, account, in.Device)
 	}
-	nowMs := s.nowMs()
-	device, refresh := core.NewDevice(account.AccountID, in.Device, s.gate.TransportFor(call.Request), core.SessionScopeSession, nowMs, 0)
-	err = s.store.Tx(ctx, func(tx saas.Tx) error {
-		return s.recordLogin(ctx, tx, account, device, call.IP, nowMs)
-	})
+	out, err := s.createSession(ctx, call, account, in.Device, sessionSteps{})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// sessionSteps 是 createSession 在同一事务里留给入口的两个钩子（都可空）。
+type sessionSteps struct {
+	// Before 在设备入库之前跑：第三方登录在这里建账号或绑定身份（设备的外键要账号先存在）。
+	Before func(tx saas.Tx) error
+	// QuietNewDevice：不发「新设备登录」提醒（刚建的账号，第一台设备不是陌生设备）。
+	QuietNewDevice bool
+	// After 在 recordLogin 之后跑：入口自己的安全日志（security.oauthLogin）。
+	After func(tx saas.Tx, device store.DeviceRecord) error
+}
+
+// createSession 是普通会话的统一建立路径（auth.login、auth.oauthFinish 共用，设计 §4.0）：账号必须可用
+// （停用答 account_disabled）→ 按本次请求的传输建设备（带控制台 Origin 且不带 Authorization 走 Cookie，否则 Bearer）→
+// 同一事务里 Before、recordLogin（设备入库、security.login、新设备提醒）、After → 答会话（Cookie 传输另带 csrfToken）。
+func (s *Service) createSession(ctx context.Context, call *api.Call, account *saas.Account, input core.DeviceInput, steps sessionSteps) (sessionResult, error) {
+	if account.Status != saas.AccountActive {
+		return sessionResult{}, core.Fail(gen.ErrAccountDisabled)
+	}
+	nowMs := s.nowMs()
+	device, refresh := core.NewDevice(account.AccountID, input, s.gate.TransportFor(call.Request), core.SessionScopeSession, nowMs, 0)
+	err := s.store.Tx(ctx, func(tx saas.Tx) error {
+		if steps.Before != nil {
+			if err := steps.Before(tx); err != nil {
+				return err
+			}
+		}
+		if err := s.recordLoginAlert(ctx, tx, account, device, call.IP, nowMs, !steps.QuietNewDevice); err != nil {
+			return err
+		}
+		if steps.After != nil {
+			return steps.After(tx, device)
+		}
+		return nil
+	})
+	if err != nil {
+		return sessionResult{}, err
 	}
 	return s.respond(ctx, call, device, refresh, account)
 }
@@ -164,6 +206,11 @@ func (s *Service) login(ctx context.Context, call *api.Call) (any, error) {
 // 新设备 = 同平台同名的设备 30 天内没出现过，或者这个账号 30 天内没有从同一个 IP 前缀、用同名设备登录过
 // （同名的设备名谁都能起，光靠名字挡不住别人冒用常用设备名登录）。
 func (s *Service) recordLogin(ctx context.Context, tx saas.Tx, account *saas.Account, device store.DeviceRecord, ip string, nowMs int64) error {
+	return s.recordLoginAlert(ctx, tx, account, device, ip, nowMs, true)
+}
+
+// recordLoginAlert 同 recordLogin；alert 为假时新设备照样记 security.newDevice，但不发提醒邮件。
+func (s *Service) recordLoginAlert(ctx context.Context, tx saas.Tx, account *saas.Account, device store.DeviceRecord, ip string, nowMs int64, alert bool) error {
 	known, err := tx.Ports().Devices.ListBySubject(ctx, s.tenant(), account.AccountID)
 	if err != nil {
 		return err
@@ -188,6 +235,9 @@ func (s *Service) recordLogin(ctx context.Context, tx saas.Tx, account *saas.Acc
 	}
 	if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityNewDevice); err != nil {
 		return err
+	}
+	if !alert {
+		return nil
 	}
 	return s.mail.Enqueue(ctx, tx, mail.Mail{
 		Template: mail.NewDevice, Locale: account.Locale, To: account.Email,
@@ -388,6 +438,9 @@ func (s *Service) changePassword(ctx context.Context, call *api.Call) (any, erro
 	}
 	if err := call.Bind(&in); err != nil {
 		return nil, err
+	}
+	if s.passwordOff {
+		return nil, core.Fail(gen.ErrForbidden)
 	}
 	account, err := s.owner(ctx, caller)
 	if err != nil {

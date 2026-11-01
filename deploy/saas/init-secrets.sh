@@ -26,6 +26,9 @@ put() { # put <名字> <内容> [模式]
 cloud_pw="$(rand)"; traffic_pw="$(rand)"; redis_pw="$(rand)"
 put master_key "$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 put smtp_password ""
+# 第三方登录的客户端密钥（可选）：占位的空文件，开哪个提供方就把密钥写进去（见运维手册「第三方登录」）。
+put oauth_github_secret ""
+put oauth_google_secret ""
 put postgres_password "$(rand)"
 put cloud_db_password "$cloud_pw"
 put traffic_db_password "$traffic_pw"

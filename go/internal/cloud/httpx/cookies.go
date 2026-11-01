@@ -101,3 +101,33 @@ func OriginOnce(r *http.Request) (string, bool) {
 	}
 	return strings.TrimSpace(values[0]), true
 }
+
+// CookieOAuth 是第三方登录的浏览器绑定 Cookie（设计 §4.3）：auth.oauthStart 下发一个随机数，auth.oauthFinish 要求它
+// 与授权状态里记的一致，防止攻击者把自己的授权码塞进受害人的浏览器（登录劫持）。Secure、HttpOnly、Path=/、
+// 不带 Domain；与会话 Cookie 不同，它是 SameSite=Lax，因为从提供方回跳是跨站的顶层导航。
+const CookieOAuth = "__Host-armadra-oauth"
+
+// OAuthCookieMaxAge 是 CookieOAuth 的寿命，与授权状态一致。
+const OAuthCookieMaxAge = 10 * 60
+
+// SetOAuth 造 CookieOAuth 的 Set-Cookie 值；maxAgeSeconds <= 0 是清除。
+func SetOAuth(value string, maxAgeSeconds int) string {
+	cookie := &http.Cookie{Name: CookieOAuth, Value: value, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+	if maxAgeSeconds > 0 {
+		cookie.MaxAge = maxAgeSeconds
+	} else {
+		cookie.MaxAge = -1
+	}
+	return cookie.String()
+}
+
+// OAuthNonce 取请求里的 CookieOAuth：恰好出现一次且非空才算（同名重复是 Cookie 投放，一律当没有）。
+func OAuthNonce(r *http.Request) (string, bool) {
+	value, count := "", 0
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == CookieOAuth {
+			value, count = cookie.Value, count+1
+		}
+	}
+	return value, count == 1 && value != ""
+}

@@ -64,6 +64,10 @@ type Reader interface {
 	Memberships(ctx context.Context, tenantID, accountID string) ([]Membership, error)
 	// HasCredential 报告账号是否登记了某种凭据（totp / passkey / oauth）。
 	HasCredential(ctx context.Context, tenantID, accountID, kind string) (bool, error)
+	// OAuthIdentity 按提供方与主体读第三方登录身份；没有答 nil。
+	OAuthIdentity(ctx context.Context, tenantID, provider, subject string) (*OAuthIdentity, error)
+	// OAuthIdentities 是账号绑定的全部第三方登录身份，按绑定顺序。
+	OAuthIdentities(ctx context.Context, tenantID, accountID string) ([]OAuthIdentity, error)
 	// Incident 读事故开关（platform_settings 键 incident）；没写过答全关。
 	Incident(ctx context.Context, tenantID string) (Incident, error)
 	// EmailToken 按令牌哈希读邮件令牌（含已用、已过期的）；没有答 nil。
@@ -120,6 +124,10 @@ type AccountRepo interface {
 	ConsumeEmailToken(ctx context.Context, tenantID, tokenHash, purpose string, nowMs int64) (*EmailToken, error)
 	// InvalidateEmailTokens 作废账号某目的下所有未用的令牌（记已用）；答作废了几枚。
 	InvalidateEmailTokens(ctx context.Context, tenantID, accountID, purpose string, nowMs int64) (int, error)
+	// InsertOAuthIdentity 绑定一个第三方登录身份；这个身份已属于别的账号、或本账号在该提供方已有身份，答 ErrConflict。
+	InsertOAuthIdentity(ctx context.Context, tenantID string, identity OAuthIdentity) error
+	// DeleteOAuthIdentity 解绑账号在某提供方的身份，答有没有删到。
+	DeleteOAuthIdentity(ctx context.Context, tenantID, accountID, provider string) (bool, error)
 	// GCEmailTokens 删过期 24 小时以上的令牌（beforeMs = now − 24 小时）。
 	GCEmailTokens(ctx context.Context, tenantID string, beforeMs int64) (int, error)
 }
