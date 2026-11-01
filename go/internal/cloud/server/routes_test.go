@@ -45,6 +45,9 @@ var enabledS7 = map[string]bool{
 	"admin.incident": true, "admin.incidentSet": true,
 }
 
+// enabledOAuth 是第三方登录的三个过程（没配提供方时 oauthStart 答 404、oauthFinish 答 401，不是 501）。
+var enabledOAuth = map[string]bool{"auth.oauthStart": true, "auth.oauthFinish": true, "auth.oauthUnlink": true}
+
 func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, rigOptions{})
@@ -66,7 +69,7 @@ func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 		}
 		res := r.do(method, path, body, nil)
 		is501 := res.status == 501 && res.json["code"] == "not_implemented"
-		if enabledThroughS5b[route.Procedure] || enabledS6[route.Procedure] || enabledS7[route.Procedure] {
+		if enabledThroughS5b[route.Procedure] || enabledS6[route.Procedure] || enabledS7[route.Procedure] || enabledOAuth[route.Procedure] {
 			seen++
 			if is501 {
 				t.Errorf("%s 应已启用", route.Procedure)
@@ -75,7 +78,7 @@ func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 			t.Errorf("%s 还没实现，应答 501 not_implemented：%d %s", route.Procedure, res.status, res.body)
 		}
 	}
-	if seen != len(enabledThroughS5b)+len(enabledS6)+len(enabledS7) {
+	if seen != len(enabledThroughS5b)+len(enabledS6)+len(enabledS7)+len(enabledOAuth) {
 		t.Fatalf("启用表里有契约里没有的过程：%d / %d", seen, len(enabledThroughS5b))
 	}
 }
