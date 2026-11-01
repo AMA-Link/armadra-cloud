@@ -11,6 +11,8 @@
 
 ### 修复 / Fixed
 
+- 控制台页面路由加 `/login/oauth/` 前缀（Refs #184）：第三方登录的回跳页 `/login/oauth/<provider>` 此前答 404，GitHub / Google 授权完回不到控制台。`/login` 下其余子路径仍不是页面。
+  Console routes now include the `/login/oauth/` prefix (Refs #184): the third-party sign-in callback `/login/oauth/<provider>` answered 404, so GitHub / Google sign-in could not return to the console. Other paths under `/login` are still not pages.
 - Workers 中继撤销源或分享链接后，被断开的一端立即拿旧令牌重连答 4401（Closes #180）：源对象在断开客户端 / 关隧道之前先作废撤销判断的缓存。此前控制面的「作废缓存」要等一次查询后才发，与断开不保证先后：撤销源时短暂答 4404，撤销链接时访客可能在缓存作废前按缓存重连成功。同类的两个窗口一并关掉：跨过作废的撤销查询不再把可能过期的答复写回缓存；判定跨过作废的建连会重判，还没登记的连接不会躲过断开。
   After revoking a source or a share link on the Workers relay, a disconnected peer reconnecting with its old token now gets 4401 right away (Closes #180): the source object clears its revocation cache before disconnecting clients or closing the tunnel. Previously the control object's invalidation was sent after a query and was unordered with the disconnect, so revoking a source briefly answered 4404 and a revoked guest could reconnect from the stale cache. Two related windows are closed too: a revocation lookup in flight across an invalidation no longer writes its possibly stale answer back to the cache, and an upgrade whose admission spanned an invalidation is re-decided, so a connection not yet tracked cannot slip past the disconnect.
 - zod 从 4.4.3 升到 4.6.6（Closes #175），修掉 GHSA-mrhx-c7xc-m3w5（校验超大的带约束集合时可耗尽内存，high）。协议包的 JSON Schema 导出随 zod 4.6 变化：邮箱正则改写成不带前瞻的等价形式（`validation.emailPattern`，同一份向量验证两边判定不变），`tunnel/open-payload` 的可空字段写成 `type: [string, null]`、`path` 多一个 `format: starts_with`、`headers` 的二元组多了 `items: false` 与长度 2；Go 生成器把这几种写法归一回原有规则，生成物只有邮箱正则与 `headers` 元素的长度界两处变化。协议包对外仍是 peer `zod >=4.0.0 <5`，由使用方自带 zod。
