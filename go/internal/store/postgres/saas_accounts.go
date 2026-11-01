@@ -165,3 +165,65 @@ func (r reader) EmailToken(ctx context.Context, tenantID, tokenHash string) (*sa
 	}
 	return &t, err
 }
+
+// ---- 第三方登录身份（迁移 0011）----
+
+type oauthPublic struct {
+	Provider string `json:"provider"`
+	Email    string `json:"email"`
+	Login    string `json:"login,omitempty"`
+	Name     string `json:"name,omitempty"`
+}
+
+const oauthColumns = "credential_id, account_id, external_id, public_json, created_at_ms"
+
+func scanOAuth(row scanner) (saas.OAuthIdentity, error) {
+	var (
+		id         saas.OAuthIdentity
+		externalID string
+		public     []byte
+	)
+	if err := row.Scan(&id.CredentialID, &id.AccountID, &externalID, &public, &id.CreatedAtMs); err != nil {
+		return id, err
+	}
+	provider, subject, ok := saas.SplitOAuthExternalID(externalID)
+	if !ok {
+		return id, store.Errorf(store.KindCorrupt, "account_credentials.external_id 不合格式，拒绝启动")
+	}
+	var meta oauthPublic
+	if len(public) > 0 {
+		if err := json.Unmarshal(public, &meta); err != nil {
+			return id, store.Errorf(store.KindCorrupt, "account_credentials.public_json 不合格式，拒绝启动")
+		}
+	}
+	id.Provider, id.Subject, id.Email, id.Login, id.Name = provider, subject, meta.Email, meta.Login, meta.Name
+	return id, nil
+}
+
+func (r reader) OAuthIdentity(ctx context.Context, tenantID, provider, subject string) (*saas.OAuthIdentity, error) {
+	return one(oneOf(scanOAuth(r.q.QueryRow(ctx,
+		"SELECT "+oauthColumns+" FROM account_credentials WHERE tenant_id = $1 AND kind = 'oauth' AND external_id = $2",
+		tenantID, saas.OAuthExternalID(provider, subject)))))
+}
+
+func (r reader) OAuthIdentities(ctx context.Context, tenantID, accountID string) ([]saas.OAuthIdentity, error) {
+	return list(ctx, r.q, scanOAuth,
+		"SELECT "+oauthColumns+" FROM account_credentials WHERE tenant_id = $1 AND account_id = $2 AND kind = 'oauth' ORDER BY created_at_ms, credential_id",
+		tenantID, accountID)
+}
+
+func (r accountRepo) InsertOAuthIdentity(ctx context.Context, tenantID string, id saas.OAuthIdentity) error {
+	public := encodeJSON(oauthPublic{Provider: id.Provider, Email: id.Email, Login: id.Login, Name: id.Name})
+	_, err := r.q.Exec(ctx,
+		`INSERT INTO account_credentials (tenant_id, credential_id, account_id, kind, external_id, public_json, created_at_ms)
+		 VALUES ($1, $2, $3, 'oauth', $4, $5::jsonb, $6)`,
+		tenantID, id.CredentialID, id.AccountID, saas.OAuthExternalID(id.Provider, id.Subject), public, id.CreatedAtMs)
+	return err
+}
+
+func (r accountRepo) DeleteOAuthIdentity(ctx context.Context, tenantID, accountID, provider string) (bool, error) {
+	tag, err := r.q.Exec(ctx,
+		"DELETE FROM account_credentials WHERE tenant_id = $1 AND account_id = $2 AND kind = 'oauth' AND split_part(external_id, ':', 1) = $3",
+		tenantID, accountID, provider)
+	return tag.RowsAffected() > 0, err
+}

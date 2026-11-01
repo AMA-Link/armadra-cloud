@@ -30,10 +30,13 @@ var (
 	ErrMemberExists  = &Error{Code: gen.ErrMemberExists}
 )
 
-// 约束与索引名（迁移 0004–0009）。
+// 约束与索引名（迁移 0004–0011）。
 const (
 	ConstraintTeamSlug      = "teams_slug"
 	ConstraintAccountsEmail = "accounts_email"
 	ConstraintTeamHasOwner  = "team_has_owner"
 	ConstraintTeamMembersPK = "team_members_pkey"
+	// 迁移 0011：一个第三方身份只属于一个账号；一个账号在同一提供方至多一个身份。
+	ConstraintOAuthExternal = "account_credentials_external"
+	ConstraintOAuthProvider = "account_credentials_oauth_provider"
 )
