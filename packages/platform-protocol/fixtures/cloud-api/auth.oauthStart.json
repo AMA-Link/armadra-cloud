@@ -1,7 +1,7 @@
 {
   "input": {
     "provider": "github",
-    "redirectUri": "https://app.armadra.test/oauth/github"
+    "redirectUri": "https://app.armadra.test/login/oauth/github"
   },
   "output": {
     "authorizationUrl": "https://github.test/login/oauth/authorize?state=st_01",

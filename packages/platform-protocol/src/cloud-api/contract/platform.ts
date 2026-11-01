@@ -16,6 +16,9 @@ export const PLATFORM_CAPABILITIES = [
   "auth.passkey",
   "auth.totp",
   "auth.oauth",
+  /** 配了对应提供方才报（GitHub / Google 登录，cloud-api §29）；`auth.oauth` 是任一提供方可用的总开关。 */
+  "auth.oauth.github",
+  "auth.oauth.google",
   "auth.device-code",
   "orgs",
   "links.source-invite",

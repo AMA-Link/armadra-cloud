@@ -1171,7 +1171,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
   "auth.oauthStart": {
     input: {
       provider: "github",
-      redirectUri: "https://app.armadra.test/oauth/github",
+      redirectUri: "https://app.armadra.test/login/oauth/github",
     },
     output: {
       authorizationUrl: "https://github.test/login/oauth/authorize?state=st_01",
@@ -1188,6 +1188,7 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     },
     outputs: [
       { session },
+      { session, csrfToken: CSRF_TOKEN },
       { mfa: { challengeId: "mfa_01", methods: ["totp", "recovery"] } },
     ],
   },
