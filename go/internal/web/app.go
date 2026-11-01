@@ -10,7 +10,8 @@ import (
 var appExact = map[string]bool{"/": true, "/login": true, "/register": true, "/verify": true, "/reset": true, "/device": true}
 
 // 带子路径的前缀（含前缀本身）。
-var appPrefixes = []string{"/me/", "/t/", "/h/", "/j/", "/invite/", "/ops/"}
+// `/login/oauth/` 是第三方登录的回跳页（`/login/oauth/<provider>`，#184）；`/login` 下的其余子路径仍不是页面。
+var appPrefixes = []string{"/me/", "/t/", "/h/", "/j/", "/invite/", "/ops/", "/login/oauth/"}
 
 // IsAppRoute 判断路径是不是控制台的页面路由（回落 index.html）。
 func IsAppRoute(path string) bool {
