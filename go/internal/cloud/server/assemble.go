@@ -259,7 +259,10 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 			logger.Warn("WEB_ROOT 里没有 index.html，不托管页面", obs.Operation("web"))
 		}
 	}
-	for name, handler := range platform.Handlers(platform.Options{Core: coreCtx, Store: saasStore, Name: cfg.Name, WebApp: webApp}) {
+	for name, handler := range platform.Handlers(platform.Options{
+		Core: coreCtx, Store: saasStore, Name: cfg.Name, WebApp: webApp,
+		PasswordOff: !cfg.PasswordAuth, OAuthProviders: cfg.OAuth.Providers(),
+	}) {
 		handlers[name] = handler
 	}
 

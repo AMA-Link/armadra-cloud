@@ -101,6 +101,31 @@ type Turnstile struct {
 	Scope []core.ChallengeScope
 }
 
+// OAuthProvider 是一个第三方登录提供方的应用凭据（GitHub OAuth App、Google OAuth 客户端）。
+type OAuthProvider struct {
+	ClientID string
+	// ClientSecret 从 *_CLIENT_SECRET_FILE 读，不打印、不进日志。
+	ClientSecret string
+}
+
+// OAuth 是第三方登录配置：配了哪个提供方才开哪个；两个都没配 = 没有第三方登录。
+type OAuth struct {
+	GitHub *OAuthProvider
+	Google *OAuthProvider
+}
+
+// Providers 是配了的提供方名字，按固定顺序（github、google）。
+func (o OAuth) Providers() []string {
+	var out []string
+	if o.GitHub != nil {
+		out = append(out, "github")
+	}
+	if o.Google != nil {
+		out = append(out, "google")
+	}
+	return out
+}
+
 // Config 是 armadra-cloud 的全部配置。
 type Config struct {
 	Issuer    string
@@ -119,6 +144,11 @@ type Config struct {
 
 	SMTP      *SMTP
 	Turnstile *Turnstile
+
+	// OAuth 是第三方登录（GitHub、Google）；PasswordAuth 是普通账号的口令登录开关（缺省开）。
+	// 关闭时 auth.register、普通的 auth.login、auth.changePassword 答 403 forbidden，运营登录不受影响。
+	OAuth        OAuth
+	PasswordAuth bool
 
 	TrustedProxy *clientip.TrustedProxyConfig
 	HIBPURL      string
@@ -149,6 +179,8 @@ var known = map[string]bool{
 	"NAME": true, "WEB_ROOT": true,
 	"SMTP_HOST": true, "SMTP_PORT": true, "SMTP_USERNAME": true, "SMTP_PASSWORD_FILE": true, "SMTP_FROM": true, "SMTP_TLS": true,
 	"TURNSTILE_SITE_KEY": true, "TURNSTILE_SECRET_FILE": true, "CHALLENGE_SCOPE": true,
+	"OAUTH_GITHUB_CLIENT_ID": true, "OAUTH_GITHUB_CLIENT_SECRET_FILE": true,
+	"OAUTH_GOOGLE_CLIENT_ID": true, "OAUTH_GOOGLE_CLIENT_SECRET_FILE": true, "PASSWORD_AUTH": true,
 	"TRUSTED_PROXY": true, "TRUSTED_PROXY_PREFER": true, "HIBP_URL": true,
 	"JOB_WORKERS": true, "TRAFFIC_RETENTION_DAYS": true,
 	"METRICS_LISTEN": true, "METRICS_TOKEN_FILE": true, "LOG_LEVEL": true,
@@ -268,6 +300,18 @@ func Load(env Env) (*Config, error) {
 	}
 	if c.Turnstile, err = turnstile(r, c); err != nil {
 		return nil, err
+	}
+	if c.OAuth.GitHub, err = oauthProvider(r, "GITHUB"); err != nil {
+		return nil, err
+	}
+	if c.OAuth.Google, err = oauthProvider(r, "GOOGLE"); err != nil {
+		return nil, err
+	}
+	if c.PasswordAuth, err = passwordAuth(r); err != nil {
+		return nil, err
+	}
+	if !c.PasswordAuth && len(c.OAuth.Providers()) == 0 {
+		c.Warnings = append(c.Warnings, Prefix+"PASSWORD_AUTH=off 却没有配置任何第三方登录提供方：普通账号将无法登录")
 	}
 	if c.TrustedProxy, err = trustedProxy(r); err != nil {
 		return nil, err
@@ -499,6 +543,38 @@ func turnstile(r reader, c *Config) (*Turnstile, error) {
 		return nil, errorf("%sCHALLENGE_SCOPE 里没有可用的项", Prefix)
 	}
 	return t, nil
+}
+
+// oauthProvider 读一个第三方登录提供方：CLIENT_ID 与 CLIENT_SECRET_FILE 要么都不给（没配这个提供方），要么都给。
+func oauthProvider(r reader, name string) (*OAuthProvider, error) {
+	idName, secretName := "OAUTH_"+name+"_CLIENT_ID", "OAUTH_"+name+"_CLIENT_SECRET_FILE"
+	id, secretPath := r.get(idName), r.get(secretName)
+	if id == "" && secretPath == "" {
+		return nil, nil
+	}
+	if id == "" || secretPath == "" {
+		return nil, errorf("%s%s 与 %s 要两个都配", Prefix, idName, secretName)
+	}
+	secret, _, err := r.file(secretName)
+	if err != nil {
+		return nil, err
+	}
+	if secret == "" {
+		return nil, errorf("%s%s 指向的文件是空的", Prefix, secretName)
+	}
+	return &OAuthProvider{ClientID: id, ClientSecret: secret}, nil
+}
+
+// passwordAuth 读 PASSWORD_AUTH：on（缺省）或 off。
+func passwordAuth(r reader) (bool, error) {
+	switch value := strings.ToLower(r.get("PASSWORD_AUTH")); value {
+	case "", "on":
+		return true, nil
+	case "off":
+		return false, nil
+	default:
+		return false, errorf("%sPASSWORD_AUTH 要 on | off：%s", Prefix, r.get("PASSWORD_AUTH"))
+	}
 }
 
 func trustedProxy(r reader) (*clientip.TrustedProxyConfig, error) {
