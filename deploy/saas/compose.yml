@@ -7,6 +7,7 @@
 #   docker compose --profile proxy up -d             # 另起参考反向代理（nginx，TLS 在它终止）
 #   docker compose -f compose.yml -f compose.mailpit.yml up -d    # 开发 / 端到端：邮件进 mailpit，不外发
 #   docker compose -f compose.yml -f compose.metrics.yml up -d    # 打开 /metrics（宿主回环 + 令牌），告警规则在 prometheus/
+#   docker compose --profile push up -d push-relay   # 可选：商店版 App 的推送中继（镜像随 Armadra v0.12.0 起发布），见 docs/runbooks/saas.md「推送中继」
 #
 # 网络：edge（反向代理、控制面、节点；代理的 IP 固定，控制面与节点只信它的 X-Forwarded-For）与 backend
 # （postgres、redis、migrate、db-roles；internal，不出网）。口令与连接串全部是 secrets 文件，不进环境变量。
@@ -19,6 +20,10 @@ name: armadra-saas
 
 x-cloud-image: &cloud-image ghcr.io/ama-link/armadra-cloud:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
 x-relay-image: &relay-image ghcr.io/ama-link/armadra-relay:${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}
+
+# 推送中继镜像由 Armadra 仓库构建（apps/push-relay），与控制面、节点同一条版本线，缺省跟 ARMADRA_CLOUD_VERSION；
+# 版本线分开走时才设 PUSH_RELAY_VERSION。
+x-push-relay-image: &push-relay-image ghcr.io/ama-link/armadra-push-relay:${PUSH_RELAY_VERSION:-${ARMADRA_CLOUD_VERSION:?set ARMADRA_CLOUD_VERSION}}
 
 x-cloud-env: &cloud-env
   ARMADRA_CLOUD_ISSUER: https://app.${DOMAIN:?set DOMAIN}
@@ -240,6 +245,35 @@ services:
     ports:
       - "127.0.0.1:${RELAY_B_PORT:-8442}:8443"
 
+  # 推送中继（可选，profile push，缺省不起）：商店版 App 的 APNs / FCM 凭据属于发布方，中继替各个 core 把已经端到端
+  # 加密的通知转给 Apple / Google，只看得到平台令牌与密文信封。无状态、没有卷，只读根文件系统。
+  # 只进 edge 网络：要出网访问 APNs / FCM，同时够不到 postgres 与 redis；对外由参考代理的 push.<域> 转发。
+  # 凭据全是可选的：不填 APNs 密钥与 FCM 服务账号也能启动（/health 报空平台列表，登记与推送答 platformUnavailable）。
+  push-relay:
+    profiles: ["push"]
+    image: *push-relay-image
+    environment:
+      ARMADRA_RELAY_SECRET_FILE: /run/secrets/push_relay_secret
+      # APNs（iOS）：路径与 Key ID、Team ID、bundle id 都填了才用；路径填 /run/secrets/push_relay_apns_key，.p8 放在 secrets/ 下。
+      ARMADRA_RELAY_APNS_KEY_FILE: ${PUSH_RELAY_APNS_KEY_FILE:-}
+      ARMADRA_RELAY_APNS_KEY_ID: ${PUSH_RELAY_APNS_KEY_ID:-}
+      ARMADRA_RELAY_APNS_TEAM_ID: ${PUSH_RELAY_APNS_TEAM_ID:-}
+      ARMADRA_RELAY_APNS_TOPIC: ${PUSH_RELAY_APNS_TOPIC:-}
+      ARMADRA_RELAY_APNS_PRODUCTION: ${PUSH_RELAY_APNS_PRODUCTION:-1}
+      # FCM（Android）：路径填 /run/secrets/push_relay_fcm_credentials，服务账号 JSON 放在 secrets/ 下；项目 id 缺省取账号里的。
+      ARMADRA_RELAY_FCM_CREDENTIALS_FILE: ${PUSH_RELAY_FCM_CREDENTIALS_FILE:-}
+      ARMADRA_RELAY_FCM_PROJECT_ID: ${PUSH_RELAY_FCM_PROJECT_ID:-}
+    secrets:
+      [push_relay_secret, push_relay_apns_key, push_relay_fcm_credentials]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "127.0.0.1:${PUSH_RELAY_PORT:-8095}:8095"
+    networks: [edge]
+    logging: *logging
+    restart: unless-stopped
+
   # 参考反向代理：终止 TLS，WebSocket 设置与限流见 nginx.conf.template；访问日志用 $uri，不记 query 串。
   # 只进 edge 网络（够不到 postgres / redis），IP 固定，控制面与节点只信它。
   proxy:
@@ -308,6 +342,15 @@ secrets:
     file: ./secrets/node_token_a
   node_token_b:
     file: ./secrets/node_token_b
+  # 推送中继（可选，profile push）：封中继令牌的钥（init-secrets.sh 生成，32 字节随机数的 base64；换钥让所有中继令牌作废，
+  # App 下次启动重新登记）；APNs 的 .p8 与 FCM 的服务账号 JSON 是占位的空文件，要开 iOS / Android 推送就把内容写进去，
+  # 并在 .env 填对应变量。
+  push_relay_secret:
+    file: ./secrets/push_relay_secret
+  push_relay_apns_key:
+    file: ./secrets/push_relay_apns_key
+  push_relay_fcm_credentials:
+    file: ./secrets/push_relay_fcm_credentials
 
 volumes:
   pg: {}

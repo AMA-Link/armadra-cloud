@@ -38,5 +38,10 @@ put relay_database_url "postgres://armadra_relay_traffic:${traffic_pw}@postgres:
 put redis_url "redis://:${redis_pw}@redis:6379"
 # 指标的 Bearer 令牌（compose.metrics.yml 用；Prometheus 抓取时出示同一个值）。
 put metrics_token "$(rand)"
+# 推送中继（可选，compose 的 push profile）：封中继令牌的钥是 32 字节随机数的 base64；APNs 的 .p8 与 FCM 的服务账号 JSON
+# 是占位的空文件，要开 iOS / Android 推送再把内容写进去（见运维手册「推送中继」）。
+put push_relay_secret "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+put push_relay_apns_key ""
+put push_relay_fcm_credentials ""
 put node_token_a "" 644
 put node_token_b "" 644

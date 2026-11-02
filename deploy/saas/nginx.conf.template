@@ -1,5 +1,6 @@
 # 参考反向代理（compose 的 proxy 服务；官方镜像在启动时只替换 ${DOMAIN}）。一张证书要覆盖
-#   app.<域>、a.edge.<域>、b.edge.<域> 与 *.src.<域>（二级通配：DNS-01 签发，或经 Cloudflare 代理时用高级证书）。
+#   app.<域>、a.edge.<域>、b.edge.<域> 与 *.src.<域>（二级通配：DNS-01 签发，或经 Cloudflare 代理时用高级证书）；
+#   起了可选的推送中继（compose 的 push profile）时再加 push.<域>。
 # 证书文件放在 TLS_DIR（缺省 ./tls）：fullchain.pem、privkey.pem。证书先于登记：真证书签好之前不要给客户端登记主机。
 #
 # 放在 Cloudflare 后面时（可选）：取消下面三段注释，让 $remote_addr 变成访问者的真实 IP（控制面与节点只信本代理
@@ -146,4 +147,28 @@ server {
   proxy_request_buffering off;
 
   location / { proxy_pass http://relay_any; }
+}
+
+# 推送中继（可选，compose 的 push profile）：商店版 App 直接登记平台令牌，所以对公网开放，只转 /v1/register、/v1/push
+# 与 /health。没起 push-relay 时这个站点答 502。登记按 IP 限流（中继自己另按令牌限流）。
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name push.${DOMAIN};
+
+  access_log /var/log/nginx/access.log armadra;
+  add_header Strict-Transport-Security "max-age=31536000" always;
+  client_max_body_size 16k;
+  keepalive_timeout 75s;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-For $remote_addr;
+  proxy_set_header X-Forwarded-Proto https;
+
+  set $push push-relay:8095;
+
+  location = /v1/register { limit_req zone=auth burst=20 nodelay; proxy_pass http://$push; }
+  location = /v1/push     { proxy_pass http://$push; }
+  location = /health      { proxy_pass http://$push; }
+  location / { return 404; }
 }
