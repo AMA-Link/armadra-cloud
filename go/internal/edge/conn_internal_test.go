@@ -64,6 +64,12 @@ func (f *fakeConn) CloseAfterFlush(time.Duration) {
 }
 func (f *fakeConn) RemoteAddr() string { return "127.0.0.1:1" }
 
+func (f *fakeConn) isClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
+}
+
 func (f *fakeConn) sent() [][]byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
