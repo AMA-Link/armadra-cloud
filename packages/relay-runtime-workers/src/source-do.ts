@@ -578,7 +578,8 @@ export class SourceDO extends DurableObject<RelayEnv> {
     edgeRequest: EdgeRequest,
   ): Promise<Response> {
     // 判定跨 await（验令牌、限流、找隧道）。期间若有撤销作废了缓存，这次判定可能用的是撤销前的结果，而断开
-    // 时这条连接还没登记、躲过了断开：放掉并重判，最多 3 次（之后的步骤都是同步的，登记前不会再有撤销插进来）。
+    // 时这条连接还没登记、躲过了断开：放掉并重判，最多 3 次。3 次之后判定仍跨过作废就拒绝本次升级（4401，
+    // 客户端重连即可），不拿可能过期的结论登记；通过重判后的步骤都是同步的，登记前不会再有撤销插进来。
     let epoch = this.revocationEpoch;
     let decision = await this.policy.decideUpgrade(edgeRequest);
     for (
@@ -589,6 +590,16 @@ export class SourceDO extends DurableObject<RelayEnv> {
       this.policy.releaseUpgrade(decision.subject);
       epoch = this.revocationEpoch;
       decision = await this.policy.decideUpgrade(edgeRequest);
+    }
+    if (decision.kind !== "refuse" && epoch !== this.revocationEpoch) {
+      this.policy.releaseUpgrade(decision.subject);
+      return this.refuseUpgrade(
+        request,
+        edgeRequest,
+        "relay_token_invalid",
+        decision.target.sourceId,
+        "revocation_changed",
+      );
     }
     if (decision.kind === "refuse")
       return this.refuseUpgrade(
@@ -925,28 +936,31 @@ export class SourceDO extends DurableObject<RelayEnv> {
     return this.controlStub().jwks();
   }
 
-  /** 撤销判断：personal 问 `ControlDO`（按 `jti` 的形状查源 / 设备 / 链接），失败按已撤销处理。 */
+  /**
+   * 撤销判断：personal 问 `ControlDO`（按 `jti` 的形状查源 / 设备 / 链接）。控制对象出错、或查询期间缓存
+   * 一直被作废而次数耗尽时按已撤销处理（fail-closed），这两种结果都不写缓存，下一次判定重新问（#192）。
+   */
   private async isRevoked(jti: string): Promise<boolean> {
     if (this.config?.mode !== "personal") return false;
     const now = Date.now();
     const cached = this.revocations.get(jti);
     if (cached && (cached.revoked || now - cached.atMs < REVOCATION_CACHE_MS))
       return cached.revoked;
-    // 查询期间若缓存被作废过，答复可能是撤销落库之前的：重问，最多 3 次；仍在变就不写缓存，照最后一次答。
+    // 查询期间若缓存被作废过，答复可能是撤销落库之前的：重问，最多 3 次；仍在变就当作已撤销，不写缓存。
     for (let attempt = 1; ; attempt++) {
       const epoch = this.revocationEpoch;
-      let revoked = true;
+      let revoked: boolean;
       try {
         revoked = await this.controlStub().isRevoked(jti);
       } catch {
-        revoked = true;
+        return true;
       }
-      const stale = epoch !== this.revocationEpoch;
-      if (stale && !revoked && attempt < 3) continue;
-      if (!stale) {
-        if (this.revocations.size > 4096) this.revocations.clear();
-        this.revocations.set(jti, { revoked, atMs: now });
+      if (epoch !== this.revocationEpoch) {
+        if (revoked || attempt >= 3) return true;
+        continue;
       }
+      if (this.revocations.size > 4096) this.revocations.clear();
+      this.revocations.set(jti, { revoked, atMs: now });
       return revoked;
     }
   }
