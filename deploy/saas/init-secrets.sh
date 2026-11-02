@@ -1,8 +1,9 @@
 #!/bin/sh
 # 生成 secrets/ 下的随机口令与连接串文件（已有的不覆盖），并建 tls/（证书放这里）。用法：sh init-secrets.sh
 # 目录 0700、文件 0444：容器里的 uid 10002（控制面与节点）、70（postgres）、999（redis）要能读，
-# 宿主上的其他用户进不了目录。节点令牌（node_token_*）要等控制面起来后用 nodes token 签，这里先放占位文件，
-# 内容留空（0644，方便 nodes token 的输出直接覆盖），签完再覆盖。主密钥 master_key 必须另存一份。托管数据库 / Redis 时，直接把
+# 宿主上的其他用户进不了目录。需要运维事后写入的占位文件（节点令牌 node_token_*、第三方登录密钥 oauth_*_secret、
+# 推送中继凭据 push_relay_apns_key / push_relay_fcm_credentials）内容留空、权限 0644，属主才能直接 `echo … >` 覆盖
+# （0444 下非 root 属主写入会 Permission denied）；节点令牌要等控制面起来后用 nodes token 签，签完再覆盖。主密钥 master_key 必须另存一份。托管数据库 / Redis 时，直接把
 # cloud_database_url、relay_database_url、redis_url 写成托管服务的连接串即可。
 set -eu
 cd "$(dirname "$0")"
@@ -27,8 +28,8 @@ cloud_pw="$(rand)"; traffic_pw="$(rand)"; redis_pw="$(rand)"
 put master_key "$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 put smtp_password ""
 # 第三方登录的客户端密钥（可选）：占位的空文件，开哪个提供方就把密钥写进去（见运维手册「第三方登录」）。
-put oauth_github_secret ""
-put oauth_google_secret ""
+put oauth_github_secret "" 644
+put oauth_google_secret "" 644
 put postgres_password "$(rand)"
 put cloud_db_password "$cloud_pw"
 put traffic_db_password "$traffic_pw"
@@ -41,7 +42,7 @@ put metrics_token "$(rand)"
 # 推送中继（可选，compose 的 push profile）：封中继令牌的钥是 32 字节随机数的 base64；APNs 的 .p8 与 FCM 的服务账号 JSON
 # 是占位的空文件，要开 iOS / Android 推送再把内容写进去（见运维手册「推送中继」）。
 put push_relay_secret "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
-put push_relay_apns_key ""
-put push_relay_fcm_credentials ""
+put push_relay_apns_key "" 644
+put push_relay_fcm_credentials "" 644
 put node_token_a "" 644
 put node_token_b "" 644

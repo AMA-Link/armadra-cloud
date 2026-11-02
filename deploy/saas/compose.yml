@@ -311,7 +311,7 @@ networks:
   backend:
     internal: true
 
-# secrets/ 由 init-secrets.sh 生成（目录 0700，文件 0444：容器里的 uid 10002 / 70 / 999 要能读，宿主上的其他用户进不了目录）。
+# secrets/ 由 init-secrets.sh 生成（目录 0700，文件 0444：容器里的 uid 10002 / 70 / 999 要能读，宿主上的其他用户进不了目录；需运维事后写入的占位文件是 0644）。
 secrets:
   # 32 字节 hex；包裹签名私钥与 TOTP 种子（另存一份，丢了无法解开）。
   master_key:

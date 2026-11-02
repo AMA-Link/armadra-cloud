@@ -11,7 +11,7 @@
 
 1. 域名与证书：`app.<域>`、`a.edge.<域>`、`b.edge.<域>`、`*.src.<域>` 四类名字（要起可选的推送中继再加 `push.<域>`），一张证书覆盖（`*.src` 是二级通配：DNS-01 签发，或经 Cloudflare 代理时用高级证书；放在 Cloudflare 后面时按 `nginx.conf.template` 头部的注释取真实 IP）。**证书先于登记**：真证书签好之前不要给客户端登记主机，指纹一换所有人都要重新登记。
 2. 准备文件：`cp .env.example .env` 填域名与版本；`sh init-secrets.sh` 生成 `secrets/` 下的口令与连接串（PostgreSQL 超级用户口令、库属主角色 `armadra_cloud` 与流量角色 `armadra_relay_traffic` 的口令、Redis 口令、主密钥、对应的连接串文件）；`secrets/smtp_password` 写发信口令（没有就留空）。**`secrets/master_key` 必须另存一份**，丢了无法解开签名私钥与 TOTP 种子。
-   - 权限：`secrets/` 目录 0700、文件 0444。容器里的 uid 10002（控制面与节点）、70（postgres）、999（redis）都要能读它们，所以文件对其他人可读，靠目录 0700 挡住宿主上的其他用户；节点令牌文件是 0644（方便 `nodes token` 的输出直接覆盖）。想更严就把文件 `chown` 给对应的 uid 再 0400（控制面、节点共用 10002，postgres 与 redis 各用自己的口令文件）。不要把 `secrets/` 与 `tls/` 提交进版本库：`init-secrets.sh` 在这两个目录各写一个内容为 `*` 的 `.gitignore`（`tls/` 由它一并建好），本仓的 `.gitignore` 也忽略了 `deploy/saas/secrets/` 与 `deploy/saas/tls/`；部署目录在别处的版本库里时，确认 `git status` 里看不到它们。
+   - 权限：`secrets/` 目录 0700、文件 0444。容器里的 uid 10002（控制面与节点）、70（postgres）、999（redis）都要能读它们，所以文件对其他人可读，靠目录 0700 挡住宿主上的其他用户；需要运维事后写入的占位文件是 0644（属主才能直接 `echo … >` 写入，0444 下非 root 会 Permission denied）：节点令牌 `node_token_*`、第三方登录密钥 `oauth_github_secret` / `oauth_google_secret`、推送中继凭据 `push_relay_apns_key` / `push_relay_fcm_credentials`。旧版脚本把后四个建成了 0444，已有部署写入前先 `chmod 644 secrets/oauth_github_secret secrets/oauth_google_secret secrets/push_relay_apns_key secrets/push_relay_fcm_credentials`。想更严就把文件 `chown` 给对应的 uid 再 0400（控制面、节点共用 10002，postgres 与 redis 各用自己的口令文件）。不要把 `secrets/` 与 `tls/` 提交进版本库：`init-secrets.sh` 在这两个目录各写一个内容为 `*` 的 `.gitignore`（`tls/` 由它一并建好），本仓的 `.gitignore` 也忽略了 `deploy/saas/secrets/` 与 `deploy/saas/tls/`；部署目录在别处的版本库里时，确认 `git status` 里看不到它们。
    - 超级用户只在 postgres 首次初始化时用（`postgres-init.sh` 建库属主角色、流量角色与库）；`migrate`、`serve`、`db-roles` 都以非超级用户 `armadra_cloud` 连。Redis 要口令（`requirepass`），连接串在 `secrets/redis_url`。
    - 托管 PostgreSQL / Redis：直接把 `cloud_database_url`、`relay_database_url`、`redis_url` 写成托管服务的连接串（`sslmode=verify-full`），并去掉 compose 里的 `postgres`、`redis`、`pg-tls` 服务与依赖。
 3. 控制台页面从哪来：镜像里的 `/app/web` 是构建参数 `WEB_IMAGE` 拷进去的 Armadra 服务器镜像里的 web 产物（发布构建取 `deploy/compat.json` 的 `web` 版本，0.10.0 起带控制台外壳）；没有页面（目录里没有 `index.html`）时控制面照常服务 API，`/` 答 404。要换页面（例如先验收新版本的页面）就把目录挂到 `/app/web`（`compose.yml` 里 `cloud` 的 `volumes` 注释打开，`WEB_DIR` 指向构建产物目录）。
@@ -176,7 +176,7 @@
 **启用**
 
 1. 镜像存在之后（v0.12.0 起）：`sh init-secrets.sh`（已有的文件不覆盖，只补 `secrets/push_relay_secret`、`push_relay_apns_key`、`push_relay_fcm_credentials`）。`push_relay_secret` 是 32 字节随机数的 base64，封中继令牌用；两个凭据文件是占位的空文件。
-2. 域名与证书：加一条 `push.<域>` 的解析，并让证书覆盖它（参考代理的 `push.<域>` 站点只转 `/v1/register`、`/v1/push` 与 `/health`，登记按 IP 限流）。**证书先于登记**：商店版 App 一旦拿着 `https://push.<域>` 去登记，换证书名不要影响已登记的设备。
+2. 域名与证书：加一条 `push.<域>` 的解析，并让证书覆盖它（参考代理的 `push.<域>` 站点只转 `/v1/register`、`/v1/push` 与 `/health`，登记与推送各用独立的限流区，不与登录共用）。**证书先于登记**：商店版 App 一旦拿着 `https://push.<域>` 去登记，换证书名不要影响已登记的设备。
 3. 起：`docker compose --profile push up -d push-relay`（带参考代理时再加 `--profile proxy`，重新加载代理配置：`docker compose --profile proxy up -d --force-recreate proxy`）。
 4. 验收：`docker compose ps push-relay` 为 healthy；`curl http://127.0.0.1:8095/health` 答 `{"ok":true,"platforms":[]}`（端口是 `PUSH_RELAY_PORT`，缺省 8095）。没配任何凭据时 `platforms` 为空是正常的，此时 `/v1/register` 与 `/v1/push` 答 400 `platformUnavailable`。
 
@@ -185,7 +185,7 @@
 - iOS：把 `.p8` 写进 `secrets/push_relay_apns_key`，`.env` 填 `PUSH_RELAY_APNS_KEY_FILE=/run/secrets/push_relay_apns_key`、`PUSH_RELAY_APNS_KEY_ID`、`PUSH_RELAY_APNS_TEAM_ID`、`PUSH_RELAY_APNS_TOPIC`（bundle id），生产 APNs 用缺省的 `PUSH_RELAY_APNS_PRODUCTION=1`，sandbox 设 `0`。
 - Android：把 Firebase 服务账号 JSON 写进 `secrets/push_relay_fcm_credentials`，`.env` 填 `PUSH_RELAY_FCM_CREDENTIALS_FILE=/run/secrets/push_relay_fcm_credentials`；项目 id 缺省取账号里的，要覆盖才设 `PUSH_RELAY_FCM_PROJECT_ID`。
 - 填完 `docker compose --profile push up -d --no-deps push-relay`（环境变量变了会重建容器），`/health` 的 `platforms` 里出现 `ios` / `android` 即生效。路径与内容要成对：路径填了而文件是空的、或 Key ID / Team ID / bundle id 缺一，中继拒绝启动；不想开某个平台就保持变量为空。
-- 文件权限同其他 secrets：0444，容器里的 uid 10001 要能读。
+- 文件权限 0644（属主可写、容器里的 uid 10001 可读），宿主上的其他用户靠 `secrets/` 目录的 0700 挡住；写入后想收紧可 `chmod 444`，之后再改内容要先放开。
 
 **换钥、升级与回滚**
 

@@ -24,6 +24,10 @@ map $http_upgrade $connection_upgrade {
 
 # 登录与链接接受的限流（应用层另有按账号 / IP 的限流，这里挡暴力枚举与廉价的洪水）。
 limit_req_zone $binary_remote_addr zone=auth:10m rate=30r/m;
+# 推送中继 push.<域> 的两个区各用各的桶，不挤占上面登录的额度：登记（App 首次登记平台令牌）按 IP 收紧；
+# 推送（Armadra 服务器经同一出口大量发起）放宽，只挡洪水，中继自己另按令牌限流。
+limit_req_zone $binary_remote_addr zone=push_register:10m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=push_send:10m rate=600r/m;
 
 # 源地址 *.src.<域> 可以落在任一节点（节点间转发）：upstream 轮转，一个节点连不上（滚动升级停机）就转另一个。
 # `resolve` 让 nginx 按上面的 resolver 跟踪容器 IP 变化（开源版 1.27.3 起支持），不必重启 proxy。
@@ -150,7 +154,7 @@ server {
 }
 
 # 推送中继（可选，compose 的 push profile）：商店版 App 直接登记平台令牌，所以对公网开放，只转 /v1/register、/v1/push
-# 与 /health。没起 push-relay 时这个站点答 502。登记按 IP 限流（中继自己另按令牌限流）。
+# 与 /health。没起 push-relay 时这个站点答 502。登记与推送各用独立的限流区（不与登录共用），推送的额度宽松（中继自己另按令牌限流）。
 server {
   listen 443 ssl;
   http2 on;
@@ -167,8 +171,8 @@ server {
 
   set $push push-relay:8095;
 
-  location = /v1/register { limit_req zone=auth burst=20 nodelay; proxy_pass http://$push; }
-  location = /v1/push     { proxy_pass http://$push; }
+  location = /v1/register { limit_req zone=push_register burst=20 nodelay; proxy_pass http://$push; }
+  location = /v1/push     { limit_req zone=push_send burst=100 nodelay; proxy_pass http://$push; }
   location = /health      { proxy_pass http://$push; }
   location / { return 404; }
 }
