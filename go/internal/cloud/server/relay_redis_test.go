@@ -230,3 +230,60 @@ func TestRedisRelayPresenceRecordsLastSeen(t *testing.T) {
 		t.Fatal("最近在线只往后推")
 	}
 }
+
+// 一直连着的主机（路由表里在线、不再有上下线事件）：每次落盘 last_seen 与核心版本跟着前进；
+// 下线之后停住（#190）。
+func TestRedisRelayPresenceStampsConnectedHost(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, rigOptions{redisRelay: true, flushEvery: 100 * time.Millisecond})
+	node := r.newFakeNode("node-1")
+	owner := r.verified()
+	h := r.addHost(owner, nil, "0.10.0")
+	ctx := context.Background()
+	at := r.clock.Ms() + 5000
+	if err := node.plane.Presence().Publish(ctx, control.PresenceEvent{
+		Type: control.PresenceSourceOnline, SourceID: h.id, Node: "node-1", TunnelID: "t1", CoreVersion: "0.12.0", AtMs: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.plane.Routes().Set(ctx, h.id, control.Route{Node: "node-1", TunnelID: "t1", SinceMs: at, CoreVersion: "0.12.0"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "上线时刻落盘", func() bool {
+		return r.queryInt("SELECT count(*)::int FROM sources WHERE source_id = $1 AND last_seen_at_ms >= $2", h.id, at) == 1
+	})
+
+	// 主机一直连着：不再有任何事件，时间走了一小时，last_seen 跟着走。
+	r.clock.Advance(time.Hour)
+	now := r.clock.Ms()
+	eventually(t, "在线主机的 last_seen 前进", func() bool {
+		return r.queryInt("SELECT count(*)::int FROM sources WHERE source_id = $1 AND last_seen_at_ms = $2", h.id, now) == 1
+	})
+
+	// 重连后换了版本：路由里的现役版本也跟着落盘。
+	if err := node.plane.Routes().Set(ctx, h.id, control.Route{Node: "node-1", TunnelID: "t2", SinceMs: now, CoreVersion: "0.12.1"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "核心版本落盘", func() bool {
+		return r.queryInt("SELECT count(*)::int FROM sources WHERE source_id = $1 AND core_version = '0.12.1'", h.id) == 1
+	})
+
+	// 下线：路由没了，最近在线停在下线时刻，时间再走也不前进。
+	offline := r.clock.Ms() + 1000
+	if err := node.plane.Routes().Delete(ctx, h.id, "t2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.plane.Presence().Publish(ctx, control.PresenceEvent{
+		Type: control.PresenceSourceOffline, SourceID: h.id, Node: "node-1", TunnelID: "t2", AtMs: offline,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "下线时刻落盘", func() bool {
+		return r.queryInt("SELECT count(*)::int FROM sources WHERE source_id = $1 AND last_seen_at_ms = $2", h.id, offline) == 1
+	})
+	r.clock.Advance(time.Hour)
+	time.Sleep(500 * time.Millisecond)
+	if r.queryInt("SELECT count(*)::int FROM sources WHERE source_id = $1 AND last_seen_at_ms = $2", h.id, offline) != 1 {
+		t.Fatal("下线之后最近在线不该再前进")
+	}
+}

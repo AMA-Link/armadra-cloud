@@ -123,7 +123,7 @@ func assemble(ctx context.Context, cfg *config.Config, db *postgres.DB, redisCli
 	}
 	if redisControl != nil {
 		// 主机上下线（relay:presence）：记 last_seen / core_version，周期性落盘。
-		out.presence = newPresenceRecorder(coreCtx.Ports, logger)
+		out.presence = newPresenceRecorder(coreCtx.Ports.Sources, redisControl.Plane().Routes(), now, logger)
 		out.closers = append(out.closers, redisControl.Plane().Presence().Subscribe(out.presence.Observe))
 	}
 	policy := grants.NewPolicy(grants.PolicyOptions{Core: coreCtx, Store: saasStore, Relay: durable, Log: logger})
