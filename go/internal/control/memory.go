@@ -223,6 +223,20 @@ func (r *memRoutes) Get(_ context.Context, sourceID string) (*Route, error) {
 	return &c, nil
 }
 
+// Online 实现 RouteLister。
+func (r *memRoutes) Online(context.Context) (map[string]Route, error) {
+	m := (*Memory)(r)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]Route, len(m.routes))
+	for id := range m.routes {
+		if e := m.liveRoute(id); e != nil {
+			out[id] = e.route
+		}
+	}
+	return out, nil
+}
+
 func (r *memRoutes) Set(_ context.Context, sourceID string, route Route, ttl time.Duration) error {
 	m := (*Memory)(r)
 	m.mu.Lock()

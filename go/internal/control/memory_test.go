@@ -87,6 +87,25 @@ func TestMemory(t *testing.T) {
 		}
 	})
 
+	t.Run("Online 只列未过期的路由", func(t *testing.T) {
+		m, clk := plane(nil)
+		_ = m.Routes().Set(ctx, "a", route("ta"), time.Second)
+		_ = m.Routes().Set(ctx, "b", route("tb"), 3*time.Second)
+		lister, ok := m.Routes().(control.RouteLister)
+		if !ok {
+			t.Fatal("Memory 的路由表应支持枚举")
+		}
+		got, err := lister.Online(ctx)
+		if err != nil || len(got) != 2 || got["a"].TunnelID != "ta" || got["b"].TunnelID != "tb" {
+			t.Fatalf("Online = %+v %v", got, err)
+		}
+		clk.Advance(2 * time.Second)
+		got, _ = lister.Online(ctx)
+		if len(got) != 1 || got["b"].TunnelID != "tb" {
+			t.Fatalf("过期的不该列出：%+v", got)
+		}
+	})
+
 	t.Run("路由删除是 CAS：只删 tunnelId 相同的那条", func(t *testing.T) {
 		m, _ := plane(nil)
 		_ = m.Routes().Set(ctx, "s", route("new"), time.Second)

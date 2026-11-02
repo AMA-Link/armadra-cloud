@@ -433,6 +433,26 @@ func (r routes) Get(ctx context.Context, sourceID string) (*control.Route, error
 	return &route, nil
 }
 
+// Online 实现 control.RouteLister：未过期的路由全部列出。
+func (r routes) Online(ctx context.Context) (map[string]control.Route, error) {
+	rows, err := r.p.pool.Query(ctx, `SELECT source_id, node, tunnel_id, since_ms, core_version FROM relay_routes
+		WHERE expires_at_ms > $1`, r.p.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]control.Route{}
+	for rows.Next() {
+		var id string
+		var route control.Route
+		if err := rows.Scan(&id, &route.Node, &route.TunnelID, &route.SinceMs, &route.CoreVersion); err != nil {
+			return nil, err
+		}
+		out[id] = route
+	}
+	return out, rows.Err()
+}
+
 func (r routes) Set(ctx context.Context, sourceID string, route control.Route, ttl time.Duration) error {
 	var err error
 	r.p.Run(func() {

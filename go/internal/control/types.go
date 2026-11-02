@@ -128,6 +128,14 @@ type RouteTable interface {
 	Delete(ctx context.Context, sourceID, tunnelID string) error
 }
 
+// RouteLister 是路由表可选的枚举能力：Memory、redis、postgres 三种实现都有。
+// 控制面据此在落盘时把「此刻持有隧道」的源记成最近在线（设计：presence 只有上下线事件，
+// 一直连着的主机不会再有事件）。
+type RouteLister interface {
+	// Online 列出路由表里现在在线（路由存在且未过期）的源，键是源 id。
+	Online(ctx context.Context) (map[string]Route, error)
+}
+
 // Presence 是源在线事件的总线。
 type Presence interface {
 	Publish(ctx context.Context, ev PresenceEvent) error
