@@ -1,6 +1,6 @@
 # SaaS 控制面与节点的运维手册
 
-适用：`deploy/saas/compose.yml` 的单机 M1 部署（`armadra-cloud` + 两个 `armadra-relay saas serve` 节点 + PostgreSQL + Redis），设计见 [SaaS 控制面 M1 实施设计](../design/saas-m1-implementation.md) §2.3、§7。变量表见 [deploy/README.md](../../deploy/README.md)。
+适用：`deploy/saas/compose.yml` 的单机 M1 部署（`armadra-cloud` + 两个 `armadra-relay saas serve` 节点 + PostgreSQL + Redis，可选的推送中继见「推送中继（可选）」），设计见 [SaaS 控制面 M1 实施设计](../design/saas-m1-implementation.md) §2.3、§7。变量表见 [deploy/README.md](../../deploy/README.md)。
 
 ## 当前状态
 
@@ -9,7 +9,7 @@
 
 ## 首次部署
 
-1. 域名与证书：`app.<域>`、`a.edge.<域>`、`b.edge.<域>`、`*.src.<域>` 四类名字，一张证书覆盖（`*.src` 是二级通配：DNS-01 签发，或经 Cloudflare 代理时用高级证书；放在 Cloudflare 后面时按 `nginx.conf.template` 头部的注释取真实 IP）。**证书先于登记**：真证书签好之前不要给客户端登记主机，指纹一换所有人都要重新登记。
+1. 域名与证书：`app.<域>`、`a.edge.<域>`、`b.edge.<域>`、`*.src.<域>` 四类名字（要起可选的推送中继再加 `push.<域>`），一张证书覆盖（`*.src` 是二级通配：DNS-01 签发，或经 Cloudflare 代理时用高级证书；放在 Cloudflare 后面时按 `nginx.conf.template` 头部的注释取真实 IP）。**证书先于登记**：真证书签好之前不要给客户端登记主机，指纹一换所有人都要重新登记。
 2. 准备文件：`cp .env.example .env` 填域名与版本；`sh init-secrets.sh` 生成 `secrets/` 下的口令与连接串（PostgreSQL 超级用户口令、库属主角色 `armadra_cloud` 与流量角色 `armadra_relay_traffic` 的口令、Redis 口令、主密钥、对应的连接串文件）；`secrets/smtp_password` 写发信口令（没有就留空）。**`secrets/master_key` 必须另存一份**，丢了无法解开签名私钥与 TOTP 种子。
    - 权限：`secrets/` 目录 0700、文件 0444。容器里的 uid 10002（控制面与节点）、70（postgres）、999（redis）都要能读它们，所以文件对其他人可读，靠目录 0700 挡住宿主上的其他用户；节点令牌文件是 0644（方便 `nodes token` 的输出直接覆盖）。想更严就把文件 `chown` 给对应的 uid 再 0400（控制面、节点共用 10002，postgres 与 redis 各用自己的口令文件）。不要把 `secrets/` 与 `tls/` 提交进版本库：`init-secrets.sh` 在这两个目录各写一个内容为 `*` 的 `.gitignore`（`tls/` 由它一并建好），本仓的 `.gitignore` 也忽略了 `deploy/saas/secrets/` 与 `deploy/saas/tls/`；部署目录在别处的版本库里时，确认 `git status` 里看不到它们。
    - 超级用户只在 postgres 首次初始化时用（`postgres-init.sh` 建库属主角色、流量角色与库）；`migrate`、`serve`、`db-roles` 都以非超级用户 `armadra_cloud` 连。Redis 要口令（`requirepass`），连接串在 `secrets/redis_url`。
@@ -166,6 +166,32 @@
 | 作业（`jobs`）                        | 完成满 7 天、失败满 30 天                                                                                                | `jobs.gc`，每天                       |
 
 - Redis 里只放可重建的状态（见「备份与恢复」），不另做保留。
+
+## 推送中继（可选）
+
+`push-relay` 是商店版 App 的最小推送中继（Armadra 仓库 `apps/push-relay`，镜像 `ghcr.io/ama-link/armadra-push-relay:<版本>`，**随 Armadra v0.12.0 起发布**；之前 compose 引用它会拉取失败）。商店版 App 的 APNs `.p8` 与 Firebase 服务账号属于发布方，不能随包发给每个用户的 core，所以 core 把已经端到端加密的通知交给中继，由它转给 Apple / Google。中继看得到平台与平台令牌、折叠键、是否紧急和密文信封，看不到标题、正文、深链、工作空间与节点。**是否运营由发布方决定**：不起它，商店版 App 只有前台通知。
+
+它是可选服务（profile `push`），缺省的 `docker compose up -d` 不会起它；无状态、没有卷，只读根文件系统，只进 `edge` 网络（要出网访问 APNs / FCM，够不到 postgres 与 redis）。镜像标签缺省跟 `ARMADRA_CLOUD_VERSION`；版本线分开走时才在 `.env` 设 `PUSH_RELAY_VERSION`。
+
+**启用**
+
+1. 镜像存在之后（v0.12.0 起）：`sh init-secrets.sh`（已有的文件不覆盖，只补 `secrets/push_relay_secret`、`push_relay_apns_key`、`push_relay_fcm_credentials`）。`push_relay_secret` 是 32 字节随机数的 base64，封中继令牌用；两个凭据文件是占位的空文件。
+2. 域名与证书：加一条 `push.<域>` 的解析，并让证书覆盖它（参考代理的 `push.<域>` 站点只转 `/v1/register`、`/v1/push` 与 `/health`，登记按 IP 限流）。**证书先于登记**：商店版 App 一旦拿着 `https://push.<域>` 去登记，换证书名不要影响已登记的设备。
+3. 起：`docker compose --profile push up -d push-relay`（带参考代理时再加 `--profile proxy`，重新加载代理配置：`docker compose --profile proxy up -d --force-recreate proxy`）。
+4. 验收：`docker compose ps push-relay` 为 healthy；`curl http://127.0.0.1:8095/health` 答 `{"ok":true,"platforms":[]}`（端口是 `PUSH_RELAY_PORT`，缺省 8095）。没配任何凭据时 `platforms` 为空是正常的，此时 `/v1/register` 与 `/v1/push` 答 400 `platformUnavailable`。
+
+**凭据（都是可选的，可以后补）**
+
+- iOS：把 `.p8` 写进 `secrets/push_relay_apns_key`，`.env` 填 `PUSH_RELAY_APNS_KEY_FILE=/run/secrets/push_relay_apns_key`、`PUSH_RELAY_APNS_KEY_ID`、`PUSH_RELAY_APNS_TEAM_ID`、`PUSH_RELAY_APNS_TOPIC`（bundle id），生产 APNs 用缺省的 `PUSH_RELAY_APNS_PRODUCTION=1`，sandbox 设 `0`。
+- Android：把 Firebase 服务账号 JSON 写进 `secrets/push_relay_fcm_credentials`，`.env` 填 `PUSH_RELAY_FCM_CREDENTIALS_FILE=/run/secrets/push_relay_fcm_credentials`；项目 id 缺省取账号里的，要覆盖才设 `PUSH_RELAY_FCM_PROJECT_ID`。
+- 填完 `docker compose --profile push up -d --no-deps push-relay`（环境变量变了会重建容器），`/health` 的 `platforms` 里出现 `ios` / `android` 即生效。路径与内容要成对：路径填了而文件是空的、或 Key ID / Team ID / bundle id 缺一，中继拒绝启动；不想开某个平台就保持变量为空。
+- 文件权限同其他 secrets：0444，容器里的 uid 10001 要能读。
+
+**换钥、升级与回滚**
+
+- 换 `secrets/push_relay_secret` 等于让所有中继令牌作废：core 收到 `badToken` 撤销设备，App 下次启动重新登记。只在泄露时换，换完 `docker compose --profile push up -d --force-recreate --no-deps push-relay`。
+- 升级：改 `ARMADRA_CLOUD_VERSION`（或 `PUSH_RELAY_VERSION`），`docker compose --profile push pull push-relay` 后 `up -d --no-deps push-relay`；它无状态，与控制面、节点的升级顺序无关，回滚就是换回上一个版本号。注意：要带 `--profile push`，否则 compose 不认这个服务。
+- 日志与其他服务一样走 json-file 轮转；中继不记平台令牌与信封。
 
 ## 端到端验收
 
