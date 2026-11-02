@@ -223,7 +223,7 @@ func (s *Service) oauthNewAccount(ctx context.Context, call *api.Call, email str
 }
 
 // oauthBind 在事务里把第三方身份绑到已有的本地账号（口令登录关闭时，提供方给的已验证邮箱与本地账号相同即视为同一人）：
-// 锁账号后重读；账号在该提供方已有别的身份答 conflict。本地邮箱还没验证过的账号，先前可能是别人抢注的：
+// 锁账号后重读并核对邮箱仍是提供方给的那个（改走了答 conflict）；账号在该提供方已有别的身份答 conflict。本地邮箱还没验证过的账号，先前可能是别人抢注的：
 // 这次登录就是邮箱的所有权证明，把邮箱记成已验证，同时清掉口令并撤销它的全部设备。
 func (s *Service) oauthBind(ctx context.Context, tx saas.Tx, account *saas.Account, row *saas.OAuthIdentity) error {
 	if found, err := tx.Accounts().LockAccount(ctx, s.tenant(), account.AccountID); err != nil {
@@ -237,6 +237,11 @@ func (s *Service) oauthBind(ctx context.Context, tx saas.Tx, account *saas.Accou
 	}
 	if fresh == nil || fresh.Status != saas.AccountActive {
 		return core.Fail(gen.ErrAccountDisabled)
+	}
+	// 事务外读到的同邮箱账号，到锁住之前邮箱可能已被改走（改邮箱确认落在这个窗口里）：邮箱不再相同就不绑，
+	// 否则会跳过下面「未验证则清口令、撤设备」的分支，把身份绑到邮箱已不属于它的账号上。
+	if normalizeEmail(fresh.Email) != row.Email {
+		return core.FailWith(gen.ErrConflict, map[string]any{"reason": "email_changed"})
 	}
 	existing, err := tx.OAuthIdentities(ctx, s.tenant(), account.AccountID)
 	if err != nil {

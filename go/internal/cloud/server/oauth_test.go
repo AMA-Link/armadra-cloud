@@ -679,6 +679,76 @@ func TestOAuthSameEmailOnAndOff(t *testing.T) {
 	})
 }
 
+// 读到同邮箱账号之后、绑定事务之前，账号的邮箱被改走了（改邮箱确认在这个窗口里落库）：绑定要在锁住账号后重核邮箱，
+// 不一致就拒绝，不能清口令、撤设备，更不能把这个身份绑到邮箱已经不是它的账号上（#193）。
+func TestOAuthBindRechecksEmail(t *testing.T) {
+	t.Parallel()
+	r, f := oauthRig(t, true, oauth.GitHub)
+	email := r.email()
+	id := r.insertAccount(email, false)
+	r.exec(`INSERT INTO devices (tenant_id, device_id, subject, platform, name, refresh_hash, rotation, created_at_ms, expires_at_ms)
+	  VALUES ('cloud', 'racing-device', $1, 'browser', '抢注者', 'h', 1, 1, 99999999999999)`, id)
+	flow := r.oauthBegin(f, "github", ghIdentity("5301", email), false)
+
+	// 测试自己先锁住账号行：绑定事务的 LockAccount 会卡在这里，等我们把邮箱改掉再放行。
+	ctx := context.Background()
+	hold, err := r.run.DB.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(ctx) }()
+	if _, err := hold.Exec(ctx, "SELECT 1 FROM accounts WHERE account_id = $1 FOR UPDATE", id); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan response, 1)
+	go func() { done <- r.finishWith(flow, nil) }()
+
+	// 等绑定事务真的排在我们的行锁后面（等的是我们这个事务的 xid）。
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := hold.QueryRow(ctx, `SELECT count(*)::int FROM pg_locks
+		  WHERE locktype = 'transactionid' AND NOT granted AND transactionid::text = pg_current_xact_id()::xid::text`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("绑定事务没有等在行锁上")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	changed := r.email()
+	if _, err := hold.Exec(ctx, "UPDATE accounts SET email = $2 WHERE account_id = $1", id, changed); err != nil {
+		t.Fatal(err)
+	}
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	res := <-done
+	r.expect(res, 409, "conflict")
+	if res.json["details"].(map[string]any)["reason"] != "email_changed" {
+		t.Fatalf("details：%s", res.body)
+	}
+	if r.identityCount("github", "5301") != 0 {
+		t.Fatal("邮箱对不上，不该绑定")
+	}
+	if r.queryString("SELECT email FROM accounts WHERE account_id = $1", id) != changed {
+		t.Fatal("邮箱应保持改后的值")
+	}
+	if r.queryInt("SELECT count(*)::int FROM accounts WHERE account_id = $1 AND email_verified_at_ms IS NOT NULL", id) != 0 {
+		t.Fatal("不该记为已验证")
+	}
+	if r.queryString("SELECT password_json::json->>'kdf' FROM accounts WHERE account_id = $1", id) != "scrypt" {
+		t.Fatal("口令不该被清")
+	}
+	if r.queryInt("SELECT count(*)::int FROM devices WHERE device_id = 'racing-device' AND revoked_at_ms IS NOT NULL") != 0 {
+		t.Fatal("设备不该被撤销")
+	}
+}
+
 // ---------------------------------------------------------------- 一个第三方身份只属于一个账号
 
 func TestOAuthIdentityBelongsToOneAccount(t *testing.T) {
