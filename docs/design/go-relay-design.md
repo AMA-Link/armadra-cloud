@@ -142,7 +142,7 @@ go/
   - 其他平台（macOS 开发机）用每连接 goroutine 实现同一个 `netpoll.Conn` 接口。行为相同，只是内存不同。
 - **隧道**：先是每隧道一个读、一个写 goroutine，写端是由信用约束的队列。写端按流轮转出队（每流每轮最多一个 DATA 块），这在 Go 内部就能做，不改线协议，正好对应 #57 的方案 A。隧道改成事件驱动放到 G5 之后，按压测数据决定做不做。
 - **信用与背压**：字节真正交给内核之后才记「已消费」、补 WINDOW。流窗与隧道窗沿用协议值，单流 256 KiB、隧道 8 MiB。
-- **控制帧**：信用只管 DATA，控制帧（OPEN、WINDOW、RST、PING / PONG、GOAWAY）另有硬上限——隧道与节点间链路的控制帧队列至多 4096 帧（`tunnel.DefaultMaxCtlQueue`），待发 PONG 只保留最新一条（RFC 6455 §5.5.3），超限整条丢掉、以 4429 `ctl_queue_overflow` 关连接并记日志；边缘每个 ping 轮至多接受 128 条客户端 PING，超过以 1008 `ping_flood` 关闭，且客户端 PING 不刷新活性（#172）。
+- **控制帧**：信用只管 DATA，控制帧（OPEN、WINDOW、RST、PING / PONG、GOAWAY）另有硬上限——隧道与节点间链路的控制帧队列至多 4096 帧（`tunnel.DefaultMaxCtlQueue`），待发 PONG 只保留最新一条（RFC 6455 §5.5.3），超限整条丢掉、以 4429 `ctl_queue_overflow` 关连接并记日志；边缘每个 ping 轮至多接受 128 条客户端 PING，超过以 1008 `ping_flood` 关闭，且客户端 PING 不刷新活性（#172）。边缘连接的写队列里不带信用的帧（PONG、关闭帧）至多 64 KiB（`netpoll.MaxCtlBytes`），带信用的下行数据由流窗口约束；超限说明对端不读 socket，连接以 `netpoll.ErrQueueOverflow` 断开、记 warn 与指标 `relay_edge_dropped_total{reason="write_queue_overflow"}`（不发关闭帧，对端本来就不读）。空闲判定除整帧外，没收齐的非 PING 帧在字节到达时也算活动，免得弱网上传大帧被当成空闲；节点间链路写侧控制帧溢出同样当场断开，不等对端下一帧（#191）。
 - **锁序**：隧道锁 → 连接锁 → 轮询器锁；连接写队列只在持连接锁时改。
 - **性能回归**：`bench/` 的套件进夜间 CI（Linux runner，中继与压测分核），看四个指标：
   - 每连接内存 ≤ 16 KB；
