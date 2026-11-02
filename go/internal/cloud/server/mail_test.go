@@ -16,11 +16,15 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/relayctl"
 )
 
-// waitMails 等到发给 to 的邮件有 n 封，答这些邮件（按发出顺序）。
+// mailWait 是等一封邮件的上限：条件一成立就返回，不拖慢通过的测试。作业靠真实时间的一秒轮询推进，
+// 整包并行加 -race 时 15 秒会误报，放宽到与 eventuallyDB 一样的 60 秒。
+const mailWait = 60 * time.Second
+
+// waitMails 等到发给 to 的邮件有 n 封，答这些邮件（按发出顺序）。只在「只关心封数」时用；要某一封按主题 / 链接挑。
 func (r *rig) waitMails(to string, n int) []mail.Message {
 	r.t.Helper()
 	var found []mail.Message
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(mailWait)
 	for time.Now().Before(deadline) {
 		found = found[:0]
 		for _, m := range r.mail.Messages() {
@@ -39,6 +43,8 @@ func (r *rig) waitMails(to string, n int) []mail.Message {
 
 // 各类通知邮件的主题（中文缺省语言）。
 const (
+	subjectVerify          = "验证你的邮箱"
+	subjectConfirmEmail    = "确认新的邮箱地址"
 	subjectReset           = "重设口令"
 	subjectPasswordChanged = "口令已更改"
 	subjectNewDevice       = "新设备登录"
@@ -49,7 +55,7 @@ const (
 // 不同种类的邮件由不同的作业发出，到达顺序不固定；需要某一封时按内容挑，不按下标取。
 func (r *rig) waitMailMatching(to, what string, match func(mail.Message) bool) mail.Message {
 	r.t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(mailWait)
 	for time.Now().Before(deadline) {
 		for _, m := range r.mail.Messages() {
 			if m.To == to && match(m) {
@@ -94,10 +100,63 @@ func (r *rig) waitLink(to, path string, not ...string) mail.Message {
 	})
 }
 
-// noMail 断言（给作业一点时间之后）没有发给 to 的邮件。
+// mailJobsSettled 等到库里每个 mail.send 作业都处理完（完成或判失败）。入队与业务事务同提交，所以请求答复之后
+// 该发的邮件都已有作业；作业全部处理完，就不会再有邮件出现。缺省发信方不失败的用例用它代替睡一会儿再断言「没有」。
+func (r *rig) mailJobsSettled() {
+	r.t.Helper()
+	eventuallyDB(r.t, "mail.send 作业全部处理完", func() bool {
+		var open int
+		_ = r.run.DB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NULL AND failed_at_ms IS NULL").Scan(&open)
+		return open == 0
+	})
+}
+
+// mailJobsDump 列出每个 mail.send 作业与它的发件箱行：超时的失败信息里用，看清各作业卡在哪个状态。
+func (r *rig) mailJobsDump() string {
+	rows, err := r.run.DB.Pool().Query(context.Background(), `SELECT j.job_id, coalesce(o.template, ''), j.attempts, coalesce(j.last_error, ''),
+		j.run_at_ms, j.done_at_ms IS NOT NULL, j.failed_at_ms IS NOT NULL, coalesce(j.locked_by, ''), o.sent_at_ms IS NOT NULL
+		FROM jobs j LEFT JOIN outbox_emails o ON o.job_id = j.job_id WHERE j.kind = 'mail.send' ORDER BY j.job_id`)
+	if err != nil {
+		return err.Error()
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var id, attempts int
+		var template, lastError, lockedBy string
+		var runAt int64
+		var done, failed, sent bool
+		if err := rows.Scan(&id, &template, &attempts, &lastError, &runAt, &done, &failed, &lockedBy, &sent); err != nil {
+			return err.Error()
+		}
+		fmt.Fprintf(&b, "  job=%d template=%q attempts=%d last_error=%q run_at=%d(now=%d) done=%t failed=%t locked_by=%q outbox_sent=%t\n", id, template, attempts, lastError, runAt, r.clock.Ms(), done, failed, lockedBy, sent)
+	}
+	return b.String()
+}
+
+// waitMailJobsFailedOnce 等到恰有 n 个未完成的 mail.send 作业，且每个都已失败过一次并记下（last_error 落库），
+// 没有尚未尝试的。发信方此时必须一直失败（FailNext），否则作业会完成而不是停在失败上。
+// 超时时把全部 mail.send 作业的状态列进失败信息。
+func (r *rig) waitMailJobsFailedOnce(n int) {
+	r.t.Helper()
+	deadline := time.Now().Add(mailWait)
+	for time.Now().Before(deadline) {
+		var fresh, failed int
+		_ = r.run.DB.Pool().QueryRow(context.Background(), `SELECT
+			count(*) FILTER (WHERE last_error IS NULL), count(*) FILTER (WHERE last_error IS NOT NULL)
+			FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NULL AND failed_at_ms IS NULL`).Scan(&fresh, &failed)
+		if fresh == 0 && failed == n {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	r.t.Fatalf("超时：等不到 %d 个未发出的邮件作业各失败一次并记下\nmail.send 作业：\n%s", n, r.mailJobsDump())
+}
+
+// noMail 断言（作业都处理完之后）没有发给 to 的邮件。
 func (r *rig) noMail(to string) {
 	r.t.Helper()
-	time.Sleep(300 * time.Millisecond)
+	r.mailJobsSettled()
 	for _, m := range r.mail.Messages() {
 		if m.To == to {
 			r.t.Fatalf("不该有发给 %s 的邮件：%s", to, m.Subject)
@@ -182,11 +241,11 @@ func TestRegisterVerifyEmailFlow(t *testing.T) {
 	email := r.email()
 	s := r.registerBearer(email)
 
-	letters := r.waitMails(email, 1)
-	if letters[0].Subject != "验证你的邮箱" || strings.Contains(letters[0].Text, "测试用户") {
-		t.Fatalf("缺省中文：%+v", letters[0])
+	letter := r.waitSubject(email, subjectVerify)
+	if strings.Contains(letter.Text, "测试用户") {
+		t.Fatalf("缺省中文：%+v", letter)
 	}
-	token := tokenOf(t, letters[0], "/verify")
+	token := tokenOf(t, letter, "/verify")
 
 	// 库里只有哈希；令牌明文既不在库里也不在日志里。
 	var stored, purpose, to string
@@ -207,7 +266,7 @@ func TestRegisterVerifyEmailFlow(t *testing.T) {
 		return r.run.DB.Pool().QueryRow(context.Background(), "SELECT sent_at_ms, message_id FROM outbox_emails WHERE to_email = $1", email).Scan(&sentAt, &messageID) == nil && sentAt != nil
 	})
 	// 发件箱里存基础 id；每次尝试的邮件头带尝试序号。
-	if letters[0].MessageID != strings.Replace(messageID, "@", ".1@", 1) || !strings.HasSuffix(messageID, "@127.0.0.1:8100") {
+	if letter.MessageID != strings.Replace(messageID, "@", ".1@", 1) || !strings.HasSuffix(messageID, "@127.0.0.1:8100") {
 		t.Fatalf("Message-ID：%s", messageID)
 	}
 
@@ -255,7 +314,7 @@ func TestEnglishLocaleFollowsAcceptLanguage(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.expect(r.register(email, hdr("Accept-Language", "en-US,en;q=0.9")), 200, "")
-	letter := r.waitMails(email, 1)[0]
+	letter := r.waitSubject(email, "Verify your email")
 	if letter.Subject != "Verify your email" || !strings.Contains(letter.Text, "Open the link below") {
 		t.Fatalf("英文：%+v", letter)
 	}
@@ -270,7 +329,7 @@ func TestResendInvalidatesOldLinkAndIsRateLimited(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	s := r.registerBearer(email)
-	first := tokenOf(t, r.waitMails(email, 1)[0], "/verify")
+	first := tokenOf(t, r.waitSubject(email, subjectVerify), "/verify")
 
 	r.expect(r.do("POST", "/v1/auth/email/resend", nil, s.bearer()), 200, "")
 	second := tokenOf(t, r.waitLink(email, "/verify", first), "/verify")
@@ -307,7 +366,7 @@ func TestEmailTokenExpiry(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
-	token := tokenOf(t, r.waitMails(email, 1)[0], "/verify")
+	token := tokenOf(t, r.waitSubject(email, subjectVerify), "/verify")
 	r.clock.Advance(24*time.Hour + time.Second)
 	r.expect(r.verifyEmail(token), 410, "email_token_expired")
 }
@@ -317,7 +376,7 @@ func TestVerifyTokenRaceHasOneWinner(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
-	token := tokenOf(t, r.waitMails(email, 1)[0], "/verify")
+	token := tokenOf(t, r.waitSubject(email, subjectVerify), "/verify")
 	var wg sync.WaitGroup
 	results := make([]int, 8)
 	for i := range results {
@@ -448,16 +507,7 @@ func TestPasswordResetStartDoesNotEnumerate(t *testing.T) {
 	r.waitMails(known, 2)
 	r.noMail(unknown)
 	r.noMail2(disabled, 1)
-	eventually := func(what string, ok func() bool) {
-		t.Helper()
-		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-			if ok() {
-				return
-			}
-		}
-		t.Fatalf("超时：%s", what)
-	}
-	eventually("占位发件被丢弃", func() bool {
+	eventuallyDB(t, "占位发件被丢弃", func() bool {
 		var n int
 		_ = r.run.DB.Pool().QueryRow(context.Background(), "SELECT count(*) FROM outbox_emails WHERE to_email = '' OR to_email = $1 OR (to_email = $2 AND template = 'password_reset')", unknown, disabled).Scan(&n)
 		return n == 0
@@ -519,7 +569,7 @@ func TestEmailChangeFlow(t *testing.T) {
 		return r.do("POST", "/v1/me/email", map[string]any{"newEmail": email, "password": pw}, s.bearer())
 	}
 	r.expect(change(strings.ToUpper(newEmail), password), 200, "")
-	letter := r.waitMails(newEmail, 1)[0]
+	letter := r.waitSubject(newEmail, subjectConfirmEmail)
 	if letter.Subject != "确认新的邮箱地址" {
 		t.Fatalf("确认邮件发往新地址：%+v", letter)
 	}
@@ -571,7 +621,7 @@ func TestNewDeviceReminder(t *testing.T) {
 	login("笔记本") // 同平台同名 30 天内出现过：不提醒
 	login("台式机")
 	r.waitMails(email, 3)
-	time.Sleep(300 * time.Millisecond)
+	r.mailJobsSettled()
 	if n := len(r.mail.Messages()); n != 3 {
 		t.Fatalf("同名设备不重复提醒：%d 封", n)
 	}
@@ -630,7 +680,7 @@ func TestSendFailureRetriesWithFreshTokenAndSendsOnce(t *testing.T) {
 	var firstHash string
 	_ = r.run.DB.Pool().QueryRow(context.Background(), "SELECT token_hash FROM email_tokens WHERE email = $1", email).Scan(&firstHash)
 	r.clock.Advance(31 * time.Second) // 退避 30 秒
-	letter := r.waitMails(email, 1)[0]
+	letter := r.waitSubject(email, subjectVerify)
 	token := tokenOf(t, letter, "/verify")
 	if hashOf(token) == firstHash {
 		t.Fatal("重试要换新令牌")
@@ -671,7 +721,7 @@ func TestGarbageCollectionJobs(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
-	token := tokenOf(t, r.waitMails(email, 1)[0], "/verify")
+	token := tokenOf(t, r.waitSubject(email, subjectVerify), "/verify")
 	r.expect(r.verifyEmail(token), 200, "")
 	eventuallyDB(t, "发件箱记已发", func() bool {
 		var n int
@@ -717,7 +767,7 @@ func TestEmailChangeLinkDiesAfterPasswordResetOrChange(t *testing.T) {
 	email, newEmail := r.email(), r.email()
 	s := r.registerBearer(email)
 	r.expect(r.startEmailChange(s, newEmail), 200, "")
-	changeToken := tokenOf(t, r.waitMails(newEmail, 1)[0], "/verify")
+	changeToken := tokenOf(t, r.waitSubject(newEmail, subjectConfirmEmail), "/verify")
 
 	r.expect(r.resetStart(email), 200, "")
 	resetToken := tokenOf(t, r.waitSubject(email, subjectReset), "/reset")
@@ -728,7 +778,7 @@ func TestEmailChangeLinkDiesAfterPasswordResetOrChange(t *testing.T) {
 	s = parseSession(r, r.login(email, newPassword, nil))
 	other := r.email()
 	r.expect(r.do("POST", "/v1/me/email", map[string]any{"newEmail": other, "password": newPassword}, s.bearer()), 200, "")
-	changeToken = tokenOf(t, r.waitMails(other, 1)[0], "/verify")
+	changeToken = tokenOf(t, r.waitSubject(other, subjectConfirmEmail), "/verify")
 	r.expect(r.do("POST", "/v1/auth/password", map[string]any{"password": newPassword, "newPassword": "another-long-passphrase-9"}, s.bearer()), 200, "")
 	r.expect(r.verifyEmail(changeToken), 400, "email_token_invalid")
 	if r.login(email, "another-long-passphrase-9", nil).status != 200 {
@@ -741,15 +791,22 @@ func TestUnsentEmailChangeMailIsCancelledByPasswordReset(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	email, newEmail := r.email(), r.email()
 	s := r.registerBearer(email)
-	r.waitMails(email, 1)
+	r.waitSubject(email, subjectVerify)
 	r.mail.FailNext(1000) // 之后的邮件都发不出去，确认邮件停在队里
 	r.expect(r.startEmailChange(s, newEmail), 200, "")
-	eventuallyDB(t, "确认邮件的第一次发送失败", func() bool { return len(r.mail.Attempts()) >= 2 })
+	// 必须等确认邮件的作业真的失败过一次再找回口令：它若在找回之后才第一次执行，会发现改邮箱已作废，直接丢掉发件箱的行、
+	// 作业完成，从头到尾没有失败过——用例就没测到「已入队未发出的确认邮件被作废」。
+	r.waitMailJobsFailedOnce(1)
 	r.insertToken(s.accountID, "reset", email, "known-reset-token")
 	r.expect(r.resetFinish("known-reset-token", newPassword), 200, "")
+	// 再等「口令已更改」通知的作业也失败一次、失败已记进库（run_at = 当时时钟 + 退避），才放开发信并拨时钟。
+	// 作业靠真实时间的轮询推进，不等这一步，失败的记录可能落在拨钟之后：run_at 就按拨过的时钟再往后推 30 秒，没人再拨，
+	// 通知永远等不到（#200）。
+	r.waitMailJobsFailedOnce(2)
 	r.mail.FailNext(0)
 	r.clock.Advance(31 * time.Second)
-	r.waitMails(email, 2) // 「口令已更改」通知发出，说明作业在跑
+	r.waitSubject(email, subjectPasswordChanged) // 通知发出，说明作业在跑
+	// 确认邮件的作业也到期重跑：发现改口令已作废这次改邮箱，丢掉发件箱的行，不发。等它处理完再断言没有信。
 	r.noMail(newEmail)
 }
 
@@ -761,7 +818,7 @@ func TestEmailChangeConfirmationKillsResetLinkToOldAddress(t *testing.T) {
 	r.expect(r.resetStart(email), 200, "")
 	resetToken := tokenOf(t, r.waitSubject(email, subjectReset), "/reset")
 	r.expect(r.startEmailChange(s, newEmail), 200, "")
-	changeToken := tokenOf(t, r.waitMails(newEmail, 1)[0], "/verify")
+	changeToken := tokenOf(t, r.waitSubject(newEmail, subjectConfirmEmail), "/verify")
 	r.expect(r.verifyEmail(changeToken), 200, "")
 	r.expect(r.resetFinish(resetToken, newPassword), 400, "email_token_invalid")
 }
@@ -792,10 +849,10 @@ func TestNewDeviceReminderFollowsIPPrefix(t *testing.T) {
 	r.noMail2(email, 2)
 }
 
-// noMail2 断言发给 to 的邮件还是 n 封。
+// noMail2 断言（作业都处理完之后）发给 to 的邮件还是 n 封。
 func (r *rig) noMail2(to string, n int) {
 	r.t.Helper()
-	time.Sleep(300 * time.Millisecond)
+	r.mailJobsSettled()
 	count := 0
 	for _, m := range r.mail.Messages() {
 		if m.To == to {
@@ -836,7 +893,7 @@ func TestNotificationsCarryDisplayNameOnlyWhenEmailIsVerified(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	email := r.email()
 	r.registerBearer(email)
-	verifyToken := tokenOf(t, r.waitMails(email, 1)[0], "/verify")
+	verifyToken := tokenOf(t, r.waitSubject(email, subjectVerify), "/verify")
 	newDevice := func(name string) {
 		res := r.do("POST", "/v1/auth/login", map[string]any{"account": email, "password": password, "device": map[string]any{"platform": "desktop", "name": name}}, nil)
 		r.expect(res, 200, "")
