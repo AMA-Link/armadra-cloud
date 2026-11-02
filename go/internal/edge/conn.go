@@ -1,6 +1,7 @@
 package edge
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,9 @@ var (
 	// endGrace 是客户端关闭后等源回 END 的时长；源迟迟不回就重置，别让流一直占着名额。
 	endGrace = 5 * time.Second
 )
+
+// dropWriteQueueOverflow 是客户端因写队列超限被断开的原因（日志 reason 与指标 reason）。
+const dropWriteQueueOverflow = "write_queue_overflow"
 
 // pingFrame 是 ping 帧（空载荷），所有连接共用，只读。
 var pingFrame = serverFrame(opPing, nil)
@@ -190,6 +194,11 @@ func (ec *edgeConn) OnRead(c netpoll.Conn, p []byte) {
 		}
 	}
 	if rest := data[off:]; len(rest) > 0 {
+		// 还有没收齐的帧：字节在到就说明对端活着（弱网上传一个近 1 MiB 的帧可以超过 WSIdle）。
+		// 但半个 PING 不算：与整帧的 PING 一样，光发 PING 不能一直赖着。
+		if rest[0]&0x0f != opPing {
+			ec.lastSeen.Store(time.Now().UnixMilli())
+		}
 		ec.partial = append(make([]byte, 0, len(rest)+4096), rest...)
 	} else {
 		ec.partial = nil
@@ -365,7 +374,7 @@ func (ec *edgeConn) OnSent(c netpoll.Conn, ack int) {
 }
 
 // OnClose：连接已断。没收到关闭帧就断了 → 重置流；收尾记日志、还并发名额。
-func (ec *edgeConn) OnClose(c netpoll.Conn, _ error) {
+func (ec *edgeConn) OnClose(c netpoll.Conn, cerr error) {
 	ec.bind(c)
 	ec.mu.Lock()
 	if ec.finished {
@@ -387,6 +396,14 @@ func (ec *edgeConn) OnClose(c netpoll.Conn, _ error) {
 		code = 1006
 	}
 	e := ec.e
+	if errors.Is(cerr, netpoll.ErrQueueOverflow) {
+		// 客户端不读 socket，写队列超限被断开（#191）。
+		e.o.Log.Warn("客户端读得太慢，写队列超限，断开",
+			obs.SourceID(ec.sourceID), obs.Kind("e2e"), obs.Reason(dropWriteQueueOverflow))
+		if e.o.Metrics != nil {
+			e.o.Metrics.EdgeDropped(dropWriteQueueOverflow)
+		}
+	}
 	e.wheel.remove(ec)
 	e.policy.Untrack(ec)
 	// 还名额可能做网络 I/O：投递给工作协程，不占住 epoll 循环。

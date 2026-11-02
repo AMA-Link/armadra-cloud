@@ -150,6 +150,7 @@ type econn struct {
 	out     [][]byte
 	ack     []int
 	outOff  int
+	ctlQ    ctlBytes
 	timer   *time.Timer
 }
 
@@ -183,8 +184,13 @@ func (c *econn) Write(b []byte, ack int) bool {
 		c.mu.Unlock()
 		return false
 	}
-	sent, broken := c.queueLocked(b, ack)
+	sent, broken, overflow := c.queueLocked(b, ack)
 	c.mu.Unlock()
+	if overflow {
+		// 对端读得太慢：整条队列（含这一帧，ack 经 OnSent 报告）作废，断开。
+		c.closeNow(ErrQueueOverflow)
+		return true
+	}
 	if broken {
 		// 写坏了：帧已被接受，经 OnSent 报告 ack 再关连接。
 		if ack > 0 {
@@ -199,22 +205,25 @@ func (c *econn) Write(b []byte, ack int) bool {
 	return true
 }
 
-// queueLocked 答是否已经全部写进内核、写是否坏了。
-func (c *econn) queueLocked(b []byte, ack int) (sent, broken bool) {
+// queueLocked 答是否已经全部写进内核、写是否坏了、排队后是否超限。
+func (c *econn) queueLocked(b []byte, ack int) (sent, broken, overflow bool) {
 	if len(c.out) == 0 {
 		n, err := syscall.Write(c.fd, b)
 		if n == len(b) {
-			return true, false
+			return true, false, false
 		}
 		if err != nil && err != syscall.EAGAIN && err != syscall.EINTR {
-			return false, true
+			return false, true, false
 		}
 		c.outOff = max(n, 0)
 	}
 	c.out = append(c.out, b)
 	c.ack = append(c.ack, ack)
+	if c.ctlQ.add(len(b), ack) {
+		return false, false, true
+	}
 	c.rearmLocked()
-	return false, false
+	return false, false, false
 }
 
 func (c *econn) flush() {
@@ -232,6 +241,7 @@ func (c *econn) flush() {
 		}
 		if c.outOff == len(f) {
 			acked += c.ack[0]
+			c.ctlQ.sub(len(f), c.ack[0])
 			c.out[0] = nil
 			c.out, c.ack, c.outOff = c.out[1:], c.ack[1:], 0
 			continue
@@ -329,7 +339,7 @@ func (c *econn) closeNow(err error) {
 	for _, a := range c.ack {
 		dropped += a
 	}
-	c.out, c.ack = nil, nil
+	c.out, c.ack, c.ctlQ = nil, nil, 0
 	if c.timer != nil {
 		c.timer.Stop()
 	}

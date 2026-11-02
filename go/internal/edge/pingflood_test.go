@@ -60,4 +60,41 @@ func TestPingFlood(t *testing.T) {
 			t.Fatal("数据应刷新活性")
 		}
 	})
+
+	t.Run("没收齐的数据帧在到字节就刷新活性，半个 PING 不算", func(t *testing.T) {
+		p := newPipe(t, nil)
+		big := clientFrameBytes(opBinary, true, make([]byte, 600<<10))
+		p.ec.lastSeen.Store(1)
+		p.read(big[:64<<10])
+		first := p.ec.lastSeen.Load()
+		if first == 1 {
+			t.Fatal("弱网上传大帧，字节在到却没刷新活性：会被当成空闲断开")
+		}
+		// 之后一直没有整帧，但每一块都刷新；整帧到齐后依旧正常。
+		p.ec.lastSeen.Store(1)
+		p.read(big[64<<10 : 128<<10])
+		if p.ec.lastSeen.Load() == 1 {
+			t.Fatal("续传的块没刷新活性")
+		}
+		p.ec.lastSeen.Store(1)
+		p.read(big[128<<10:])
+		if p.ec.lastSeen.Load() == 1 {
+			t.Fatal("整帧到齐没刷新活性")
+		}
+		p.ec.tick(time.Now().UnixMilli(), time.Minute)
+		if p.conn.isClosed() {
+			t.Fatal("上传中的连接被当成空闲关了")
+		}
+
+		p.ec.lastSeen.Store(1)
+		ping := clientFrameBytes(opPing, true, []byte("pp"))
+		p.read(ping[:3]) // 半个 PING
+		if p.ec.lastSeen.Load() != 1 {
+			t.Fatal("半个 PING 不该刷新活性")
+		}
+		p.read(ping[3:])
+		if p.ec.lastSeen.Load() != 1 {
+			t.Fatal("PING 不该刷新活性")
+		}
+	})
 }

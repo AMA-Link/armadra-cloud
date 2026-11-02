@@ -320,3 +320,21 @@ func TestMetricsHandler(t *testing.T) {
 		t.Error("无令牌应放行")
 	}
 }
+
+// 中继主动断开的客户端：没发生过不输出这个族（Workers 版的黄金输出不变），发生后按原因计数。
+func TestMetricsEdgeDropped(t *testing.T) {
+	m := NewMetrics(nil)
+	if strings.Contains(m.Render(), "relay_edge_dropped_total") {
+		t.Fatal("没有断开记录时不该输出")
+	}
+	m.EdgeDropped("write_queue_overflow")
+	m.EdgeDropped("write_queue_overflow")
+	text := m.Render()
+	if !strings.Contains(text, "# TYPE relay_edge_dropped_total counter\n") ||
+		!strings.Contains(text, `relay_edge_dropped_total{reason="write_queue_overflow"} 2`+"\n") {
+		t.Fatalf("缺指标：\n%s", text)
+	}
+	if m.Snapshot().EdgeDropped["write_queue_overflow"] != 2 {
+		t.Fatal("快照里没有")
+	}
+}

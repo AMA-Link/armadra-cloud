@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 修复 / Fixed
+
+- 边缘写队列加上限，慢读客户端被断开（Closes #191，Refs #172、#173）：事件循环与每连接协程两种 `netpoll` 实现的写队列里，不带信用的帧（边缘对 PING 的 PONG、关闭帧）至多 64 KiB（`netpoll.MaxCtlBytes`），超过就以 `netpoll.ErrQueueOverflow` 断开该连接并作废队列；带信用的下行数据仍由流窗口约束。此前持有效令牌的客户端不读 socket、每个 ping 轮发满 128 条 PING，写队列每连接约 2 MB/小时无限增长（#173 只限了速率）。边缘记一条 warn（`reason=write_queue_overflow`）并计 `relay_edge_dropped_total{reason="write_queue_overflow"}`（出现过才输出这个指标族）。同批两处：空闲判定不再只看整帧，没收齐的非 PING 帧在字节到达时也刷新活性（弱网上传近 1 MiB 的帧超过 `WSIdle` 不再被当成空闲断开；半个 PING 不算）；节点间链路的控制帧队列在写侧（WINDOW、RST）溢出时当场断开链路，不再等对端下一帧。设计 §3.3 补上这几条约束。
+  The edge write queue is now bounded and slow readers are dropped (Closes #191, Refs #172, #173): in both `netpoll` implementations (event loop and per-connection goroutines) frames without credit (the edge's PONG replies to PINGs and close frames) may occupy at most 64 KiB of the write queue (`netpoll.MaxCtlBytes`); beyond that the connection is closed with `netpoll.ErrQueueOverflow` and the queue is discarded, while credit-bearing downstream data stays bounded by the stream window. Previously an authenticated client that never read its socket and sent 128 PINGs per ping round grew the queue by ~2 MB/hour per connection without limit (#173 only limited the rate). The edge logs a warning (`reason=write_queue_overflow`) and counts `relay_edge_dropped_total{reason="write_queue_overflow"}` (the metric family is only rendered once it has occurred). Two related fixes in the same batch: idle detection no longer looks at complete frames only — bytes of an incomplete non-PING frame also refresh liveness (a slow near-1 MiB upload that exceeds `WSIdle` is no longer closed as idle; half a PING does not count); and when the inter-node link's control queue overflows on the write side (WINDOW, RST) the link is closed at once instead of waiting for the peer's next frame. Design §3.3 gains these constraints.
+
 ## 0.12.0（2026-11-02）
 
 ### 新增 / Added

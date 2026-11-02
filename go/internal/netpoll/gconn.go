@@ -20,6 +20,7 @@ type gconn struct {
 	rwake   *sync.Cond // 读协程等恢复
 	out     [][]byte
 	acks    []int
+	ctlQ    ctlBytes
 	paused  bool
 	closing bool
 	closed  bool
@@ -93,6 +94,7 @@ func (c *gconn) writeLoop() {
 		// 只有这个协程亲手出队的帧才由它报 ack；连接已关时 shutdown 已把它记成丢弃并报过了。
 		report := false
 		if !c.closed && len(c.out) > 0 {
+			c.ctlQ.sub(len(c.out[0]), c.acks[0])
 			c.out[0] = nil
 			c.out, c.acks = c.out[1:], c.acks[1:]
 			report = true
@@ -112,6 +114,12 @@ func (c *gconn) Write(b []byte, ack int) bool {
 	}
 	c.out = append(c.out, b)
 	c.acks = append(c.acks, ack)
+	if c.ctlQ.add(len(b), ack) {
+		c.mu.Unlock()
+		// 对端读得太慢：整条队列（含这一帧，ack 经 OnSent 报告）作废，断开。
+		c.shutdown(ErrQueueOverflow)
+		return true
+	}
 	c.wake.Signal()
 	c.mu.Unlock()
 	return true
@@ -159,7 +167,7 @@ func (c *gconn) shutdown(err error) {
 		for _, a := range c.acks {
 			dropped += a
 		}
-		c.out, c.acks = nil, nil
+		c.out, c.acks, c.ctlQ = nil, nil, 0
 		if c.timer != nil {
 			c.timer.Stop()
 		}

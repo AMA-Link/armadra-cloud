@@ -30,6 +30,7 @@ type Metrics struct {
 	mu          sync.Mutex
 	edge        map[string]int64
 	edgeStreams map[string]int64
+	edgeDropped map[string]int64
 	handshakes  map[string]int64
 	buckets     [len(handshakeBuckets)]int64
 	hsCount     int64
@@ -45,6 +46,7 @@ func NewMetrics(gauges func() (tunnels, streams int)) *Metrics {
 		gauges:      gauges,
 		edge:        map[string]int64{},
 		edgeStreams: map[string]int64{},
+		edgeDropped: map[string]int64{},
 		handshakes:  map[string]int64{},
 	}
 }
@@ -64,6 +66,9 @@ func (m *Metrics) EdgeConnection(result string) { m.inc(m.edge, result) }
 
 // EdgeStream 按 OPEN.kind（http / ws / e2e）计一条边缘开出的流。
 func (m *Metrics) EdgeStream(kind string) { m.inc(m.edgeStreams, kind) }
+
+// EdgeDropped 按原因计一条被中继主动断开的客户端连接（如写队列超限的慢读客户端）。
+func (m *Metrics) EdgeDropped(reason string) { m.inc(m.edgeDropped, reason) }
 
 // Handshake 按结果计一次握手（不进直方图）。
 func (m *Metrics) Handshake(result string) { m.inc(m.handshakes, result) }
@@ -98,6 +103,7 @@ type Snapshot struct {
 	Bytes            map[Direction]int64
 	Edge             map[string]int64
 	EdgeStreams      map[string]int64
+	EdgeDropped      map[string]int64
 	Handshakes       map[string]int64
 	HeartbeatMisses  int64
 }
@@ -120,6 +126,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		Bytes:           map[Direction]int64{ToSource: m.toSource.Load(), ToClient: m.toClient.Load()},
 		Edge:            cloneMap(m.edge),
 		EdgeStreams:     cloneMap(m.edgeStreams),
+		EdgeDropped:     cloneMap(m.edgeDropped),
 		Handshakes:      cloneMap(m.handshakes),
 		HeartbeatMisses: m.heartbeat.Load(),
 	}
@@ -148,6 +155,7 @@ func (m *Metrics) Render() string {
 	tunnels, streams := m.gauges()
 	m.mu.Lock()
 	edge, edgeStreams, handshakes := cloneMap(m.edge), cloneMap(m.edgeStreams), cloneMap(m.handshakes)
+	edgeDropped := cloneMap(m.edgeDropped)
 	buckets, hsCount, hsSum := m.buckets, m.hsCount, m.hsSum
 	m.mu.Unlock()
 
@@ -171,6 +179,13 @@ func (m *Metrics) Render() string {
 	family("relay_edge_streams_total", "counter", "Streams opened at the edge by kind.")
 	for _, k := range sortedEntries(edgeStreams) {
 		line(`relay_edge_streams_total{kind="` + k + `"} ` + strconv.FormatInt(edgeStreams[k], 10))
+	}
+	// 中继主动断开的客户端：没发生过就不输出，Workers 版的黄金输出不受影响。
+	if len(edgeDropped) > 0 {
+		family("relay_edge_dropped_total", "counter", "Client connections dropped by the relay, by reason.")
+		for _, k := range sortedEntries(edgeDropped) {
+			line(`relay_edge_dropped_total{reason="` + k + `"} ` + strconv.FormatInt(edgeDropped[k], 10))
+		}
 	}
 	family("relay_handshake_total", "counter", "Tunnel handshakes by result.")
 	for _, k := range sortedEntries(handshakes) {
