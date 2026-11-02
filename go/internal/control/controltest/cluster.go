@@ -87,6 +87,31 @@ func Contract(t *testing.T, pair func(t *testing.T) Pair) {
 		}
 	})
 
+	t.Run("Online 列出全部未过期的路由，别的节点写的也看得到", func(t *testing.T) {
+		p := pair(t)
+		const second = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+		lister, ok := p.B.Routes().(control.RouteLister)
+		if !ok {
+			t.Fatal("多节点路由表应支持枚举")
+		}
+		must(t, p.A.Routes().Set(ctx, Source, route("node-a", "t1"), 30*time.Second))
+		must(t, p.A.Routes().Set(ctx, second, route("node-a", "t2"), 50*time.Millisecond))
+		got, err := lister.Online(ctx)
+		if err != nil || len(got) != 2 || got[Source] != route("node-a", "t1") || got[second] != route("node-a", "t2") {
+			t.Fatalf("B 应列出 A 写的两条路由：%+v %v", got, err)
+		}
+		time.Sleep(120 * time.Millisecond)
+		got, err = lister.Online(ctx)
+		if err != nil || len(got) != 1 || got[Source].TunnelID != "t1" {
+			t.Fatalf("过期的路由不该列出：%+v %v", got, err)
+		}
+		must(t, p.A.Routes().Delete(ctx, Source, "t1"))
+		p.A.Settle()
+		if got, _ = lister.Online(ctx); len(got) != 0 {
+			t.Fatalf("删除之后不该再列出：%+v", got)
+		}
+	})
+
 	t.Run("在线事件与节点命令：本节点收一次，另一节点经广播收到", func(t *testing.T) {
 		p := pair(t)
 		var mu sync.Mutex

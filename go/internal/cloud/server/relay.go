@@ -67,11 +67,17 @@ func orDefault(value, fallback string) string {
 	return fallback
 }
 
-// presenceRecorder 累计主机的上下线：最近在线与核心版本只在内存累计，周期性（与设备的最近使用一起）
+// presenceRecorder 累计主机的最近在线：上下线事件与「此刻持有隧道」都只在内存累计，周期性（与设备的最近使用一起）
 // 批量落盘 sources.last_seen_at_ms / core_version，只往后推。多个实例各记各的，落盘取较大值，所以互不冲突。
+//
+// 上下线事件只在状态变化时发一次，一直连着的主机不会再有事件，所以每次落盘前还要读一遍路由表，
+// 把当前持有隧道的源记成「此刻在线」（#190）；否则「最近在线」会停在它连上的那一刻，直到重连。
 type presenceRecorder struct {
-	ports *store.Ports
-	log   *obs.Logger
+	sources store.SourceStore
+	// routes 是路由表的枚举能力；为空（实现不支持）就只记事件。
+	routes control.RouteLister
+	now    func() time.Time
+	log    *obs.Logger
 
 	mu   sync.Mutex
 	seen map[string]seenSource
@@ -82,8 +88,9 @@ type seenSource struct {
 	coreVersion string
 }
 
-func newPresenceRecorder(ports *store.Ports, log *obs.Logger) *presenceRecorder {
-	return &presenceRecorder{ports: ports, log: log, seen: map[string]seenSource{}}
+func newPresenceRecorder(sources store.SourceStore, routes control.RouteTable, now func() time.Time, log *obs.Logger) *presenceRecorder {
+	lister, _ := routes.(control.RouteLister)
+	return &presenceRecorder{sources: sources, routes: lister, now: now, log: log, seen: map[string]seenSource{}}
 }
 
 // Observe 记一个上下线事件；上线带核心版本。
@@ -100,14 +107,40 @@ func (r *presenceRecorder) Observe(ev control.PresenceEvent) {
 	r.seen[ev.SourceID] = entry
 }
 
+// stampOnline 把路由表里当前在线的源记成「此刻在线」并带上它们的核心版本，只往后推。
+// 时刻取读路由表之前：读到的路由此刻存在，它下线的事件一定不早于这个时刻，所以下线之后最近在线
+// 不会被推到下线时刻之后。读不到路由表只记 warn，事件累计的部分照常落盘。
+func (r *presenceRecorder) stampOnline(ctx context.Context) {
+	if r.routes == nil {
+		return
+	}
+	at := r.now().UnixMilli()
+	online, err := r.routes.Online(ctx)
+	if err != nil {
+		r.log.Warn("读取在线主机失败，本轮只落盘上下线事件", obs.Operation("presence.flush"), obs.Error(err))
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, route := range online {
+		entry := r.seen[id]
+		entry.atMs = max(entry.atMs, at)
+		if route.CoreVersion != "" {
+			entry.coreVersion = route.CoreVersion
+		}
+		r.seen[id] = entry
+	}
+}
+
 // Flush 把累计的批量落盘；失败的条目留着下次再试（不丢）。
 func (r *presenceRecorder) Flush(ctx context.Context) {
+	r.stampOnline(ctx)
 	r.mu.Lock()
 	batch := r.seen
 	r.seen = map[string]seenSource{}
 	r.mu.Unlock()
 	for id, seen := range batch {
-		err := r.ports.Sources.Update(ctx, TenantID, id, func(draft *store.SourceRecord) error {
+		err := r.sources.Update(ctx, TenantID, id, func(draft *store.SourceRecord) error {
 			if draft == nil {
 				return nil
 			}

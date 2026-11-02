@@ -547,6 +547,43 @@ func (r routes) Get(ctx context.Context, sourceID string) (*control.Route, error
 	return &route, nil
 }
 
+// Online 实现 control.RouteLister：SCAN 出全部 <前缀>route:src:*，再成批读值。
+// 过期的键 Redis 自己丢；扫描与读取之间消失的键、记录坏了的键直接跳过。
+func (r routes) Online(ctx context.Context) (map[string]control.Route, error) {
+	keyPrefix := r.p.routeKey("")
+	out := map[string]control.Route{}
+	var cursor uint64
+	for {
+		keys, next, err := r.p.client.Scan(ctx, cursor, keyPrefix+"*", 500).Result()
+		if err != nil {
+			return nil, err
+		}
+		if len(keys) > 0 {
+			pipe := r.p.client.Pipeline()
+			cmds := make([]*goredis.StringCmd, len(keys))
+			for i, key := range keys {
+				cmds[i] = pipe.Get(ctx, key)
+			}
+			if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, goredis.Nil) {
+				return nil, err
+			}
+			for i, cmd := range cmds {
+				value, err := cmd.Bytes()
+				if err != nil {
+					continue
+				}
+				if route, err := cluster.DecodeRoute(value); err == nil {
+					out[strings.TrimPrefix(keys[i], keyPrefix)] = route
+				}
+			}
+		}
+		if next == 0 {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
 func (r routes) Set(ctx context.Context, sourceID string, route control.Route, ttl time.Duration) error {
 	var err error
 	r.p.Run(func() {
