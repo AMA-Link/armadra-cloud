@@ -228,7 +228,7 @@ type internodeConn struct {
 	recvLeft    int                      // 对端还能发多少（本节点给的链路窗口）；超了是对端违反流控，断开
 	ctl         []outItem                // 控制帧（WINDOW、PONG、RST）：每批先写；超过 maxInternodeCtl 整条丢掉并断开
 	pongAt      int                      // ctl 里待发 PONG 的下标（-1 没有）：再来 PING 只替换（RFC 6455 §5.5.3）
-	overflow    bool                     // 控制帧队列超限：receive 据此断开
+	overflow    bool                     // 控制帧队列超限：sendLocked 当场断开链路，receive 也据此退出
 	sched       tunnel.Sched[*fwdStream] // 各流的 DATA / END：按流轮转、稀疏流优先、按字节预算分批（#57）
 	queued      int                      // 各流出队列里还没取走的帧数（含已摘表的流）
 	writing     bool                     // 写协程正在写一批
@@ -371,8 +371,12 @@ func (c *internodeConn) closeTransport() {
 		c.mu.Lock()
 		c.closed = true
 		c.mu.Unlock()
-		close(c.done)
-		_ = c.ws.Close()
+		if c.done != nil {
+			close(c.done)
+		}
+		if c.ws != nil {
+			_ = c.ws.Close()
+		}
 	})
 }
 
@@ -405,6 +409,9 @@ func (c *internodeConn) sendLocked(frame []byte, after func()) {
 		if c.s != nil && c.s.log != nil {
 			c.s.log.Warn("节点间链路控制帧队列超限，断开", obs.Node(c.peer), obs.Reason(tunnel.ReasonCtlQueueOverflow))
 		}
+		// 写侧（WINDOW、RST）溢出时没有读路径替我们断开：队列已整体丢掉，链路再活着就会少帧、
+		// 对端的流控错位。持着锁，closeTransport 要拿同一把锁，所以另起协程（#191）。
+		go c.closeTransport()
 		return
 	}
 	c.ctl = append(c.ctl, outItem{frame: frame, after: after})

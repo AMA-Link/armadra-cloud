@@ -1,7 +1,13 @@
 package saas
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol"
 )
@@ -57,6 +63,44 @@ func TestInternodeCtlFlood(t *testing.T) {
 		}
 		if len(c.ctl) != 0 {
 			t.Fatal("溢出后还在排控制帧")
+		}
+	})
+
+	t.Run("写侧溢出（WINDOW、RST）后链路立即关闭，不等对端下一帧", func(t *testing.T) {
+		up := websocket.Upgrader{}
+		srvWS := make(chan *websocket.Conn, 1)
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := up.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			srvWS <- ws
+		}))
+		defer ts.Close()
+		client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(ts.URL, "http"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		c := &internodeConn{ws: <-srvWS, done: make(chan struct{}), streams: map[uint32]*fwdStream{}, wake: make(chan struct{}, 1), pongAt: -1}
+		rst := encode(protocol.Frame{Type: protocol.FrameRst, StreamID: 1, Code: protocol.RstProtocol})
+		c.mu.Lock()
+		for i := 0; i <= maxInternodeCtl; i++ { // 第 maxInternodeCtl+1 条顶爆队列；没有读路径参与
+			c.sendLocked(rst, nil)
+		}
+		overflow := c.overflow
+		c.mu.Unlock()
+		if !overflow {
+			t.Fatal("队列该溢出了")
+		}
+		select {
+		case <-c.done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("写侧溢出后链路没有关闭")
+		}
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, _, err := client.ReadMessage(); err == nil {
+			t.Fatal("对端应读到连接断开")
 		}
 	})
 }
