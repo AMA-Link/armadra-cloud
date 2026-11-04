@@ -47,7 +47,8 @@ export const SINCE_0_10 = "0.10.0";
  * 协议 1.4 发布后的只加不改补充，随协议包 0.11.0 发布。协议包 0.12.0 又追加了第三方登录的补充
  * （能力位 `auth.oauth.github` / `auth.oauth.google`、`auth.register` 等的错误码 `forbidden`、
  * `auth.oauthFinish` 的 `registrations_paused` 与会话分支的可选 `csrfToken`），同样只加不改、
- * 协议仍是 1.4；这些补充没有新的 procedure，所以没有对应的 `since` 常量。
+ * 协议仍是 1.4；这些补充没有新的 procedure，所以没有对应的 `since` 常量。协议包 0.13.0 没有形状
+ * 变化，协议仍是 1.4。
  */
 export const SINCE_0_11 = "0.11.0";
 

@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.13.0（2026-11-04）
+
+### 变更 / Changed
+
+- 发版 0.13.0（与 Armadra、armadra-agent 统一）：本版只有修复与加固——边缘写队列上限（慢读客户端被断开）、一直连着的主机「最近在线」随落盘前进、Workers 中继撤销判断的失败方向、第三方登录绑定本地账号时核对邮箱、占位 secret 的文件权限与推送中继的独立限流区；另有邮件集成测试的稳定性修复（#200，只改测试）。协议包 `@armadra/platform-protocol` 0.13.0 没有形状变化，仍是协议 1.4（`Armadra-Protocol: 1.4`，`deploy/compat.json` 的 `protocol` 不变）；`MIN_CORE_VERSION_TEAM_ASSERTION`（0.10.0）与 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`（0.11.0）不变。没有新的数据库迁移。明细见「修复」各条。
+  Release 0.13.0 (unified with Armadra and armadra-agent): fixes and hardening only — a bounded edge write queue (slow readers are dropped), "last seen" advancing for hosts that stay connected, the fail direction of the Workers relay's revocation check, an email check when third-party sign-in binds to a local account, the file mode of placeholder secrets and separate rate-limit zones for the push relay; plus a stability fix for the mail integration tests (#200, tests only). The protocol package `@armadra/platform-protocol` 0.13.0 has no shape changes and is still protocol 1.4 (`Armadra-Protocol: 1.4`; the `protocol` of `deploy/compat.json` is unchanged); `MIN_CORE_VERSION_TEAM_ASSERTION` (0.10.0) and `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION` (0.11.0) are unchanged. There are no new database migrations. See the entries under Fixed for details.
+- 部署注意：（1）**先发 Armadra v0.13.0，再打本仓标签**：`deploy/compat.json` 的 `web` 改为 0.13.0，发布构建据此把 `ghcr.io/ama-link/armadra-server:0.13.0` 的页面拷进 `armadra-cloud` 镜像，镜像不存在时构建失败；把自建页面挂到 `/app/web` 的部署也要换成 0.13 的页面。（2）用参考 nginx（`--profile proxy`）的部署要按新模板更新代理配置（新增 `push_register` / `push_send` 两个限流区）并重建代理：`docker compose --profile proxy up -d --force-recreate proxy`。（3）已有部署里的占位 secret（`oauth_github_secret`、`oauth_google_secret`、`push_relay_apns_key`、`push_relay_fcm_credentials`）仍是 0444，写入前先 `chmod 644`；重跑 `init-secrets.sh` 不会改已有文件。（4）Workers 中继的修复要由维护者 `wrangler deploy` 才生效。
+  Deployment notes: (1) **release Armadra v0.13.0 before tagging this repository**: `web` in `deploy/compat.json` becomes 0.13.0 and the release build copies the pages of `ghcr.io/ama-link/armadra-server:0.13.0` into the `armadra-cloud` image, so the build fails while that image does not exist; deployments that mount their own pages at `/app/web` must switch to the 0.13 pages too. (2) Deployments using the reference nginx (`--profile proxy`) must update the proxy configuration from the new template (two new rate-limit zones, `push_register` and `push_send`) and recreate the proxy: `docker compose --profile proxy up -d --force-recreate proxy`. (3) Placeholder secrets in existing deployments (`oauth_github_secret`, `oauth_google_secret`, `push_relay_apns_key`, `push_relay_fcm_credentials`) are still 0444; `chmod 644` them before writing — re-running `init-secrets.sh` does not touch existing files. (4) The Workers relay fixes take effect only after the maintainer runs `wrangler deploy`.
 
 ### 修复 / Fixed
 
