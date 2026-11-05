@@ -910,10 +910,10 @@ func TestOAuthCapabilities(t *testing.T) {
 		providers []string
 		want      []any
 	}{
-		{"只配 GitHub", false, []string{oauth.GitHub}, with("auth.password", "auth.password-change", "auth.oauth", "auth.oauth.github")},
-		{"两个都配", false, []string{oauth.GitHub, oauth.Google}, with("auth.password", "auth.password-change", "auth.oauth", "auth.oauth.github", "auth.oauth.google")},
-		{"口令关、配了 Google", true, []string{oauth.Google}, with("auth.oauth", "auth.oauth.google")},
-		{"口令关、两个都配", true, []string{oauth.GitHub, oauth.Google}, with("auth.oauth", "auth.oauth.github", "auth.oauth.google")},
+		{"只配 GitHub", false, []string{oauth.GitHub}, with("auth.password", "auth.password-change", "auth.oauth", "auth.oauth.github", "auth.step-up-oauth")},
+		{"两个都配", false, []string{oauth.GitHub, oauth.Google}, with("auth.password", "auth.password-change", "auth.oauth", "auth.oauth.github", "auth.oauth.google", "auth.step-up-oauth")},
+		{"口令关、配了 Google", true, []string{oauth.Google}, with("auth.oauth", "auth.oauth.google", "auth.step-up-oauth")},
+		{"口令关、两个都配", true, []string{oauth.GitHub, oauth.Google}, with("auth.oauth", "auth.oauth.github", "auth.oauth.google", "auth.step-up-oauth")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

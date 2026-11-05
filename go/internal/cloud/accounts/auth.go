@@ -500,8 +500,8 @@ func (s *Service) changePassword(ctx context.Context, call *api.Call) (any, erro
 	return s.respond(ctx, call, device, refresh, account)
 }
 
-// stepUp 是 auth.stepUp：按设备限流（所有尝试都计，失败不会因此少算）→ 口令（运营账号另认两步验证码 totpCode）→
-// 把设备提权 10 分钟。M1 不要求任何过程提权。
+// stepUp 是 auth.stepUp：按设备限流（所有尝试都计，失败不会因此少算）→ 口令（运营账号另认两步验证码 totpCode），
+// 或用已绑定的第三方身份重新授权一次（oauth，要先 auth.stepUpOAuthStart）→ 把设备提权 10 分钟，写 security.stepUp。
 func (s *Service) stepUp(ctx context.Context, call *api.Call) (any, error) {
 	caller, err := call.Caller(ctx)
 	if err != nil {
@@ -511,12 +511,17 @@ func (s *Service) stepUp(ctx context.Context, call *api.Call) (any, error) {
 		Password         *string        `json:"password"`
 		TOTPCode         *string        `json:"totpCode"`
 		PasskeyAssertion map[string]any `json:"passkeyAssertion"`
+		OAuth            *struct {
+			Provider string `json:"provider"`
+			State    string `json:"state"`
+			Code     string `json:"code"`
+		} `json:"oauth"`
 	}
 	if err := call.Bind(&in); err != nil {
 		return nil, err
 	}
 	// 入参里「至少给一项」的约束 JSON Schema 表达不了，这里自己判。
-	if in.Password == nil && in.TOTPCode == nil && in.PasskeyAssertion == nil {
+	if in.Password == nil && in.TOTPCode == nil && in.PasskeyAssertion == nil && in.OAuth == nil {
 		return nil, core.Fail(gen.ErrBadRequest)
 	}
 	account, err := s.owner(ctx, caller)
@@ -526,6 +531,7 @@ func (s *Service) stepUp(ctx context.Context, call *api.Call) (any, error) {
 	if err := s.limits.Check(ctx, httpx.LimitStepUpDevice, caller.DeviceID); err != nil {
 		return nil, err
 	}
+	var linked *saas.OAuthIdentity
 	switch {
 	case in.Password != nil:
 		if err := core.VerifyPassword(ctx, s.c, &account.AccountRecord, *in.Password, s.nowMs()); err != nil {
@@ -547,17 +553,34 @@ func (s *Service) stepUp(ctx context.Context, call *api.Call) (any, error) {
 		if !ok {
 			return nil, core.Fail(gen.ErrMfaInvalid)
 		}
+	case in.OAuth != nil:
+		linked, err = s.reauthIdentity(ctx, call, caller, account, struct{ Provider, State, Code string }{in.OAuth.Provider, in.OAuth.State, in.OAuth.Code})
+		if err != nil {
+			return nil, err
+		}
 	default:
 		// 通行密钥是 M2。
 		return nil, core.Fail(gen.ErrNotImplemented)
 	}
 	until := s.nowMs() + stepUpTTL.Milliseconds()
-	err = s.c.Ports.Devices.Update(ctx, s.tenant(), caller.DeviceID, func(device *store.DeviceRecord) error {
-		if device == nil || device.RevokedAtMs != nil {
-			return core.Fail(gen.ErrUnauthenticated)
+	err = s.store.Tx(ctx, func(tx saas.Tx) error {
+		err := s.bound(tx).Ports.Devices.Update(ctx, s.tenant(), caller.DeviceID, func(device *store.DeviceRecord) error {
+			if device == nil || device.RevokedAtMs != nil {
+				return core.Fail(gen.ErrUnauthenticated)
+			}
+			device.ElevatedUntilMs = &until
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-		device.ElevatedUntilMs = &until
-		return nil
+		if linked != nil {
+			if err := tx.Accounts().TouchOAuthIdentity(ctx, s.tenant(), account.AccountID, linked.Provider, s.nowMs()); err != nil {
+				return err
+			}
+		}
+		who := audit.Security{AccountID: account.AccountID, IP: call.IP}
+		return audit.WriteSecurity(ctx, tx, s.tenant(), s.nowMs(), who, audit.SecurityStepUp)
 	})
 	if err != nil {
 		return nil, err

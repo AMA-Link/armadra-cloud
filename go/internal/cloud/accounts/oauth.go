@@ -46,10 +46,16 @@ func (s *Service) oauthStart(ctx context.Context, call *api.Call) (any, error) {
 	if err := s.limits.Check(ctx, httpx.LimitOAuthStartIP, call.IP); err != nil {
 		return nil, err
 	}
-	if !s.oauth.Client.Configured(in.Provider) {
+	return s.beginAuthorization(ctx, call, in.Provider, in.RedirectURI, oauth.State{Purpose: oauth.PurposeLogin})
+}
+
+// beginAuthorization 是三种目的共用的发起：提供方要配了（否则 404）→ redirectUri 严格等于回调地址（否则 400）→
+// 存 state（带目的与发起者）→ Cookie 传输时下发浏览器绑定随机数。record 只填 Purpose、AccountID、DeviceID。
+func (s *Service) beginAuthorization(ctx context.Context, call *api.Call, provider, redirectURI string, record oauth.State) (any, error) {
+	if !s.oauth.Client.Configured(provider) {
 		return nil, core.Fail(gen.ErrNotFound)
 	}
-	if in.RedirectURI != s.appOrigin+"/login/oauth/"+in.Provider {
+	if redirectURI != s.appOrigin+"/login/oauth/"+provider {
 		return nil, core.Fail(gen.ErrBadRequest)
 	}
 	state, verifier := core.RandomToken(32), core.RandomToken(32)
@@ -57,18 +63,113 @@ func (s *Service) oauthStart(ctx context.Context, call *api.Call) (any, error) {
 	if s.gate.TransportFor(call.Request) == core.TransportCookie {
 		nonce = core.RandomToken(32)
 	}
-	expiresAtMs := s.nowMs() + oauth.StateTTL.Milliseconds()
-	err := s.oauth.States.Put(ctx, state, oauth.State{
-		Provider: in.Provider, RedirectURI: in.RedirectURI, Verifier: verifier, Nonce: nonce, ExpiresAtMs: expiresAtMs,
-	})
-	if err != nil {
+	record.Provider, record.RedirectURI, record.Verifier, record.Nonce = provider, redirectURI, verifier, nonce
+	record.ExpiresAtMs = s.nowMs() + oauth.StateTTL.Milliseconds()
+	if err := s.oauth.States.Put(ctx, state, record); err != nil {
 		return nil, err
 	}
-	authorizationURL, _ := s.oauth.Client.AuthorizationURL(in.Provider, state, verifier, in.RedirectURI)
+	authorizationURL, _ := s.oauth.Client.AuthorizationURL(provider, state, verifier, redirectURI)
 	if nonce != "" {
 		call.Header.Add("Set-Cookie", httpx.SetOAuth(nonce, httpx.OAuthCookieMaxAge))
 	}
-	return map[string]any{"authorizationUrl": authorizationURL, "state": state, "expiresAtMs": expiresAtMs}, nil
+	return map[string]any{"authorizationUrl": authorizationURL, "state": state, "expiresAtMs": record.ExpiresAtMs}, nil
+}
+
+// takeAuthorization 取走 state 并核对回调：一次性（不存在、已用、过期、提供方或目的对不上 → 401 credentials_invalid）；
+// 提权与绑定还要账号和设备都是发起者；浏览器绑定（Cookie 传输或发起时下发过随机数，就要求 Cookie 与记录一致，
+// 用后清除）。state 取走后无论成败，浏览器上的绑定 Cookie 都清掉。
+func (s *Service) takeAuthorization(ctx context.Context, call *api.Call, provider, state, purpose string, caller *core.Caller) (*oauth.State, error) {
+	record, err := s.oauth.States.Take(ctx, state)
+	if err != nil {
+		return nil, err
+	}
+	invalid := core.Fail(gen.ErrCredentialsInvalid)
+	if record == nil {
+		return nil, invalid
+	}
+	viaCookie := s.gate.TransportFor(call.Request) == core.TransportCookie
+	nonce, hasCookie := httpx.OAuthNonce(call.Request)
+	if viaCookie || record.Nonce != "" || hasCookie {
+		call.Header.Add("Set-Cookie", httpx.SetOAuth("", 0))
+	}
+	if record.ExpiresAtMs <= s.nowMs() || record.Provider != provider || record.PurposeOf() != purpose {
+		return nil, invalid
+	}
+	if caller != nil && (record.AccountID != caller.AccountID || record.DeviceID != caller.DeviceID) {
+		return nil, invalid
+	}
+	if viaCookie || record.Nonce != "" {
+		if record.Nonce == "" || !hasCookie || subtle.ConstantTimeCompare([]byte(nonce), []byte(record.Nonce)) != 1 {
+			return nil, invalid
+		}
+	}
+	return record, nil
+}
+
+// exchangeIdentity 用 code 换出提供方的身份：提供方拒绝 → 401，不可用 → 503（记 OnError）。
+func (s *Service) exchangeIdentity(ctx context.Context, provider, code string, record *oauth.State) (oauth.Identity, error) {
+	ident, err := s.oauth.Client.Exchange(ctx, provider, code, record.Verifier, record.RedirectURI)
+	switch {
+	case errors.Is(err, oauth.ErrRejected):
+		return ident, core.Fail(gen.ErrCredentialsInvalid)
+	case err != nil:
+		if s.oauth.OnError != nil {
+			s.oauth.OnError(provider, err)
+		}
+		return ident, core.Fail(gen.ErrUnavailable)
+	}
+	return ident, nil
+}
+
+// stepUpOAuthStart 是 auth.stepUpOAuthStart：会话（账号本人）→ 按 IP 限流 → 同 oauthStart，目的是 reauth，
+// 绑定账号与设备。
+func (s *Service) stepUpOAuthStart(ctx context.Context, call *api.Call) (any, error) {
+	caller, err := call.Caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var in struct {
+		Provider    string `json:"provider"`
+		RedirectURI string `json:"redirectUri"`
+	}
+	if err := call.Bind(&in); err != nil {
+		return nil, err
+	}
+	account, err := s.owner(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.limits.Check(ctx, httpx.LimitOAuthStartIP, call.IP); err != nil {
+		return nil, err
+	}
+	return s.beginAuthorization(ctx, call, in.Provider, in.RedirectURI, oauth.State{
+		Purpose: oauth.PurposeReauth, AccountID: account.AccountID, DeviceID: caller.DeviceID,
+	})
+}
+
+// reauthIdentity 核提权的回调：state 的目的、账号、设备与浏览器随机数都对得上，换出的 (提供方, 主体) 是本账号已绑定的身份；
+// 否则 401 credentials_invalid。答已绑定的那条身份。
+func (s *Service) reauthIdentity(ctx context.Context, call *api.Call, caller core.Caller, account *saas.Account, in struct{ Provider, State, Code string }) (*saas.OAuthIdentity, error) {
+	invalid := core.Fail(gen.ErrCredentialsInvalid)
+	if !s.oauth.Client.Configured(in.Provider) {
+		return nil, invalid
+	}
+	record, err := s.takeAuthorization(ctx, call, in.Provider, in.State, oauth.PurposeReauth, &caller)
+	if err != nil {
+		return nil, err
+	}
+	ident, err := s.exchangeIdentity(ctx, in.Provider, in.Code, record)
+	if err != nil {
+		return nil, err
+	}
+	bound, err := s.store.Read().OAuthIdentity(ctx, s.tenant(), in.Provider, ident.Subject)
+	if err != nil {
+		return nil, err
+	}
+	if bound == nil || bound.AccountID != account.AccountID {
+		return nil, invalid
+	}
+	return bound, nil
 }
 
 // oauthFinish 是 auth.oauthFinish：按 IP 限流 → 取走 state（一次性；不存在、过期、提供方对不上 → 401）→
@@ -91,38 +192,14 @@ func (s *Service) oauthFinish(ctx context.Context, call *api.Call) (any, error) 
 	if !s.oauth.Client.Configured(in.Provider) {
 		return nil, core.Fail(gen.ErrCredentialsInvalid)
 	}
-	record, err := s.oauth.States.Take(ctx, in.State)
+	invalid := core.Fail(gen.ErrCredentialsInvalid)
+	record, err := s.takeAuthorization(ctx, call, in.Provider, in.State, oauth.PurposeLogin, nil)
 	if err != nil {
 		return nil, err
 	}
-	invalid := core.Fail(gen.ErrCredentialsInvalid)
-	if record == nil {
-		return nil, invalid
-	}
-	// state 已取走：此后无论成败，浏览器上的绑定 Cookie 都清掉。
-	viaCookie := s.gate.TransportFor(call.Request) == core.TransportCookie
-	nonce, hasCookie := httpx.OAuthNonce(call.Request)
-	if viaCookie || record.Nonce != "" || hasCookie {
-		call.Header.Add("Set-Cookie", httpx.SetOAuth("", 0))
-	}
-	if record.ExpiresAtMs <= s.nowMs() || record.Provider != in.Provider {
-		return nil, invalid
-	}
-	if viaCookie || record.Nonce != "" {
-		if record.Nonce == "" || !hasCookie || subtle.ConstantTimeCompare([]byte(nonce), []byte(record.Nonce)) != 1 {
-			return nil, invalid
-		}
-	}
-
-	ident, err := s.oauth.Client.Exchange(ctx, in.Provider, in.Code, record.Verifier, record.RedirectURI)
-	switch {
-	case errors.Is(err, oauth.ErrRejected):
-		return nil, invalid
-	case err != nil:
-		if s.oauth.OnError != nil {
-			s.oauth.OnError(in.Provider, err)
-		}
-		return nil, core.Fail(gen.ErrUnavailable)
+	ident, err := s.exchangeIdentity(ctx, in.Provider, in.Code, record)
+	if err != nil {
+		return nil, err
 	}
 	if !ident.EmailVerified || ident.Email == "" {
 		return nil, core.Fail(gen.ErrEmailUnverified)
@@ -144,7 +221,13 @@ func (s *Service) oauthFinish(ctx context.Context, call *api.Call) (any, error) 
 	)
 	loginLog := func(tx saas.Tx, device store.DeviceRecord) error {
 		who := audit.Security{AccountID: account.AccountID, DeviceName: device.Name, IP: call.IP}
-		return audit.WriteSecurity(ctx, tx, s.tenant(), s.nowMs(), who, audit.SecurityOAuthLogin)
+		if err := audit.WriteSecurity(ctx, tx, s.tenant(), s.nowMs(), who, audit.SecurityOAuthLogin); err != nil {
+			return err
+		}
+		if bound == nil {
+			return nil
+		}
+		return tx.Accounts().TouchOAuthIdentity(ctx, s.tenant(), account.AccountID, in.Provider, s.nowMs())
 	}
 	steps.After = loginLog
 	switch {

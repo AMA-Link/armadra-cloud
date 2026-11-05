@@ -17,6 +17,14 @@ const StatePrefix = "cloud:oauth:"
 // StateTTL 是授权状态的有效期。
 const StateTTL = 10 * time.Minute
 
+// 授权的目的（State.Purpose）：登录、提权（重新认证已绑定的身份）、给已登录账号绑定新身份。
+// 三种目的共用回调地址，以服务端记录的目的为准；老记录没有这个字段，按登录处理。
+const (
+	PurposeLogin  = "login"
+	PurposeReauth = "reauth"
+	PurposeLink   = "link"
+)
+
 // State 是一次授权的服务端记录：只存发起时的上下文，不存访问令牌。
 type State struct {
 	Provider    string `json:"provider"`
@@ -25,8 +33,21 @@ type State struct {
 	Verifier string `json:"verifier"`
 	// Nonce 是浏览器绑定随机数（Cookie 传输时才有，同时下发给浏览器的 __Host-armadra-oauth）；Bearer 传输为空。
 	Nonce string `json:"nonce"`
+	// Purpose 是目的（Purpose* 常量），空 = 登录。
+	Purpose string `json:"purpose,omitempty"`
+	// AccountID 与 DeviceID 是提权和绑定的发起者（会话的账号与设备）；登录没有。
+	AccountID string `json:"accountId,omitempty"`
+	DeviceID  string `json:"deviceId,omitempty"`
 	// ExpiresAtMs 按控制面的时钟记；Redis 的 TTL 只负责清理。
 	ExpiresAtMs int64 `json:"expiresAtMs"`
+}
+
+// PurposeOf 是记录的目的，老记录（没有目的）按登录。
+func (s State) PurposeOf() string {
+	if s.Purpose == "" {
+		return PurposeLogin
+	}
+	return s.Purpose
 }
 
 // States 存授权状态。

@@ -28,7 +28,7 @@ var fixedCapabilities = []string{
 }
 
 // Capabilities 按配置组装控制面报的能力：口令登录开着才报 auth.password 与 auth.password-change；
-// 配了任一第三方登录提供方报 auth.oauth 与对应的 auth.oauth.<provider>（providers 按配置顺序）。
+// 配了任一第三方登录提供方报 auth.oauth、对应的 auth.oauth.<provider>（providers 按配置顺序）与 auth.step-up-oauth。
 // 配了挑战时另加 challenge.turnstile（info 里追加）。
 func Capabilities(passwordAuth bool, providers []string) []string {
 	out := []string{}
@@ -40,6 +40,8 @@ func Capabilities(passwordAuth bool, providers []string) []string {
 		for _, provider := range providers {
 			out = append(out, "auth.oauth."+provider)
 		}
+		// 提权要用已绑定的提供方再授权一次，配了提供方就能用（auth.stepUp 的 oauth 分支）。
+		out = append(out, "auth.step-up-oauth")
 	}
 	return append(out, fixedCapabilities...)
 }
