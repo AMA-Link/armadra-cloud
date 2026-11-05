@@ -42,6 +42,8 @@ func Capabilities(passwordAuth bool, providers []string) []string {
 		}
 		// 提权要用已绑定的提供方再授权一次，配了提供方就能用（auth.stepUp 的 oauth 分支）。
 		out = append(out, "auth.step-up-oauth")
+		// 绑定、解绑第三方登录与 me.signInMethods。
+		out = append(out, "auth.oauth-link")
 	}
 	return append(out, fixedCapabilities...)
 }

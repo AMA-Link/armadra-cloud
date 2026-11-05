@@ -38,7 +38,15 @@ const (
 	TeamInvitation = "team_invitation"
 	// HostInvitation 是主机邀请邮件（S6）：同团队邀请，链接带邀请 id 与一次性令牌。
 	HostInvitation = "host_invitation"
+	// ProviderLinked 与 ProviderUnlinked 通知账号邮箱：第三方登录刚被绑定 / 解绑；EmailChangeRequested 在申请改邮箱时
+	// 通知旧地址（新地址打码）。
+	ProviderLinked       = "provider_linked"
+	ProviderUnlinked     = "provider_unlinked"
+	EmailChangeRequested = "email_change_requested"
 )
+
+// providerLabels 是第三方登录提供方在邮件里的叫法（不认识的提供方答空串）。
+var providerLabels = map[string]string{"github": "GitHub", "google": "Google"}
 
 // Data 是渲染模板的数据。令牌只出现在 Link 的 # 片段里，且只在内存中。
 type Data struct {
@@ -53,6 +61,9 @@ type Data struct {
 	TeamName    string
 	InviterName string
 	RoleLabel   string
+	// Provider 是提供方的叫法（GitHub / Google），Login 是它的登录名（用户在提供方填的字符串，渲染前已 SanitizeLabel）。
+	Provider string
+	Login    string
 	// HostName 是主机邀请的主机名（用户填的字符串，渲染前已 SanitizeLabel）。
 	HostName string
 }

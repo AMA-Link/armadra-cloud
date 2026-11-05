@@ -53,7 +53,7 @@
 
 **关闭口令登录**（`ARMADRA_CLOUD_PASSWORD_AUTH=off`，`.env` 里 `PASSWORD_AUTH=off`）：`auth.register`、普通的 `auth.login`、`auth.changePassword` 答 `403 forbidden`；`auth.passwordResetStart` 照常答成功但不发信；能力里不再有 `auth.password` 与 `auth.password-change`；运营登录（`scope: "operator"`，口令 + 两步验证）不受影响，运营账号的口令靠命令行维护。先配好并验证至少一个第三方登录再关，否则普通账号全部登不进来（配了 off 却没有任何提供方时启动日志会警告）。已有口令账号的口令记录保留，只是登录不再接受；切回 `on` 即恢复。
 
-**排障**：授权地址的 `redirect_uri` 不匹配提供方里登记的回调地址，是提供方页面报错，控制面看不到；换 code 失败（过期、已用、密钥不对）控制面答 `401 credentials_invalid`，提供方不可达或答复异常答 `503 unavailable`，同时记一条警告日志「第三方登录提供方请求失败」（只带提供方名和错误类名，不带 code 与令牌）。限流：`oauth.start.ip`、`oauth.finish.ip` 每 IP 每分钟 20 次。
+**排障**：授权地址的 `redirect_uri` 不匹配提供方里登记的回调地址，是提供方页面报错，控制面看不到；换 code 失败（过期、已用、密钥不对）控制面答 `401 credentials_invalid`，提供方不可达或答复异常答 `503 unavailable`，同时记一条警告日志「第三方登录提供方请求失败」（只带提供方名和错误类名，不带 code 与令牌）。限流：`oauth.start.ip`、`oauth.finish.ip` 每 IP 每分钟 20 次；`oauth.link.acct`（发起绑定）每账号每小时 10 次。
 
 ## 节点令牌：签发、轮换与撤销
 

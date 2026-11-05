@@ -45,7 +45,7 @@ func TestRenderEveryTemplateInBothLocales(t *testing.T) {
 	const link = "https://app.example.test/verify#TOKEN-IN-FRAGMENT"
 	for _, locale := range Locales {
 		for _, name := range templates.Names(locale) {
-			data := Data{DisplayName: "小明", NewEmail: "new@example.test", DeviceName: "工作笔记本", Platform: "desktop",
+			data := Data{Provider: "GitHub", Login: "octo", DisplayName: "小明", NewEmail: "new@example.test", DeviceName: "工作笔记本", Platform: "desktop",
 				TeamName: "研发组", HostName: "构建机", InviterName: "小红", RoleLabel: RoleLabel(locale, "member")}
 			if tokenTemplates[name] {
 				data.Link = link

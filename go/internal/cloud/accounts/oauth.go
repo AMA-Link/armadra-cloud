@@ -9,6 +9,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/httpx"
+	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/mail"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/oauth"
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/identity"
@@ -253,6 +254,18 @@ func (s *Service) oauthFinish(ctx context.Context, call *api.Call) (any, error) 
 				// 口令登录开着：不自动合并（防抢注与接管），用户先用原方式登录。
 				return nil, core.FailWith(gen.ErrConflict, map[string]any{"reason": "account_exists"})
 			}
+			// 口令登录关闭时也只有「还没有任何第三方身份、且不是运营账号」的同邮箱账号才自动绑定；
+			// 否则 409，用户用原有方式登录后在设置里显式绑定（身份不按邮箱合并）。
+			if existing.HasScope(saas.ScopeOperator) {
+				return nil, core.FailWith(gen.ErrConflict, map[string]any{"reason": "account_exists"})
+			}
+			have, err := read.OAuthIdentities(ctx, s.tenant(), existing.AccountID)
+			if err != nil {
+				return nil, err
+			}
+			if len(have) > 0 {
+				return nil, core.FailWith(gen.ErrConflict, map[string]any{"reason": "account_exists"})
+			}
 			account = existing
 			steps.Before = func(tx saas.Tx) error { return s.oauthBind(ctx, tx, existing, &identityRow) }
 		}
@@ -330,10 +343,9 @@ func (s *Service) oauthBind(ctx context.Context, tx saas.Tx, account *saas.Accou
 	if err != nil {
 		return err
 	}
-	for _, have := range existing {
-		if have.Provider == row.Provider {
-			return core.FailWith(gen.ErrConflict, map[string]any{"reason": "provider_linked"})
-		}
+	// 事务外读到之后又绑上了别的身份（或账号被授予运营范围）：不再自动绑定。
+	if len(existing) > 0 || fresh.HasScope(saas.ScopeOperator) {
+		return core.FailWith(gen.ErrConflict, map[string]any{"reason": "account_exists"})
 	}
 	nowMs := s.nowMs()
 	if fresh.EmailVerifiedAtMs == nil {
@@ -369,8 +381,150 @@ func oauthDisplayName(ident oauth.Identity, email string) string {
 	return name
 }
 
-// oauthUnlink 是 auth.oauthUnlink：要会话（账号本人）→ 这个提供方没绑过 404 → 解绑后至少还要有一种登录方式
-// （口令，口令登录关闭时不算；或另一个第三方），否则 409 conflict。
+// requireElevated：会话必须在提权窗口内，否则 401 mfa_required。
+func (s *Service) requireElevated(caller core.Caller) error {
+	if !caller.Elevated(s.nowMs()) {
+		return core.Fail(gen.ErrMfaRequired)
+	}
+	return nil
+}
+
+// passwordUsable：账号设过口令且普通登录接受口令（运营的口令加 TOTP 只进运营会话，口令登录关闭时不算）。
+func (s *Service) passwordUsable(account *saas.Account) bool {
+	return !s.passwordOff && account.Password.IsSet()
+}
+
+// oauthLinkStart 是 auth.oauthLinkStart：会话（账号本人）→ 已提权（否则 401 mfa_required）→ 按账号每小时 10 次 →
+// 同 oauthStart，目的是 link，绑定账号与设备。
+func (s *Service) oauthLinkStart(ctx context.Context, call *api.Call) (any, error) {
+	caller, err := call.Caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var in struct {
+		Provider    string `json:"provider"`
+		RedirectURI string `json:"redirectUri"`
+	}
+	if err := call.Bind(&in); err != nil {
+		return nil, err
+	}
+	account, err := s.owner(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireElevated(caller); err != nil {
+		return nil, err
+	}
+	if err := s.limits.Check(ctx, httpx.LimitOAuthLinkAcct, account.AccountID); err != nil {
+		return nil, err
+	}
+	return s.beginAuthorization(ctx, call, in.Provider, in.RedirectURI, oauth.State{
+		Purpose: oauth.PurposeLink, AccountID: account.AccountID, DeviceID: caller.DeviceID,
+	})
+}
+
+// oauthLinkFinish 是 auth.oauthLinkFinish：会话 + 已提权 → 按 IP 限流 → 取走 state（目的、账号、设备、浏览器随机数都要对得上）→
+// 换身份 → 邮箱必须已验证（403 email_unverified），但不要求等于账号邮箱，也不改账号 → 身份已属别的账号 409 identity_linked，
+// 本账号该提供方已有身份 409 provider_linked → 同事务写 security.oauthLink 并给账号邮箱发 ProviderLinked。
+func (s *Service) oauthLinkFinish(ctx context.Context, call *api.Call) (any, error) {
+	caller, err := call.Caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var in struct {
+		Provider string `json:"provider"`
+		State    string `json:"state"`
+		Code     string `json:"code"`
+	}
+	if err := call.Bind(&in); err != nil {
+		return nil, err
+	}
+	account, err := s.owner(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireElevated(caller); err != nil {
+		return nil, err
+	}
+	if err := s.limits.Check(ctx, httpx.LimitOAuthFinishIP, call.IP); err != nil {
+		return nil, err
+	}
+	if !s.oauth.Client.Configured(in.Provider) {
+		return nil, core.Fail(gen.ErrCredentialsInvalid)
+	}
+	record, err := s.takeAuthorization(ctx, call, in.Provider, in.State, oauth.PurposeLink, &caller)
+	if err != nil {
+		return nil, err
+	}
+	ident, err := s.exchangeIdentity(ctx, in.Provider, in.Code, record)
+	if err != nil {
+		return nil, err
+	}
+	if !ident.EmailVerified || ident.Email == "" {
+		return nil, core.Fail(gen.ErrEmailUnverified)
+	}
+	nowMs := s.nowMs()
+	row := saas.OAuthIdentity{
+		CredentialID: core.NewUUID(), AccountID: account.AccountID, Provider: in.Provider, Subject: ident.Subject,
+		Email: normalizeEmail(ident.Email), Login: ident.Login, Name: ident.Name, CreatedAtMs: nowMs,
+	}
+	err = s.store.Tx(ctx, func(tx saas.Tx) error {
+		if found, err := tx.Accounts().LockAccount(ctx, s.tenant(), account.AccountID); err != nil {
+			return err
+		} else if !found {
+			return core.Fail(gen.ErrUnauthenticated)
+		}
+		fresh, err := tx.Account(ctx, s.tenant(), account.AccountID)
+		if err != nil {
+			return err
+		}
+		if fresh == nil || fresh.Status != saas.AccountActive {
+			return core.Fail(gen.ErrUnauthenticated)
+		}
+		owned, err := tx.OAuthIdentity(ctx, s.tenant(), in.Provider, ident.Subject)
+		if err != nil {
+			return err
+		}
+		if owned != nil && owned.AccountID != account.AccountID {
+			return core.FailWith(gen.ErrConflict, map[string]any{"reason": "identity_linked"})
+		}
+		have, err := tx.OAuthIdentities(ctx, s.tenant(), account.AccountID)
+		if err != nil {
+			return err
+		}
+		for _, one := range have {
+			if one.Provider == in.Provider {
+				return core.FailWith(gen.ErrConflict, map[string]any{"reason": "provider_linked"})
+			}
+		}
+		if err := tx.Accounts().InsertOAuthIdentity(ctx, s.tenant(), row); err != nil {
+			return err
+		}
+		who := audit.Security{AccountID: account.AccountID, IP: call.IP}
+		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityOAuthLink); err != nil {
+			return err
+		}
+		return s.mail.Enqueue(ctx, tx, mail.Mail{
+			Template: mail.ProviderLinked, Locale: fresh.Locale, To: fresh.Email,
+			Params: mail.Params{DisplayName: greetName(fresh), Provider: in.Provider, Login: ident.Login},
+		})
+	})
+	switch {
+	case errors.Is(err, saas.ErrConflict):
+		return nil, core.FailWith(gen.ErrConflict, map[string]any{"reason": "identity_linked"})
+	case err != nil:
+		return nil, err
+	}
+	out := map[string]any{"provider": in.Provider, "email": row.Email, "linkedAtMs": nowMs}
+	if ident.Login != "" {
+		out["login"] = ident.Login
+	}
+	return out, nil
+}
+
+// oauthUnlink 是 auth.oauthUnlink：要会话（账号本人）且已提权（401 mfa_required）→ 这个提供方没绑过 404 →
+// 解绑后至少还要有一种此刻能用的登录方式：服务端已配置的另一个提供方，或已设口令且口令登录开着的口令
+// （运营的口令加 TOTP 只进运营会话，不算），否则 409 conflict → 同事务写日志并给账号邮箱发 ProviderUnlinked。
 func (s *Service) oauthUnlink(ctx context.Context, call *api.Call) (any, error) {
 	caller, err := call.Caller(ctx)
 	if err != nil {
@@ -384,6 +538,9 @@ func (s *Service) oauthUnlink(ctx context.Context, call *api.Call) (any, error) 
 	}
 	account, err := s.owner(ctx, caller)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireElevated(caller); err != nil {
 		return nil, err
 	}
 	err = s.store.Tx(ctx, func(tx saas.Tx) error {
@@ -405,26 +562,80 @@ func (s *Service) oauthUnlink(ctx context.Context, call *api.Call) (any, error) 
 		}
 		linked, others := false, 0
 		for _, have := range identities {
-			if have.Provider == in.Provider {
+			switch {
+			case have.Provider == in.Provider:
 				linked = true
-			} else {
+			case s.oauth.Client.Configured(have.Provider):
 				others++
 			}
 		}
 		if !linked {
 			return core.Fail(gen.ErrNotFound)
 		}
-		if others == 0 && (s.passwordOff || !fresh.Password.IsSet()) {
+		if others == 0 && !s.passwordUsable(fresh) {
 			return core.Fail(gen.ErrConflict)
 		}
 		if _, err := tx.Accounts().DeleteOAuthIdentity(ctx, s.tenant(), account.AccountID, in.Provider); err != nil {
 			return err
 		}
 		who := audit.Security{AccountID: account.AccountID, DeviceName: "", IP: call.IP}
-		return audit.WriteSecurity(ctx, tx, s.tenant(), s.nowMs(), who, audit.SecurityOAuthUnlink)
+		if err := audit.WriteSecurity(ctx, tx, s.tenant(), s.nowMs(), who, audit.SecurityOAuthUnlink); err != nil {
+			return err
+		}
+		return s.mail.Enqueue(ctx, tx, mail.Mail{
+			Template: mail.ProviderUnlinked, Locale: fresh.Locale, To: fresh.Email,
+			Params: mail.Params{DisplayName: greetName(fresh), Provider: in.Provider},
+		})
 	})
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{}, nil
+}
+
+// signInMethods 是 me.signInMethods：账号的登录方式与此刻可用的提权方式。
+func (s *Service) signInMethods(ctx context.Context, call *api.Call) (any, error) {
+	caller, err := call.Caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	account, err := s.owner(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	read := s.store.Read()
+	totp, err := read.HasCredential(ctx, s.tenant(), account.AccountID, "totp")
+	if err != nil {
+		return nil, err
+	}
+	identities, err := read.OAuthIdentities(ctx, s.tenant(), account.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	providers := make([]map[string]any, 0, len(identities))
+	usableOAuth := false
+	for _, have := range identities {
+		one := map[string]any{"provider": have.Provider, "email": have.Email, "linkedAtMs": have.CreatedAtMs}
+		if have.Login != "" {
+			one["login"] = have.Login
+		}
+		if have.LastUsedAtMs != nil {
+			one["lastUsedAtMs"] = *have.LastUsedAtMs
+		}
+		providers = append(providers, one)
+		usableOAuth = usableOAuth || s.oauth.Client.Configured(have.Provider)
+	}
+	password := s.passwordUsable(account)
+	stepUp := []string{}
+	if password {
+		stepUp = append(stepUp, "password")
+	}
+	// 两步验证码只有运营账号能用来提权（auth.stepUp 的 totpCode）。
+	if totp && account.HasScope(saas.ScopeOperator) && s.wrapper != nil {
+		stepUp = append(stepUp, "totp")
+	}
+	if usableOAuth {
+		stepUp = append(stepUp, "oauth")
+	}
+	return map[string]any{"password": password, "totp": totp, "providers": providers, "stepUp": stepUp}, nil
 }
