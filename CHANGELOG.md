@@ -1,6 +1,6 @@
 # Changelog
 
-## 未发布 / Unreleased
+## 0.15.0（2026-11-05）
 
 ### 新增 / Added
 
@@ -15,6 +15,10 @@
 
 ### 变更 / Changed
 
+- 发版 0.15.0（与 Armadra、armadra-agent 统一）：本版的内容是只有第三方登录的账号也能提权、改邮箱、绑定与解绑登录方式（#195，见上）。协议包 `@armadra/platform-protocol` 0.15.0 只加不改，仍是协议 1.4（`Armadra-Protocol: 1.4`，`deploy/compat.json` 的 `protocol` 不变）；`MIN_CORE_VERSION_TEAM_ASSERTION`（0.10.0）与 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`（0.11.0）不变。没有新的数据库迁移，没有新的环境变量，Workers 中继没有代码改动。
+  Release 0.15.0 (unified with Armadra and armadra-agent): this release lets accounts that only use third-party sign-in step up, change email and link or unlink sign-in providers (#195, above). The protocol package `@armadra/platform-protocol` 0.15.0 is additive and still protocol 1.4 (`Armadra-Protocol: 1.4`; the `protocol` of `deploy/compat.json` is unchanged); `MIN_CORE_VERSION_TEAM_ASSERTION` (0.10.0) and `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION` (0.11.0) are unchanged. There are no new database migrations, no new environment variables and no Workers relay code changes.
+- 部署注意：（1）**先发 Armadra v0.15.0，再打本仓标签**：`deploy/compat.json` 的 `web` 改为 0.15.0，发布构建据此把 `ghcr.io/ama-link/armadra-server:0.15.0` 的页面（含设置里的提权、绑定与登录方式界面）拷进 `armadra-cloud` 镜像，镜像不存在时构建失败；把自建页面挂到 `/app/web` 的部署也要换成 0.15 的页面。（2）口令登录关闭的部署注意下面的行为变化：同邮箱的第三方身份不再自动接管已有身份的账号。
+  Deployment notes: (1) **release Armadra v0.15.0 before tagging this repository**: `web` in `deploy/compat.json` becomes 0.15.0 and the release build copies the pages of `ghcr.io/ama-link/armadra-server:0.15.0` (including the step-up, linking and sign-in method screens in settings) into the `armadra-cloud` image, so the build fails while that image does not exist; deployments that mount their own pages at `/app/web` must switch to the 0.15 pages too. (2) Deployments with password sign-in off should note the behaviour change below: a same-email third-party identity no longer takes over an account that already has an identity.
 - **行为变化**：口令登录关闭（`ARMADRA_CLOUD_PASSWORD_AUTH=off`）时，第三方登录不再按同邮箱自动绑定到所有本地账号：只有「还没有任何第三方身份、且不是运营账号」的同邮箱账号才自动绑定并登录；其余答 `409 conflict`（`details.reason = "account_exists"`），用户用原有方式登录后，在设置里显式绑定（`auth.oauthLinkStart`）。已绑定身份的账号、运营账号因此不会再被另一个提供方里同邮箱的身份接管（Refs #195）。
   **Behaviour change**: with password sign-in off (`ARMADRA_CLOUD_PASSWORD_AUTH=off`), third-party sign-in no longer auto-binds to every local account with the same email: only a same-email account that has no third-party identity yet and is not an operator account is bound and signed in automatically; everything else answers `409 conflict` (`details.reason = "account_exists"`), and the user signs in the existing way and links explicitly in settings (`auth.oauthLinkStart`). Accounts that already have an identity, and operator accounts, can therefore no longer be taken over by a same-email identity at another provider (Refs #195).
 
