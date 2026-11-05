@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.14.0（2026-11-05）
+
+### 变更 / Changed
+
+- 发版 0.14.0（与 Armadra、armadra-agent 统一）：0.13.0 之后本仓没有功能或修复改动，本版只对齐版本号。协议包 `@armadra/platform-protocol` 0.14.0 没有形状变化，仍是协议 1.4（`Armadra-Protocol: 1.4`，`deploy/compat.json` 的 `protocol` 不变）；`MIN_CORE_VERSION_TEAM_ASSERTION`（0.10.0）与 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`（0.11.0）不变。没有新的数据库迁移，Workers 中继没有代码改动。
+  Release 0.14.0 (unified with Armadra and armadra-agent): this repository has no feature or fix changes since 0.13.0; this release only aligns the version. The protocol package `@armadra/platform-protocol` 0.14.0 has no shape changes and is still protocol 1.4 (`Armadra-Protocol: 1.4`; the `protocol` of `deploy/compat.json` is unchanged); `MIN_CORE_VERSION_TEAM_ASSERTION` (0.10.0) and `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION` (0.11.0) are unchanged. There are no new database migrations and no Workers relay code changes.
+- 部署注意：**先发 Armadra v0.14.0，再打本仓标签**：`deploy/compat.json` 的 `web` 改为 0.14.0，发布构建据此把 `ghcr.io/ama-link/armadra-server:0.14.0` 的页面拷进 `armadra-cloud` 镜像，镜像不存在时构建失败；把自建页面挂到 `/app/web` 的部署也要换成 0.14 的页面。
+  Deployment note: **release Armadra v0.14.0 before tagging this repository**: `web` in `deploy/compat.json` becomes 0.14.0 and the release build copies the pages of `ghcr.io/ama-link/armadra-server:0.14.0` into the `armadra-cloud` image, so the build fails while that image does not exist; deployments that mount their own pages at `/app/web` must switch to the 0.14 pages too.
+
 ## 0.13.0（2026-11-04）
 
 ### 变更 / Changed
