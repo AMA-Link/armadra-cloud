@@ -1,0 +1,3 @@
+{{if .DisplayName}}{{.DisplayName}}，你好。{{else}}你好。{{end}}
+
+账号已绑定 {{.Provider}} 登录{{if .Login}}（{{.Login}}）{{end}}。如果不是你本人的操作，请立即在设置里解绑，并更改口令或联系我们。

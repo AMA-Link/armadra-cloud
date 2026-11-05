@@ -67,7 +67,10 @@ type Params struct {
 	DisplayName string `json:"displayName,omitempty"`
 	NewEmail    string `json:"newEmail,omitempty"`
 	DeviceName  string `json:"deviceName,omitempty"`
-	Platform    string `json:"platform,omitempty"`
+	// Provider 与 Login 是绑定 / 解绑第三方登录通知的：提供方代码（github / google）与它的登录名。
+	Provider string `json:"provider,omitempty"`
+	Login    string `json:"login,omitempty"`
+	Platform string `json:"platform,omitempty"`
 	// TeamName、InviterName、Role 是团队邀请的：团队名、邀请人显示名与被邀请的角色码；主机邀请用 HostName
 	// 与主机角色码（Role）。
 	TeamName    string `json:"teamName,omitempty"`
@@ -302,6 +305,7 @@ func (s *Service) prepare(ctx context.Context, tx saas.Tx, payload sendPayload, 
 		DeviceName: SanitizeLabel(params.DeviceName, labelMax), Platform: SanitizeLabel(params.Platform, labelMax),
 		TeamName: SanitizeLabel(params.TeamName, labelMax), HostName: SanitizeLabel(params.HostName, labelMax), InviterName: SanitizeLabel(params.InviterName, labelMax),
 		RoleLabel: RoleLabel(email.Locale, params.Role),
+		Provider:  providerLabels[params.Provider], Login: SanitizeLabel(params.Login, labelMax),
 	}
 	if email.Template == TeamInvitation || email.Template == HostInvitation {
 		link, ok, err := s.inviteLink(ctx, tx, payload.InvitationID, email.To)

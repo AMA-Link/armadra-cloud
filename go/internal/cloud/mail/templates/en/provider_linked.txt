@@ -1,0 +1,3 @@
+{{if .DisplayName}}Hi {{.DisplayName}},{{else}}Hello,{{end}}
+
+{{.Provider}} sign-in{{if .Login}} ({{.Login}}){{end}} was linked to your account. If this was not you, unlink it in settings right away and contact us.
