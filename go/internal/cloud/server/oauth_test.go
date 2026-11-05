@@ -648,11 +648,23 @@ func TestOAuthSameEmailOnAndOff(t *testing.T) {
 		if r.queryInt("SELECT count(*)::int FROM accounts WHERE email = $1", email) != 1 {
 			t.Fatal("不该多建账号")
 		}
-		// 同一账号再绑另一个提供方（Google）。
+		// 账号已有第三方身份：另一个提供方同邮箱来登录不再自动绑定，要先登录后在设置里显式绑定。
 		g := r.oauthLogin(f, "google", googleIdentity("g-5101", email), false)
-		r.expect(g, 200, "")
-		if parseSession(r, g).accountID != id || r.queryInt("SELECT count(*)::int FROM account_credentials WHERE account_id = $1 AND kind = 'oauth'", id) != 2 {
-			t.Fatal("两个提供方都绑在同一账号")
+		r.expect(g, 409, "conflict")
+		if g.json["details"].(map[string]any)["reason"] != "account_exists" || r.queryInt("SELECT count(*)::int FROM account_credentials WHERE account_id = $1 AND kind = 'oauth'", id) != 1 {
+			t.Fatalf("不该再绑：%s", g.body)
+		}
+	})
+
+	t.Run("口令登录关闭：运营账号不自动绑定", func(t *testing.T) {
+		r, f := oauthRig(t, true, oauth.GitHub)
+		email := r.email()
+		id := r.insertAccount(email, true)
+		r.exec("UPDATE accounts SET scopes = '{operator}' WHERE account_id = $1", id)
+		res := r.oauthLogin(f, "github", ghIdentity("5151", email), false)
+		r.expect(res, 409, "conflict")
+		if res.json["details"].(map[string]any)["reason"] != "account_exists" || r.identityCount("github", "5151") != 0 {
+			t.Fatalf("运营账号不该被绑定：%s", res.body)
 		}
 	})
 
@@ -770,7 +782,7 @@ func TestOAuthIdentityBelongsToOneAccount(t *testing.T) {
 	// A 已有 GitHub 身份，另一个 GitHub 主体带着 A 的邮箱来：409，不绑。
 	conflict := r.oauthLogin(f, "github", ghIdentity("6002", emailA), false)
 	r.expect(conflict, 409, "conflict")
-	if conflict.json["details"].(map[string]any)["reason"] != "provider_linked" || r.identityCount("github", "6002") != 0 {
+	if conflict.json["details"].(map[string]any)["reason"] != "account_exists" || r.identityCount("github", "6002") != 0 {
 		t.Fatalf("同提供方第二个身份：%s", conflict.body)
 	}
 	// 数据库兜底：直接把已绑的身份绑给 B 会被唯一索引拒绝。
@@ -910,10 +922,10 @@ func TestOAuthCapabilities(t *testing.T) {
 		providers []string
 		want      []any
 	}{
-		{"只配 GitHub", false, []string{oauth.GitHub}, with("auth.password", "auth.password-change", "auth.oauth", "auth.oauth.github", "auth.step-up-oauth")},
-		{"两个都配", false, []string{oauth.GitHub, oauth.Google}, with("auth.password", "auth.password-change", "auth.oauth", "auth.oauth.github", "auth.oauth.google", "auth.step-up-oauth")},
-		{"口令关、配了 Google", true, []string{oauth.Google}, with("auth.oauth", "auth.oauth.google", "auth.step-up-oauth")},
-		{"口令关、两个都配", true, []string{oauth.GitHub, oauth.Google}, with("auth.oauth", "auth.oauth.github", "auth.oauth.google", "auth.step-up-oauth")},
+		{"只配 GitHub", false, []string{oauth.GitHub}, with("auth.password", "auth.password-change", "auth.oauth", "auth.oauth.github", "auth.step-up-oauth", "auth.oauth-link")},
+		{"两个都配", false, []string{oauth.GitHub, oauth.Google}, with("auth.password", "auth.password-change", "auth.oauth", "auth.oauth.github", "auth.oauth.google", "auth.step-up-oauth", "auth.oauth-link")},
+		{"口令关、配了 Google", true, []string{oauth.Google}, with("auth.oauth", "auth.oauth.google", "auth.step-up-oauth", "auth.oauth-link")},
+		{"口令关、两个都配", true, []string{oauth.GitHub, oauth.Google}, with("auth.oauth", "auth.oauth.github", "auth.oauth.google", "auth.step-up-oauth", "auth.oauth-link")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -933,6 +945,7 @@ func TestOAuthCapabilities(t *testing.T) {
 func TestOAuthUnlink(t *testing.T) {
 	t.Parallel()
 	unlink := func(r *rig, s session, provider string) response {
+		r.elevate(s)
 		return r.do("DELETE", "/v1/auth/oauth/"+provider, nil, s.bearer())
 	}
 
@@ -992,6 +1005,8 @@ func TestOAuthWithoutProviders(t *testing.T) {
 	r.expect(r.oauthStart("github", nil), 404, "not_found")
 	r.expect(r.finishWith(oauthFlow{provider: "google", state: "s", code: "c"}, nil), 401, "credentials_invalid")
 	s := r.registerBearer(r.email())
+	r.expect(r.do("DELETE", "/v1/auth/oauth/github", nil, s.bearer()), 401, "mfa_required")
+	r.elevate(s)
 	r.expect(r.do("DELETE", "/v1/auth/oauth/github", nil, s.bearer()), 404, "not_found")
 	res := r.do("GET", "/.well-known/armadra-platform", nil, nil)
 	for _, have := range res.json["capabilities"].([]any) {

@@ -231,6 +231,9 @@ func (s *Service) Handlers() map[string]api.Handler {
 	handlers["auth.oauthFinish"] = s.oauthFinish
 	handlers["auth.oauthUnlink"] = s.oauthUnlink
 	handlers["auth.stepUpOAuthStart"] = s.stepUpOAuthStart
+	handlers["auth.oauthLinkStart"] = s.oauthLinkStart
+	handlers["auth.oauthLinkFinish"] = s.oauthLinkFinish
+	handlers["me.signInMethods"] = s.signInMethods
 	for name, handler := range handlers {
 		handlers[name] = wrap(handler)
 	}
