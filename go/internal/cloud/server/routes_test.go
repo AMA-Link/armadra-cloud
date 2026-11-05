@@ -46,7 +46,7 @@ var enabledS7 = map[string]bool{
 }
 
 // enabledOAuth 是第三方登录的三个过程（没配提供方时 oauthStart 答 404、oauthFinish 答 401，不是 501）。
-var enabledOAuth = map[string]bool{"auth.oauthStart": true, "auth.oauthFinish": true, "auth.oauthUnlink": true}
+var enabledOAuth = map[string]bool{"auth.oauthStart": true, "auth.oauthFinish": true, "auth.oauthUnlink": true, "auth.stepUpOAuthStart": true}
 
 func TestEnabledProceduresAreExactlyThisBatch(t *testing.T) {
 	t.Parallel()
