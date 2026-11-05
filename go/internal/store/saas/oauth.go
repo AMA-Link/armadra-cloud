@@ -18,6 +18,8 @@ type OAuthIdentity struct {
 	Login       string
 	Name        string
 	CreatedAtMs int64
+	// LastUsedAtMs 是最近一次用它登录或提权的时刻；没用过为 nil。
+	LastUsedAtMs *int64
 }
 
 // OAuthExternalID 是 account_credentials.external_id：<提供方>:<主体>。

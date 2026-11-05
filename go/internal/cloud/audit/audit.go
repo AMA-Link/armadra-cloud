@@ -26,6 +26,8 @@ const (
 	SecurityDeviceDeny       = "security.deviceDeny"
 	SecurityOAuthLogin       = "security.oauthLogin"
 	SecurityOAuthUnlink      = "security.oauthUnlink"
+	SecurityOAuthLink        = "security.oauthLink"
+	SecurityStepUp           = "security.stepUp"
 	deviceNameMax            = 128
 )
 

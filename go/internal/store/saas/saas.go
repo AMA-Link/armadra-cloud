@@ -126,6 +126,8 @@ type AccountRepo interface {
 	InvalidateEmailTokens(ctx context.Context, tenantID, accountID, purpose string, nowMs int64) (int, error)
 	// InsertOAuthIdentity 绑定一个第三方登录身份；这个身份已属于别的账号、或本账号在该提供方已有身份，答 ErrConflict。
 	InsertOAuthIdentity(ctx context.Context, tenantID string, identity OAuthIdentity) error
+	// TouchOAuthIdentity 记下账号在某提供方的身份刚被用过（登录或提权）。
+	TouchOAuthIdentity(ctx context.Context, tenantID, accountID, provider string, atMs int64) error
 	// DeleteOAuthIdentity 解绑账号在某提供方的身份，答有没有删到。
 	DeleteOAuthIdentity(ctx context.Context, tenantID, accountID, provider string) (bool, error)
 	// GCEmailTokens 删过期 24 小时以上的令牌（beforeMs = now − 24 小时）。

@@ -175,7 +175,7 @@ type oauthPublic struct {
 	Name     string `json:"name,omitempty"`
 }
 
-const oauthColumns = "credential_id, account_id, external_id, public_json, created_at_ms"
+const oauthColumns = "credential_id, account_id, external_id, public_json, created_at_ms, last_used_at_ms"
 
 func scanOAuth(row scanner) (saas.OAuthIdentity, error) {
 	var (
@@ -183,7 +183,7 @@ func scanOAuth(row scanner) (saas.OAuthIdentity, error) {
 		externalID string
 		public     []byte
 	)
-	if err := row.Scan(&id.CredentialID, &id.AccountID, &externalID, &public, &id.CreatedAtMs); err != nil {
+	if err := row.Scan(&id.CredentialID, &id.AccountID, &externalID, &public, &id.CreatedAtMs, &id.LastUsedAtMs); err != nil {
 		return id, err
 	}
 	provider, subject, ok := saas.SplitOAuthExternalID(externalID)
@@ -218,6 +218,13 @@ func (r accountRepo) InsertOAuthIdentity(ctx context.Context, tenantID string, i
 		`INSERT INTO account_credentials (tenant_id, credential_id, account_id, kind, external_id, public_json, created_at_ms)
 		 VALUES ($1, $2, $3, 'oauth', $4, $5::jsonb, $6)`,
 		tenantID, id.CredentialID, id.AccountID, saas.OAuthExternalID(id.Provider, id.Subject), public, id.CreatedAtMs)
+	return err
+}
+
+func (r accountRepo) TouchOAuthIdentity(ctx context.Context, tenantID, accountID, provider string, atMs int64) error {
+	_, err := r.q.Exec(ctx,
+		"UPDATE account_credentials SET last_used_at_ms = $4 WHERE tenant_id = $1 AND account_id = $2 AND kind = 'oauth' AND split_part(external_id, ':', 1) = $3",
+		tenantID, accountID, provider, atMs)
 	return err
 }
 
