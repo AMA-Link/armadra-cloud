@@ -796,13 +796,14 @@ func TestUnsentEmailChangeMailIsCancelledByPasswordReset(t *testing.T) {
 	r.expect(r.startEmailChange(s, newEmail), 200, "")
 	// 必须等确认邮件的作业真的失败过一次再找回口令：它若在找回之后才第一次执行，会发现改邮箱已作废，直接丢掉发件箱的行、
 	// 作业完成，从头到尾没有失败过——用例就没测到「已入队未发出的确认邮件被作废」。
-	r.waitMailJobsFailedOnce(1)
+	// 申请改邮箱同事务还给旧地址插了一封「申请改邮箱」通知，所以是两个作业。
+	r.waitMailJobsFailedOnce(2)
 	r.insertToken(s.accountID, "reset", email, "known-reset-token")
 	r.expect(r.resetFinish("known-reset-token", newPassword), 200, "")
 	// 再等「口令已更改」通知的作业也失败一次、失败已记进库（run_at = 当时时钟 + 退避），才放开发信并拨时钟。
 	// 作业靠真实时间的轮询推进，不等这一步，失败的记录可能落在拨钟之后：run_at 就按拨过的时钟再往后推 30 秒，没人再拨，
 	// 通知永远等不到（#200）。
-	r.waitMailJobsFailedOnce(2)
+	r.waitMailJobsFailedOnce(3)
 	r.mail.FailNext(0)
 	r.clock.Advance(31 * time.Second)
 	r.waitSubject(email, subjectPasswordChanged) // 通知发出，说明作业在跑
