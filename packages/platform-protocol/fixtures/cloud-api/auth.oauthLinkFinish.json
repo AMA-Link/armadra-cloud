@@ -1,0 +1,13 @@
+{
+  "input": {
+    "provider": "github",
+    "state": "test-state",
+    "code": "test-code"
+  },
+  "output": {
+    "provider": "github",
+    "login": "octocat",
+    "email": "dev@armadra.test",
+    "linkedAtMs": 1760000000000
+  }
+}

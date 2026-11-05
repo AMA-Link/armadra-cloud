@@ -1,5 +1,12 @@
 # Changelog
 
+## 未发布 / Unreleased
+
+### 新增 / Added
+
+- 只有第三方登录的账号能提权、改邮箱、绑定与解绑登录方式（Refs #195，协议包 0.15.0）：本批先加协议与契约，处理器随后几批落地，落地前新增的 procedure 答 `501 not_implemented`。新增 `auth.stepUpOAuthStart`、`auth.oauthLinkStart`、`auth.oauthLinkFinish`、`me.signInMethods`（契约 §29）；`auth.stepUp` 多可选的 `oauth`，`me.emailChange` 的 `password` 改为可选，`me.emailChange`、`auth.oauthLinkStart`、`auth.oauthUnlink` 的错误表加 `mfa_required`；能力 `auth.oauth-link`、`auth.step-up-oauth`（配了提供方才报）。全是加法，协议仍是 1.4（`Armadra-Protocol: 1.4` 不变），没有新迁移；隧道、断言与中继令牌不变，桌面与手机客户端不受影响。
+  OAuth-only accounts can step up, change email and link or unlink sign-in providers (Refs #195, protocol package 0.15.0): this batch adds the protocol and contract; handlers land in the following batches, and until then the new procedures answer `501 not_implemented`. New `auth.stepUpOAuthStart`, `auth.oauthLinkStart`, `auth.oauthLinkFinish` and `me.signInMethods` (contract §29); `auth.stepUp` gains an optional `oauth`, `password` of `me.emailChange` becomes optional, and the error tables of `me.emailChange`, `auth.oauthLinkStart` and `auth.oauthUnlink` gain `mfa_required`; capabilities `auth.oauth-link` and `auth.step-up-oauth` (reported only when a provider is configured). All additive: the protocol is still 1.4 (`Armadra-Protocol: 1.4` is unchanged), there are no new migrations, and the tunnel, assertions and relay tokens are untouched, so desktop and mobile clients are unaffected.
+
 ## 0.14.0（2026-11-05）
 
 ### 变更 / Changed

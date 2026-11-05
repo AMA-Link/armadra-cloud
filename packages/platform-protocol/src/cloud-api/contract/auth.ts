@@ -1,7 +1,13 @@
 import { z } from "zod";
 
 import { errors } from "../../errors/registry.ts";
-import { base, SINCE_0_1, SINCE_0_3_10, SINCE_0_10 } from "../meta.ts";
+import {
+  base,
+  SINCE_0_1,
+  SINCE_0_3_10,
+  SINCE_0_10,
+  SINCE_0_15,
+} from "../meta.ts";
 import { deviceRequestSchema } from "../saas-schemas.ts";
 import {
   challengeTokenSchema,
@@ -53,6 +59,31 @@ export const devicePollOutputSchema = z.discriminatedUnion("status", [
 /** 1.4 起的 OAuth 提供方（M2；账号绑定要先验证邮箱）。 */
 export const OAUTH_PROVIDERS = ["github", "google"] as const;
 export const oauthProviderSchema = z.enum(OAUTH_PROVIDERS);
+
+/** 授权地址：`oauthStart`、`stepUpOAuthStart`、`oauthLinkStart` 共用。 */
+export const oauthStartOutputSchema = z.object({
+  authorizationUrl: z.url(),
+  state: z.string(),
+  expiresAtMs: z.number().int(),
+});
+
+/** 回调带回的授权结果：`auth.stepUp` 的 `oauth` 分支用。 */
+export const oauthStepUpInputSchema = z.object({
+  provider: oauthProviderSchema,
+  state: z.string(),
+  code: z.string(),
+});
+
+/** 绑定成功后的一条第三方身份（不含任何令牌）。 */
+export const linkedProviderSchema = z.object({
+  provider: oauthProviderSchema,
+  /** 提供方的登录名（GitHub 的 login）；没有则缺省。 */
+  login: z.string().optional(),
+  email: z.string(),
+  linkedAtMs: z.number().int(),
+});
+
+const since15 = { scope: ["session"], since: SINCE_0_15 } as const;
 
 const since10 = (scope: "anonymous" | "session") =>
   ({ scope: [scope], since: SINCE_0_10 }) as const;
@@ -150,6 +181,9 @@ export const auth = {
   /**
    * 在已有会话上再验证（1.4 补充，cloud-api §2）：口令、两步验证码、通行密钥断言至少给一项；
    * 通过后这个会话在 `elevatedUntilMs`（10 分钟）前算「已提权」，敏感操作（注销账号、转移所有权）据此放行。
+   * 0.15.0 起可带 `oauth`：用已绑定的提供方再走一次授权（先 `auth.stepUpOAuthStart`），换出的
+   * `(provider, subject)` 必须是本账号已绑定的身份，state 的目的、账号、设备与浏览器随机数都要对得上，
+   * 否则 `401 credentials_invalid`（cloud-api §29）。
    */
   stepUp: base
     .route({ method: "POST", path: "/v1/auth/step-up" })
@@ -168,16 +202,35 @@ export const auth = {
           password: z.string().optional(),
           totpCode: z.string().optional(),
           passkeyAssertion: webauthnJson.optional(),
+          oauth: oauthStepUpInputSchema.optional(),
         })
         .refine(
           (value) =>
             value.password !== undefined ||
             value.totpCode !== undefined ||
-            value.passkeyAssertion !== undefined,
-          { message: "password、totpCode、passkeyAssertion 至少给一项" },
+            value.passkeyAssertion !== undefined ||
+            value.oauth !== undefined,
+          {
+            message: "password、totpCode、passkeyAssertion、oauth 至少给一项",
+          },
         ),
     )
     .output(z.object({ elevatedUntilMs: z.number().int() })),
+  /**
+   * 提权用的授权地址（0.15.0 起，cloud-api §29）：`redirectUri` 规则同 `auth.oauthStart`；
+   * state 的目的是 `reauth`，绑定账号、设备与浏览器随机数。能力 `auth.step-up-oauth`。
+   */
+  stepUpOAuthStart: base
+    .route({ method: "POST", path: "/v1/auth/step-up/oauth/{provider}/start" })
+    .meta(since15)
+    .errors(errors.pick("rate_limited", "bad_request", "not_found"))
+    .input(
+      z.object({
+        provider: oauthProviderSchema,
+        redirectUri: z.url().max(2048),
+      }),
+    )
+    .output(oauthStartOutputSchema),
   logout: base
     .route({ method: "POST", path: "/v1/auth/logout" })
     .meta(session)
@@ -361,17 +414,12 @@ export const auth = {
         redirectUri: z.url().max(2048),
       }),
     )
-    .output(
-      z.object({
-        authorizationUrl: z.url(),
-        state: z.string(),
-        expiresAtMs: z.number().int(),
-      }),
-    ),
+    .output(oauthStartOutputSchema),
   /**
    * 用回调的 `code` 换会话（cloud-api §29）：`state` 一次性、10 分钟；Cookie 传输时 `__Host-armadra-oauth` 要与
    * 发起时的一致。已绑定则登录；未绑定且本地没有同邮箱账号则建账号（邮箱已验证、无口令）；本地有同邮箱账号时，
-   * 服务端关了口令登录（`auth.password` 不在能力里）就绑定并登录，否则 `409 conflict`（`details.reason = "account_exists"`）。
+   * 服务端关了口令登录（`auth.password` 不在能力里）且那个账号没有任何第三方身份、也不是运营账号时才绑定并登录（0.15.0 起收紧），
+   * 否则 `409 conflict`（`details.reason = "account_exists"`），用户用原有方式登录后在设置里显式绑定。
    * 提供方给的邮箱未验证答 `403 email_unverified`。Cookie 会话多带 `csrfToken`。
    */
   oauthFinish: base
@@ -396,11 +444,56 @@ export const auth = {
       }),
     )
     .output(z.union([cookieSessionResultSchema, mfaChallengeResultSchema])),
-  /** 解绑第三方登录；至少要留一种登录方式。 */
+  /**
+   * 绑定第三方登录的授权地址（0.15.0 起，cloud-api §29）：会话必须已提权，否则 `401 mfa_required`；
+   * 按账号限流（每小时 10 次）。state 的目的是 `link`，绑定账号、设备与浏览器随机数。能力 `auth.oauth-link`。
+   */
+  oauthLinkStart: base
+    .route({ method: "POST", path: "/v1/auth/oauth/{provider}/link/start" })
+    .meta(since15)
+    .errors(
+      errors.pick("mfa_required", "rate_limited", "bad_request", "not_found"),
+    )
+    .input(
+      z.object({
+        provider: oauthProviderSchema,
+        redirectUri: z.url().max(2048),
+      }),
+    )
+    .output(oauthStartOutputSchema),
+  /**
+   * 完成绑定（0.15.0 起）：提供方邮箱必须已验证（`403 email_unverified`），但不要求等于账号邮箱，
+   * 也不改账号邮箱与显示名。身份已属别的账号答 `409 conflict`（`details.reason = "identity_linked"`，不透露是谁），
+   * 本账号该提供方已有身份答 `409 conflict`（`details.reason = "provider_linked"`）。
+   */
+  oauthLinkFinish: base
+    .route({ method: "POST", path: "/v1/auth/oauth/{provider}/link/finish" })
+    .meta(since15)
+    .errors(
+      errors.pick(
+        "mfa_required",
+        "credentials_invalid",
+        "email_unverified",
+        "conflict",
+        "rate_limited",
+      ),
+    )
+    .input(
+      z.object({
+        provider: oauthProviderSchema,
+        state: z.string(),
+        code: z.string(),
+      }),
+    )
+    .output(linkedProviderSchema),
+  /**
+   * 解绑第三方登录；会话必须已提权（0.15.0 起，否则 `401 mfa_required`）。「至少留一种登录方式」只算此刻能用的：
+   * 服务端已配置的提供方，加上已设口令且口令登录开着；运营的口令加 TOTP 只进运营会话，不算。
+   */
   oauthUnlink: base
     .route({ method: "DELETE", path: "/v1/auth/oauth/{provider}" })
     .meta(since10("session"))
-    .errors(errors.pick("not_found", "conflict"))
+    .errors(errors.pick("not_found", "conflict", "mfa_required"))
     .input(z.object({ provider: oauthProviderSchema }))
     .output(empty),
 };

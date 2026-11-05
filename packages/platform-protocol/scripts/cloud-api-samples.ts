@@ -369,6 +369,18 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
     input: { password: "correct horse battery staple" },
     output: { elevatedUntilMs: NOW + 10 * 60_000 },
   },
+  "auth.stepUpOAuthStart": {
+    input: {
+      provider: "github",
+      redirectUri: "https://app.armadra.test/login/oauth/github",
+    },
+    output: {
+      authorizationUrl:
+        "https://github.com/login/oauth/authorize?state=test-state",
+      state: "test-state",
+      expiresAtMs: NOW + 600_000,
+    },
+  },
   "auth.logout": { input: {}, output: {} },
   "auth.deviceStart": {
     input: { device: { platform: "server", name: "armadra-server" } },
@@ -1204,6 +1216,44 @@ export const CLOUD_API_SAMPLES: Record<string, Sample> = {
   },
   "auth.deviceDeny": { input: { userCode: "BCDF-GHJK" }, output: {} },
   "auth.oauthUnlink": { input: { provider: "github" }, output: {} },
+  "auth.oauthLinkStart": {
+    input: {
+      provider: "github",
+      redirectUri: "https://app.armadra.test/login/oauth/github",
+    },
+    output: {
+      authorizationUrl:
+        "https://github.com/login/oauth/authorize?state=test-state",
+      state: "test-state",
+      expiresAtMs: NOW + 600_000,
+    },
+  },
+  "auth.oauthLinkFinish": {
+    input: { provider: "github", state: "test-state", code: "test-code" },
+    output: {
+      provider: "github",
+      login: "octocat",
+      email: "dev@armadra.test",
+      linkedAtMs: NOW,
+    },
+  },
+  "me.signInMethods": {
+    input: {},
+    output: {
+      password: false,
+      totp: false,
+      providers: [
+        {
+          provider: "github",
+          login: "octocat",
+          email: "dev@armadra.test",
+          linkedAtMs: NOW,
+          lastUsedAtMs: NOW,
+        },
+      ],
+      stepUp: ["oauth"],
+    },
+  },
   "me.notificationPrefs": {
     input: {},
     output: {

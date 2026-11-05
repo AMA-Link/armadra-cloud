@@ -51,6 +51,11 @@ export const SINCE_0_10 = "0.10.0";
  * 变化，协议仍是 1.4。
  */
 export const SINCE_0_11 = "0.11.0";
+/**
+ * 协议包 0.15.0：只给云端控制台 API 加东西（OAuth 提权、绑定第三方登录、登录方式查询），
+ * 全是加法，协议仍是 1.4（cloud-api §29）。
+ */
+export const SINCE_0_15 = "0.15.0";
 
 /** 契约构建器：每条 procedure 都必须 `.meta({ scope, since })`。 */
 export const base = oc.$meta<CloudMeta>({ scope: [], since: "" });

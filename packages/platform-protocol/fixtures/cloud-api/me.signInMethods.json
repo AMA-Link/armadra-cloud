@@ -1,0 +1,19 @@
+{
+  "input": {},
+  "output": {
+    "password": false,
+    "totp": false,
+    "providers": [
+      {
+        "provider": "github",
+        "login": "octocat",
+        "email": "dev@armadra.test",
+        "linkedAtMs": 1760000000000,
+        "lastUsedAtMs": 1760000000000
+      }
+    ],
+    "stepUp": [
+      "oauth"
+    ]
+  }
+}

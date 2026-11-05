@@ -85,6 +85,10 @@ export const CONTRACT_SECTIONS: Record<string, string> = {
   "auth.oauthStart": "§29",
   "auth.oauthFinish": "§29",
   "auth.oauthUnlink": "§29",
+  "auth.stepUpOAuthStart": "§29",
+  "auth.oauthLinkStart": "§29",
+  "auth.oauthLinkFinish": "§29",
+  "me.signInMethods": "§29",
   "me.emailChange": "§29",
   "me.spaces": "§29",
   "me.securityLog": "§29",
@@ -147,8 +151,11 @@ export * from "./saas-schemas.ts";
 export {
   deviceStartOutputSchema,
   devicePollOutputSchema,
+  linkedProviderSchema,
   OAUTH_PROVIDERS,
   oauthProviderSchema,
+  oauthStartOutputSchema,
+  oauthStepUpInputSchema,
   passkeySchema,
 } from "./contract/auth.ts";
 export {
@@ -163,6 +170,8 @@ export { createLinkInputSchema } from "./contract/links.ts";
 export {
   meDeviceSchema,
   securityEventSchema,
+  signInMethodsSchema,
+  STEP_UP_METHODS,
   TRAFFIC_GRANULARITIES,
   TRAFFIC_KINDS,
   TRAFFIC_MAX_ROWS,
