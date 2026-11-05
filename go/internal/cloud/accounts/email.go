@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"context"
+	"strings"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/AMA-Link/armadra-cloud/go/internal/cloud/audit"
@@ -277,7 +278,8 @@ func (s *Service) passwordResetFinish(ctx context.Context, call *api.Call) (any,
 	return map[string]any{}, nil
 }
 
-// meEmailChange 是 me.emailChange：口令比对（计入锁定）→ 新地址未被占用 → 给新地址插确认邮件；
+// meEmailChange 是 me.emailChange：带口令就比对（计入锁定），不带就要求会话在提权窗口内（否则 401 mfa_required；
+// 只有第三方登录的账号没有口令）→ 新地址未被占用 → 同事务给新地址插确认邮件、给旧地址插「申请改邮箱」通知（新地址打码）；
 // 验证前旧邮箱照常生效。按账号每小时 3 次（与重发验证邮件同一个桶）。
 func (s *Service) meEmailChange(ctx context.Context, call *api.Call) (any, error) {
 	caller, err := call.Caller(ctx)
@@ -285,8 +287,8 @@ func (s *Service) meEmailChange(ctx context.Context, call *api.Call) (any, error
 		return nil, err
 	}
 	var in struct {
-		NewEmail string `json:"newEmail"`
-		Password string `json:"password"`
+		NewEmail string  `json:"newEmail"`
+		Password *string `json:"password"`
 	}
 	if err := call.Bind(&in); err != nil {
 		return nil, err
@@ -298,7 +300,11 @@ func (s *Service) meEmailChange(ctx context.Context, call *api.Call) (any, error
 	if err := s.limits.Check(ctx, httpx.LimitVerifyAcct, account.AccountID); err != nil {
 		return nil, err
 	}
-	if err := core.VerifyPassword(ctx, s.c, &account.AccountRecord, in.Password, s.nowMs()); err != nil {
+	if in.Password != nil {
+		if err := core.VerifyPassword(ctx, s.c, &account.AccountRecord, *in.Password, s.nowMs()); err != nil {
+			return nil, err
+		}
+	} else if err := s.requireElevated(caller); err != nil {
 		return nil, err
 	}
 	newEmail := normalizeEmail(in.NewEmail)
@@ -318,9 +324,16 @@ func (s *Service) meEmailChange(ctx context.Context, call *api.Call) (any, error
 		if err := audit.WriteSecurity(ctx, tx, s.tenant(), nowMs, who, audit.SecurityEmailChangeAsked); err != nil {
 			return err
 		}
-		return s.mail.Enqueue(ctx, tx, mail.Mail{
+		if err := s.mail.Enqueue(ctx, tx, mail.Mail{
 			Template: mail.EmailChange, Locale: account.Locale, To: newEmail, AccountID: account.AccountID,
 			Params: mail.Params{DisplayName: greetName(account)},
+		}); err != nil {
+			return err
+		}
+		// 申请时旧地址就收到通知：新地址打码，万一账号被别人动了，真正的主人还来得及发现。
+		return s.mail.Enqueue(ctx, tx, mail.Mail{
+			Template: mail.EmailChangeRequested, Locale: account.Locale, To: account.Email,
+			Params: mail.Params{DisplayName: greetName(account), NewEmail: maskEmail(newEmail)},
 		})
 	})
 	if err != nil {
@@ -345,4 +358,13 @@ func greetName(account *saas.Account) string {
 		return ""
 	}
 	return mail.SanitizeLabel(account.DisplayName, 64)
+}
+
+// maskEmail 把邮箱的本地部分遮成首字符加 ***（域名保留），写进旧地址的通知里。
+func maskEmail(email string) string {
+	local, domain, ok := strings.Cut(email, "@")
+	if !ok || local == "" {
+		return "***"
+	}
+	return string([]rune(local)[:1]) + "***@" + domain
 }
