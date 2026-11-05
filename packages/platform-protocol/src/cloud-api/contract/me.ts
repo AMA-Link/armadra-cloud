@@ -2,7 +2,8 @@ import { z } from "zod";
 
 import { devicePlatformSchema } from "../../assertion/claims.ts";
 import { errors } from "../../errors/registry.ts";
-import { base, SINCE_0_1, SINCE_0_5, SINCE_0_10 } from "../meta.ts";
+import { linkedProviderSchema } from "./auth.ts";
+import { base, SINCE_0_1, SINCE_0_5, SINCE_0_10, SINCE_0_15 } from "../meta.ts";
 import {
   msQuery,
   nextCursorSchema,
@@ -72,6 +73,21 @@ export const securityEventSchema = z.object({
   atMs: z.number().int(),
 });
 
+export const STEP_UP_METHODS = ["password", "totp", "oauth"] as const;
+
+/** 登录方式一览（`me.signInMethods`，0.15.0 起）：不含任何令牌与口令。 */
+export const signInMethodsSchema = z.object({
+  /** 账号设过口令且服务端口令登录开着。 */
+  password: z.boolean(),
+  totp: z.boolean(),
+  providers: z.array(
+    linkedProviderSchema.extend({ lastUsedAtMs: z.number().int().optional() }),
+  ),
+  /** 此刻可用来提权的方式。 */
+  stepUp: z.array(z.enum(STEP_UP_METHODS)),
+});
+
+const since15me = { scope: ["session"], since: SINCE_0_15 } as const;
 const session10 = { scope: ["session"], since: SINCE_0_10 } as const;
 
 export const me = {
@@ -118,7 +134,10 @@ export const me = {
     .errors(errors.pick("bad_request"))
     .input(trafficInputSchema)
     .output(z.object({ buckets: z.array(trafficBucketSchema) })),
-  /** 改邮箱要验证新地址（`auth.emailVerify`），并通知旧地址；验证前旧邮箱照常生效。 */
+  /**
+   * 改邮箱要验证新地址（`auth.emailVerify`）；申请时旧地址就收到通知（新地址打码），验证前旧邮箱照常生效。
+   * 0.15.0 起 `password` 可省：不带则会话必须在提权窗口内，否则 `401 mfa_required`（OAuth-only 账号没有口令）。
+   */
   emailChange: base
     .route({ method: "POST", path: "/v1/me/email" })
     .meta(session10)
@@ -128,10 +147,17 @@ export const me = {
         "credentials_invalid",
         "rate_limited",
         "bad_request",
+        "mfa_required",
       ),
     )
-    .input(z.object({ newEmail: z.email(), password: z.string() }))
+    .input(z.object({ newEmail: z.email(), password: z.string().optional() }))
     .output(empty),
+  /** 登录方式与可用的提权方式（0.15.0 起，cloud-api §29）。 */
+  signInMethods: base
+    .route({ method: "GET", path: "/v1/me/sign-in-methods" })
+    .meta(since15me)
+    .input(empty)
+    .output(signInMethodsSchema),
   /** 通知偏好（M2）：邀请、访问申请、主机上下线按类开关邮件；安全类邮件不能关。 */
   notificationPrefs: base
     .route({ method: "GET", path: "/v1/me/notification-prefs" })

@@ -677,6 +677,57 @@ describe("挑战（§16）与节点回报（§17）", () => {
     );
   });
 
+  it("OAuth 提权、绑定与登录方式（0.15.0，只加不改）", () => {
+    expect(PLATFORM_CAPABILITIES).toEqual(
+      expect.arrayContaining(["auth.oauth-link", "auth.step-up-oauth"]),
+    );
+    const byKey = new Map(listProcedures().map((one) => [one.key, one]));
+    for (const key of [
+      "auth.stepUpOAuthStart",
+      "auth.oauthLinkStart",
+      "auth.oauthLinkFinish",
+      "me.signInMethods",
+    ]) {
+      expect(sectionOf(key), key).toBe("§29");
+      expect(byKey.get(key)?.meta.since, key).toBe("0.15.0");
+      expect(byKey.get(key)?.meta.scope, key).toEqual(["session"]);
+    }
+    const codes = (key: string) => byKey.get(key)?.errorCodes ?? [];
+    for (const key of [
+      "auth.oauthLinkStart",
+      "auth.oauthLinkFinish",
+      "auth.oauthUnlink",
+      "me.emailChange",
+    ])
+      expect(codes(key), key).toContain("mfa_required");
+    const stepUp = input("auth.stepUp");
+    const oauth = { provider: "github", state: "s", code: "c" };
+    expect(stepUp.safeParse({ oauth }).success).toBe(true);
+    expect(stepUp.safeParse({}).success).toBe(false);
+    expect(
+      stepUp.safeParse({ oauth: { ...oauth, provider: "x" } }).success,
+    ).toBe(false);
+    // 改邮箱的口令可省。
+    const change = input("me.emailChange");
+    expect(change.safeParse({ newEmail: "a@b.test" }).success).toBe(true);
+    expect(
+      change.safeParse({ newEmail: "a@b.test", password: "x" }).success,
+    ).toBe(true);
+    const methods = output("me.signInMethods");
+    const sample = readJsonFixture("cloud-api/me.signInMethods.json") as {
+      output: unknown;
+    };
+    expect(methods.safeParse(sample.output).success).toBe(true);
+    expect(
+      methods.safeParse({
+        password: false,
+        totp: false,
+        providers: [],
+        stepUp: ["email"],
+      }).success,
+    ).toBe(false);
+  });
+
   it("platform.info.challenge 可选，scope 至少一条", () => {
     const info = output("platform.info");
     const base = {

@@ -159,7 +159,38 @@ var RouteInputs = map[string]*schema.Schema{
 					Type: "string",
 				},
 			}},
+			{Name: "oauth", Schema: &schema.Schema{
+				Type: "object",
+				Properties: []schema.Property{
+					{Name: "provider", Schema: &schema.Schema{
+						Type: "string",
+						Enum: []any{"github", "google"},
+					}},
+					{Name: "state", Schema: &schema.Schema{
+						Type: "string",
+					}},
+					{Name: "code", Schema: &schema.Schema{
+						Type: "string",
+					}},
+				},
+				Required: []string{"provider", "state", "code"},
+			}},
 		},
+	},
+	"auth.stepUpOAuthStart": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "provider", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"github", "google"},
+			}},
+			{Name: "redirectUri", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(2048),
+				Format:    "uri",
+			}},
+		},
+		Required: []string{"provider", "redirectUri"},
 	},
 	"auth.logout": &schema.Schema{
 		Type: "object",
@@ -455,6 +486,37 @@ var RouteInputs = map[string]*schema.Schema{
 		},
 		Required: []string{"provider", "state", "code", "device"},
 	},
+	"auth.oauthLinkStart": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "provider", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"github", "google"},
+			}},
+			{Name: "redirectUri", Schema: &schema.Schema{
+				Type:      "string",
+				MaxLength: schema.Int(2048),
+				Format:    "uri",
+			}},
+		},
+		Required: []string{"provider", "redirectUri"},
+	},
+	"auth.oauthLinkFinish": &schema.Schema{
+		Type: "object",
+		Properties: []schema.Property{
+			{Name: "provider", Schema: &schema.Schema{
+				Type: "string",
+				Enum: []any{"github", "google"},
+			}},
+			{Name: "state", Schema: &schema.Schema{
+				Type: "string",
+			}},
+			{Name: "code", Schema: &schema.Schema{
+				Type: "string",
+			}},
+		},
+		Required: []string{"provider", "state", "code"},
+	},
 	"auth.oauthUnlink": &schema.Schema{
 		Type: "object",
 		Properties: []schema.Property{
@@ -532,7 +594,10 @@ var RouteInputs = map[string]*schema.Schema{
 				Type: "string",
 			}},
 		},
-		Required: []string{"newEmail", "password"},
+		Required: []string{"newEmail"},
+	},
+	"me.signInMethods": &schema.Schema{
+		Type: "object",
 	},
 	"me.notificationPrefs": &schema.Schema{
 		Type: "object",

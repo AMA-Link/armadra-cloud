@@ -1,0 +1,11 @@
+{
+  "input": {
+    "provider": "github",
+    "redirectUri": "https://app.armadra.test/login/oauth/github"
+  },
+  "output": {
+    "authorizationUrl": "https://github.com/login/oauth/authorize?state=test-state",
+    "state": "test-state",
+    "expiresAtMs": 1760000600000
+  }
+}
