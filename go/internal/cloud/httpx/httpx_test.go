@@ -292,14 +292,15 @@ func TestRulesMatchDesignTable(t *testing.T) {
 		httpx.LimitInviteResend:  {Max: 5, Window: time.Hour},
 		httpx.LimitOAuthStartIP:  {Max: 20, Window: time.Minute},
 		httpx.LimitOAuthFinishIP: {Max: 20, Window: time.Minute},
+		httpx.LimitOAuthLinkAcct: {Max: 10, Window: time.Hour},
 	}
 	for kind, rule := range want {
 		if httpx.Rules[kind] != rule {
 			t.Errorf("%s：%+v", kind, httpx.Rules[kind])
 		}
 	}
-	if len(httpx.Rules) != 20 {
-		t.Errorf("§5.4 共 20 种：%d", len(httpx.Rules))
+	if len(httpx.Rules) != 21 {
+		t.Errorf("§5.4 共 21 种：%d", len(httpx.Rules))
 	}
 }
 
