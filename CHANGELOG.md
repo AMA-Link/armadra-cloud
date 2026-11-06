@@ -1,5 +1,12 @@
 # Changelog
 
+## 未发布 / Unreleased
+
+### 修复 / Fixed
+
+- 没配 SMTP 时丢掉的积压邮件不再留下孤儿作业（Closes #203）：发件箱超过积压上限删最旧的邮件时，它们没做完的 `mail.send` 作业此前只删没被锁着的；正被别的工作者（或做清理的作业自己）锁着的那个留下来，发件箱行已经没了，作业却每 5 分钟被领一次、再延后一次。现在连锁着的一起删，持锁方随后的放开、完成都是带工作者条件的更新，行不在就是空操作。配上 SMTP 后旧版本留下的孤儿会自行完成，不需要清理。
+  Mail dropped from the backlog while SMTP is not configured no longer leaves orphan jobs (Closes #203): when the outbox exceeds its backlog cap and the oldest mails are deleted, their unfinished `mail.send` jobs were only deleted if unlocked; one locked by another worker (or by the trimming job itself) stayed behind without an outbox row and was claimed and deferred again every 5 minutes. Locked jobs are now deleted too; the lock holder's later release or completion is an update conditioned on its worker id and is a no-op once the row is gone. Orphans left by older versions complete on their own once SMTP is configured; no cleanup is needed.
+
 ## 0.15.0（2026-11-05）
 
 ### 新增 / Added
