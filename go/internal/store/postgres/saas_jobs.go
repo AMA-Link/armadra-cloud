@@ -99,6 +99,9 @@ func (r jobRepo) CancelUnsentMail(ctx context.Context, tenantID, accountID, temp
 
 // TrimOutbox 不按账号加锁：只在没配 SMTP 时由 mail.send 调用，与别的事务抢发件箱行时若死锁，
 // saas.Store.Tx 回滚后重跑（最多 3 次），作业本身也会被重试，可以接受。
+// 被删发件对应的作业连锁着的也一起删：发件箱行已经没了，留下作业就是每次延后再空转的孤儿
+// （包括正在做 trim 的作业自己）。持锁方随后的 Release / Complete / Fail / Extend 都带
+// locked_by = 本工作者的条件，行没了只是改 0 行，不出错。
 func (r jobRepo) TrimOutbox(ctx context.Context, tenantID string, keep int) (int, error) {
 	rows, err := r.q.Query(ctx,
 		`DELETE FROM outbox_emails WHERE tenant_id = $1 AND email_id IN (
@@ -126,7 +129,7 @@ func (r jobRepo) TrimOutbox(ctx context.Context, tenantID string, keep int) (int
 	dropped := len(jobIDs)
 	if dropped > 0 {
 		if _, err := r.q.Exec(ctx,
-			"DELETE FROM jobs WHERE tenant_id = $1 AND job_id = ANY($2) AND done_at_ms IS NULL AND locked_by IS NULL", tenantID, jobIDs); err != nil {
+			"DELETE FROM jobs WHERE tenant_id = $1 AND job_id = ANY($2) AND done_at_ms IS NULL", tenantID, jobIDs); err != nil {
 			return 0, err
 		}
 	}
