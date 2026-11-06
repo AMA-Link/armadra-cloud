@@ -3,6 +3,7 @@ package mail_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -117,6 +118,49 @@ func (e *env) eventually(what string, ok func() bool) {
 		}
 	}
 	e.t.Fatalf("超时：%s", what)
+}
+
+// deferredMailJobs 数延后、不计尝试的 mail.send 作业（run_at 在一分钟以后）。
+func (e *env) deferredMailJobs() int {
+	e.t.Helper()
+	return e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND attempts = 0 AND locked_by IS NULL AND last_error IS NULL AND run_at_ms > $1",
+		e.clock.Now().UnixMilli()+int64(time.Minute/time.Millisecond))
+}
+
+// eventuallyJobs 同 eventually，超时时列出全部 mail.send 作业的状态。
+func (e *env) eventuallyJobs(what string, ok func() bool) {
+	e.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	e.t.Fatalf("超时：%s；现在 %d，作业：%s", what, e.clock.Now().UnixMilli(), e.mailJobs())
+}
+
+// mailJobs 列出全部 mail.send 作业的 job_id / attempts / locked_by / run_at_ms，供失败信息用。
+func (e *env) mailJobs() string {
+	e.t.Helper()
+	rows, err := e.db.Pool().Query(e.ctx,
+		"SELECT job_id, attempts, coalesce(locked_by, ''), run_at_ms FROM jobs WHERE kind = 'mail.send' ORDER BY job_id")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id, runAt int64
+		var attempts int
+		var lockedBy string
+		if err := rows.Scan(&id, &attempts, &lockedBy, &runAt); err != nil {
+			e.t.Fatal(err)
+		}
+		out = append(out, fmt.Sprintf("{id=%d attempts=%d locked_by=%q run_at=%d}", id, attempts, lockedBy, runAt))
+	}
+	if err := rows.Err(); err != nil {
+		e.t.Fatal(err)
+	}
+	return strings.Join(out, " ")
 }
 
 func (e *env) count(sql string, args ...any) (n int) {
@@ -453,10 +497,7 @@ func TestWithoutSMTPJobsAreDeferredBacklogIsCappedAndNoTokenIsMinted(t *testing.
 	e.eventually("积压只留最新的 3 封", func() bool {
 		return e.count("SELECT count(*) FROM outbox_emails") == 3 && e.mail.Dropped() == 2
 	})
-	e.eventually("作业延后、不计尝试", func() bool {
-		return e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND attempts = 0 AND locked_by IS NULL AND last_error IS NULL AND run_at_ms > $1",
-			e.clock.Now().UnixMilli()+int64(time.Minute/time.Millisecond)) == 3
-	})
+	e.eventuallyJobs("作业延后、不计尝试", func() bool { return e.deferredMailJobs() == 3 })
 	if e.count("SELECT count(*) FROM email_tokens") != 0 {
 		t.Fatal("没配 SMTP 不生成令牌")
 	}
@@ -465,6 +506,43 @@ func TestWithoutSMTPJobsAreDeferredBacklogIsCappedAndNoTokenIsMinted(t *testing.
 	}
 	// 没配 SMTP 不算发信失败，只计丢掉的积压。
 	e.expectMetrics(0, 0, 0, 2)
+}
+
+// 被丢掉的邮件，作业就算正被别的工作者（或做 trim 的作业自己）锁着也一起删，不留孤儿作业；
+// 持锁方随后放开一个已不存在的作业是空操作。
+func TestTrimDropsJobsEvenWhileLocked(t *testing.T) {
+	e := openWith(t, mail.Disabled(), 3)
+	e.runner.Stop(5 * time.Second)
+	e.account("a1", "ann@example.test")
+	for range 5 {
+		e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleEN, To: "ann@example.test", AccountID: "a1"})
+		e.clock.Advance(time.Millisecond) // created_at_ms 与 run_at_ms 区分先后
+	}
+	held, err := e.store.Queue().Claim(e.ctx, tenant, "held", []string{"mail.send"}, e.clock.Now().UnixMilli(), 60_000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldest := e.count("SELECT min(job_id)::int FROM jobs WHERE kind = 'mail.send'")
+	if len(held) != 1 || held[0].ID != int64(oldest) {
+		t.Fatalf("手动锁住最旧的作业：%+v，最旧 %d", held, oldest)
+	}
+	// 一个工作者处理剩下 4 封：第一次 trim 删最旧 2 封的发件箱行，连同锁着的第 1 封与正在处理的第 2 封的作业。
+	runner := jobs.New(jobs.Options{Store: e.store, TenantID: tenant, Workers: 1, Now: e.clock.Now, Poll: 20 * time.Millisecond})
+	e.mail.Register(runner)
+	runner.Start()
+	t.Cleanup(func() { runner.Stop(5 * time.Second) })
+	e.eventuallyJobs("只剩 3 个延后的作业", func() bool {
+		return e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send'") == 3 && e.deferredMailJobs() == 3 && e.mail.Dropped() == 2
+	})
+	if e.count("SELECT count(*) FROM jobs WHERE job_id = $1", held[0].ID) != 0 {
+		t.Fatal("锁着的作业随发件一起删")
+	}
+	if err := e.store.Queue().Release(e.ctx, tenant, held[0].ID, "held", 0); err != nil {
+		t.Fatalf("放开已删的作业：%v", err)
+	}
+	if n := e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send'"); n != 3 {
+		t.Fatalf("放开已删的作业不该留下行：%d", n)
+	}
 }
 
 // 排队期间账号邮箱换了：寄往旧地址的找回口令邮件丢掉，不发。
