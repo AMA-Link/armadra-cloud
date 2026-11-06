@@ -1,6 +1,13 @@
 # Changelog
 
-## 未发布 / Unreleased
+## 0.15.1（2026-11-06）
+
+### 变更 / Changed
+
+- 发版 0.15.1（与 Armadra、armadra-agent 统一的修复版）：本版只有下面这条修复和开发链的依赖安全升级（vitest 4.1.12、wrangler 4.155.0、`@cloudflare/vitest-plugin` 1.4.10，#212，只动开发依赖，镜像内容不变）。协议包 `@armadra/platform-protocol` 0.15.1 没有形状变化，仍是协议 1.4（`Armadra-Protocol: 1.4`，`deploy/compat.json` 的 `protocol` 不变）；`MIN_CORE_VERSION_TEAM_ASSERTION`（0.10.0）与 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`（0.11.0）不变。没有新的数据库迁移，没有新的环境变量，Workers 中继没有代码改动。
+  Release 0.15.1 (a fix release unified with Armadra and armadra-agent): it carries only the fix below and dev-toolchain dependency security updates (vitest 4.1.12, wrangler 4.155.0, `@cloudflare/vitest-plugin` 1.4.10, #212; dev dependencies only, image contents unchanged). The protocol package `@armadra/platform-protocol` 0.15.1 has no shape changes and is still protocol 1.4 (`Armadra-Protocol: 1.4`; the `protocol` of `deploy/compat.json` is unchanged); `MIN_CORE_VERSION_TEAM_ASSERTION` (0.10.0) and `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION` (0.11.0) are unchanged. There are no new database migrations, no new environment variables and no Workers relay code changes.
+- 部署注意：**先发 Armadra v0.15.1，再打本仓标签**：`deploy/compat.json` 的 `web` 改为 0.15.1，发布构建据此把 `ghcr.io/ama-link/armadra-server:0.15.1` 的页面拷进 `armadra-cloud` 镜像，镜像不存在时构建失败；把自建页面挂到 `/app/web` 的部署也要换成 0.15.1 的页面。
+  Deployment note: **release Armadra v0.15.1 before tagging this repository**: `web` in `deploy/compat.json` becomes 0.15.1 and the release build copies the pages of `ghcr.io/ama-link/armadra-server:0.15.1` into the `armadra-cloud` image, so the build fails while that image does not exist; deployments that mount their own pages at `/app/web` must switch to the 0.15.1 pages too.
 
 ### 修复 / Fixed
 
