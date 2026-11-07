@@ -523,6 +523,39 @@ func trafficRetentionOf(values Values, env Env) (int, error) {
 	return days, nil
 }
 
+var dailyBytesRe = regexp.MustCompile(`^(\d{1,18})\s*([KkMmGgTt]?)(?:[iI]?[bB])?$`)
+
+// dailyMax 是每日配额的上限（2^60，远大于任何真实值，只拦溢出）。
+const dailyMax = int64(1) << 60
+
+// dailyOf 解 --daily-requests / --daily-bytes：0 或没给 = 不限；字节可带 K / M / G / T（二进制，1K = 1024），
+// 后面可跟 B 或 iB（10G、10GB、10GiB 同义）。
+func dailyOf(values Values, env Env, flag, variable string, bytes bool) (int64, error) {
+	text, ok := values.pickNonEmpty(flag, env, variable)
+	if !ok {
+		return 0, nil
+	}
+	trimmed := strings.TrimSpace(text)
+	var n, unit int64 = 0, 1
+	if bytes {
+		m := dailyBytesRe.FindStringSubmatch(trimmed)
+		if m == nil {
+			return 0, Usagef("--%s 要是 0 或字节数，可带 K、M、G、T 单位，例如 10G：%s", flag, text)
+		}
+		n, _ = strconv.ParseInt(m[1], 10, 64)
+		unit = map[string]int64{"": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40}[strings.ToLower(m[2])]
+	} else {
+		if !digitsRe.MatchString(trimmed) || len(trimmed) > 18 {
+			return 0, Usagef("--%s 要是 0（不限）或正整数：%s", flag, text)
+		}
+		n, _ = strconv.ParseInt(trimmed, 10, 64)
+	}
+	if n > dailyMax/unit {
+		return 0, Usagef("--%s 太大：%s", flag, text)
+	}
+	return n * unit, nil
+}
+
 var rateLimitFlags = []struct {
 	flag, variable string
 	field          func(*RateLimits) *int
@@ -650,7 +683,7 @@ var serveFlags = withDatabase(
 	"limit-anonymous", "limit-preflight", "limit-token", "limit-account",
 	"trusted-proxy", "trusted-proxy-prefer", "name",
 	"challenge", "turnstile-site-key", "turnstile-secret-file", "turnstile-hostnames", "challenge-scope",
-	"traffic-retention-days",
+	"traffic-retention-days", "daily-requests", "daily-bytes",
 )
 
 // controlOf 是 --control、--redis-url 与 --node-id。
@@ -807,6 +840,17 @@ func ParseServe(argv []string, env Env, cwd string) (ServeOptions, error) {
 	if err != nil {
 		return ServeOptions{}, err
 	}
+	dailyRequests, err := dailyOf(values, env, "daily-requests", "RELAY_DAILY_REQUESTS", false)
+	if err != nil {
+		return ServeOptions{}, err
+	}
+	dailyBytes, err := dailyOf(values, env, "daily-bytes", "RELAY_DAILY_BYTES", true)
+	if err != nil {
+		return ServeOptions{}, err
+	}
+	if (dailyRequests > 0 || dailyBytes > 0) && retention == 0 {
+		return ServeOptions{}, Usagef("每日配额靠流量统计恢复与对齐：--daily-requests / --daily-bytes 不能和 --traffic-retention-days 0 一起用")
+	}
 	control, redis, nodeID, err := controlOf(values, env, host, common.Database)
 	if err != nil {
 		return ServeOptions{}, err
@@ -817,6 +861,7 @@ func ParseServe(argv []string, env Env, cwd string) (ServeOptions, error) {
 		Account: account, PasswordFile: passwordFile, ACME: acme,
 		RateLimits: rateLimits, TrustedProxy: trustedProxy, Name: name, Challenge: challenge,
 		TrafficRetentionDays: retention,
+		DailyRequests:        dailyRequests, DailyBytes: dailyBytes,
 	}
 	if publicText != "" {
 		if options.PublicOrigin, err = originOf(publicText); err != nil {

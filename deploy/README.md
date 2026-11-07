@@ -97,6 +97,8 @@
 | `--limit-preflight` / `RELAY_LIMIT_PREFLIGHT`                 |      | 0.5.0 起不再使用（中继不答 CORS 预检），仍接受                                                                                    |
 | `--limit-token` / `RELAY_LIMIT_TOKEN`                         |      | 有效中继令牌每分钟上限，缺省 1200                                                                                                 |
 | `--limit-account` / `RELAY_LIMIT_ACCOUNT`                     |      | 同一账号全部令牌每分钟上限，缺省 3600                                                                                             |
+| `--daily-requests` / `RELAY_DAILY_REQUESTS`                   |      | 每个 UTC 日经中继的端到端通道数上限，缺省 0（不限）；超额的新通道以 `4429 rate_limited`（关闭原因 `daily_budget_exceeded`）被拒，到下一个 UTC 零点恢复 |
+| `--daily-bytes` / `RELAY_DAILY_BYTES`                         |      | 每个 UTC 日经中继的字节数上限，双向合计，缺省 0（不限）；可写 `10G`、`500M`（二进制单位）；已建立的流不切断                         |
 | `--challenge` / `RELAY_CHALLENGE`                             |      | 人机挑战：`turnstile` / `off`（缺省）；开了以后 `platform.info` 报 `challenge`，登录缺令牌答 `400 challenge_required`（契约 §16） |
 | `--turnstile-site-key` / `RELAY_TURNSTILE_SITE_KEY`           |      | Turnstile 站点密钥（不是秘密）；`--challenge turnstile` 必填                                                                      |
 | `--turnstile-secret-file` / `RELAY_TURNSTILE_SECRET_FILE`     |      | Turnstile secret 文件（compose 用 secret 挂载）；`--challenge turnstile` 必填                                                     |

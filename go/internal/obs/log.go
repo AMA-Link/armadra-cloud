@@ -92,6 +92,11 @@ func Reasons(v string) Field     { return str("reasons", v) }
 func Failures(v int) Field       { return num("failures", int64(v)) }
 func Dropped(v int) Field        { return num("dropped", int64(v)) }
 
+// 个人中转的每日配额：上限与到下一个 UTC 零点的等待，只有数字。
+func DailyRequests(v int64) Field     { return num("dailyRequests", v) }
+func DailyBytes(v int64) Field        { return num("dailyBytes", v) }
+func RetryAfterSeconds(v int64) Field { return num("retryAfterSeconds", v) }
+
 // armadra-cloud 的进程与请求字段：版本、请求 id、数量，同样不含请求内容与凭据。
 func Version(v string) Field   { return str("version", v) }
 func RequestID(v string) Field { return str("requestId", v) }

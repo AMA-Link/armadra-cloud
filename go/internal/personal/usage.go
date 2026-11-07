@@ -71,4 +71,9 @@ serve:
   --turnstile-secret-file F Turnstile secret 文件（或 RELAY_TURNSTILE_SECRET_FILE）
   --turnstile-hostnames L  允许的 siteverify 主机名，逗号分隔（或 RELAY_TURNSTILE_HOSTNAMES）；空 = 拒绝一切；https 公网地址下不得含本机
   --challenge-scope LIST   要挑战的 procedure：auth.login、links.accept、auth.changePassword，逗号分隔（或 RELAY_CHALLENGE_SCOPE），默认 auth.login
-  --traffic-retention-days N 流量统计保留天数（或 RELAY_TRAFFIC_RETENTION_DAYS），默认 90，0 = 不记录`
+  --traffic-retention-days N 流量统计保留天数（或 RELAY_TRAFFIC_RETENTION_DAYS），默认 90，0 = 不记录
+  --daily-requests N       每个 UTC 日经中继的端到端通道数上限（或 RELAY_DAILY_REQUESTS），默认 0 = 不限
+  --daily-bytes N          每个 UTC 日经中继的字节数上限，双向合计（或 RELAY_DAILY_BYTES），默认 0 = 不限；
+                           可写 10G、500M（二进制单位 K / M / G / T）。超额时新通道以 4429 rate_limited
+                           （关闭原因 daily_budget_exceeded）被拒，已建立的流不切断，到下一个 UTC 零点恢复；
+                           用量从流量统计恢复，所以不能和 --traffic-retention-days 0 同用`
