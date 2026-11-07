@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "端到端用的假 core（Node http + ws 的隧道客户端），给 scripts/e2e 的 saas 与 workers 模式连中继用（不发布）",
+  "description": "端到端用的假 core（Node http + ws 的隧道客户端），给 scripts/e2e 的 saas 与 saas-nodes 模式连中继用（不发布）",
   "exports": {
     "./*": "./src/*.ts"
   },
@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@armadra/platform-protocol": "workspace:*",
-    "@armadra/relay-kernel": "workspace:*",
     "ws": "8.21.0"
   },
   "devDependencies": {

@@ -1,13 +1,13 @@
 /**
  * `TunnelStream`：一条隧道流的 `stream.Duplex` 适配（中继设计 §3.3、协议包 §3.3）。信用、
- * 队列与关闭规则全在内核的 {@link StreamCore}；这里只把它接到 Duplex 的读写回调上：
+ * 队列与关闭规则全在 {@link StreamCore}（`stream-core.ts`）；这里只把它接到 Duplex 的读写回调上：
  *
  * - `_read` → `core.read()`，交出的块 `push` 给消费者（`push` 答 false 就停）；
  * - `_write` → `core.write()`，信用不够时回调挂起，背压经 Duplex 的写水位传给上游 `pipe`；
  * - `_final` → 发 `END`；`_destroy` → 发 `RST`（无错误时 `clientGone`）；
  * - 收 `RST` → `destroy(StreamResetError)`。
  *
- * 本类对角色无感：中继节点与假 core 都能用（只有中继发 `OPEN`）；TypeScript 版中继删除后只剩假 core 在用。
+ * 本类对角色无感（只有中继发 `OPEN`），现在只有假 core 在用。
  */
 import { Duplex } from "node:stream";
 
@@ -19,7 +19,7 @@ import {
   type StreamFactory,
   type StreamHost as KernelStreamHost,
   type StreamOptions,
-} from "@armadra/relay-kernel/tunnel/stream";
+} from "./stream-core.ts";
 
 export { CreditPool, StreamResetError };
 
