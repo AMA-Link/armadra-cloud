@@ -8,7 +8,7 @@
 | [dev/compose.yml](dev/compose.yml)           | 本地开发依赖（`pnpm dev:up`）                                                                                                                                                                                                                     |
 | [e2e/compose.yml](e2e/compose.yml)           | 跨仓端到端（`pnpm e2e --mode personal`，脚本驱动）                                                                                                                                                                                                |
 | [compat.json](compat.json)                   | 验证过的 Armadra 服务器镜像区间与协议版本                                                                                                                                                                                                         |
-| [cloudflare/README.md](cloudflare/README.md) | Cloudflare Workers 上的个人中转（wrangler 项目在 `apps/relay-workers`）                                                                                                                                                                           |
+| [cloudflare/README.md](cloudflare/README.md) | armadra.com 的 Cloudflare 区域设置（Terraform：WAF、限速、控制面 DNS）                                                                                                                                                                            |
 
 ## 环境变量
 
@@ -118,6 +118,10 @@
 两种以上存储都在、`--store` 与目录里已有的不符、库认不出或损坏、账本对不上，一律拒绝启动，不自动清库或重建。`personal doctor` 检查目录与文件权限、库的完整性、监听地址与 TLS、受信代理与口令，有失败项时退出码为 1。
 
 `--control redis` 需要 Redis 7.0 以上（撤销全量重读用 `PEXPIRETIME`）；版本更低时 Go 版中继启动报错并说明，Node 版同样要求。
+
+## 托管的 relay.armadra.com
+
+`relay.armadra.com` 与自建走同一条路径：Go 个人中转 `armadra-relay personal serve`，按 [personal/compose.yml](personal/compose.yml) 起（镜像版本与发布同号），前面由反向代理终止 TLS，DNS 灰云直连。Cloudflare Workers 上的 TypeScript 中继已删除（#214），原有账号与源不迁移：切换后在桌面与手机上重新登录、重新配对。部署、改 DNS 与下线旧 Worker 都由维护者执行。
 
 ## 端点
 

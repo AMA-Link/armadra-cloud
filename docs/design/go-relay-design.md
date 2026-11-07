@@ -2,6 +2,7 @@
 
 > 状态：定稿（2026-10-22），§9 已按建议定下；实施跟踪 AMA-Link/armadra-cloud#59。
 > **2026-11：** TypeScript 的 `apps/cloud` 已删除（AMA-Link/armadra-cloud#177），下文对它的描述只作追溯；控制面是 Go 的 `go/cmd/armadra-cloud`。
+> **2026-11（#214）：** D2 作废——Workers 中继与它依赖的 TS 包（`relay-kernel`、`control-core`、`control-store-*`、`cloud-shared`）已删除，`relay.armadra.com` 改由 Go 个人中转承载；迁移文件由 `go/internal/store` 接管。下文对这些包的描述只作追溯。
 > 与旧方案的关系见 §10。草稿在工作区 `docs/cloud/drafts/go-relay-rewrite-design.md`，只留作追溯。
 > 输入：
 >

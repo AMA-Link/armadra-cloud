@@ -1,18 +1,20 @@
 # Cloudflare 上的防护、预算与拉闸
 
+> **已归档（#214）：** Cloudflare Workers 上的 TypeScript 中继已删除，`relay.armadra.com` 改由 Go 个人中转承载（见 [deploy/README.md](../../deploy/README.md#托管的-relayarmadracom)）；本文只作追溯，不再更新。
+
 `armadra.com` 是 Free Website 区域，Workers 中继按 Workers Free 配置（[deploy/cloudflare/README.md](../../deploy/cloudflare/README.md) 的配置 F）。本文讲部署之后怎么设预算告警、开人机挑战、管区域规则、回滚、拉闸，以及被打时怎么处置。日常运维（初始化、心跳、日配额、撤销、排障）见 [relay-on-cloudflare.md](relay-on-cloudflare.md)。
 
 所有步骤都是对外操作，由维护者在本机或面板执行；令牌、secret 不进仓库、不进对话、不进日志。
 
 ## 防护分层
 
-| 层              | 在哪                                                                                                     | 管什么                                                                                                                                |
-| --------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 区域规则        | [deploy/cloudflare/terraform/](../../deploy/cloudflare/terraform/)                                       | 自定义规则（中继只认常用方法、源地址之外的扫描路径直接拦、可选按国家拦）、Free 托管规则、1 条区域级限速、Bot Fight Mode 关闭          |
-| Worker 入口的闸 | `wrangler.jsonc` 的 `ratelimits`                                                                         | 按 IP、按路径的 Rate Limiting 绑定（登录、接受链接、登记、隧道、媒体票、无令牌请求、预检），按 Cloudflare 节点各自计数                |
-| 对象里的上限    | `SourceDO` / `ControlDO`                                                                                 | 帧与消息大小、每源 256 条流、每账号 256 条 WS、登录锁定、日配额（超了答 429 `limit_reached`）                                         |
-| 人机挑战        | `RELAY_TURNSTILE_SITE_KEY` + `RELAY_TURNSTILE_SECRET`（Node 中继：`--challenge turnstile`）              | 登录要 Turnstile 令牌（契约 [cloud-api §16](../contracts/cloud-api.md)），缺失 `400 challenge_required`、无效 `400 challenge_invalid` |
-| 拉闸            | [scripts/kill-switch.mjs](../../scripts/kill-switch.mjs) + 维护页 Worker（`wrangler.maintenance.jsonc`） | 一条命令把中继主机切到只答 503 的维护页，或整个摘掉                                                                                   |
+| 层              | 在哪                                                                                        | 管什么                                                                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 区域规则        | [deploy/cloudflare/terraform/](../../deploy/cloudflare/terraform/)                          | 自定义规则（中继只认常用方法、源地址之外的扫描路径直接拦、可选按国家拦）、Free 托管规则、1 条区域级限速、Bot Fight Mode 关闭          |
+| Worker 入口的闸 | `wrangler.jsonc` 的 `ratelimits`                                                            | 按 IP、按路径的 Rate Limiting 绑定（登录、接受链接、登记、隧道、媒体票、无令牌请求、预检），按 Cloudflare 节点各自计数                |
+| 对象里的上限    | `SourceDO` / `ControlDO`                                                                    | 帧与消息大小、每源 256 条流、每账号 256 条 WS、登录锁定、日配额（超了答 429 `limit_reached`）                                         |
+| 人机挑战        | `RELAY_TURNSTILE_SITE_KEY` + `RELAY_TURNSTILE_SECRET`（Node 中继：`--challenge turnstile`） | 登录要 Turnstile 令牌（契约 [cloud-api §16](../contracts/cloud-api.md)），缺失 `400 challenge_required`、无效 `400 challenge_invalid` |
+| 拉闸            | `scripts/kill-switch.mjs`（已删除） + 维护页 Worker（`wrangler.maintenance.jsonc`）         | 一条命令把中继主机切到只答 503 的维护页，或整个摘掉                                                                                   |
 
 自定义规则与区域级限速在 Worker 之前执行：在那里挡掉的请求不计 Workers 请求数，也不吃日配额。
 

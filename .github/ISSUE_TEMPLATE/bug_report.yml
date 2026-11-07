@@ -43,7 +43,6 @@ body:
         - 中继 saas / Relay saas (armadra-relay saas)
         - 控制面 / Control plane (armadra-cloud)
         - 协议包 / Protocol package (@armadra/platform-protocol)
-        - 共享库 / Shared library (@armadra/cloud-shared)
         - 工具与脚本 / Tools and scripts
     validations:
       required: true
