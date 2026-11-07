@@ -103,7 +103,7 @@ func TestPageCSPFor(t *testing.T) {
 	}
 }
 
-// golden 对照 TS 版 renderPage 的输出（testdata/dump-golden.mjs 生成，nonce 统一成 NONCE）。
+// golden 是冻结的对照数据（原由已删除的 TS 版 renderPage 生成，nonce 统一成 NONCE）；改页面要同 PR 改 golden。
 func TestGolden(t *testing.T) {
 	for _, locale := range []PageLocale{LocaleZH, LocaleEN} {
 		for _, kind := range []PageKind{PageUnavailable, PageJoin} {

@@ -1,4 +1,4 @@
-// Package coretest 是控制核服务的测试装配与服务合同：packages/control-core/src/testing/
+// Package coretest 是控制核服务的测试装配与服务合同：已删除的 TypeScript 版 packages/control-core/src/testing/
 // services-contract.ts 的 16 个用例逐例翻译成 Go，只经端口跑一遍登录、会话、源、链接、撤销与
 // me-stream 扇出，SQLite 与 PostgreSQL 各跑一遍。只在 _test.go 里用。
 package coretest

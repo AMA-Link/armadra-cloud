@@ -9,8 +9,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/protocol/gen"
 )
 
-// commonPasswords 是随包的常见口令表，与 packages/control-core/src/common-passwords.txt
-// 逐字相同（测试比 sha256），两边一起改。
+// commonPasswords 是随包的常见口令表（测试钉住 sha256）。
 //
 //go:embed common-passwords.txt
 var commonPasswords string

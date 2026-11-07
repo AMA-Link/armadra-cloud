@@ -1,6 +1,6 @@
 package web
 
-// 页面样式与脚本逐字取自 packages/cloud-shared/src/pages.ts，改动要两边同步（有 golden 测试守着）。
+// 页面样式与脚本（有 golden 测试守着，改动同 PR 更新 testdata/*.golden）。
 
 // pageStyle 是设计系统 §2 的 token（深色缺省，浅色覆盖）。
 const pageStyle = `

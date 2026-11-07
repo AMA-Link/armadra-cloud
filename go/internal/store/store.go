@@ -1,10 +1,10 @@
 // Package store 是控制核的存储端口与记录类型。
 //
-// 端口对应 packages/control-core/src/ports.ts：每个方法的第一个业务参数是 tenantID
+// 端口对应 已删除的 TypeScript 版 packages/control-core/src/ports.ts：每个方法的第一个业务参数是 tenantID
 // （个人中转恒为 DefaultTenant），Update 类方法是原子的读-改-写——fn 在一份副本上执行，
 // 返回错误则什么也不写，没改任何东西也不写。实现在 sqlite/ 与 postgres/，statefile/ 只读导入
-// state.json。记录的 JSON 形状与 TypeScript 一侧逐字段相同（camelCase、字段顺序一致），
-// 两种实现读写的库可以交替给 TypeScript 版打开。
+// state.json。记录的 JSON 形状与原 TypeScript 版逐字段相同（camelCase、字段顺序一致），
+// 已部署的库（go/testdata/compat 的冻结夹具）照样打开。
 package store
 
 import (

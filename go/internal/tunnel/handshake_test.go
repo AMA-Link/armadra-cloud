@@ -15,7 +15,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
-// 对应 packages/relay-kernel/src/tunnel/handshake.test.ts（黄金夹具 handshake.json）。
+// 对应 已删除的 TypeScript 版 packages/relay-kernel/src/tunnel/handshake.test.ts（黄金夹具 handshake.json）。
 
 type handshakeFixture struct {
 	Hello     json.RawMessage `json:"hello"`

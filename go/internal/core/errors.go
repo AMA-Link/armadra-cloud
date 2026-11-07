@@ -1,5 +1,5 @@
 // Package core 是控制核的服务：账号、会话、签名、源、链接、me-stream、流量、挑战与撤销，
-// 逐个对应 packages/control-core/src。服务只经 internal/store 的端口读写状态，不碰文件、
+// 逐个对应 已删除的 TypeScript 版 packages/control-core/src。服务只经 internal/store 的端口读写状态，不碰文件、
 // 数据库驱动、HTTP 与中继内核（internal/tunnel、internal/edge）。
 package core
 
