@@ -79,7 +79,7 @@ describe("DoSqlDatabase", () => {
     const lock = JSON.parse(
       String((await import("../../../migrations.lock?raw")).default),
     ) as Record<string, Record<string, string>>;
-    const recorded = lock["packages/control-store-sql/migrations"] ?? {};
+    const recorded = lock["go/internal/store/sqlite/migrations"] ?? {};
     expect(Object.keys(recorded)).toEqual([...BUNDLED_MIGRATION_FILES]);
     BUNDLED_MIGRATION_FILES.forEach((file, index) =>
       expect(

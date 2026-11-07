@@ -346,8 +346,8 @@ function checkMigrations(context, problems) {
 }
 
 /**
- * 迁移 SQL 的副本（Go 的 go:embed 目录）：SQL 以 `from` 目录里的为准，`to` 里每个文件必须与
- * migrations.lock 登记的字节一致，文件集合也要一样——新迁移只在 TS 包里加，`go generate` 拷过去。
+ * 迁移 SQL 的副本：SQL 以 `from` 目录里的为准，`to` 里每个文件必须与 migrations.lock 登记的字节
+ * 一致，文件集合也要一样——新迁移只在 `from` 里加，再逐字节拷到副本。
  */
 function checkMigrationCopies(context, rule, lock, problems) {
   for (const copy of rule.copies ?? []) {
@@ -365,10 +365,12 @@ function checkMigrationCopies(context, rule, lock, problems) {
     for (const [name, expected] of Object.entries(recorded)) {
       const digest = actual.get(name);
       if (digest === undefined) {
-        problems.push(`迁移副本缺文件：${copy.to}/${name}（运行 go generate）`);
+        problems.push(
+          `迁移副本缺文件：${copy.to}/${name}（从 ${copy.from} 拷过去）`,
+        );
       } else if (digest !== expected) {
         problems.push(
-          `迁移副本与 ${copy.from}/${name} 不一致：${copy.to}/${name}（运行 go generate）`,
+          `迁移副本与 ${copy.from}/${name} 不一致：${copy.to}/${name}（从 ${copy.from} 拷过去）`,
         );
       }
     }

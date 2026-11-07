@@ -1,5 +1,5 @@
-// Package postgres 是控制核存储端口的 PostgreSQL 实现（pgx/v5），与 packages/control-store-postgres
-// 读写同一套表（cloud 与中继 --store postgres 共用）。
+// Package postgres 是控制核存储端口的 PostgreSQL 实现（pgx/v5），cloud 与中继 --store postgres
+// 共用同一套表。
 //
 // 写都是一个事务：先锁租户行（SELECT … FOR UPDATE，同一租户的写串行）→ 读行 → 在副本上跑 fn →
 // 变了才写（并给租户修订加一）；fn 返回错误就回滚。连不上、库不认识、账本对不上、库比程序新
@@ -27,7 +27,7 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// Migrations 是随包的迁移（拷自 packages/control-store-postgres/migrations）。
+// Migrations 是随包的迁移：migrations/ 是 PostgreSQL 迁移的唯一来源，字节记在仓库根的 migrations.lock。
 func Migrations() ([]store.Migration, error) {
 	return store.LoadMigrations(migrationFS, "migrations")
 }

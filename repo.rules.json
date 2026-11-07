@@ -74,25 +74,25 @@
   },
   "migrations": {
     "lock": "migrations.lock",
-    "$comment": "两个迁移目录各自从 0001 连续：PostgreSQL（cloud 与 Go 中继 --store postgres / --control postgres 共用，在 control-store-postgres 包里）与 SQLite（Go 中继 --store sqlite 与 DO SQLite 共用）；lock 守住已发布迁移的字节。copies 是 Go 的 go:embed 副本：SQL 以 TS 包里的为准，副本必须与 lock 逐字节一致（go generate 拷过去）。",
+    "$comment": "两个迁移目录各自从 0001 连续，都在 Go 模块里、是唯一来源：PostgreSQL（cloud 与 Go 中继 --store postgres / --control postgres 共用）与 SQLite（Go 中继 --store sqlite 与 DO SQLite 共用）；lock 守住已发布迁移的字节。copies 是 TS 包里留着的副本（Workers 中继删除前还在读），必须与 lock 逐字节一致。",
     "sources": [
       {
-        "path": "packages/control-store-postgres/migrations",
+        "path": "go/internal/store/postgres/migrations",
         "kind": "directory"
       },
       {
-        "path": "packages/control-store-sql/migrations",
+        "path": "go/internal/store/sqlite/migrations",
         "kind": "directory"
       }
     ],
     "copies": [
       {
-        "from": "packages/control-store-postgres/migrations",
-        "to": "go/internal/store/postgres/migrations"
+        "from": "go/internal/store/postgres/migrations",
+        "to": "packages/control-store-postgres/migrations"
       },
       {
-        "from": "packages/control-store-sql/migrations",
-        "to": "go/internal/store/sqlite/migrations"
+        "from": "go/internal/store/sqlite/migrations",
+        "to": "packages/control-store-sql/migrations"
       }
     ]
   },

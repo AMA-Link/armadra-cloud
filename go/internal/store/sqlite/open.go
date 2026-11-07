@@ -1,5 +1,4 @@
-// Package sqlite 是控制核存储端口的 SQLite 实现（modernc.org/sqlite，纯 Go），
-// 与 packages/control-store-sqlite 读写同一个库文件。
+// Package sqlite 是控制核存储端口的 SQLite 实现（modernc.org/sqlite，纯 Go），中继缺省的 relay.db。
 //
 //   - 新建（Create）：先以 0600 独占建文件，再设 WAL、application_id、跑迁移；文件已在就拒绝。
 //   - 打开已有的：不是 SQLite、application_id 不对、quick_check 不过、迁移账本对不上、库比程序新
@@ -29,7 +28,7 @@ const busyTimeoutMs = 5_000
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// Migrations 是随包的迁移（拷自 packages/control-store-sql/migrations）。
+// Migrations 是随包的迁移：migrations/ 是 SQLite 迁移的唯一来源，字节记在仓库根的 migrations.lock。
 func Migrations() ([]store.Migration, error) {
 	return store.LoadMigrations(migrationFS, "migrations")
 }
