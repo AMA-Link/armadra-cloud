@@ -8,7 +8,8 @@ import (
 )
 
 // 签名钥：每次都读库（表只有几行），别的进程 rotate-key 之后立即可见；轮换在一个写事务里。
-// 私钥以 PKCS#8 base64 存、不包裹，靠库文件 0600 保护，不进日志与响应。
+// 私钥以 PKCS#8 base64 存；给了主密钥（Options.MasterKey）就用 aes256gcm-v1 包裹后才落库，
+// 没给时明文存，靠库文件 0600 保护。私钥不进日志与响应。
 
 type keys struct {
 	d        *DB
@@ -18,9 +19,9 @@ type keys struct {
 // Keys 是某个租户的签名钥。
 func (d *DB) Keys(tenantID string) store.KeyStore { return keys{d, tenantID} }
 
-func readSigningKeys(ctx context.Context, q *safeConn, tenantID string) ([]store.SigningKeyRecord, error) {
+func (d *DB) readSigningKeys(ctx context.Context, q *safeConn, tenantID string) ([]store.SigningKeyRecord, error) {
 	return collect(ctx, q, "SELECT "+keyColumns+" FROM signing_keys WHERE tenant_id = ? ORDER BY rowid", tenantID,
-		func(s scanner) (store.SigningKeyRecord, error) { return toSigningKey(s) })
+		func(s scanner) (store.SigningKeyRecord, error) { return d.toSigningKey(tenantID, s) })
 }
 
 func (k keys) Issuer(ctx context.Context) (issuer string, err error) {
@@ -36,7 +37,7 @@ func (k keys) Issuer(ctx context.Context) (issuer string, err error) {
 
 func (k keys) SigningKeys(ctx context.Context) (out []store.SigningKeyRecord, err error) {
 	err = k.d.read(ctx, func(q *safeConn) (err error) {
-		out, err = readSigningKeys(ctx, q, k.tenantID)
+		out, err = k.d.readSigningKeys(ctx, q, k.tenantID)
 		return err
 	})
 	return out, err
@@ -45,7 +46,7 @@ func (k keys) SigningKeys(ctx context.Context) (out []store.SigningKeyRecord, er
 // AddSigningKey 加一把钥（建租户、导入时用）。
 func (d *DB) AddSigningKey(ctx context.Context, tenantID string, key store.SigningKeyRecord) error {
 	return d.write(ctx, func(q *safeConn) error {
-		if err := insertSigningKey(ctx, q, tenantID, key); err != nil {
+		if err := d.insertSigningKey(ctx, q, tenantID, key); err != nil {
 			return err
 		}
 		return bumpRevision(ctx, q, tenantID)
@@ -55,7 +56,7 @@ func (d *DB) AddSigningKey(ctx context.Context, tenantID string, key store.Signi
 // RotateKey 轮换（rotate-key）：追加新钥，其余未退役的定在一小时后退役，早已退役的删掉。答新 kid。
 func (d *DB) RotateKey(ctx context.Context, tenantID string, nowMs int64) (kid string, err error) {
 	err = d.write(ctx, func(q *safeConn) error {
-		before, err := readSigningKeys(ctx, q, tenantID)
+		before, err := d.readSigningKeys(ctx, q, tenantID)
 		if err != nil {
 			return err
 		}
@@ -84,7 +85,7 @@ func (d *DB) RotateKey(ctx context.Context, tenantID string, nowMs int64) (kid s
 		}
 		for _, key := range after {
 			if !known[key.Kid] {
-				if err := insertSigningKey(ctx, q, tenantID, key); err != nil {
+				if err := d.insertSigningKey(ctx, q, tenantID, key); err != nil {
 					return err
 				}
 			}
@@ -100,4 +101,80 @@ func sameInt(a, b *int64) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// KeyWrapStats 数库里没包裹与已包裹的签名私钥（doctor 用，不解密）。
+func (d *DB) KeyWrapStats(ctx context.Context) (plain, wrapped int, err error) {
+	err = d.read(ctx, func(q *safeConn) error {
+		rows, err := q.QueryContext(ctx, "SELECT private_key_wrap, count(*) FROM signing_keys GROUP BY private_key_wrap")
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var wrap string
+			var n int
+			if err := rows.Scan(&wrap, &n); err != nil {
+				return err
+			}
+			if wrap == store.KeyWrapAESGCM {
+				wrapped += n
+			} else {
+				plain += n
+			}
+		}
+		return rows.Err()
+	})
+	return plain, wrapped, err
+}
+
+// WrapSigningKeys 把库里没包裹的签名私钥就地用主密钥包裹（wrap-keys），一个写事务，可重复执行；
+// 答这次包裹了几把。没给主密钥拒绝；已包裹的不动，没有反向解包。
+func (d *DB) WrapSigningKeys(ctx context.Context) (count int, err error) {
+	if d.wrapper == nil {
+		return 0, store.Errorf(store.KindUnknown, "包裹签名钥需要主密钥")
+	}
+	err = d.write(ctx, func(q *safeConn) error {
+		rows, err := q.QueryContext(ctx, "SELECT tenant_id, kid, private_key_pkcs8 FROM signing_keys WHERE private_key_wrap = ? OR private_key_wrap = ''", keyWrapNone)
+		if err != nil {
+			return err
+		}
+		type plainKey struct{ tenant, kid, body string }
+		var todo []plainKey
+		for rows.Next() {
+			var k plainKey
+			if err := rows.Scan(&k.tenant, &k.kid, &k.body); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			todo = append(todo, k)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+		for _, k := range todo {
+			sealed := d.wrapper.Seal([]byte(k.body), keyAAD(k.tenant, k.kid))
+			if _, err := q.ExecContext(ctx, "UPDATE signing_keys SET private_key_pkcs8 = ?, private_key_wrap = ? WHERE tenant_id = ? AND kid = ?",
+				sealed, store.KeyWrapAESGCM, k.tenant, k.kid); err != nil {
+				return err
+			}
+		}
+		count = len(todo)
+		if count == 0 {
+			return nil
+		}
+		tenants := map[string]bool{}
+		for _, k := range todo {
+			if !tenants[k.tenant] {
+				tenants[k.tenant] = true
+				if err := bumpRevision(ctx, q, k.tenant); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	return count, err
 }
