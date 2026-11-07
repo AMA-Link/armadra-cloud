@@ -58,7 +58,7 @@ func (t *revTracker) advance(now int64) (external bool) {
 
 func connectPostgres(ctx context.Context, db DatabaseOptions, tracker *revTracker) (*postgres.DB, error) {
 	pg, err := postgres.Open(ctx, postgres.Options{
-		URL: db.URL, Schema: db.Schema, MaxConns: postgresPoolMax, ApplicationName: "armadra-relay-personal", OnError: db.OnError, OnCommit: tracker.commit,
+		URL: db.URL, Schema: db.Schema, MaxConns: postgresPoolMax, ApplicationName: "armadra-relay-personal", OnError: db.OnError, OnCommit: tracker.commit, MasterKey: db.MasterKey,
 	})
 	if err != nil {
 		return nil, mapStoreError(StorePostgres, err)

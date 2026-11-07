@@ -59,7 +59,7 @@ func openCluster(ctx context.Context, in ClusterInput) (*Cluster, error) {
 	case factory.Redis:
 		config.RedisURL = in.RedisURL
 	case factory.Postgres:
-		if in.Database == nil {
+		if !in.Database.hasURL() {
 			return nil, Usagef("--control postgres 要给 --database-url（或 RELAY_DATABASE_URL / RELAY_DATABASE_URL_FILE）")
 		}
 		if in.Pool != nil {

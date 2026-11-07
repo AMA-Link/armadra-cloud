@@ -280,6 +280,27 @@ func openForDoctor(ctx context.Context, o DoctorOptions) (Store, error) {
 	return OpenStore(ctx, o.DataDir, "", o.Database)
 }
 
+// keyWrapFinding 报签名私钥的包裹情况：有明文私钥给警告（提示 wrap-keys）；全部包裹则通过。
+// 有包裹的钥却没给主密钥时存储根本打不开，那一项在「存储」里报失败。PostgreSQL 不查，答 nil。
+func keyWrapFinding(ctx context.Context, o DoctorOptions, s Store) *Finding {
+	plain, wrapped, ok, err := KeyWrapStats(ctx, s)
+	if !ok {
+		return nil
+	}
+	if err != nil {
+		return &Finding{LevelFail, "签名钥包裹", "读不出：" + err.Error()}
+	}
+	switch {
+	case plain > 0:
+		return &Finding{LevelWarn, "签名钥包裹", fmt.Sprintf("%d 把签名私钥没有包裹（明文在库里）：先停 serve、备份，再运行 personal wrap-keys --master-key-file F", plain)}
+	case wrapped > 0 && o.Database.masterKey() == nil:
+		return &Finding{LevelFail, "签名钥包裹", "签名私钥是主密钥包裹的，没有给主密钥：--master-key-file（或 RELAY_MASTER_KEY_FILE）"}
+	case wrapped > 0:
+		return &Finding{LevelPass, "签名钥包裹", fmt.Sprintf("%d 把签名私钥已用主密钥包裹", wrapped)}
+	}
+	return nil
+}
+
 // Diagnose 逐项检查；now 用于锁定与证书有效期。
 func Diagnose(ctx context.Context, o DoctorOptions, now time.Time) []Finding {
 	if _, err := os.Stat(o.DataDir); err != nil {
@@ -307,6 +328,7 @@ func Diagnose(ctx context.Context, o DoctorOptions, now time.Time) []Finding {
 				}
 				add(ptr(integrityFinding(ctx, s.Path())))
 			}
+			add(keyWrapFinding(ctx, o, s))
 			findings = append(findings, passwordFindings(ctx, o, s, now)...)
 			tenant := s.Tenant()
 			add(ptr(trustedProxyFinding(o, &tenant)))

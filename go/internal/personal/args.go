@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"unicode/utf16"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/core"
 	"github.com/AMA-Link/armadra-cloud/go/internal/edge"
+	"github.com/AMA-Link/armadra-cloud/go/internal/store"
 )
 
 // 参数解析：命令行优先，其次环境变量（RELAY_*），最后缺省值。对应 已删除的 TypeScript 版 apps/relay/src/personal/args.ts。
@@ -283,7 +285,7 @@ func resolvePath(cwd, p string) string {
 
 // ------------------------------------------------------------ 公共
 
-var databaseFlags = []string{"database-url", "database-url-file", "database-schema"}
+var databaseFlags = []string{"database-url", "database-url-file", "database-schema", "master-key-file"}
 
 func withDatabase(flags ...string) FlagSet {
 	set := FlagSet{}
@@ -338,11 +340,47 @@ func commonOf(values Values, env Env, cwd string) (Common, error) {
 	if err != nil {
 		return Common{}, err
 	}
+	key, err := masterKeyOf(values, env, cwd)
+	if err != nil {
+		return Common{}, err
+	}
+	if key != nil {
+		if database == nil {
+			database = &DatabaseOptions{}
+		}
+		database.MasterKey = key
+	}
 	return Common{DataDir: dir, Database: database}, nil
 }
 
+// masterKeyOf 读 --master-key-file / RELAY_MASTER_KEY_FILE：64 位十六进制。没给答 nil；
+// 文件权限比 0600 宽（组或其他用户有任何权限位）或格式不对都拒绝。错误消息不带密钥内容。
+func masterKeyOf(values Values, env Env, cwd string) ([]byte, error) {
+	file, ok := values.pickNonEmpty("master-key-file", env, "RELAY_MASTER_KEY_FILE")
+	if !ok {
+		return nil, nil
+	}
+	path := resolvePath(cwd, file)
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, Usagef("--master-key-file 读不出来：%s", file)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&^0o600 != 0 {
+		return nil, Usagef("--master-key-file 权限太松（%04o），要 0600 或更严：chmod 600 %s", info.Mode().Perm(), file)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, Usagef("--master-key-file 读不出来：%s", file)
+	}
+	key, err := store.ParseMasterKey(string(data))
+	if err != nil {
+		return nil, Usagef("--master-key-file 的内容要是 64 位十六进制（32 字节）：%s", file)
+	}
+	return key, nil
+}
+
 func requirePostgres(store StoreKind, database *DatabaseOptions) error {
-	if store == StorePostgres && database == nil {
+	if store == StorePostgres && !database.hasURL() {
 		return Usagef("--store postgres 要给 --database-url（或 RELAY_DATABASE_URL / RELAY_DATABASE_URL_FILE）")
 	}
 	return nil
@@ -635,7 +673,7 @@ func controlOf(values Values, env Env, host string, database *DatabaseOptions) (
 	if haveRedis && !redisURL.MatchString(redisText) {
 		return "", "", "", Usagef("--redis-url 要是 redis:// 或 rediss:// 开头的地址")
 	}
-	if control == "postgres" && database == nil {
+	if control == "postgres" && !database.hasURL() {
 		return "", "", "", Usagef("--control postgres 要给 --database-url（或 RELAY_DATABASE_URL / RELAY_DATABASE_URL_FILE）")
 	}
 	given, haveGiven := values.pickNonEmpty("node-id", env, "RELAY_NODE_ID")

@@ -79,7 +79,8 @@ func TestDoctorCleanInstall(t *testing.T) {
 	dir := sqliteDataDir(t)
 	findings := Diagnose(context.Background(), doctorOptions(dir), doctorNow)
 	for _, f := range findings {
-		if f.Level != LevelPass {
+		// 明文签名钥是缺省：只有「签名钥包裹」一条警告，其余全部通过。
+		if f.Level != LevelPass && f.Item != "签名钥包裹" {
 			t.Fatalf("缺省配置应全部通过：%+v", f)
 		}
 	}
@@ -102,7 +103,7 @@ func TestDoctorOutput(t *testing.T) {
 		t.Fatalf("第一行不对：%q", lines[0])
 	}
 	last := lines[len(lines)-1]
-	if !strings.HasPrefix(last, "检查完成：通过 ") || !strings.HasSuffix(last, "，警告 0，失败 0") {
+	if !strings.HasPrefix(last, "检查完成：通过 ") || !strings.HasSuffix(last, "，警告 1，失败 0") { // 警告是明文签名钥
 		t.Fatalf("汇总不对：%q", last)
 	}
 	if !strings.Contains(strings.Join(lines, "\n"), "通过  存储：SQLite，"+filepath.Join(dir, DatabaseFile)) {
@@ -234,7 +235,7 @@ func TestDoctorPermissions(t *testing.T) {
 			t.Errorf("不含 key 的文件不该检查：%s", k)
 		}
 	}
-	if warns != 5 { // 数据目录、relay.db 与随它继承权限的 -wal / -shm、ca.key
+	if warns != 6 { // 数据目录、relay.db 与随它继承权限的 -wal / -shm、ca.key、明文签名钥
 		t.Errorf("应有 5 条警告，实际 %d：%v", warns, details)
 	}
 }

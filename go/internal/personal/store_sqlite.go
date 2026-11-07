@@ -33,8 +33,8 @@ func wrapSQLite(ctx context.Context, dataDir string, db *sqlite.DB) (Store, erro
 }
 
 // openSQLite 打开 relay.db 并核对它是一个个人中转的库。
-func openSQLite(ctx context.Context, dataDir string) (Store, error) {
-	db, err := sqlite.Open(ctx, filepath.Join(dataDir, DatabaseFile), sqlite.Options{})
+func openSQLite(ctx context.Context, dataDir string, masterKey []byte) (Store, error) {
+	db, err := sqlite.Open(ctx, filepath.Join(dataDir, DatabaseFile), sqlite.Options{MasterKey: masterKey})
 	if err != nil {
 		return nil, mapStoreError(StoreSQLite, err)
 	}
@@ -51,12 +51,12 @@ func openSQLite(ctx context.Context, dataDir string) (Store, error) {
 }
 
 // createSQLite 新建 relay.db 并在一个事务里写入整份快照；没写成的删掉，不留半个库。
-func createSQLite(ctx context.Context, dataDir string, snap store.TenantSnapshot) (Store, error) {
+func createSQLite(ctx context.Context, dataDir string, snap store.TenantSnapshot, masterKey []byte) (Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, Statef(Invalid, "数据目录建不出来：%s", dataDir)
 	}
 	path := filepath.Join(dataDir, DatabaseFile)
-	db, err := sqlite.Open(ctx, path, sqlite.Options{Create: true})
+	db, err := sqlite.Open(ctx, path, sqlite.Options{Create: true, MasterKey: masterKey})
 	if err != nil {
 		return nil, mapStoreError(StoreSQLite, err)
 	}

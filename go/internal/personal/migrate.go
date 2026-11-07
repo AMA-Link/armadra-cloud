@@ -107,14 +107,14 @@ func refuseWhileServing(dataDir string) error {
 }
 
 func migrateRequireDatabase(db *DatabaseOptions) (*DatabaseOptions, error) {
-	if db == nil {
+	if !db.hasURL() {
 		return nil, Usagef("要给 --database-url（或 RELAY_DATABASE_URL / RELAY_DATABASE_URL_FILE）")
 	}
 	return db, nil
 }
 
 func postgresOptions(db *DatabaseOptions) postgres.Options {
-	return postgres.Options{URL: db.URL, Schema: db.Schema, ApplicationName: "armadra-relay-personal"}
+	return postgres.Options{URL: db.URL, Schema: db.Schema, ApplicationName: "armadra-relay-personal", MasterKey: db.MasterKey}
 }
 
 func postgresPath(db *DatabaseOptions) string {
@@ -191,7 +191,7 @@ func openMigrateSource(ctx context.Context, dataDir string, db *DatabaseOptions)
 			return kept, os.Rename(state, kept)
 		}}, nil
 	case StoreSQLite:
-		d, err := sqlite.Open(ctx, database, sqlite.Options{})
+		d, err := sqlite.Open(ctx, database, sqlite.Options{MasterKey: db.masterKey()})
 		if err != nil {
 			return nil, asStateError(err)
 		}
@@ -253,8 +253,8 @@ func exportError(err error) error {
 }
 
 // verifySQLite 打开 path（create 时先把快照整份写进去）读回来与快照比对。
-func verifySQLite(ctx context.Context, path string, create bool, snap store.TenantSnapshot, what string) error {
-	d, err := sqlite.Open(ctx, path, sqlite.Options{Create: create})
+func verifySQLite(ctx context.Context, path string, create bool, snap store.TenantSnapshot, what string, masterKey []byte) error {
+	d, err := sqlite.Open(ctx, path, sqlite.Options{Create: create, MasterKey: masterKey})
 	if err != nil {
 		return asStateError(err)
 	}
@@ -275,13 +275,13 @@ func verifySQLite(ctx context.Context, path string, create bool, snap store.Tena
 }
 
 // writeSQLite 写成 relay.db：先写临时库，比对后整体改名，再按正式路径核对一次。
-func writeSQLite(ctx context.Context, dataDir string, snap store.TenantSnapshot) (string, error) {
+func writeSQLite(ctx context.Context, dataDir string, snap store.TenantSnapshot, masterKey []byte) (string, error) {
 	database := filepath.Join(dataDir, DatabaseFile)
 	temporary := fmt.Sprintf("%s.migrating-%d", database, os.Getpid())
 	removeDatabase(temporary)
 	renamed := false
 	err := func() error {
-		if err := verifySQLite(ctx, temporary, true, snap, "原存储"); err != nil {
+		if err := verifySQLite(ctx, temporary, true, snap, "原存储", masterKey); err != nil {
 			return err
 		}
 		// 关库时 WAL 已并入主文件：只剩主文件才能整体改名。
@@ -294,7 +294,7 @@ func writeSQLite(ctx context.Context, dataDir string, snap store.TenantSnapshot)
 			return err
 		}
 		renamed = true
-		return verifySQLite(ctx, database, false, snap, "原存储")
+		return verifySQLite(ctx, database, false, snap, "原存储", masterKey)
 	}()
 	if err != nil {
 		if renamed {
@@ -372,7 +372,7 @@ func MigrateStore(ctx context.Context, dataDir string, to StoreKind, o MigrateOp
 	}
 	var target string
 	if to == StoreSQLite {
-		target, err = writeSQLite(ctx, dataDir, source.snap)
+		target, err = writeSQLite(ctx, dataDir, source.snap, o.Database.masterKey())
 	} else {
 		target, err = writePostgres(ctx, dataDir, source.snap, o.Database)
 	}

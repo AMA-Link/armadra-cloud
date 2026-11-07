@@ -122,7 +122,7 @@ func openOrInit(ctx context.Context, o ServeOptions, issuer string, now time.Tim
 	}
 	// PostgreSQL：数据目录是空的不等于没初始化（别的节点可能已经建好），要问库。
 	var missing bool
-	if kind == StorePostgres && o.Database != nil {
+	if kind == StorePostgres && o.Database.hasURL() {
 		found, err := PostgresStoreExists(ctx, *o.Database)
 		if err != nil {
 			return nil, err

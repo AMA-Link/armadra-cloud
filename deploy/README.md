@@ -85,6 +85,7 @@
 | `--web-root` / `RELAY_WEB_ROOT`                               |      | Armadra `apps/web` 构建产物；镜像缺省 `/app/web`（构建参数 `WEB_IMAGE`）                                                          |
 | `--account` / `RELAY_PERSONAL_ACCOUNT`                        |      | 存储不存在时自动初始化的账号                                                                                                      |
 | `--password-file` / `RELAY_PERSONAL_PASSWORD_FILE`            |      | 自动初始化的口令文件（之后不再读取）                                                                                              |
+| `--master-key-file` / `RELAY_MASTER_KEY_FILE`                 |      | 主密钥文件（64 位十六进制，权限不得宽于 `0600`）：给了就把签名私钥用 AES-256-GCM 包裹后才落库（SQLite 与 PostgreSQL），缺省明文存 |
 | `--listen` / `RELAY_LISTEN`                                   |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`                                                                                    |
 | `--log-level` / `RELAY_LOG_LEVEL`                             |      | `debug` / `info`（缺省）/ `warn` / `error`                                                                                        |
 | `--name` / `RELAY_NAME`                                       |      | 服务端名称（`platform.info.name`），客户端添加时的缺省显示名；缺省取状态里的 `displayName`，再取 `--host`                         |
