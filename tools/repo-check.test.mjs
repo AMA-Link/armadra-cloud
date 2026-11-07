@@ -478,7 +478,7 @@ test("package-dependencies：本仓库的规则在现状上通过", () => {
   const rules = JSON.parse(readFileSync(join(root, "repo.rules.json"), "utf8"));
   assert.ok(
     rules.packageDependencies.some(
-      (rule) => rule.package === "packages/relay-kernel",
+      (rule) => rule.package === "packages/platform-protocol",
     ),
   );
   assert.deepEqual(

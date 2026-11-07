@@ -31,7 +31,7 @@ const JS = ["**/*.{js,mjs,cjs}"];
 const orpcPattern = {
   group: ["@orpc/*"],
   message:
-    "@orpc/* 只能出现在 packages/platform-protocol/src/cloud-api/、packages/control-core/src/router.ts、tools/contract/。",
+    "@orpc/* 只能出现在 packages/platform-protocol/src/cloud-api/、tools/contract/。",
 };
 
 /** 与 Armadra 的往来只经协议包与容器镜像，不 import 它的源码。 */
@@ -49,128 +49,6 @@ const armadraSourcePattern = {
   message:
     "不得 import Armadra 仓的源码；只经 @armadra/platform-protocol 与容器镜像往来。",
 };
-
-/** 中继的 TS 包（relay-kernel、relay-runtime-workers）不直接碰数据库驱动。 */
-const relayPatterns = [
-  {
-    group: ["postgres", "@armadra/cloud-shared/db"],
-    message:
-      "中继的 TS 包不直接碰数据库驱动：PostgreSQL 只经 @armadra/control-store-postgres。",
-  },
-];
-
-/** PostgreSQL 存储只实现控制核的端口。 */
-const controlStorePostgresPatterns = [
-  {
-    group: [
-      "redis",
-      "ws",
-      "@armadra/cloud-shared/redis",
-      "@armadra/cloud-shared/http",
-      "@armadra/control-store-sqlite",
-      "@armadra/control-store-sqlite/*",
-      "@armadra/relay-kernel",
-      "@armadra/relay-kernel/*",
-      "@armadra/relay-runtime-workers",
-      "@armadra/relay-runtime-workers/*",
-    ],
-    message:
-      "control-store-postgres 只实现控制核的端口：不带 Redis、网络、中继与别的存储实现。",
-  },
-];
-
-/** 中继内核（personal 与 saas 共用的数据面）：不 import 控制核，不带 SaaS 专有依赖。 */
-const kernelPatterns = [
-  {
-    group: ["@armadra/control-core", "@armadra/control-core/*"],
-    message:
-      "relay-kernel 不得 import control-core；控制面经 ControlPlane 接口接进来。",
-  },
-  {
-    group: ["redis", "@armadra/cloud-shared/redis"],
-    message:
-      "relay-kernel 不带 SaaS 专有依赖：Redis 实现在 Go 中继（go/internal/control/redis）。",
-  },
-];
-
-/**
- * 内核运行时无关（Workers 版用）：只许 `node:crypto` / `node:buffer`；`ws`、
- * `node:http` / `net` / `stream` / `fs` 与 HTTP 外壳不进内核。
- * 只管源码，测试照常可以用 Node 起服务器。
- */
-const kernelPortablePatterns = [
-  {
-    regex: "^node:(?!(crypto|buffer)$)",
-    message:
-      "relay-kernel 运行时无关：只许 node:crypto / node:buffer，其余 Node 专有部分不进内核。",
-  },
-  {
-    group: ["ws", "@armadra/cloud-shared/http"],
-    message: "relay-kernel 运行时无关：WebSocket 与 HTTP 外壳不进内核。",
-  },
-];
-
-/**
- * Workers 运行时：跑在 workerd 上，只许 `node:crypto` / `node:buffer`（`nodejs_compat` 原生支持）；
- * 不带 `ws`、HTTP 外壳、Node 运行时与 PostgreSQL / Redis，`node:sqlite` 版存储的打开与迁移读目录
- * 也不能进来（DO SQLite 只复用端口、行映射与迁移对账）。
- */
-const workersRuntimePatterns = [
-  {
-    regex: "^node:(?!(crypto|buffer)$)",
-    message:
-      "relay-runtime-workers 跑在 workerd 上：只许 node:crypto / node:buffer。",
-  },
-  {
-    regex: "^(ws|postgres|redis)$",
-    message:
-      "relay-runtime-workers 不带 ws 与 PostgreSQL / Redis：客户端 WS 由 workerd 终止，存储是 DO SQLite。",
-  },
-  {
-    group: [
-      "@armadra/cloud-shared/db",
-      "@armadra/cloud-shared/redis",
-      "@armadra/cloud-shared/http",
-      "@armadra/cloud-shared/config",
-      "@armadra/control-store-sqlite/open",
-      "@armadra/control-store-sqlite/migrate",
-    ],
-    message:
-      "relay-runtime-workers 只装配内核、控制核与可移植的 SQLite 端口；Node 专有的部分不进 Worker。",
-  },
-];
-
-/** 控制核只经端口读写状态，且与传输无关。 */
-const controlCorePatterns = [
-  {
-    group: [
-      "postgres",
-      "redis",
-      "@armadra/cloud-shared/db",
-      "@armadra/cloud-shared/redis",
-    ],
-    message:
-      "control-core 只经端口读写状态；PostgreSQL / Redis 实现放在 app 的适配器里。",
-  },
-  {
-    regex: "^node:fs(/promises)?$",
-    message: "control-core 只经端口读写状态，不碰文件系统。",
-  },
-  {
-    group: [
-      "ws",
-      "node:http",
-      "node:https",
-      "node:net",
-      "@armadra/cloud-shared/http",
-    ],
-    message: "control-core 与传输无关：HTTP / WebSocket 外壳在 app 里。",
-  },
-  {
-    group: ["@armadra/relay-kernel", "@armadra/relay-kernel/*"],
-    message: "control-core 不 import 中继内核与 app。",
-  },
-];
 
 /** 协议包只含 schema、类型、纯编解码与常量：不 import node:*（fixtures 子路径除外）。 */
 const nodeBuiltinPattern = {
@@ -220,55 +98,6 @@ export default tseslint.config(
     },
   },
   {
-    files: ["packages/relay-kernel/**/*.ts"],
-    rules: restrictImports(
-      orpcPattern,
-      armadraSourcePattern,
-      ...relayPatterns,
-      ...kernelPatterns,
-    ),
-  },
-  {
-    files: ["packages/control-store-postgres/src/**/*.ts"],
-    ignores: ["packages/control-store-postgres/src/**/*.test.ts"],
-    rules: restrictImports(
-      orpcPattern,
-      armadraSourcePattern,
-      ...controlStorePostgresPatterns,
-    ),
-  },
-  {
-    files: ["packages/relay-kernel/src/**/*.ts"],
-    ignores: ["packages/relay-kernel/src/**/*.test.ts"],
-    rules: restrictImports(
-      orpcPattern,
-      armadraSourcePattern,
-      ...relayPatterns,
-      ...kernelPatterns,
-      ...kernelPortablePatterns,
-    ),
-  },
-  {
-    files: [
-      "packages/relay-runtime-workers/src/**/*.ts",
-      "apps/relay-workers/src/**/*.ts",
-    ],
-    rules: restrictImports(
-      orpcPattern,
-      armadraSourcePattern,
-      ...workersRuntimePatterns,
-    ),
-  },
-  {
-    files: ["packages/control-core/src/**/*.ts"],
-    ignores: ["packages/control-core/src/**/*.test.ts"],
-    rules: restrictImports(
-      orpcPattern,
-      armadraSourcePattern,
-      ...controlCorePatterns,
-    ),
-  },
-  {
     files: ["packages/platform-protocol/src/**/*.ts"],
     ignores: ["packages/platform-protocol/src/fixtures/**"],
     rules: restrictImports(
@@ -284,10 +113,6 @@ export default tseslint.config(
   {
     files: ["tools/contract/**"],
     rules: restrictImports(armadraSourcePattern),
-  },
-  {
-    files: ["packages/control-core/src/router.ts"],
-    rules: restrictImports(armadraSourcePattern, ...controlCorePatterns),
   },
 
   prettier,

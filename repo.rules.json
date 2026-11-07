@@ -13,7 +13,6 @@
     "LICENSE",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
-    "apps",
     "deploy",
     "docs",
     "eslint.config.js",
@@ -50,7 +49,7 @@
     "directoryOnly": ["runbooks"]
   },
   "links": {
-    "include": ["*.md", "apps/", "deploy/", "docs/", "packages/", "tools/"],
+    "include": ["*.md", "deploy/", "docs/", "packages/", "tools/"],
     "exclude": []
   },
   "naming": [
@@ -58,23 +57,18 @@
       "directory": "packages",
       "manifest": "package.json",
       "prefix": "@armadra/"
-    },
-    {
-      "directory": "apps",
-      "manifest": "package.json",
-      "prefix": "@armadra/"
     }
   ],
   "fileSize": {
     "max": 1500,
-    "roots": ["apps", "packages", "tools", "scripts", "go"],
+    "roots": ["packages", "tools", "scripts", "go"],
     "extensions": [".ts", ".mts", ".mjs", ".js", ".go"],
     "excludeSegments": ["/node_modules/", "go/internal/protocol/gen/"],
     "exemptions": []
   },
   "migrations": {
     "lock": "migrations.lock",
-    "$comment": "两个迁移目录各自从 0001 连续，都在 Go 模块里、是唯一来源：PostgreSQL（cloud 与 Go 中继 --store postgres / --control postgres 共用）与 SQLite（Go 中继 --store sqlite 与 DO SQLite 共用）；lock 守住已发布迁移的字节。copies 是 TS 包里留着的副本（Workers 中继删除前还在读），必须与 lock 逐字节一致。",
+    "$comment": "两个迁移目录各自从 0001 连续，都在 Go 模块里、是唯一来源：PostgreSQL（cloud 与 Go 中继 --store postgres / --control postgres 共用）与 SQLite（Go 中继 --store sqlite）；lock 守住已发布迁移的字节。",
     "sources": [
       {
         "path": "go/internal/store/postgres/migrations",
@@ -83,16 +77,6 @@
       {
         "path": "go/internal/store/sqlite/migrations",
         "kind": "directory"
-      }
-    ],
-    "copies": [
-      {
-        "from": "go/internal/store/postgres/migrations",
-        "to": "packages/control-store-postgres/migrations"
-      },
-      {
-        "from": "go/internal/store/sqlite/migrations",
-        "to": "packages/control-store-sql/migrations"
       }
     ]
   },
@@ -169,99 +153,14 @@
   ],
   "packageDependencies": [
     {
-      "$comment": "中继内核是 Workers 中继的数据面（Go 中继另有自己的实现）：不依赖控制核、app 与 Node 运行时，不带 SaaS 专有依赖（PostgreSQL / Redis）、oRPC 与 ws（源码层只许 node:crypto / node:buffer，由内核的 boundaries.test.ts 与 ESLint 守）。",
-      "package": "packages/relay-kernel",
-      "forbid": [
-        "@armadra/control-core",
-        "@armadra/relay-runtime-workers",
-        "postgres",
-        "redis",
-        "@orpc/*",
-        "ws",
-        "@types/ws",
-        "@armadra/control-store-postgres"
-      ]
-    },
-    {
-      "$comment": "中继的 Workers 运行时只装配内核、控制核与 SQLite 端口（DO SQLite）：不依赖 app 与 Node 运行时，不带 ws、PostgreSQL / Redis、oRPC 与第三方 SQLite 驱动。",
-      "package": "packages/relay-runtime-workers",
-      "forbid": [
-        "@armadra/relay-workers",
-        "postgres",
-        "redis",
-        "@orpc/*",
-        "ws",
-        "@types/ws",
-        "better-sqlite3",
-        "sqlite3",
-        "@armadra/control-store-postgres"
-      ]
-    },
-    {
-      "$comment": "Workers 中继的 wrangler 项目只 re-export 运行时：不依赖别的 app，不带 ws、PostgreSQL / Redis。",
-      "package": "apps/relay-workers",
-      "forbid": ["postgres", "redis", "ws", "@armadra/control-store-postgres"]
-    },
-    {
-      "$comment": "控制核只经端口读写状态、与传输无关：不依赖中继内核、app、存储客户端与 WebSocket。",
-      "package": "packages/control-core",
-      "forbid": [
-        "@armadra/relay-kernel",
-        "@armadra/relay-runtime-workers",
-        "postgres",
-        "redis",
-        "ws",
-        "@armadra/control-store-postgres"
-      ]
-    },
-    {
-      "$comment": "PostgreSQL 存储只实现控制核的端口：不依赖中继内核、Node / Workers 运行时、app、Redis 与别的存储实现。",
-      "package": "packages/control-store-postgres",
-      "forbid": [
-        "@armadra/relay-kernel",
-        "@armadra/relay-runtime-workers",
-        "@armadra/control-store-sqlite",
-        "redis",
-        "ws",
-        "better-sqlite3",
-        "sqlite3"
-      ]
-    },
-    {
-      "$comment": "SQLite 存储只实现控制核的端口（node:sqlite）：不依赖中继内核、app 与别的存储客户端。",
-      "package": "packages/control-store-sqlite",
-      "forbid": [
-        "@armadra/relay-kernel",
-        "@armadra/relay-runtime-workers",
-        "postgres",
-        "redis",
-        "ws",
-        "better-sqlite3",
-        "sqlite3",
-        "@armadra/control-store-postgres"
-      ]
-    },
-    {
-      "$comment": "SQL 包只放迁移与账本判定（Node 与 DO 共用）：不依赖本仓任何包。",
-      "package": "packages/control-store-sql",
-      "forbid": [
-        "@armadra/cloud-shared",
-        "@armadra/control-core",
-        "@armadra/control-store-sqlite",
-        "@armadra/relay-kernel",
-        "@armadra/control-store-postgres"
-      ]
-    },
-    {
       "$comment": "协议包两仓共用、页面与手机直接用：不依赖本仓任何包。",
       "package": "packages/platform-protocol",
-      "forbid": [
-        "@armadra/cloud-shared",
-        "@armadra/control-core",
-        "@armadra/relay-kernel",
-        "@armadra/relay-runtime-workers",
-        "@armadra/control-store-postgres"
-      ]
+      "forbid": ["@armadra/e2e-fake-core"]
+    },
+    {
+      "$comment": "假 core 只给 scripts/e2e 用：只依赖协议包与 ws，不带 PostgreSQL / Redis 与 oRPC。",
+      "package": "packages/e2e-fake-core",
+      "forbid": ["postgres", "redis", "@orpc/*"]
     }
   ]
 }
