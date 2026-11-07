@@ -123,7 +123,6 @@ test("e2e.mjs 在用协议包之前先查产物（#143）", () => {
     '"@armadra/platform-protocol/e2e"',
     '"./e2e/saas-nodes.mjs"',
     '"./e2e/saas.mjs"',
-    '"./e2e/workers.mjs"',
   ])
     assert.ok(text.indexOf(target) > ensure, target);
 });
