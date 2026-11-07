@@ -120,6 +120,11 @@ func RunCLI(args []string, env Env, stdout, stderr io.Writer) int {
 		if options, err = ParseBackup(rest, env, cwd); err == nil {
 			err = RunBackup(ctx, options.DataDir, options.Out, options.Database, print)
 		}
+	case "wrap-keys":
+		var options WrapKeysOptions
+		if options, err = ParseWrapKeys(rest, env, cwd); err == nil {
+			err = RunWrapKeys(ctx, options, print)
+		}
 	case "doctor":
 		var options DoctorOptions
 		if options, err = ParseDoctor(rest, env, cwd); err == nil {

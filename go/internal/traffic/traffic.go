@@ -97,6 +97,9 @@ type MeterOptions struct {
 	OnRow func()
 	// MaxPendingRows 缺省 MaxPendingRows。
 	MaxPendingRows int
+	// OnBytes 每记一笔载荷字节（两个方向）调用一次，调用时不持锁，要立即返回；个人中转的每日字节配额接在这里。
+	// 缺省不调用。
+	OnBytes func(n int64)
 }
 
 // BucketStart 返回 t 所在 UTC 整小时桶的起点（毫秒）。
@@ -122,6 +125,7 @@ type Meter struct {
 	now     func() time.Time
 	onError func(err error, dropped int)
 	onRow   func()
+	onBytes func(n int64)
 	maxRows int
 
 	flushMu sync.Mutex // 串行化 Flush
@@ -136,7 +140,7 @@ type Meter struct {
 // NewMeter 建一个累加器。
 func NewMeter(o MeterOptions) *Meter {
 	m := &Meter{
-		node: o.Node, write: o.Write, now: o.Now, onError: o.OnError, onRow: o.OnRow,
+		node: o.Node, write: o.Write, now: o.Now, onError: o.OnError, onRow: o.OnRow, onBytes: o.OnBytes,
 		maxRows: o.MaxPendingRows, rows: map[rowID]*Row{},
 	}
 	if m.now == nil {
@@ -165,6 +169,11 @@ func (m *Meter) Add(s Sample) {
 	m.mu.Unlock()
 	if created && m.onRow != nil {
 		m.onRow()
+	}
+	if m.onBytes != nil {
+		if n := s.BytesToSource + s.BytesToClient; n > 0 {
+			m.onBytes(n)
+		}
 	}
 }
 
@@ -306,6 +315,9 @@ func (c *Counter) Bytes(d Direction, n int) {
 		c.add(func(r *Row) { r.BytesToSource += int64(n) })
 	} else {
 		c.add(func(r *Row) { r.BytesToClient += int64(n) })
+	}
+	if c.meter.onBytes != nil && n > 0 {
+		c.meter.onBytes(int64(n))
 	}
 }
 

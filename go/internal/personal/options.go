@@ -82,6 +82,9 @@ type ServeOptions struct {
 	Challenge     *ChallengeOptions
 	// TrafficRetentionDays 缺省 90，0 = 不记录。
 	TrafficRetentionDays int
+	// DailyRequests 与 DailyBytes 是同一账号每个 UTC 日的端到端通道数与字节数（双向合计）上限，0 = 不限；
+	// 要开流量统计（TrafficRetentionDays > 0）。
+	DailyRequests, DailyBytes int64
 }
 
 // DefaultTrafficRetentionDays 是流量统计的缺省保留天数。

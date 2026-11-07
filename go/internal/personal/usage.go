@@ -24,7 +24,11 @@ const PersonalUsage = `用法: armadra-relay personal <子命令> [选项]
   traffic      按源、账号、设备与类别合计中继流量：--data-dir [--since 7d] [--source <id>]
   migrate      换存储（先停 serve），原文件改名留作回退：--data-dir --to sqlite|postgres [--database-url URL]
   backup       在线备份存储到一个新文件：--data-dir --out F
-  doctor       检查权限、存储完整性、监听地址、受信代理与口令：--data-dir，其余同 serve
+  wrap-keys    把库里没包裹的签名私钥用主密钥就地包裹，可重复执行（先停 serve、先备份；无反向解包）：
+               --data-dir --master-key-file F
+  doctor       检查权限、存储完整性、签名钥包裹、监听地址、受信代理与口令：--data-dir，其余同 serve
+
+每个打开存储的子命令都收 --master-key-file F（或 RELAY_MASTER_KEY_FILE）：64 位十六进制，权限不得宽于 0600。
 
 数据目录用 PostgreSQL 时，每个子命令都要 --database-url（或 RELAY_DATABASE_URL / RELAY_DATABASE_URL_FILE）。
 
@@ -33,6 +37,8 @@ serve:
   --store S                sqlite | file | postgres（或 RELAY_STORE）；默认按数据目录里已有的，新装 sqlite（file 只能用 migrate 导入）
   --database-url URL       PostgreSQL 连接串（或 RELAY_DATABASE_URL）；--store postgres 与 --control postgres 用
   --database-url-file F    从文件读连接串（或 RELAY_DATABASE_URL_FILE），口令不出现在进程参数里
+  --master-key-file F      主密钥文件（或 RELAY_MASTER_KEY_FILE）：给了就把签名私钥用 aes256gcm-v1 包裹后才落库并能读已包裹的；
+                           库里已是包裹的而没给它，拒绝启动；缺省明文存（靠库文件 0600）
   --database-schema S      用哪个 schema（或 RELAY_DATABASE_SCHEMA），默认连接的缺省 schema
   --control C              memory | redis | postgres（或 RELAY_CONTROL），默认 memory；多节点选 redis 或 postgres
   --redis-url URL          Redis 地址（或 RELAY_REDIS_URL），--control redis 用；要 Redis 7 以上
@@ -65,4 +71,9 @@ serve:
   --turnstile-secret-file F Turnstile secret 文件（或 RELAY_TURNSTILE_SECRET_FILE）
   --turnstile-hostnames L  允许的 siteverify 主机名，逗号分隔（或 RELAY_TURNSTILE_HOSTNAMES）；空 = 拒绝一切；https 公网地址下不得含本机
   --challenge-scope LIST   要挑战的 procedure：auth.login、links.accept、auth.changePassword，逗号分隔（或 RELAY_CHALLENGE_SCOPE），默认 auth.login
-  --traffic-retention-days N 流量统计保留天数（或 RELAY_TRAFFIC_RETENTION_DAYS），默认 90，0 = 不记录`
+  --traffic-retention-days N 流量统计保留天数（或 RELAY_TRAFFIC_RETENTION_DAYS），默认 90，0 = 不记录
+  --daily-requests N       每个 UTC 日经中继的端到端通道数上限（或 RELAY_DAILY_REQUESTS），默认 0 = 不限
+  --daily-bytes N          每个 UTC 日经中继的字节数上限，双向合计（或 RELAY_DAILY_BYTES），默认 0 = 不限；
+                           可写 10G、500M（二进制单位 K / M / G / T）。超额时新通道以 4429 rate_limited
+                           （关闭原因 daily_budget_exceeded）被拒，已建立的流不切断，到下一个 UTC 零点恢复；
+                           用量从流量统计恢复，所以不能和 --traffic-retention-days 0 同用`

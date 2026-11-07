@@ -108,7 +108,7 @@ func OpenStore(ctx context.Context, dataDir string, requested StoreKind, db *Dat
 	case StoreFile:
 		return nil, Statef(Invalid, "数据目录里是状态文件：先运行 armadra-relay personal migrate --to sqlite")
 	case StoreSQLite:
-		return openSQLite(ctx, dataDir)
+		return openSQLite(ctx, dataDir, db.masterKey())
 	default:
 		opts, err := requireDatabase(db)
 		if err != nil {
@@ -131,7 +131,7 @@ func CreateStore(ctx context.Context, dataDir string, kind StoreKind, snap store
 	}
 	switch kind {
 	case StoreSQLite, "":
-		return createSQLite(ctx, dataDir, snap)
+		return createSQLite(ctx, dataDir, snap, db.masterKey())
 	case StorePostgres:
 		opts, err := requireDatabase(db)
 		if err != nil {
@@ -363,6 +363,9 @@ func mapStoreError(kind StoreKind, err error) error {
 	if !errors.As(err, &se) {
 		if errors.Is(err, store.ErrNoTenant) {
 			return Statef(Invalid, "数据库里没有个人中转的租户")
+		}
+		if errors.Is(err, store.ErrWrapped) {
+			return Statef(Invalid, "签名钥是主密钥包裹的：给 --master-key-file（或 RELAY_MASTER_KEY_FILE）")
 		}
 		return err
 	}

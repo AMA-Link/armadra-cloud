@@ -74,6 +74,14 @@ type Gate interface {
 	Admit(ctx context.Context, in GateInput) (release func(), code gen.ErrorCode, err error)
 }
 
+// ReasonedGate 是 Gate 的可选扩展：拒绝时给出 WS 关闭帧里的原因（缺省就是错误码）。
+// 个人中转的每日配额用它把关闭原因写成 daily_budget_exceeded（错误码表是封闭的，仍答 rate_limited）。
+type ReasonedGate interface {
+	Gate
+	// RefusalReason 答 code 对应的关闭原因；空串用错误码。
+	RefusalReason(code gen.ErrorCode) string
+}
+
 // GateInput 是 Gate.Admit 的入参：已验过的中继令牌里的身份。
 type GateInput struct {
 	SourceID string
@@ -305,7 +313,11 @@ func (p *Policy) DecideUpgrade(ctx context.Context, r Request) (Decision, error)
 				return Decision{}, err
 			}
 			p.o.Metrics.EdgeConnection(string(code))
-			return Decision{Code: code, SourceID: addressed.SourceID}, nil
+			d := Decision{Code: code, SourceID: addressed.SourceID}
+			if rg, ok := p.o.Gate.(ReasonedGate); ok {
+				d.Reason = rg.RefusalReason(code)
+			}
+			return d, nil
 		}
 		release = rel
 	}

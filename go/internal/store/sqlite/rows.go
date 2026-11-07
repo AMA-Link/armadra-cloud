@@ -77,12 +77,20 @@ func writeAccount(ctx context.Context, q *safeConn, tenantID, accountID string, 
 
 // ------------------------------------------------------------ 签名钥
 
-// keyWrapNone 是没包裹的私钥列值。别的包裹方式（Workers 的 aes-256-gcm）本实现不认识。
+// keyWrapNone 是没包裹的私钥列值；包裹方式 store.KeyWrapAESGCM 用主密钥（Options.MasterKey）读时解开。
+// 别的包裹方式（Workers 的 aes-256-gcm）本实现不认识。
 const keyWrapNone = "none"
 
 const keyColumns = "kid, private_key_pkcs8, private_key_wrap, public_jwk_json, active_from_ms, retired_at_ms"
 
-func toSigningKey(row scanner) (store.SigningKeyRecord, error) {
+// keyAAD 把包裹的私钥绑定到租户与 kid，与 PostgreSQL 存储相同。
+func keyAAD(tenantID, kid string) string {
+	return "armadra-cloud/signing-key/v1\x00" + tenantID + "\x00" + kid
+}
+
+// toSigningKey 读一行签名钥：没包裹的原样取，主密钥包裹的在这里解开；没给主密钥答 store.ErrWrapped；
+// 别的包裹方式拒绝，不把密文当私钥用，也不回退成明文。
+func (d *DB) toSigningKey(tenantID string, row scanner) (store.SigningKeyRecord, error) {
 	var (
 		k       store.SigningKeyRecord
 		wrap    string
@@ -92,8 +100,18 @@ func toSigningKey(row scanner) (store.SigningKeyRecord, error) {
 	if err := row.Scan(&k.Kid, &k.PrivateKeyPKCS8, &wrap, &jwk, &k.ActiveFromMs, &retired); err != nil {
 		return k, err
 	}
-	// 读签名钥：只认没包裹的；别的包裹方式拒绝，不把密文当私钥用，也不回退成明文。
-	if wrap != "" && wrap != keyWrapNone {
+	switch wrap {
+	case "", keyWrapNone:
+	case store.KeyWrapAESGCM:
+		if d.wrapper == nil {
+			return k, store.ErrWrapped
+		}
+		plain, err := d.wrapper.Open(k.PrivateKeyPKCS8, keyAAD(tenantID, k.Kid))
+		if err != nil {
+			return k, store.Errorf(store.KindCorrupt, "签名钥解不开：主密钥不对或密文被改，拒绝启动")
+		}
+		k.PrivateKeyPKCS8 = string(plain)
+	default:
 		return k, store.Errorf(store.KindUnknown, "签名钥的包裹方式不认识，拒绝启动：%s", wrap)
 	}
 	if err := decodeJSON(jwk, &k.PublicJWK); err != nil {
@@ -103,11 +121,15 @@ func toSigningKey(row scanner) (store.SigningKeyRecord, error) {
 	return k, nil
 }
 
-func insertSigningKey(ctx context.Context, q *safeConn, tenantID string, k store.SigningKeyRecord) error {
+func (d *DB) insertSigningKey(ctx context.Context, q *safeConn, tenantID string, k store.SigningKeyRecord) error {
+	body, wrap := k.PrivateKeyPKCS8, keyWrapNone
+	if d.wrapper != nil {
+		body, wrap = d.wrapper.Seal([]byte(k.PrivateKeyPKCS8), keyAAD(tenantID, k.Kid)), store.KeyWrapAESGCM
+	}
 	_, err := q.ExecContext(ctx,
 		`INSERT INTO signing_keys (tenant_id, kid, private_key_pkcs8, private_key_wrap, public_jwk_json,
 		   active_from_ms, retired_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		tenantID, k.Kid, k.PrivateKeyPKCS8, keyWrapNone, encodeJSON(k.PublicJWK), k.ActiveFromMs, nullable(k.RetiredAtMs))
+		tenantID, k.Kid, body, wrap, encodeJSON(k.PublicJWK), k.ActiveFromMs, nullable(k.RetiredAtMs))
 	return err
 }
 

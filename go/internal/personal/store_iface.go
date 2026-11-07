@@ -29,8 +29,22 @@ const (
 type DatabaseOptions struct {
 	URL    string
 	Schema string
+	// MasterKey 是签名私钥的主密钥（--master-key-file）：存储是 SQLite 时也用，所以可以没有 URL。
+	// 给了就把新写的签名私钥包裹后才落库，并能读已包裹的；不进日志与输出。
+	MasterKey []byte
 	// OnError 报告存储的后台失败（签名钥缓存重读失败）；serve 填，错误只带类别。
 	OnError func(operation string, err error)
+}
+
+// hasURL 是给了 PostgreSQL 连接（只给了主密钥不算）；nil 安全。
+func (d *DatabaseOptions) hasURL() bool { return d != nil && d.URL != "" }
+
+// masterKey 是主密钥，没给答 nil；nil 安全。
+func (d *DatabaseOptions) masterKey() []byte {
+	if d == nil {
+		return nil
+	}
+	return d.MasterKey
 }
 
 // SourceSeen 是源上下线的累计（只在内存，按批落盘）。

@@ -63,49 +63,52 @@
 
 中继（`armadra-relay personal serve`，参数优先，其次环境变量）：
 
-| 参数 / 变量                                                   | 必填 | 说明                                                                                                                              |
-| ------------------------------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `--data-dir` / `RELAY_DATA_DIR`                               | 是   | 数据目录（0700）：`relay.db` 或 `state.json`、`tls/`、`acme/`                                                                     |
-| `--store` / `RELAY_STORE`                                     |      | `sqlite` / `postgres`；缺省按数据目录里已有的，新装 `sqlite`；`state.json` 先迁到 SQLite                                          |
-| `--database-url` / `RELAY_DATABASE_URL`                       |      | `postgres://…`；`--store postgres` 与 `--control postgres` 必填                                                                   |
-| `--database-url-file` / `RELAY_DATABASE_URL_FILE`             |      | 从文件读连接串（口令不出现在进程参数里）                                                                                          |
-| `--database-schema` / `RELAY_DATABASE_SCHEMA`                 |      | 用哪个 schema，缺省连接的缺省 schema                                                                                              |
-| `--control` / `RELAY_CONTROL`                                 |      | `memory`（缺省，单节点）/ `redis` / `postgres`（多节点）                                                                          |
-| `--redis-url` / `RELAY_REDIS_URL`                             |      | `redis://…`；`--control redis` 必填，要 Redis 7 以上                                                                              |
-| `--node-id` / `RELAY_NODE_ID`                                 |      | 本节点的名字，多节点时各不相同，缺省 `--host`                                                                                     |
-| `--host` / `RELAY_HOST`                                       | 是   | 对外的 IP 或域名（issuer 与证书 SAN）                                                                                             |
-| `--port` / `RELAY_PORT`                                       |      | 对外端口，缺省 8443（443 时 issuer 省略端口）                                                                                     |
-| `--public-origin` / `RELAY_PUBLIC_ORIGIN`                     |      | 对外来源，缺省 `https://<host>:<port>`                                                                                            |
-| `--tls` / `RELAY_TLS`                                         |      | `self-signed`（缺省）/ `acme` / `file` / `plain`（只允许回环监听）                                                                |
-| `--tls-cert`、`--tls-key` / `RELAY_TLS_CERT`、`RELAY_TLS_KEY` |      | `--tls file` 的证书与私钥，变化时热加载                                                                                           |
-| `--acme-email` / `RELAY_ACME_EMAIL`                           |      | `--tls acme` 必填                                                                                                                 |
-| `--acme-directory` / `RELAY_ACME_DIRECTORY`                   |      | 缺省 Let's Encrypt 生产目录                                                                                                       |
-| `--acme-ca-bundle` / `RELAY_ACME_CA_BUNDLE`                   |      | 信任 ACME 目录服务器的 PEM（测试 CA）                                                                                             |
-| `--acme-http-listen` / `RELAY_ACME_HTTP_LISTEN`               |      | `http-01` 挑战监听，缺省 `0.0.0.0:80`                                                                                             |
-| `--web-root` / `RELAY_WEB_ROOT`                               |      | Armadra `apps/web` 构建产物；镜像缺省 `/app/web`（构建参数 `WEB_IMAGE`）                                                          |
-| `--account` / `RELAY_PERSONAL_ACCOUNT`                        |      | 存储不存在时自动初始化的账号                                                                                                      |
-| `--password-file` / `RELAY_PERSONAL_PASSWORD_FILE`            |      | 自动初始化的口令文件（之后不再读取）                                                                                              |
-| `--listen` / `RELAY_LISTEN`                                   |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`                                                                                    |
-| `--log-level` / `RELAY_LOG_LEVEL`                             |      | `debug` / `info`（缺省）/ `warn` / `error`                                                                                        |
-| `--name` / `RELAY_NAME`                                       |      | 服务端名称（`platform.info.name`），客户端添加时的缺省显示名；缺省取状态里的 `displayName`，再取 `--host`                         |
-| `--trusted-proxy` / `RELAY_TRUSTED_PROXY`                     |      | 受信反向代理的 IP / CIDR，逗号分隔，如 `127.0.0.1/32,::1/128`；直连对端在列表内才读 `X-Forwarded-For` / `X-Real-IP`，缺省不信任   |
-| `--trusted-proxy-prefer` / `RELAY_TRUSTED_PROXY_PREFER`       |      | 先读哪个头：`forwarded-for`（缺省）/ `real-ip`；要和 `--trusted-proxy` 一起给                                                     |
-| `--metrics-listen` / `RELAY_METRICS_LISTEN`                   |      | `/metrics` 的单独监听，缺省不开；非回环（含 `:端口`、`0.0.0.0`、`[::]`）必须配令牌，否则退出 64                                   |
-| `RELAY_METRICS_TOKEN`                                         |      | `/metrics` 要 `Authorization: Bearer <令牌>`；监听不在回环地址上时必填                                                            |
-| `--limit-anonymous` / `RELAY_LIMIT_ANONYMOUS`                 |      | 无令牌或令牌无效的请求，按 IP 每分钟上限，缺省 60                                                                                 |
-| `--limit-preflight` / `RELAY_LIMIT_PREFLIGHT`                 |      | 0.5.0 起不再使用（中继不答 CORS 预检），仍接受                                                                                    |
-| `--limit-token` / `RELAY_LIMIT_TOKEN`                         |      | 有效中继令牌每分钟上限，缺省 1200                                                                                                 |
-| `--limit-account` / `RELAY_LIMIT_ACCOUNT`                     |      | 同一账号全部令牌每分钟上限，缺省 3600                                                                                             |
-| `--challenge` / `RELAY_CHALLENGE`                             |      | 人机挑战：`turnstile` / `off`（缺省）；开了以后 `platform.info` 报 `challenge`，登录缺令牌答 `400 challenge_required`（契约 §16） |
-| `--turnstile-site-key` / `RELAY_TURNSTILE_SITE_KEY`           |      | Turnstile 站点密钥（不是秘密）；`--challenge turnstile` 必填                                                                      |
-| `--turnstile-secret-file` / `RELAY_TURNSTILE_SECRET_FILE`     |      | Turnstile secret 文件（compose 用 secret 挂载）；`--challenge turnstile` 必填                                                     |
-| `--turnstile-hostnames` / `RELAY_TURNSTILE_HOSTNAMES`         |      | siteverify 答复里允许的主机名，逗号分隔；空 = 拒绝一切；有 https 的 `--public-origin` 时不得含本机地址                            |
-| `--challenge-scope` / `RELAY_CHALLENGE_SCOPE`                 |      | 要挑战的 procedure，`auth.login`（缺省）、`links.accept`，逗号分隔                                                                |
-| `--traffic-retention-days` / `RELAY_TRAFFIC_RETENTION_DAYS`   |      | 流量统计保留天数，缺省 90，`0` = 不记录（契约 §19）                                                                               |
+| 参数 / 变量                                                   | 必填 | 说明                                                                                                                                                   |
+| ------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--data-dir` / `RELAY_DATA_DIR`                               | 是   | 数据目录（0700）：`relay.db` 或 `state.json`、`tls/`、`acme/`                                                                                          |
+| `--store` / `RELAY_STORE`                                     |      | `sqlite` / `postgres`；缺省按数据目录里已有的，新装 `sqlite`；`state.json` 先迁到 SQLite                                                               |
+| `--database-url` / `RELAY_DATABASE_URL`                       |      | `postgres://…`；`--store postgres` 与 `--control postgres` 必填                                                                                        |
+| `--database-url-file` / `RELAY_DATABASE_URL_FILE`             |      | 从文件读连接串（口令不出现在进程参数里）                                                                                                               |
+| `--database-schema` / `RELAY_DATABASE_SCHEMA`                 |      | 用哪个 schema，缺省连接的缺省 schema                                                                                                                   |
+| `--control` / `RELAY_CONTROL`                                 |      | `memory`（缺省，单节点）/ `redis` / `postgres`（多节点）                                                                                               |
+| `--redis-url` / `RELAY_REDIS_URL`                             |      | `redis://…`；`--control redis` 必填，要 Redis 7 以上                                                                                                   |
+| `--node-id` / `RELAY_NODE_ID`                                 |      | 本节点的名字，多节点时各不相同，缺省 `--host`                                                                                                          |
+| `--host` / `RELAY_HOST`                                       | 是   | 对外的 IP 或域名（issuer 与证书 SAN）                                                                                                                  |
+| `--port` / `RELAY_PORT`                                       |      | 对外端口，缺省 8443（443 时 issuer 省略端口）                                                                                                          |
+| `--public-origin` / `RELAY_PUBLIC_ORIGIN`                     |      | 对外来源，缺省 `https://<host>:<port>`                                                                                                                 |
+| `--tls` / `RELAY_TLS`                                         |      | `self-signed`（缺省）/ `acme` / `file` / `plain`（只允许回环监听）                                                                                     |
+| `--tls-cert`、`--tls-key` / `RELAY_TLS_CERT`、`RELAY_TLS_KEY` |      | `--tls file` 的证书与私钥，变化时热加载                                                                                                                |
+| `--acme-email` / `RELAY_ACME_EMAIL`                           |      | `--tls acme` 必填                                                                                                                                      |
+| `--acme-directory` / `RELAY_ACME_DIRECTORY`                   |      | 缺省 Let's Encrypt 生产目录                                                                                                                            |
+| `--acme-ca-bundle` / `RELAY_ACME_CA_BUNDLE`                   |      | 信任 ACME 目录服务器的 PEM（测试 CA）                                                                                                                  |
+| `--acme-http-listen` / `RELAY_ACME_HTTP_LISTEN`               |      | `http-01` 挑战监听，缺省 `0.0.0.0:80`                                                                                                                  |
+| `--web-root` / `RELAY_WEB_ROOT`                               |      | Armadra `apps/web` 构建产物；镜像缺省 `/app/web`（构建参数 `WEB_IMAGE`）                                                                               |
+| `--account` / `RELAY_PERSONAL_ACCOUNT`                        |      | 存储不存在时自动初始化的账号                                                                                                                           |
+| `--password-file` / `RELAY_PERSONAL_PASSWORD_FILE`            |      | 自动初始化的口令文件（之后不再读取）                                                                                                                   |
+| `--master-key-file` / `RELAY_MASTER_KEY_FILE`                 |      | 主密钥文件（64 位十六进制，权限不得宽于 `0600`）：给了就把签名私钥用 AES-256-GCM 包裹后才落库（SQLite 与 PostgreSQL），缺省明文存                      |
+| `--listen` / `RELAY_LISTEN`                                   |      | 缺省：回环 host 绑 `127.0.0.1`，否则 `0.0.0.0`                                                                                                         |
+| `--log-level` / `RELAY_LOG_LEVEL`                             |      | `debug` / `info`（缺省）/ `warn` / `error`                                                                                                             |
+| `--name` / `RELAY_NAME`                                       |      | 服务端名称（`platform.info.name`），客户端添加时的缺省显示名；缺省取状态里的 `displayName`，再取 `--host`                                              |
+| `--trusted-proxy` / `RELAY_TRUSTED_PROXY`                     |      | 受信反向代理的 IP / CIDR，逗号分隔，如 `127.0.0.1/32,::1/128`；直连对端在列表内才读 `X-Forwarded-For` / `X-Real-IP`，缺省不信任                        |
+| `--trusted-proxy-prefer` / `RELAY_TRUSTED_PROXY_PREFER`       |      | 先读哪个头：`forwarded-for`（缺省）/ `real-ip`；要和 `--trusted-proxy` 一起给                                                                          |
+| `--metrics-listen` / `RELAY_METRICS_LISTEN`                   |      | `/metrics` 的单独监听，缺省不开；非回环（含 `:端口`、`0.0.0.0`、`[::]`）必须配令牌，否则退出 64                                                        |
+| `RELAY_METRICS_TOKEN`                                         |      | `/metrics` 要 `Authorization: Bearer <令牌>`；监听不在回环地址上时必填                                                                                 |
+| `--limit-anonymous` / `RELAY_LIMIT_ANONYMOUS`                 |      | 无令牌或令牌无效的请求，按 IP 每分钟上限，缺省 60                                                                                                      |
+| `--limit-preflight` / `RELAY_LIMIT_PREFLIGHT`                 |      | 0.5.0 起不再使用（中继不答 CORS 预检），仍接受                                                                                                         |
+| `--limit-token` / `RELAY_LIMIT_TOKEN`                         |      | 有效中继令牌每分钟上限，缺省 1200                                                                                                                      |
+| `--limit-account` / `RELAY_LIMIT_ACCOUNT`                     |      | 同一账号全部令牌每分钟上限，缺省 3600                                                                                                                  |
+| `--daily-requests` / `RELAY_DAILY_REQUESTS`                   |      | 每个 UTC 日经中继的端到端通道数上限，缺省 0（不限）；超额的新通道以 `4429 rate_limited`（关闭原因 `daily_budget_exceeded`）被拒，到下一个 UTC 零点恢复 |
+| `--daily-bytes` / `RELAY_DAILY_BYTES`                         |      | 每个 UTC 日经中继的字节数上限，双向合计，缺省 0（不限）；可写 `10G`、`500M`（二进制单位）；已建立的流不切断                                            |
+| `--challenge` / `RELAY_CHALLENGE`                             |      | 人机挑战：`turnstile` / `off`（缺省）；开了以后 `platform.info` 报 `challenge`，登录缺令牌答 `400 challenge_required`（契约 §16）                      |
+| `--turnstile-site-key` / `RELAY_TURNSTILE_SITE_KEY`           |      | Turnstile 站点密钥（不是秘密）；`--challenge turnstile` 必填                                                                                           |
+| `--turnstile-secret-file` / `RELAY_TURNSTILE_SECRET_FILE`     |      | Turnstile secret 文件（compose 用 secret 挂载）；`--challenge turnstile` 必填                                                                          |
+| `--turnstile-hostnames` / `RELAY_TURNSTILE_HOSTNAMES`         |      | siteverify 答复里允许的主机名，逗号分隔；空 = 拒绝一切；有 https 的 `--public-origin` 时不得含本机地址                                                 |
+| `--challenge-scope` / `RELAY_CHALLENGE_SCOPE`                 |      | 要挑战的 procedure，`auth.login`（缺省）、`links.accept`，逗号分隔                                                                                     |
+| `--traffic-retention-days` / `RELAY_TRAFFIC_RETENTION_DAYS`   |      | 流量统计保留天数，缺省 90，`0` = 不记录（契约 §19）                                                                                                    |
 
 限流额度也可写在状态文件 `settings.rateLimits`（`anonymous`、`preflight`、`token`、`account`，都是 1–1000000 的整数，可省略），优先级：命令行 > 环境变量 > 状态文件 > 缺省；改动后重启 `serve` 生效。登录、链接接受与隧道登记的限流不可配。
 
-其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`traffic`、`backup`、`doctor`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay armadra-relay personal …`），改动一秒内生效；`migrate --to sqlite|postgres` 要先停 `serve`（多节点要停掉所有节点）。数据目录用 PostgreSQL 时每个子命令都要连接串（参数或环境变量）。
+其余子命令（`init`、`status`、`passwd`、`rotate-key`、`links list|revoke`、`traffic`、`backup`、`doctor`；`wrap-keys` 例外，要先停 `serve`）只读写存储，可以在 `serve` 运行时执行（`docker compose exec relay armadra-relay personal …`），改动一秒内生效；`migrate --to sqlite|postgres` 要先停 `serve`（多节点要停掉所有节点）。数据目录用 PostgreSQL 时每个子命令都要连接串（参数或环境变量）。
 
 存储（[运维手册](../docs/runbooks/personal-storage.md)）：
 
@@ -122,6 +125,34 @@
 ## 托管的 relay.armadra.com
 
 `relay.armadra.com` 与自建走同一条路径：Go 个人中转 `armadra-relay personal serve`，按 [personal/compose.yml](personal/compose.yml) 起（镜像版本与发布同号），前面由反向代理终止 TLS，DNS 灰云直连。Cloudflare Workers 上的 TypeScript 中继已删除（#214），原有账号与源不迁移：切换后在桌面与手机上重新登录、重新配对。部署、改 DNS 与下线旧 Worker 都由维护者执行。
+
+### 签名钥主密钥包裹（SQLite）
+
+缺省签名私钥以明文存在 `relay.db`（0600）里；给 `--master-key-file F`（或 `RELAY_MASTER_KEY_FILE`）后，新写入的签名私钥用 AES-256-GCM（`aes256gcm-v1`，附加数据绑定租户与 kid，与 PostgreSQL 存储相同）包裹后才落库，读时用同一个主密钥解开。
+
+- 主密钥文件：64 位十六进制（32 字节），权限不得宽于 `0600`，格式不对或权限太松拒绝启动；**另存一份**，丢了就读不回签名私钥，只能靠备份回退（会让已登记的源与已登录的设备重新登录）。
+- 所有打开存储的子命令都认这个参数：`init`、`serve`、`status`、`rotate-key`、`passwd`、`links`、`traffic`、`backup`、`doctor`、`migrate`、`wrap-keys`。库里已有包裹的钥而没给主密钥，这些命令都拒绝并提示给 `--master-key-file`。
+- `personal doctor` 报「签名钥包裹」：有明文私钥给警告，包裹了而没给主密钥报失败，全部包裹则通过。
+- PostgreSQL 存储同样认这个参数（新写入的钥被包裹），但 `wrap-keys` 只处理 SQLite。
+
+从没包裹迁到包裹（已在跑的部署），按顺序：
+
+1. **备份**：`armadra-relay personal backup --data-dir D --out /安全的位置/relay-前.db`（在线、一致）。没有反向解包，回退靠这份备份。
+2. **停 serve**：`docker compose stop relay`（`wrap-keys` 在 serve 运行时拒绝）。
+3. **包裹**：生成主密钥并包裹——`umask 077; openssl rand -hex 32 > master.key`，再 `armadra-relay personal wrap-keys --data-dir D --master-key-file master.key`。可以重复执行，已包裹的不动，输出这次包裹了几把。
+4. **带主密钥启动**：给 `serve` 加 `--master-key-file`（或环境变量 `RELAY_MASTER_KEY_FILE`，compose 里把文件挂成只读 secret），之后 `personal doctor --master-key-file F` 应显示「签名钥包裹」通过。
+
+之后轮换（`rotate-key`）出的新钥也是包裹的。
+
+### 每日配额
+
+只有每分钟限流之外，可以给整个中转（个人中转只有一个账号，访客链接的流量一并计入）设每个 UTC 日的上限，缺省都是 `0`（不限，行为与不配一致）：
+
+- `--daily-requests N`（`RELAY_DAILY_REQUESTS`）：端到端通道数。令牌验过之后才占名额，匿名请求烧不掉配额。
+- `--daily-bytes N`（`RELAY_DAILY_BYTES`，可写 `10G`、`500M`，二进制单位）：经中继的字节数，两个方向合计。
+- 超额后新通道以 `4429 rate_limited` 被拒（WS 关闭原因 `daily_budget_exceeded`，错误码表是封闭的所以码仍是 `rate_limited`），已建立的流不切断，到下一个 UTC 零点自动恢复。`/health`、`/ready` 与 `/v1/*` 不计入。
+- 用量在内存里累加，每 30 秒与流量统计对齐（也并入别的节点已落库的量），重启后从统计恢复当天用量，所以**要开流量统计**（`--traffic-retention-days` 不为 0，缺省 90）。
+- 指标（`--metrics-listen`）加 `relay_daily_requests_used|limit`、`relay_daily_bytes_used|limit` 与 `relay_daily_budget_rejected_total`（只列配了上限的项）。
 
 ## 端点
 

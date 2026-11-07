@@ -35,7 +35,8 @@ func Migrations() ([]store.Migration, error) {
 
 // DB 是一个打开的库：一条连接，读写串行。
 type DB struct {
-	path string
+	path    string
+	wrapper *store.Wrapper
 
 	mu     sync.Mutex
 	db     *sql.DB
@@ -72,6 +73,9 @@ type Options struct {
 	Migrations []store.Migration
 	// Now 缺省 time.Now；账本的 applied_at_ms 用它。
 	Now func() int64
+	// MasterKey 是主密钥（32 字节）：给了就把新写的签名私钥用 aes256gcm-v1 包裹，并能读已包裹的；
+	// 没给时明文存，读到包裹的答 store.ErrWrapped。与 PostgreSQL 存储同义。
+	MasterKey []byte
 }
 
 var _ store.Backend = (*DB)(nil)
@@ -97,6 +101,13 @@ func Open(ctx context.Context, path string, options Options) (*DB, error) {
 	now := options.Now
 	if now == nil {
 		now = nowMs
+	}
+	var wrapper *store.Wrapper
+	if options.MasterKey != nil {
+		var err error
+		if wrapper, err = store.NewWrapper(options.MasterKey); err != nil {
+			return nil, store.Errorf(store.KindUnknown, "%v", err)
+		}
 	}
 	info, statErr := os.Stat(path)
 	exists := statErr == nil
@@ -135,7 +146,7 @@ func Open(ctx context.Context, path string, options Options) (*DB, error) {
 		}
 		return nil, wrapOpenError(path, err)
 	}
-	db := &DB{path: path, db: raw, conn: conn, q: &safeConn{c: conn}}
+	db := &DB{path: path, db: raw, conn: conn, q: &safeConn{c: conn}, wrapper: wrapper}
 	if err := db.prepare(ctx, options.Create, migrations, now); err != nil {
 		_ = db.Close()
 		// 自己刚建的文件没写成：删掉，下次还能重建；已有的库一个字节也不动。

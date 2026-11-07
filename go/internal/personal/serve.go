@@ -20,6 +20,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/api"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AMA-Link/armadra-cloud/go/internal/budget"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control"
 	clusterpkg "github.com/AMA-Link/armadra-cloud/go/internal/control/cluster"
 	"github.com/AMA-Link/armadra-cloud/go/internal/control/factory"
@@ -44,8 +45,10 @@ const (
 	shutdownGrace = 5 * time.Second
 	// httpShutdown 是关 HTTP 服务等空闲连接的上限；jobTimeout 是周期任务（落库、清理）单次开始前的上限（已开始的事务以 busy_timeout 为上界）。
 	// 关闭总时间：GOAWAY 宽限 ≤5s + 关服务 ≤2s + 等任务 ≤3s，正常（没有长连接在排空）不到 1s。
-	httpShutdown    = 2 * time.Second
-	jobTimeout      = 3 * time.Second
+	httpShutdown = 2 * time.Second
+	jobTimeout   = 3 * time.Second
+	// budgetSyncEvery 是每日配额与流量账本对齐的周期。
+	budgetSyncEvery = 30 * time.Second
 	httpIdleTimeout = 75 * time.Second
 	httpHeaderWait  = 76 * time.Second
 	httpReadTimeout = 5 * time.Minute
@@ -122,7 +125,7 @@ func openOrInit(ctx context.Context, o ServeOptions, issuer string, now time.Tim
 	}
 	// PostgreSQL：数据目录是空的不等于没初始化（别的节点可能已经建好），要问库。
 	var missing bool
-	if kind == StorePostgres && o.Database != nil {
+	if kind == StorePostgres && o.Database.hasURL() {
 		found, err := PostgresStoreExists(ctx, *o.Database)
 		if err != nil {
 			return nil, err
@@ -401,6 +404,22 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 		Challenge: challengeInfo,
 	})
 
+	// 每日配额（缺省关闭：不建账、不挂准入，行为与没有这个功能时一致）。要靠流量统计恢复与对齐。
+	limits := budget.Limits{Requests: o.DailyRequests, Bytes: o.DailyBytes}
+	var daily *budget.Budget
+	var gate edge.Gate
+	var onBytes func(int64)
+	if limits.Enabled() {
+		if o.TrafficRetentionDays <= 0 {
+			return nil, Usagef("每日配额靠流量统计恢复与对齐：不能和 --traffic-retention-days 0 一起用")
+		}
+		daily = budget.New(limits, now)
+		onBytes = daily.AddBytes
+		gate = &budget.Gate{Budget: daily, OnExceeded: func(retryAfter time.Duration) {
+			logger.Warn("每日配额已用尽，新通道被拒，到下一个 UTC 零点恢复", obs.RetryAfterSeconds(int64(retryAfter/time.Second)))
+		}}
+	}
+
 	// 流量统计。
 	retentionDays := o.TrafficRetentionDays
 	var meter *traffic.Meter
@@ -410,7 +429,15 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 			OnError: func(err error, dropped int) {
 				logger.Warn("流量统计写入失败", obs.Error(err), obs.Dropped(dropped))
 			},
+			OnBytes: onBytes,
 		})
+	}
+	if daily != nil {
+		// 重启后从账本恢复当天用量；读不出来就从零算起（只会偏松一个落库周期的量），照样启动。
+		if err := daily.Reconcile(ctx, st.Ports().Traffic, store.DefaultTenant, meter); err != nil {
+			logger.Warn("每日配额没能从流量统计恢复当天用量", obs.Error(err))
+		}
+		logger.Info("已开启每日配额", obs.DailyRequests(limits.Requests), obs.DailyBytes(limits.Bytes))
 	}
 
 	// 数据面。
@@ -424,7 +451,7 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 		Mode: "personal", NodeID: o.NodeID, Version: Version, Control: cluster.Cluster,
 		Addressing: edge.PathAddressing(), Log: logger,
 		CORSOrigins: func(string) []string { return core.TrustedOriginsOf(st.Tenant().TenantSettings) },
-		ClientIP:    clientIP, Traffic: meter, Probes: probes,
+		ClientIP:    clientIP, Traffic: meter, Probes: probes, Gate: gate,
 		UpgradeExtra: stream.HandleUpgrade,
 		Fallback: func(w http.ResponseWriter, r *http.Request) bool {
 			if apiServer.Claims(r.URL.Path) {
@@ -474,12 +501,16 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 	var metricsURL string
 	if o.MetricsListen != nil {
 		addr := net.JoinHostPort(o.MetricsListen.Host, strconv.Itoa(o.MetricsListen.Port))
+		render := plane.Metrics.Render
+		if daily != nil {
+			render = func() string { return plane.Metrics.Render() + daily.Render() }
+		}
 		mln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return nil, fmt.Errorf("指标监听失败：%s", addr)
 		}
 		metricsServer = &http.Server{
-			Handler: obs.MetricsHandler(plane.Metrics.Render, o.MetricsToken), ReadHeaderTimeout: httpHeaderWait,
+			Handler: obs.MetricsHandler(render, o.MetricsToken), ReadHeaderTimeout: httpHeaderWait,
 			ErrorLog: log.New(io.Discard, "", 0),
 		}
 		metricsURL = "http://" + hostPort(mln.Addr())
@@ -528,6 +559,15 @@ func serving(ctx context.Context, o ServeOptions, deps ServeDeps, base serveBase
 		workers.Add(1)
 		go func() { defer workers.Done(); prune(job()) }()
 		every(day, prune)
+	}
+
+	// 每日配额与流量账本对齐：别的节点已落库的用量并进来，换日时清零（Budget 自己按 UTC 日滚动）。
+	if daily != nil {
+		every(budgetSyncEvery, func(ctx context.Context) {
+			if err := daily.Reconcile(ctx, st.Ports().Traffic, store.DefaultTenant, meter); err != nil {
+				logger.Warn("每日配额与流量统计对齐失败", obs.Error(err))
+			}
+		})
 	}
 
 	// 源上下线：记最近在线与版本（只在内存累计，和设备的 lastSeen 一起每 5 分钟落盘）。
