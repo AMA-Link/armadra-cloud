@@ -1,5 +1,7 @@
 # Cloudflare Workers 上的个人中转：运维
 
+> **已归档（#214）：** Cloudflare Workers 上的 TypeScript 中继已删除，`relay.armadra.com` 改由 Go 个人中转承载（见 [deploy/README.md](../../deploy/README.md#托管的-relayarmadracom)）；本文只作追溯，不再更新。
+
 部署步骤与面板设置见 [deploy/cloudflare/README.md](../../deploy/cloudflare/README.md)。本文是部署之后的日常：初始化、心跳与检查周期、日配额、撤销、存储拒绝服务、主密钥、回滚与排障。
 
 ## 初始化

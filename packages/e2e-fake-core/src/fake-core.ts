@@ -3,7 +3,7 @@
  * 自己实现的「隧道客户端」连上中继。每条 `OPEN` 变成一个 `Duplex`，`emit("connection")`
  * 给 `http.Server`——与 core 的做法相同，由 Node 解析 HTTP 与升级。
  *
- * 流控用中继同一份 `TunnelStream`（对角色无感）；帧的分派、握手、隧道级窗口、心跳应答
+ * 流控用 `TunnelStream`（对角色无感）；帧的分派、握手、隧道级窗口、心跳应答
  * 是这里独立写的。路由：
  *
  * - `GET /echo-request`：答 `{ method, url, headers }`（看中继剥了什么、加了什么）。
@@ -42,7 +42,7 @@ import {
   sourceKey as defaultSourceKey,
   SOURCE_ID,
   tunnelToken,
-} from "@armadra/relay-kernel/testing/tokens";
+} from "./tokens.ts";
 
 export function bigByte(index: number): number {
   return (index * 31 + 7) & 0xff;

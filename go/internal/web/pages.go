@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-// 本文件对应 packages/cloud-shared/src/pages.ts：页面 CSP、内容类型、缓存判断与中继自有的两页。
+// 本文件对应 已删除的 TypeScript 版 packages/cloud-shared/src/pages.ts：页面 CSP、内容类型、缓存判断与中继自有的两页。
 
 // PageCSP 是托管页的 CSP（与 core Gateway 的服务器版相同）。
 const PageCSP = "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; " +

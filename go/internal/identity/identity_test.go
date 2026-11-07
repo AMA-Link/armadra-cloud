@@ -223,18 +223,15 @@ func TestPolicy(t *testing.T) {
 	}
 }
 
-// 随包的常见口令表与 control-core 里那份逐字相同。
-func TestCommonPasswordsMatchControlCore(t *testing.T) {
-	original, err := os.ReadFile(filepath.Join(testutil.RepoRoot(t), "packages", "control-core", "src", "common-passwords.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
+// 随包的常见口令表字节固定（协议约定的那份 10000 条），改动要有意为之、同步改这里的 sha256。
+func TestCommonPasswordsPinned(t *testing.T) {
 	embedded, err := os.ReadFile("common-passwords.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sha256.Sum256(original) != sha256.Sum256(embedded) {
-		t.Fatal("go/internal/identity/common-passwords.txt 与 packages/control-core/src/common-passwords.txt 不同：两边一起改")
+	sum := sha256.Sum256(embedded)
+	if got := hex.EncodeToString(sum[:]); got != "ff9351ae2bb398ad3d3b2642faeab2024f952bcdbb86e195b7d77207c4286bb9" {
+		t.Fatalf("go/internal/identity/common-passwords.txt 的 sha256 变了：%s", got)
 	}
 	if n := len(identity.CommonPasswords()); n != 10000 {
 		t.Errorf("常见口令表应有 10000 条，实际 %d", n)

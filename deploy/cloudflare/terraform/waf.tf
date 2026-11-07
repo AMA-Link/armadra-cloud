@@ -1,6 +1,6 @@
 # WAF：自定义规则（Free 5 条，不支持正则）、托管规则（Free Managed Ruleset；付费的托管 WAF 与 OWASP
 # 用 enable_paid_managed_waf 开）、Bot Fight Mode 保持关闭（会挑战原生 App 与 core 的非浏览器请求，
-# 自定义规则绕不过）。自定义规则在 Worker 之前执行：在这里挡掉的请求不计 Workers 请求数。
+# 自定义规则绕不过）。自定义规则只对经 Cloudflare 代理（橙云）的主机生效。
 
 variable "enable_managed_waf" {
   description = "部署 Cloudflare Free Managed Ruleset（所有套餐可用）。区域里已有这个阶段的入口规则集时先 import（见 runbook）。"

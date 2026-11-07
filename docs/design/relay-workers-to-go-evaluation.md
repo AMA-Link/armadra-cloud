@@ -1,5 +1,7 @@
 # 线上中继 Workers 版切 Go 的评估报告（骨架）
 
+> **已归档（#214）：** Cloudflare Workers 上的 TypeScript 中继已删除，`relay.armadra.com` 改由 Go 个人中转承载（见 [deploy/README.md](../../deploy/README.md#托管的-relayarmadracom)）；本文只作追溯，不再更新。
+
 状态：骨架（#161）。对比维度、测量方法、表格与决策准则先定下来，数字等 0.12 内测的实测填写；表里的「待测」不得用估算替代。
 
 ## 1. 要回答的问题

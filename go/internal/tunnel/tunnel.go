@@ -1,6 +1,6 @@
 // Package tunnel 是中继的隧道层：`/t/v1` 握手、隧道表、流与信用、心跳、GOAWAY。
 //
-// 与 packages/relay-kernel 的 tunnel/ 逐项对应：
+// 与 已删除的 TypeScript 版 packages/relay-kernel 的 tunnel/ 逐项对应：
 //
 //   - Tunnel 是 ready 之后的一条隧道（tunnel.ts + stream.ts 的 StreamCore）；
 //   - Handshake 是四步握手状态机（handshake.ts）；

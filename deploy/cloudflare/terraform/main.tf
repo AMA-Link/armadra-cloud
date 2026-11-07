@@ -7,7 +7,8 @@
 #   Bot Management:Edit），不写进任何文件。
 # - zone 是 Free Website：缺省只写 Free 能用的规则；付费能力（托管 WAF、OWASP、更长的限速窗口）
 #   用变量开关，升级后再打开。
-# - Worker 的 Custom Domain（relay）由 wrangler 建与管，这里不碰，免得两边抢同一条记录。
+# - relay 的 DNS 记录不在这里：Workers 中继已删除（#214），relay.armadra.com 改由 Go 个人中转承载，
+#   灰云直连的记录由维护者管。灰云主机不经 Cloudflare，下面按 relay_hosts 收窄的规则对它不生效。
 # - state 缺省在本目录（已在 .gitignore）；要多人共用时换成 R2 的 s3 后端（见 runbook）。
 
 terraform {
@@ -45,7 +46,7 @@ variable "zone_plan" {
 }
 
 variable "relay_hosts" {
-  description = "Workers 中继的主机名（Custom Domain，由 wrangler 管）；WAF 规则按它们收窄。"
+  description = "中继的主机名；WAF 与限速规则按它们收窄（只对经 Cloudflare 代理的主机生效）。"
   type        = list(string)
   default     = ["relay.armadra.com"]
 }
@@ -65,6 +66,6 @@ locals {
 }
 
 output "zone_id" {
-  description = "解析到的区域 id（kill-switch 与排障用）。"
+  description = "解析到的区域 id（排障用）。"
   value       = local.zone_id
 }

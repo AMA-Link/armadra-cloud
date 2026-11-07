@@ -1,6 +1,6 @@
 // Package jose 实现协议用的 EdDSA compact JWS：签名、验签与声明校验，以及 JWKS 缓存。
 //
-// 验证顺序与 packages/cloud-shared/src/jwt.ts 一致，签名没过之前不看声明内容：
+// 验证顺序与 已删除的 TypeScript 版 packages/cloud-shared/src/jwt.ts 一致，签名没过之前不看声明内容：
 // typ → kid 查钥 → 签名 → schema → aud → iss → 时间 → jti 撤销回调。
 package jose
 

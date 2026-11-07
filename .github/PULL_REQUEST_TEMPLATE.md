@@ -17,10 +17,7 @@ See .github/CONTRIBUTING.md. Write "无 / None" for sections that do not apply i
 
 - [ ] Go 实现（中继与控制面）/ Go implementation (relay and control plane)（`go/`）
 - [ ] 协议包 / protocol package（`packages/platform-protocol`）
-- [ ] 中继内核 / relay kernel（`packages/relay-kernel`）
-- [ ] 中继 Workers 运行时 / relay Workers runtime（`packages/relay-runtime-workers`、`apps/relay-workers`）
-- [ ] 控制核 / control core（`packages/control-core`）
-- [ ] cloud-shared（`packages/cloud-shared`）
+- [ ] 端到端假 core / e2e fake core（`packages/e2e-fake-core`）
 - [ ] deploy / 镜像 / images（`deploy/`、`go/Dockerfile`、`go/Dockerfile.cloud`）
 - [ ] docs
 - [ ] tools / scripts / CI
@@ -55,7 +52,7 @@ Number of the new migration (max on main + 1) and whether `migrations.lock` is u
 <!-- 跑了哪些命令、加了哪些用例。 / Commands run and tests added. -->
 
 - [ ] 单元测试 / Unit tests（`pnpm test`）:
-- [ ] 集成测试 / Integration tests（`pnpm test:integration`，需 `pnpm dev:up`）:
+- [ ] 集成测试 / Integration tests（`pnpm go:check` 带 PostgreSQL / Redis / mailpit，需 `pnpm dev:up`）:
 - [ ] 跨仓端到端 / Cross-repo e2e（`pnpm e2e --mode personal`）:
 - [ ] 镜像 / Images（`pnpm images:build`）:
 - [ ] `pnpm check` 与 / and `pnpm repo:test`
@@ -64,7 +61,7 @@ Number of the new migration (max on main + 1) and whether `migrations.lock` is u
 
 <!-- 见 AGENTS.md。 / See AGENTS.md. -->
 
-- [ ] app 不 import Armadra 源码，与 Armadra 只经 `@armadra/platform-protocol` 与镜像往来 / apps do not import Armadra sources, and everything shared with Armadra goes through `@armadra/platform-protocol` and images
+- [ ] 本仓代码不 import Armadra 源码，与 Armadra 只经 `@armadra/platform-protocol` 与镜像往来 / code here does not import Armadra sources, and everything shared with Armadra goes through `@armadra/platform-protocol` and images
 - [ ] `@orpc/*` 只出现在允许的门面文件里；协议包不 import `node:*`（夹具除外） / `@orpc/*` appears only in the allowed facade files; the protocol package does not import `node:*` (fixtures excepted)
 - [ ] 流正文、终端输出、画布内容、口令与令牌明文不进入日志、持久化或响应 / Stream bodies, terminal output, canvas content, passwords and plaintext tokens stay out of logs, persistence and responses
 - [ ] 令牌校验保留 `aud`、`exp`、`jti`；中继只把流转给令牌 `src` 指定的源 / Token checks keep `aud`, `exp` and `jti`; the relay only forwards to the source named by the token's `src`

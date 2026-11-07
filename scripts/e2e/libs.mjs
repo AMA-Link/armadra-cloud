@@ -1,6 +1,6 @@
 // 端到端用到的工作区包产物（#143）：协议包经 dist 导出，检出换了提交而 dist 没重建时，
 // 用例会拿旧常量（如没有 TOKEN_TYPES.node）误报失败。启动前查新鲜度，旧了或没有就先构建，
-// 构建完仍不新鲜则报错退出。其余工作区包（relay-kernel、e2e-fake-core）直接导出源码，不用构建。
+// 构建完仍不新鲜则报错退出。其余工作区包（e2e-fake-core）直接导出源码，不用构建。
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";

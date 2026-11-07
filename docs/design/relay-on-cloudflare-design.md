@@ -1,5 +1,7 @@
 # 中继上 Cloudflare、防护与成本、Node 中继存储可选：设计（2026-10-10）
 
+> **已归档（#214）：** Cloudflare Workers 上的 TypeScript 中继已删除，`relay.armadra.com` 改由 Go 个人中转承载（见 [deploy/README.md](../../deploy/README.md#托管的-relayarmadracom)）；本文只作追溯，不再更新。
+
 > **2026-10-22 起：** Workers 中继、防护与存储部分已实现，Workers 版冻结功能；§6（控制面放 49、Workers 当 SaaS 节点）由 [中继 Go 重写](go-relay-design.md) §3.6、§3.10 取代；§2.11 的域名规划与 §4 的防护已合并进那一节。
 > **2026-11：** 下文的 TypeScript `apps/cloud` 已删除（AMA-Link/armadra-cloud#177），只作追溯。
 > 状态：设计稿（只设计，不改代码）。对应 AMA-Link/Armadra#256（Refs #229）。输入：[多租户与 SaaS 设计](multi-tenant-saas-design.md) §4、§5；armadra-cloud `main 362cb7b`（0.3.0：`packages/relay-kernel`、`packages/control-core`、`packages/cloud-shared`、`packages/platform-protocol` 协议 `1.1`、`apps/relay` personal 的状态文件端口、`apps/cloud` 骨架）；Armadra `main 462be14d`（`apps/desktop/src/core/relay/` 隧道客户端、`core/sources/` 客户端源表，契约最大节号 §59，迁移最大 `0045`）。Cloudflare 事实以文内引用的官方文档为准（读取日期 2026-10-10）。

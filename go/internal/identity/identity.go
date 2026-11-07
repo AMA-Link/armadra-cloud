@@ -1,5 +1,5 @@
 // Package identity 是身份算法：口令的 scrypt 派生与校验、令牌哈希、口令策略。
-// 参数全部取自协议包的生成物（gen.Identity*），与 packages/control-core 的实现逐字对应。
+// 参数全部取自协议包的生成物（gen.Identity*），与 已删除的 TypeScript 版 packages/control-core 的实现逐字对应。
 package identity
 
 import (

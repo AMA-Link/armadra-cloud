@@ -14,7 +14,7 @@ coverage/
 .env.*
 !.env.example
 .data/
-# Workers 中继：wrangler dev 的本地 secret 与状态
+# 已删除的 Workers 中继（#214）留在旧检出里的本地 secret 与状态，仍不许提交
 .dev.vars
 .wrangler/
 # Terraform：本地 state、provider 缓存与变量文件（可能含 IP 与账号信息）
@@ -29,9 +29,6 @@ deploy/personal/relay_password.txt
 # SaaS 部署：init-secrets.sh 生成的口令、连接串、主密钥与节点令牌，以及 TLS 证书与私钥
 deploy/saas/secrets/
 deploy/saas/tls/
-# Workers 中继：构建产物（scripts/build.mjs 生成），只保留 .assetsignore
-apps/relay-workers/assets/*
-!apps/relay-workers/assets/.assetsignore
 
 # Go 压测（go/bench）的产物
 go/bench/bin/

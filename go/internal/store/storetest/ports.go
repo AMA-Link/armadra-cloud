@@ -1,4 +1,4 @@
-// Package storetest 是存储端口的合同测试：packages/control-core/src/testing/ports-contract.ts
+// Package storetest 是存储端口的合同测试：已删除的 TypeScript 版 packages/control-core/src/testing/ports-contract.ts
 // 的 15 个用例逐例翻译成 Go，SQLite 与 PostgreSQL 各跑一遍。只在 _test.go 里用。
 //
 // 用法：storetest.PortsContract(t, func(t *testing.T) store.Backend { 新建后端 })。

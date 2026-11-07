@@ -1,7 +1,7 @@
 /**
  * 一条隧道流的信用与队列（中继设计 §3.3、协议包 §3.3），与运行时无关：只用 `Uint8Array`，
- * 不碰 `node:stream` 与 Web Streams。运行时各自在外面包一层（Web Streams 版在 `web-stream.ts`；端到端的假 core 用
- * `packages/e2e-fake-core` 的 `stream.Duplex` 版）。
+ * 不碰 `node:stream`；假 core 在 `stream.ts` 里包成 `stream.Duplex`。TypeScript 中继删除（#214）后
+ * 从原中继内核搬到这里，只给端到端的假 core 用。
  *
  * 写（本端 → 对端）：按 `maxDataChunk` 切块，每块同时扣「流信用」与「隧道信用」，
  * 任一不足就挂起这次写的回调，直到 `WINDOW` 补回——背压经适配层传给上游。可用信用比
@@ -15,7 +15,7 @@
  * 关闭：收 `END` → 交出 EOF；本地结束 → 发 `END`；收 `RST` → 适配层销毁自己；本地销毁 →
  * 发 `RST`（无错误时 `clientGone`）。两端都 `END` 后从流表摘掉。
  *
- * 本类对角色无感：中继与测试里的假 core 都能用（只有中继发 `OPEN`）。
+ * 本类对角色无感（只有中继发 `OPEN`）。
  */
 import { RST, type Frame } from "@armadra/platform-protocol/tunnel";
 

@@ -2,12 +2,10 @@
 //
 //   pnpm e2e --mode personal [--skip-build] [--relay-image <镜像>] [--server-image <镜像>]
 //                            [--output <目录>] [--keep]
-//   pnpm e2e --mode personal-workers [--output <目录>]
 //   pnpm e2e --mode saas [--output <目录>]
 //   pnpm e2e --mode saas-nodes [--redis-url <专用 Redis>] [--output <目录>]
 //
-// `personal-workers` 是本地 workerd 上的 Workers 中继（`wrangler dev --local`，不连 Cloudflare
-// 账号）对假 core 与 Node 客户端，见 scripts/e2e/workers.mjs；`saas` 是真实控制面 + 两个 SaaS 中继节点
+// `saas` 是真实控制面 + 两个 SaaS 中继节点
 // + PostgreSQL / Redis / mailpit 的账号、团队、授予、撤销与再平衡（SaaS 实施设计 §8.4），见 scripts/e2e/saas.mjs；
 // `saas-nodes` 是三个节点 + Redis、测试签发者代替控制面的节点用例（转发、慢客户端、再平衡），见
 // scripts/e2e/saas-nodes.mjs；下面的编排只属于 `personal`。
@@ -72,7 +70,6 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const USAGE = `用法: pnpm e2e --mode personal [选项]
 
   --mode personal        个人中转
-  --mode personal-workers  本地 workerd 上的 Workers 中继（wrangler dev --local）对假 core
   --mode saas            真实控制面 armadra-cloud + 两个 SaaS 中继节点 + PostgreSQL / Redis / mailpit（一次性容器）
                          对假 core：注册与验证邮件、团队与邀请、设备码登记主机、授予与断言、经节点转发、撤销、停用、再平衡
   --mode saas-nodes      三个 SaaS 中继节点 + Redis（一次性容器）对假 core，测试签发者代替控制面：
@@ -135,47 +132,6 @@ try {
 const { ed25519SignerFromSeed } = await import(
   "@armadra/platform-protocol/e2e"
 );
-if (mode === "personal-workers") {
-  const { runWorkersE2e } = await import("./e2e/workers.mjs");
-  const workersReport = new Report();
-  const workersOutput = resolve(
-    root,
-    options.values.get("--output") ?? ".data/e2e",
-  );
-  log("armadra-cloud e2e（personal-workers）");
-  let workersFailure;
-  try {
-    await runWorkersE2e({ root, report: workersReport });
-  } catch (error) {
-    workersFailure = error;
-  }
-  mkdirSync(workersOutput, { recursive: true });
-  const result = {
-    mode,
-    ok: workersFailure === undefined,
-    totalMs: Date.now() - workersReport.startedAt,
-    steps: workersReport.steps,
-    ...(workersFailure
-      ? {
-          error: redact(
-            workersFailure instanceof Error
-              ? workersFailure.message
-              : workersFailure,
-          ),
-        }
-      : {}),
-  };
-  writeFileSync(
-    join(workersOutput, "result.json"),
-    `${JSON.stringify(result, null, 2)}\n`,
-  );
-  log(
-    workersFailure
-      ? `失败：${result.error}（用时 ${result.totalMs} ms）`
-      : `全部通过（用时 ${result.totalMs} ms，${join(workersOutput, "result.json")}）`,
-  );
-  process.exit(workersFailure ? 1 : 0);
-}
 if (mode === "saas" || mode === "saas-nodes") {
   const { runSaasE2e } =
     mode === "saas"
@@ -226,7 +182,7 @@ if (mode !== "personal") {
   console.error(
     mode === undefined
       ? `需要 --mode personal\n${USAGE}`
-      : `--mode ${mode}：只支持 personal、personal-workers、saas 与 saas-nodes`,
+      : `--mode ${mode}：只支持 personal、saas 与 saas-nodes`,
   );
   process.exit(2);
 }

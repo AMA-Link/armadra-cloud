@@ -1,5 +1,5 @@
-# DNS（中继设计 §2.11）。relay、edge 是 Worker 的 Custom Domain，由 wrangler 建记录与
-# 证书，这里不管。SaaS 控制面的 app / status 记录是可选的：部署位置待定（Render 或 Cloudflare），缺省不建。
+# DNS（中继设计 §2.11）。relay 的记录（Go 个人中转，灰云）由维护者管，这里不管。
+# SaaS 控制面的 app / status 记录是可选的：部署位置待定（Render 或 Cloudflare），缺省不建。
 # 没给 origin_ipv4 时不建任何记录（CI 的 validate 与首次 plan 不需要它）。
 
 variable "origin_ipv4" {

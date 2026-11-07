@@ -279,7 +279,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **请求**：`POST /v1/auth/password`，`Authorization: Bearer <accessToken>`（账号本人；访客答 `403 forbidden`），体 `{ password, newPassword, challenge? }`——`password` 是旧口令。
 - **次序**：按 IP 限流（与 `auth.login` 同一个桶，`rate_limited`）→ 挑战（`platform.info.challenge.scope` 含 `auth.changePassword` 才要，action `armadra-password`，规则同 §16）→ 锁定检查（`account_locked`）→ 新口令策略（与注册、初始化同一套，`password_too_short` 等）→ 比对旧口令（不对答 `401 credentials_invalid`，计入与登录同一个锁定计数）。
 - **成功**：换口令记录、清锁，并在同一个写入里撤销账号本人除当前设备以外的全部设备（它们的访问令牌与刷新令牌即时失效；访客设备不受影响，由链接管）；当前设备的刷新令牌也换新（旧的作废、不当作重放），答 `{ session }`——当前设备的新会话，客户端用它替换保存的刷新令牌。
-- **运维**：Node 中继的 `personal passwd` 走同一个实现，但不留设备（全部重新登录）；Workers 中继由 `apps/relay-workers/scripts/rotate-password.sh` 在运维本机调这条接口，新口令只打印在运维终端。口令、令牌不进日志、存储与响应。
+- **运维**：Node 中继的 `personal passwd` 走同一个实现，但不留设备（全部重新登录）。口令、令牌不进日志、存储与响应。
 
 <!-- rpc:begin contract=§18 -->
 
@@ -304,7 +304,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - **日志与指标**：通道结束时记一条元数据（源、流号、两个方向的字节数、时长、关闭码），不记账号、设备、IP 与任何内容；指标 `relay_edge_streams_total{kind}` 计开出的流（0.5.0 起只有 `e2e`）。
 - **活性**：Node 中继每 30 秒发 `ping`、60 秒没有任何消息或 `pong` 即断开（与 §7 相同）；Workers 中继由检查周期按空闲时长断开。客户端的通道自己另有内层 `PING`（协议包 `LIMITS_E2E.pingIntervalMs`）。
 - **访客链接的身份指纹**（0.5.0 起）：`links.accept`（§10）的答案多可选的 `identityFp`——源登记的公钥（也就是它端到端通道的身份公钥）的指纹 `base32(SHA-256(pub))`，52 字符。它来自中继，只作提示与旧链接的兜底；core 生成的分享链接片段第三段（`<secret>.<邀请令牌>.<指纹前 16 位>`）才是访客钉扎的依据，两者不符时客户端拒绝。
-- **实现**：Go 中继（`go/internal/edge` 的端到端管道）与 Workers 中继（`SourceDO` 的 `e2e-bridge.ts`，休眠后照样接上）行为相同；签发方从 0.4.0 起在中继令牌里带 `dev`。
+- **实现**：Go 中继（`go/internal/edge` 的端到端管道；原 Workers 中继已随 #214 删除）；签发方从 0.4.0 起在中继令牌里带 `dev`。
 
 ## §19 流量统计
 

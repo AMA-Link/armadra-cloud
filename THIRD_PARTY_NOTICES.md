@@ -35,12 +35,10 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | modernc.org/memory | v1.12.1 | BSD-3-Clause |
 | modernc.org/sqlite | v1.61.0 | Apache-2.0 |
 | openapi-types | 12.1.3 | MIT |
-| postgres | 3.4.9 | Unlicense |
 | radash | 12.1.1 | MIT |
 | tagged-tag | 1.0.0 | MIT |
 | type-fest | 5.10.0 | (MIT OR CC0-1.0) |
 | ws | 8.21.0 | MIT |
-| zod | 4.6.6 | MIT |
 
 ## @orpc/client@1.15.4
 
@@ -3194,13 +3192,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## postgres@3.4.9
-
-License: Unlicense
-Homepage: https://github.com/porsager/postgres
-
-（包内没有附带许可证文件）
-
 ## radash@12.1.1
 
 License: MIT
@@ -3414,33 +3405,4 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```
-
-## zod@4.6.6
-
-License: MIT
-Homepage: https://zod.dev
-
-```text
-MIT License
-
-Copyright (c) 2025 Colin McDonnell
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 ```

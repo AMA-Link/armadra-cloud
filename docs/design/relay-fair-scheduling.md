@@ -70,6 +70,8 @@ p50 的趋势清楚（改前随流数线性增长，每多一条流约多 1 ms�
 
 ## 5. 与 Workers 中继（`packages/relay-kernel`、`relay-runtime-workers`）
 
+> #214 起 Workers 中继已删除，本节只作追溯。
+
 Workers 中继仍是写端先进先出：`StreamCore.pump` 把一块分成不超过 64 KiB 的帧、在信用允许的范围内一口气全部 `sendFrame`（一条流一次最多 256 KiB），没有跨流的调度；Workers 的 WebSocket 没有 `bufferedAmount`，发送立即返回，积压在 Cloudflare 边缘。按 `AGENTS.md`，Workers 版冻结功能、只修缺陷，这个问题是长期存在的性能特性而非缺陷，所以本 PR 不动它。若以后要做：在 `relay-kernel` 的 `Tunnel` 里加同样的 `Sched`（纯数据结构，可直接照 `sched.go` 移植），`pump` 改为入每流队列、由 `Tunnel` 在每个 JS 回合按预算刷出，休眠判断把队列算进去。
 
 ## 6. core 侧（AMA-Link/Armadra）要跟进的改动

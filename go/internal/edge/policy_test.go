@@ -14,7 +14,7 @@ import (
 	"github.com/AMA-Link/armadra-cloud/go/internal/tunnel"
 )
 
-// 对应 packages/relay-kernel/src/edge/policy.test.ts。
+// 对应 已删除的 TypeScript 版 packages/relay-kernel/src/edge/policy.test.ts。
 
 type nullTransport struct{}
 
