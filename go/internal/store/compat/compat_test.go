@@ -1,25 +1,24 @@
-// Package compat 证明 Go 版与 TypeScript 版能交替读写同一个库：
+// Package compat 证明 Go 读得动已部署的库，账本对得上：
 //
-//   - go/testdata/compat/ 里是 TypeScript 版写出来的夹具：relay.db（SQLite）、postgres.sql
-//     （PostgreSQL schema 的转储）、state.json（状态文件，schema v1）；生成脚本 make-fixtures.mjs
-//     在同一个目录，用法见脚本头；
-//   - Go 打开夹具库（账本的 SHA-384 必须与 Go 内嵌的迁移一致，否则拒绝）、读出的内容与 state.json
-//     导入的快照逐字段相同；再让 Go 写（轮换钥、旋转刷新令牌、撤销链接、加流量……）；
-//   - 然后用 TypeScript 的存储（read-snapshot.mjs）打开 Go 写过的库、导出整个租户，与 Go 自己
-//     导出的逐字段比对。反方向也一样：Go 新建的库交给 TypeScript 读。
+//   - go/testdata/compat/ 里是冻结的静态夹具（由已删除的 TypeScript 存储写出，不再重新生成）：
+//     relay.db（SQLite）、postgres.sql（PostgreSQL schema 的转储）、state.json（状态文件，schema v1）、
+//     expected.json（测试值）；
+//   - 夹具账本里每条迁移的名字与 SHA-384 必须与 Go 内嵌的迁移一致——迁移文件改了一个字节，
+//     已部署的库就会拒绝启动，这里先失败；
+//   - Go 打开夹具库、读出的内容与 state.json 导入的快照逐字段相同；再让 Go 写（轮换钥、旋转刷新
+//     令牌、撤销链接、加流量……），关掉重开后读回逐字段相同。Go 新建的库账本与夹具逐条相同。
 //
-// TypeScript 一侧要 node（≥ 24）与 pnpm install 过的依赖；没有就跳过那一半并说明。PostgreSQL 那一半
-// 要 ARMADRA_CLOUD_TEST_DATABASE_URL（pnpm dev:up 的库），没有就整段跳过。
+// PostgreSQL 那一半要 ARMADRA_CLOUD_TEST_DATABASE_URL（pnpm dev:up 的库），没有就整段跳过。
 package compat_test
 
 import (
-	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -89,7 +88,7 @@ func stateSnapshot(t testing.TB) store.TenantSnapshot {
 	return snapshot
 }
 
-// canonical 把快照换成与 TypeScript 的 exportTenant 同形的、可比较的通用值。
+// canonical 把快照换成可比较的通用值（与 state.json 导入的快照同形）。
 func canonical(t testing.TB, snapshot store.TenantSnapshot) any {
 	t.Helper()
 	data, err := json.Marshal(map[string]any{
@@ -120,58 +119,74 @@ func sameSnapshot(t testing.TB, got, want any, what string) {
 	}
 }
 
-// skipOrFail：本机缺 TypeScript 这一半时跳过；CI（环境变量 CI 非空）里一律失败——
-// 兼容测试的另一半被静默跳过，等于没测。
-func skipOrFail(t testing.TB, format string, args ...any) {
+// sqliteLedger 读 SQLite 库的迁移账本（不经 Go 的存储，免得打开时补跑迁移）；夹具要先拷出来，WAL 会在库旁边建文件。
+func sqliteLedger(t *testing.T, path string) []store.Applied {
 	t.Helper()
-	if os.Getenv("CI") != "" {
-		t.Fatalf("CI 里不许跳过 TypeScript 读回："+format, args...)
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Skipf(format, args...)
+	defer func() { _ = db.Close() }()
+	rows, err := db.Query("SELECT id, name, sha384 FROM relay_migrations ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []store.Applied
+	for rows.Next() {
+		var row store.Applied
+		if err := rows.Scan(&row.ID, &row.Name, &row.SHA384); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
-// runNode 用 TypeScript 的存储读库；没有 node（≥ 24）或依赖没装就跳过。
-func runNode(t *testing.T, args ...string) (migrations int, snapshot any) {
+// postgresDumpLedger 从 postgres.sql 里取账本的 INSERT 行。
+func postgresDumpLedger(t *testing.T) []store.Applied {
 	t.Helper()
-	node, err := exec.LookPath("node")
+	dump, err := os.ReadFile(filepath.Join(compatDir(t), "postgres.sql"))
 	if err != nil {
-		skipOrFail(t, "没有 node：跳过 TypeScript 读回")
+		t.Fatal(err)
 	}
-	out, err := exec.Command(node, "--version").Output()
+	pattern := regexp.MustCompile(`INSERT INTO cloud_migrations \(id, name, sha384, applied_at_ms\) VALUES \((\d+), '([^']+)', '([0-9a-f]{96})'`)
+	var out []store.Applied
+	for _, match := range pattern.FindAllStringSubmatch(string(dump), -1) {
+		id, _ := strconv.Atoi(match[1])
+		out = append(out, store.Applied{ID: id, Name: match[2], SHA384: match[3]})
+	}
+	return out
+}
+
+// embedded 把 Go 内嵌的迁移换成账本行。
+func embedded(t *testing.T, list func() ([]store.Migration, error)) []store.Applied {
+	t.Helper()
+	migrations, err := list()
 	if err != nil {
-		skipOrFail(t, "node 跑不起来：%v", err)
+		t.Fatal(err)
 	}
-	major, _ := strconv.Atoi(strings.SplitN(strings.TrimPrefix(strings.TrimSpace(string(out)), "v"), ".", 2)[0])
-	if major < 24 {
-		skipOrFail(t, "node %s 低于 24：跳过 TypeScript 读回", strings.TrimSpace(string(out)))
+	out := make([]store.Applied, 0, len(migrations))
+	for _, m := range migrations {
+		out = append(out, store.Applied{ID: m.ID, Name: m.Name, SHA384: m.SHA384})
 	}
-	root := testutil.RepoRoot(t)
-	if _, err := os.Stat(filepath.Join(root, "packages", "control-store-sqlite", "node_modules")); err != nil {
-		skipOrFail(t, "TypeScript 依赖没装（pnpm install）：跳过 TypeScript 读回")
+	return out
+}
+
+// TestFixtureLedgersMatchEmbeddedMigrations：已部署的库里记的 SHA-384 与 Go 内嵌的迁移逐条相同。
+func TestFixtureLedgersMatchEmbeddedMigrations(t *testing.T) {
+	sqliteWant := embedded(t, sqlite.Migrations)
+	if got := sqliteLedger(t, copyFixtureDB(t)); !reflect.DeepEqual(got, sqliteWant) {
+		t.Fatalf("relay.db 的账本与内嵌迁移不同：\n夹具 %+v\n内嵌 %+v", got, sqliteWant)
 	}
-	if _, err := os.Stat(filepath.Join(root, "packages", "platform-protocol", "dist")); err != nil {
-		skipOrFail(t, "协议包没构建（pnpm libs:build）：跳过 TypeScript 读回")
+	postgresWant := embedded(t, postgres.Migrations)
+	got := postgresDumpLedger(t)
+	if len(got) != 3 || len(postgresWant) < 3 || !reflect.DeepEqual(got, postgresWant[:3]) {
+		t.Fatalf("postgres.sql 的账本与内嵌迁移的前三条不同：\n夹具 %+v\n内嵌 %+v", got, postgresWant)
 	}
-	cmd := exec.Command(node, append([]string{filepath.Join(compatDir(t), "read-snapshot.mjs")}, args...)...)
-	cmd.Dir = root
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("TypeScript 读库失败：%v\n%s", err, stderr.String())
-	}
-	var result struct {
-		Migrations int  `json:"migrations"`
-		KeysUsable bool `json:"keysUsable"`
-		Snapshot   any  `json:"snapshot"`
-	}
-	if err := json.Unmarshal(stdout, &result); err != nil {
-		t.Fatalf("TypeScript 的输出不是 JSON：%v", err)
-	}
-	if !result.KeysUsable {
-		t.Fatal("TypeScript 加载不了 Go 写的（或夹具里的）签名私钥")
-	}
-	return result.Migrations, result.Snapshot
 }
 
 // ---------------------------------------------------------------- 变更：让 Go 写一遍
@@ -382,16 +397,9 @@ func TestSQLiteFixtureRoundTrip(t *testing.T) {
 	want := loadExpected(t)
 	path := copyFixtureDB(t)
 
-	// TypeScript 先读一遍夹具本身（证明夹具就是 TypeScript 写出来的、TypeScript 读得动）。
-	migrations, ts := runNode(t, "sqlite", path)
-	if migrations != 2 {
-		t.Fatalf("账本应有 2 条：%d", migrations)
-	}
-	sameSnapshot(t, ts, canonical(t, stateSnapshot(t)), "TypeScript 读夹具库与 state.json 导入")
-
 	db, err := sqlite.Open(ctx, path, sqlite.Options{})
 	if err != nil {
-		t.Fatalf("Go 打开 TypeScript 写的库：%v", err)
+		t.Fatalf("Go 打开夹具库：%v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -419,11 +427,25 @@ func TestSQLiteFixtureRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ts = runNode(t, "sqlite", path)
-	sameSnapshot(t, ts, canonical(t, goView), "TypeScript 读 Go 写过的库")
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sqlite.Open(ctx, path, sqlite.Options{})
+	if err != nil {
+		t.Fatalf("重开 Go 写过的夹具库：%v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	again, err := reopened.ExportTenant(ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameSnapshot(t, canonical(t, again), canonical(t, goView), "重开 Go 写过的库")
+	if got := sqliteLedger(t, path); !reflect.DeepEqual(got, embedded(t, sqlite.Migrations)) {
+		t.Fatalf("Go 写过之后账本变了：%+v", got)
+	}
 }
 
-func TestGoCreatedSQLiteIsReadableByTypeScript(t *testing.T) {
+func TestGoCreatedSQLiteMatchesFixture(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "relay.db")
 	db, err := sqlite.Open(ctx, path, sqlite.Options{Create: true})
@@ -437,19 +459,21 @@ func TestGoCreatedSQLiteIsReadableByTypeScript(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	migrations, ts := runNode(t, "sqlite", path)
-	if migrations != 2 {
-		t.Fatalf("账本应有 2 条：%d", migrations)
-	}
-	sameSnapshot(t, ts, canonical(t, snapshot), "TypeScript 读 Go 新建的库")
-
-	// 账本里的 SHA-384 与 TypeScript 写的逐字相同（TypeScript 才肯打开，上面已经证明）；
-	// 反过来 Go 也认夹具库的账本：打开夹具库不会补跑任何迁移。
-	fixture, err := sqlite.Open(ctx, copyFixtureDB(t), sqlite.Options{})
+	reopened, err := sqlite.Open(ctx, path, sqlite.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = fixture.Close()
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.ExportTenant(ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameSnapshot(t, canonical(t, got), canonical(t, snapshot), "重开 Go 新建的库")
+
+	// Go 新建的库与夹具库的账本逐条相同（名字与 SHA-384），applied_at_ms 不比。
+	if created, fixture := sqliteLedger(t, path), sqliteLedger(t, copyFixtureDB(t)); !reflect.DeepEqual(created, fixture) {
+		t.Fatalf("Go 新建的库与夹具账本不同：\n新建 %+v\n夹具 %+v", created, fixture)
+	}
 }
 
 // ---------------------------------------------------------------- PostgreSQL
@@ -481,11 +505,11 @@ func TestPostgresFixtureRoundTrip(t *testing.T) {
 	want := loadExpected(t)
 	url, schema := restoreDump(t)
 
-	// Go 打开 TypeScript 迁移器建出来的 schema（夹具停在 0003）：前三条的 SHA-384 一致，不拒绝；
+	// Go 打开夹具 schema（停在 0003）：前三条的 SHA-384 一致，不拒绝；
 	// 0004–0011（SaaS）补跑，老行取缺省。
 	db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, Now: func() int64 { return 1 }})
 	if err != nil {
-		t.Fatalf("Go 打开 TypeScript 写的 schema：%v", err)
+		t.Fatalf("Go 打开夹具 schema：%v", err)
 	}
 	defer func() { _ = db.Close() }()
 	var applied int
@@ -497,17 +521,15 @@ func TestPostgresFixtureRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sameSnapshot(t, canonical(t, exported), canonical(t, stateSnapshot(t)), "Go 读 TypeScript 写的 schema")
+	sameSnapshot(t, canonical(t, exported), canonical(t, stateSnapshot(t)), "Go 读夹具 schema")
 	rows, err := db.Ports().Traffic.Query(ctx, tenant, store.TrafficQuery{ToMs: want.NowMs * 2, Granularity: "hour", Limit: 10})
 	if err != nil || len(rows) != 2 || rows[1].BytesToClient != 5_000_000_000 {
 		t.Fatalf("夹具里的流量：%+v %v", rows, err)
 	}
 
-	migrations, ts := runNode(t, "postgres", url, schema)
-	if migrations != 11 {
-		t.Fatalf("账本应有 11 条：%d", migrations)
+	if got, want := postgresLedger(t, db), embedded(t, postgres.Migrations); !reflect.DeepEqual(got, want) {
+		t.Fatalf("补跑之后账本与内嵌迁移不同：\n库里 %+v\n内嵌 %+v", got, want)
 	}
-	sameSnapshot(t, ts, canonical(t, exported), "TypeScript 读夹具 schema")
 
 	before, _, _ := db.Revision(ctx, tenant)
 	mutate(t, db, func(ctx context.Context) error { _, err := db.RotateKey(ctx, tenant, want.NowMs+60_000); return err }, want)
@@ -519,11 +541,41 @@ func TestPostgresFixtureRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ts = runNode(t, "postgres", url, schema)
-	sameSnapshot(t, ts, canonical(t, goView), "TypeScript 读 Go 写过的 schema")
+	reopened, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema})
+	if err != nil {
+		t.Fatalf("重开 Go 写过的 schema：%v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	again, err := reopened.ExportTenant(ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameSnapshot(t, canonical(t, again), canonical(t, goView), "重开 Go 写过的 schema")
 }
 
-func TestGoCreatedPostgresIsReadableByTypeScript(t *testing.T) {
+// postgresLedger 读 schema 里的 cloud_migrations。
+func postgresLedger(t *testing.T, db *postgres.DB) []store.Applied {
+	t.Helper()
+	rows, err := db.Pool().Query(context.Background(), "SELECT id, name, sha384 FROM cloud_migrations ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []store.Applied
+	for rows.Next() {
+		var row store.Applied
+		if err := rows.Scan(&row.ID, &row.Name, &row.SHA384); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestGoCreatedPostgresMatchesFixture(t *testing.T) {
 	ctx := context.Background()
 	url, schema := pgtest.Schema(t)
 	db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema})
@@ -535,15 +587,24 @@ func TestGoCreatedPostgresIsReadableByTypeScript(t *testing.T) {
 	if err := db.ImportTenant(ctx, tenant, snapshot); err != nil {
 		t.Fatal(err)
 	}
-	// 走一遍 Go 的写（含批量流量 upsert）后交给 TypeScript。
+	// 走一遍 Go 的写（含批量流量 upsert），重开后读回逐字段相同。
 	mutate(t, db, func(ctx context.Context) error { _, err := db.RotateKey(ctx, tenant, 1_760_000_060_000); return err }, loadExpected(t))
 	goView, err := db.ExportTenant(ctx, tenant)
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrations, ts := runNode(t, "postgres", url, schema)
-	if migrations != 11 {
-		t.Fatalf("账本应有 11 条：%d", migrations)
+	reopened, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema})
+	if err != nil {
+		t.Fatal(err)
 	}
-	sameSnapshot(t, ts, canonical(t, goView), "TypeScript 读 Go 新建的 schema")
+	defer func() { _ = reopened.Close() }()
+	again, err := reopened.ExportTenant(ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameSnapshot(t, canonical(t, again), canonical(t, goView), "重开 Go 新建的 schema")
+	// 新建 schema 的账本前三条与夹具转储（已部署的库）逐条相同。
+	if got := postgresLedger(t, reopened); len(got) < 3 || !reflect.DeepEqual(got[:3], postgresDumpLedger(t)) {
+		t.Fatalf("Go 新建的 schema 与夹具账本不同：%+v", got)
+	}
 }
