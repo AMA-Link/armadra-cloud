@@ -152,11 +152,7 @@ go/
 
 ### 3.4 存储与兼容（D3）
 
-- **迁移文件**：SQL 文件仍以 TS 包里的为准：
-  - SQLite：`packages/control-store-sql/migrations/`
-  - PostgreSQL：`packages/control-store-postgres/migrations/`
-
-  `go generate` 把它们拷进 `go/internal/store/{sqlite,postgres}/migrations/` 并 `go:embed`。repo-check 按 `migrations.lock` 校验两份逐字节一致。新迁移仍只在 TS 包里加，编号接 main 最大号。
+- **迁移文件**：SQL 文件在 `go/internal/store/{sqlite,postgres}/migrations/` 并 `go:embed`，是唯一来源（#214 起；此前以 TS 包为准、`go generate` 拷过来，迁移字节未变）。repo-check 按 `migrations.lock` 守字节。新迁移只在这里加，编号接 main 最大号。
 
 - **账本与拒绝规则**照搬：
   - SQLite：`relay_migrations(id, name, sha384, applied_at_ms)`；`application_id = 0x41524d44`；`quick_check`；WAL、`busy_timeout` 5 秒、`BEGIN IMMEDIATE`；新建文件 0600。拒绝 `not_found` / `exists` / `unknown` / `corrupt` / `newer`。

@@ -46,7 +46,7 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 
 单节点什么都不用加（`--control memory` 是缺省）。几个 `serve` 共用一份数据时：
 
-- 存储：`--store postgres`，连接串给 `--database-url`、`RELAY_DATABASE_URL`，或从文件读（`--database-url-file` / `RELAY_DATABASE_URL_FILE`，口令不出现在进程参数里）；`--database-schema` 选 schema（缺省连接的缺省 schema，给了不存在的就建一个空的）。打开时自动迁移（`packages/control-store-postgres/migrations/`，账本 `cloud_migrations`，与 `armadra-cloud migrate` 同一份）。
+- 存储：`--store postgres`，连接串给 `--database-url`、`RELAY_DATABASE_URL`，或从文件读（`--database-url-file` / `RELAY_DATABASE_URL_FILE`，口令不出现在进程参数里）；`--database-schema` 选 schema（缺省连接的缺省 schema，给了不存在的就建一个空的）。打开时自动迁移（`go/internal/store/postgres/migrations/`，账本 `cloud_migrations`，与 `armadra-cloud migrate` 同一份）。
 - 控制面：`--control postgres`（同一个库：路由 / 撤销 / 限流表 + `LISTEN/NOTIFY`）或 `--control redis --redis-url redis://…`。路由互见、在线事件与关隧道广播到各节点，撤销与速率限流各节点共用一个桶；并发限流按节点。
 - 每个节点 `--node-id` 各不相同（缺省 `--host`），数据目录各自一个（证书、ACME 账号与 `postgres.json` 标记在里面）。
 
@@ -66,7 +66,7 @@ SQLite 模式下没有可手改的 JSON：限流额度、受信代理、服务�
 
 ## 升级与降级
 
-- 升级：新版本打开 `relay.db` 时自动补跑新迁移（`packages/control-store-sql/migrations/`，账本 `relay_migrations` 记编号与 SHA-384）。升级前先备份。
+- 升级：新版本打开 `relay.db` 时自动补跑新迁移（`go/internal/store/sqlite/migrations/`，账本 `relay_migrations` 记编号与 SHA-384）。升级前先备份。
 - 降级：旧程序看到库里记着它不认识的迁移会拒绝启动。从升级前的备份恢复，或用 Node 版 `migrate --to file` 导出后再降级。加了流量统计表（SQLite 0002 / PostgreSQL 0003）的版本同样如此。
 
 ## 切换到 Go 版中继（0.10.0）与回滚

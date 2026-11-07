@@ -1,5 +1,12 @@
 # Changelog
 
+## 未发布 / Unreleased
+
+### 变更 / Changed
+
+- 迁移 SQL 由 Go 接管（Refs #214）：`go/internal/store/{postgres,sqlite}/migrations/` 是唯一来源，`migrations.lock` 改按这两个目录登记，`go/tools/copymigrations` 与对应的 `go generate` 删除；迁移文件逐字节不变，账本里的 SHA-384 不变，已部署的库（含 `armadra-cloud migrate` 的 11 条）照常打开、不补跑。`go/testdata/compat` 冻结为静态夹具，TypeScript 的生成与读回脚本删除，兼容测试改为核对夹具账本与内嵌迁移逐条相同、Go 写后重开读回；CI 的 `go` 作业不再装 TypeScript 依赖。
+  Go now owns the SQL migrations (Refs #214): `go/internal/store/{postgres,sqlite}/migrations/` is the single source, `migrations.lock` is keyed by those directories, and `go/tools/copymigrations` with its `go generate` step is removed. Migration files are byte-identical and ledger SHA-384 values are unchanged, so deployed databases (including the 11 migrations of `armadra-cloud migrate`) open as before with nothing re-run. `go/testdata/compat` is frozen as static fixtures; the TypeScript generator and read-back scripts are removed, and the compatibility tests now check that the fixture ledgers match the embedded migrations entry by entry and that Go-written databases reopen identically. The CI `go` job no longer installs TypeScript dependencies.
+
 ## 0.15.1（2026-11-06）
 
 ### 变更 / Changed
