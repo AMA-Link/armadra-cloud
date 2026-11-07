@@ -181,4 +181,4 @@
 
 ## 升级顺序
 
-先升 relay、后升 cloud；PostgreSQL 迁移（`packages/control-store-postgres/migrations/`）由 `armadra-cloud migrate` 执行，个人中转 `--store postgres` / `--control postgres` 打开时也会补跑同一份（advisory lock 保证只跑一次）。个人中转的 SQLite 迁移（`packages/control-store-sql/migrations/`）在打开 `relay.db` 时自动补跑；库比程序新（降级）时拒绝启动，先备份再升回去。
+先升 relay、后升 cloud；PostgreSQL 迁移（`go/internal/store/postgres/migrations/`）由 `armadra-cloud migrate` 执行，个人中转 `--store postgres` / `--control postgres` 打开时也会补跑同一份（advisory lock 保证只跑一次）。个人中转的 SQLite 迁移（`go/internal/store/sqlite/migrations/`）在打开 `relay.db` 时自动补跑；库比程序新（降级）时拒绝启动，先备份再升回去。

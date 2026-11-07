@@ -84,8 +84,8 @@ jobs:
       - run: pnpm repo:check
 
   # Go：gofmt、go vet、staticcheck、race 测试与生成物新鲜度（pnpm go:check），
-  # amd64 与 arm64 各一遍。存储的合同测试要真的 PostgreSQL（服务容器，镜像与 check 作业同一个版本），
-  # 兼容测试要 TypeScript 依赖（装依赖并构建协议包）：Go 写的库交给 TypeScript 的存储读回来。
+  # amd64 与 arm64 各一遍。存储的合同测试要真的 PostgreSQL（服务容器，镜像与 check 作业同一个版本）；
+  # 兼容测试只读 go/testdata/compat 的冻结夹具，不再调 TypeScript 的存储。
   go:
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' }}
@@ -144,9 +144,7 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
-      - run: pnpm install --frozen-lockfile --ignore-scripts
-      - run: pnpm libs:build
-      - run: pnpm go:check
+      - run: node scripts/go-check.mjs
 
   check:
     needs: changes

@@ -297,7 +297,7 @@ test("migrations：编号连续、已发布文件 sha256 不变", () => {
   ]);
 });
 
-test("migrations：副本（Go embed）与 lock 逐字节一致、文件集合一样", () => {
+test("migrations：副本与 lock 逐字节一致、文件集合一样", () => {
   const first = "create table a(id);\n";
   const second = "create table b(id);\n";
   const lock = JSON.stringify({
@@ -327,8 +327,8 @@ test("migrations：副本（Go embed）与 lock 逐字节一致、文件集合�
     "migrations.lock": lock,
   });
   assert.deepEqual(run(bad, rules, ["migrations"], []), [
-    "迁移副本与 db/0001_a.sql 不一致：go/migrations/0001_a.sql（运行 go generate）",
-    "迁移副本缺文件：go/migrations/0002_b.sql（运行 go generate）",
+    "迁移副本与 db/0001_a.sql 不一致：go/migrations/0001_a.sql（从 db 拷过去）",
+    "迁移副本缺文件：go/migrations/0002_b.sql（从 db 拷过去）",
     "迁移副本多出文件：go/migrations/0003_c.sql",
   ]);
 
