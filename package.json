@@ -12,7 +12,7 @@
     "libs:build": "pnpm --filter @armadra/platform-protocol build",
     "check": "pnpm libs:build && pnpm format:check && pnpm lint && pnpm typecheck && pnpm repo:check && pnpm contract:check && pnpm protocol:check && pnpm ci:workflows && pnpm notices:check",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "prettier --check . --cache --cache-location node_modules/.cache/prettier/.prettier-cache",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm libs:build && pnpm -r --if-present test",
