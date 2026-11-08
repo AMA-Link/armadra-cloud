@@ -62,9 +62,10 @@ pnpm dev:down    # 停掉依赖；pnpm dev:down --volumes 连数据一起删
 ## 检查与测试
 
 ```sh
+pnpm verify            # 本机一条命令跑完下面的 check、repo:test、go:check 与单测：并行，只测相对 origin/main 受影响的部分，结尾列出各步耗时；--full 全量
 pnpm check             # 构建协议包 + prettier + eslint + typecheck + repo:check + contract:check + 工作流校验 + 第三方声明
 pnpm repo:test         # tools/ 的自检
-pnpm go:check          # Go：gofmt + vet + staticcheck + race 测试 + 生成物新鲜度；PostgreSQL、Redis、mailpit 的测试读 ARMADRA_CLOUD_TEST_DATABASE_URL、REDIS_URL、MAILPIT_SMTP_ADDR + MAILPIT_API_URL（没有就跳过）
+pnpm go:check          # Go：gofmt + vet + staticcheck + race 测试 + 生成物新鲜度（vet、staticcheck、测试并行；--changed 只查受影响的包、保留测试缓存）；PostgreSQL、Redis、mailpit 的测试读 ARMADRA_CLOUD_TEST_DATABASE_URL、REDIS_URL、MAILPIT_SMTP_ADDR + MAILPIT_API_URL（没有就跳过）
 pnpm test              # 全部单测
 pnpm images:build      # 本地构建两个 Go 镜像：armadra-cloud（go/Dockerfile.cloud）与 armadra-relay（go/Dockerfile），不推送
 pnpm e2e --mode personal  # 跨仓端到端：个人中转 + Armadra 服务器壳 + Node 客户端，需要 Docker，见下
