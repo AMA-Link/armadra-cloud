@@ -4,12 +4,12 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 
 | 包 | 版本 | 许可证 |
 | --- | --- | --- |
-| @orpc/client | 1.15.4 | MIT |
-| @orpc/contract | 1.15.4 | MIT |
-| @orpc/shared | 1.15.4 | MIT |
-| @orpc/standard-server | 1.15.4 | MIT |
-| @orpc/standard-server-fetch | 1.15.4 | MIT |
-| @orpc/standard-server-peer | 1.15.4 | MIT |
+| @orpc/client | 1.16.1 | MIT |
+| @orpc/contract | 1.16.1 | MIT |
+| @orpc/shared | 1.16.1 | MIT |
+| @orpc/standard-server | 1.16.1 | MIT |
+| @orpc/standard-server-fetch | 1.16.1 | MIT |
+| @orpc/standard-server-peer | 1.16.1 | MIT |
 | @standard-schema/spec | 1.1.0 | MIT |
 | github.com/cespare/xxhash/v2 | v2.3.0 | MIT |
 | github.com/dustin/go-humanize | v1.1.0 | MIT |
@@ -17,8 +17,8 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | github.com/gorilla/websocket | v1.5.3 | BSD-2-Clause |
 | github.com/jackc/pgpassfile | v1.0.0 | MIT |
 | github.com/jackc/pgservicefile | v0.0.0-20240606120523-5a60cdf6a761 | MIT |
-| github.com/jackc/pgx/v5 | v5.11.0 | MIT |
-| github.com/jackc/puddle/v2 | v2.2.2 | MIT |
+| github.com/jackc/pgx/v5 | v5.12.0 | MIT |
+| github.com/jackc/puddle/v2 | v2.2.3 | MIT |
 | github.com/mattn/go-isatty | v0.0.24 | MIT |
 | github.com/ncruces/go-strftime | v1.1.0 | MIT |
 | github.com/redis/go-redis/v9 | v9.23.0 | BSD-2-Clause |
@@ -26,50 +26,21 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | github.com/santhosh-tekuri/jsonschema/v6 | v6.0.3 | Apache-2.0 |
 | go.uber.org/atomic | v1.12.0 | MIT |
 | golang.org/x/crypto | v0.58.0 | BSD-3-Clause |
-| golang.org/x/net | v0.60.0 | BSD-3-Clause |
+| golang.org/x/net | v0.62.0 | BSD-3-Clause |
 | golang.org/x/sync | v0.24.0 | BSD-3-Clause |
 | golang.org/x/sys | v0.49.0 | BSD-3-Clause |
 | golang.org/x/text | v0.43.0 | BSD-3-Clause |
-| modernc.org/libc | v1.79.0 | MIT |
+| modernc.org/libc | v1.80.1 | MIT |
 | modernc.org/mathutil | v1.7.1 | BSD-2-Clause |
 | modernc.org/memory | v1.12.1 | BSD-3-Clause |
-| modernc.org/sqlite | v1.61.0 | Apache-2.0 |
+| modernc.org/sqlite | v1.62.0 | Apache-2.0 |
 | openapi-types | 12.1.3 | MIT |
 | radash | 12.1.1 | MIT |
 | tagged-tag | 1.0.0 | MIT |
 | type-fest | 5.10.0 | (MIT OR CC0-1.0) |
-| ws | 8.21.0 | MIT |
+| ws | 8.22.1 | MIT |
 
-## @orpc/client@1.15.4
-
-License: MIT
-Homepage: https://orpc.dev
-
-```text
-MIT License
-
-Copyright (c) 2023 oRPC
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-## @orpc/contract@1.15.4
+## @orpc/client@1.16.1
 
 License: MIT
 Homepage: https://orpc.dev
@@ -98,7 +69,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @orpc/shared@1.15.4
+## @orpc/contract@1.16.1
 
 License: MIT
 Homepage: https://orpc.dev
@@ -127,7 +98,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @orpc/standard-server@1.15.4
+## @orpc/shared@1.16.1
 
 License: MIT
 Homepage: https://orpc.dev
@@ -156,7 +127,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @orpc/standard-server-fetch@1.15.4
+## @orpc/standard-server@1.16.1
 
 License: MIT
 Homepage: https://orpc.dev
@@ -185,7 +156,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @orpc/standard-server-peer@1.15.4
+## @orpc/standard-server-fetch@1.16.1
+
+License: MIT
+Homepage: https://orpc.dev
+
+```text
+MIT License
+
+Copyright (c) 2023 oRPC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## @orpc/standard-server-peer@1.16.1
 
 License: MIT
 Homepage: https://orpc.com
@@ -427,7 +427,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## github.com/jackc/pgx/v5@v5.11.0
+## github.com/jackc/pgx/v5@v5.12.0
 
 License: MIT
 Homepage: https://github.com/jackc/pgx
@@ -457,7 +457,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## github.com/jackc/puddle/v2@v2.2.2
+## github.com/jackc/puddle/v2@v2.2.3
 
 License: MIT
 Homepage: https://github.com/jackc/puddle
@@ -846,7 +846,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## golang.org/x/net@v0.60.0
+## golang.org/x/net@v0.62.0
 
 License: BSD-3-Clause
 Homepage: https://golang.org/x/net
@@ -986,7 +986,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## modernc.org/libc@v1.79.0
+## modernc.org/libc@v1.80.1
 
 License: MIT
 Homepage: https://modernc.org/libc
@@ -1460,7 +1460,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## modernc.org/sqlite@v1.61.0
+## modernc.org/sqlite@v1.62.0
 
 License: Apache-2.0
 Homepage: https://modernc.org/sqlite
@@ -1540,7 +1540,7 @@ and license texts it points at are the ones you have to carry with you.
 | [Go](https://github.com/golang/go) | -- | BSD-3-Clause | modernc.org/libc | [N1](#N1) |
 | [go-netdb](https://github.com/dominikh/go-netdb) | -- | MIT | modernc.org/libc | [N1](#N1) |
 | [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) | v0.49.0 | BSD-3-Clause | github.com/google/pprof, github.com/mattn/go-isatty, modernc.org/libc, modernc.org/memory, `go.mod` | [L3](#L3) |
-| [modernc.org/libc](https://pkg.go.dev/modernc.org/libc) | v1.79.0 | BSD-3-Clause | `go.mod` | [L4](#L4) |
+| [modernc.org/libc](https://pkg.go.dev/modernc.org/libc) | v1.80.1 | BSD-3-Clause | `go.mod` | [L4](#L4) |
 | [modernc.org/mathutil](https://pkg.go.dev/modernc.org/mathutil) | v1.7.1 | BSD-3-Clause | modernc.org/fileutil, modernc.org/libc, modernc.org/memory, `go.mod` | [L4](#L4) |
 | [modernc.org/memory](https://pkg.go.dev/modernc.org/memory) | v1.12.1 | BSD-3-Clause, attribution reference | modernc.org/libc, `go.mod` | [L4](#L4), [L2](#L2), [L5](#L5), [L6](#L6) |
 | [musl libc](https://musl.libc.org/) | -- | MIT | modernc.org/libc | [N1](#N1) |
@@ -1585,8 +1585,8 @@ this one.
 | [golang.org/x/mod](https://pkg.go.dev/golang.org/x/mod) | v0.42.0 | BSD-3-Clause | modernc.org/libc | [L3](#L3) |
 | [golang.org/x/sync](https://pkg.go.dev/golang.org/x/sync) | v0.24.0 | BSD-3-Clause | modernc.org/libc | [L3](#L3) |
 | [golang.org/x/tools](https://pkg.go.dev/golang.org/x/tools) | v0.52.0 | BSD-3-Clause | modernc.org/libc | [L3](#L3) |
-| [modernc.org/cc/v4](https://pkg.go.dev/modernc.org/cc/v4) | v4.30.3 | BSD-3-Clause | modernc.org/libc | [L4](#L4) |
-| [modernc.org/ccgo/v4](https://pkg.go.dev/modernc.org/ccgo/v4) | v4.37.0 | BSD-3-Clause | modernc.org/libc | [L4](#L4) |
+| [modernc.org/cc/v4](https://pkg.go.dev/modernc.org/cc/v4) | v4.30.6-0.20261101114202-1b9d1a076f6b | BSD-3-Clause | modernc.org/libc | [L4](#L4) |
+| [modernc.org/ccgo/v4](https://pkg.go.dev/modernc.org/ccgo/v4) | v4.38.1 | BSD-3-Clause | modernc.org/libc | [L4](#L4) |
 | [modernc.org/gc/v2](https://pkg.go.dev/modernc.org/gc/v2) | v2.6.5 | BSD-3-Clause | modernc.org/libc | [L16](#L16) |
 | [modernc.org/gc/v3](https://pkg.go.dev/modernc.org/gc/v3) | v3.2.0 | BSD-3-Clause | modernc.org/libc | [L16](#L16) |
 | [modernc.org/goabi0](https://pkg.go.dev/modernc.org/goabi0) | v0.2.0 | BSD-3-Clause | modernc.org/libc | [L17](#L17) |
@@ -3379,7 +3379,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## ws@8.21.0
+## ws@8.22.1
 
 License: MIT
 Homepage: https://github.com/websockets/ws
