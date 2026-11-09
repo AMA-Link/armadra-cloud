@@ -637,7 +637,10 @@ func TestTeamsDeleteRestorePurge(t *testing.T) {
 	r.seedHost("p-host", team, owner.accountID)
 	r.exec(`INSERT INTO source_grants (tenant_id, grant_id, source_id, team_id, subject_kind, subject_id, role, granted_by, created_at_ms, updated_at_ms)
 	  VALUES ('cloud', 'pg1', 'p-host', $1, 'team', $1, 'viewer', $2, 1, 1)`, team, owner.accountID)
-	r.exec(`INSERT INTO entitlements (tenant_id, space_kind, space_id, plan, updated_at_ms) VALUES ('cloud', 'team', $1, 'free', 1)`, team)
+	// Team 计划（审计保留 90 天）：下面把时钟拨过 31 天的恢复期时，每日的 audit.retention 与 team.purge
+	// 同时到期、先后不定；Free 只留 7 天，保留期先跑就会按计划删掉 create / delete / restore 三行（#226）。
+	// 这里只验清除本身不删审计行。
+	r.exec(`INSERT INTO entitlements (tenant_id, space_kind, space_id, plan, updated_at_ms) VALUES ('cloud', 'team', $1, 'team', 1)`, team)
 	if err := r.run.Relay.IndexIssued(ctxBackground, relayctl.Issued{Subject: admin.accountID, SourceID: "p-host", DeviceID: "d", JTI: "p-tok", ExpMs: r.clock.Ms() + 600_000}); err != nil {
 		t.Fatal(err)
 	}
