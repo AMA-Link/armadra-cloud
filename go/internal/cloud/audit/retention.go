@@ -55,7 +55,7 @@ func (s *Service) runPartitions(ctx context.Context, _ saas.Job) error {
 
 // runRetention 是 audit.retention：
 //   - 团队审计按团队当前的计划删超期的行，一个团队一个团队地删，只动 team_id 相符的行；已清除的团队（teams 表里已没有）
-//     审计行按设计保留，不按 free 的 7 天删，只随 13 个月的整月分区 DROP；
+//     的审计行另扫，按清除时记在 team.purge 行里的计划保留（找不到或解析不了按 free）；
 //   - 账号安全日志固定 90 天；
 //   - 整月都超过 13 个月的分区直接 DROP。
 //
@@ -64,6 +64,9 @@ func (s *Service) runRetention(ctx context.Context, _ saas.Job) error {
 	now := time.UnixMilli(s.nowMs())
 	var errs []error
 	if err := s.pruneTeams(ctx, now); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.prunePurgedTeams(ctx, now); err != nil {
 		errs = append(errs, err)
 	}
 	if err := s.loop(ctx, func(tx saas.Tx) (int, error) {
@@ -97,6 +100,33 @@ func (s *Service) pruneTeams(ctx context.Context, now time.Time) error {
 		}
 		for _, team := range teams {
 			if err := s.pruneTeam(ctx, now, team); err != nil {
+				return err
+			}
+		}
+		if len(teams) < teamBatch {
+			return nil
+		}
+		after = teams[len(teams)-1].TeamID
+	}
+}
+
+// prunePurgedTeams 删已清除团队（审计行里有、teams 表里没有）超期的审计行：计划取自该团队 team.purge 行记下的，
+// 保留期从各行 at_ms 起算；team.purge 行最新，最后一个到期，删完即不留痕迹。
+func (s *Service) prunePurgedTeams(ctx context.Context, now time.Time) error {
+	scanBefore := now.Add(-quota.ShortestAuditRetention()).UnixMilli()
+	after := ""
+	for {
+		var teams []saas.PurgedTeam
+		err := s.store.Tx(ctx, func(tx saas.Tx) (err error) {
+			teams, err = tx.Retention().PurgedTeamsWithAuditBefore(ctx, s.tenant(), scanBefore, after, teamBatch)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		for _, team := range teams {
+			// 没有 team.purge 行或解析不了：plan 为空，AuditRetention 按 free（最严）。
+			if err := s.pruneTeam(ctx, now, saas.RetentionTeam{TeamID: team.TeamID, Plan: PurgePlan(team.PurgeReason)}); err != nil {
 				return err
 			}
 		}

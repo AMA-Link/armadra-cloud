@@ -97,6 +97,20 @@ func (r retentionRepo) TeamsWithAuditBefore(ctx context.Context, tenantID string
 	    ORDER BY t.team_id LIMIT $4`, tenantID, beforeMs, afterTeamID, limit)
 }
 
+func (r retentionRepo) PurgedTeamsWithAuditBefore(ctx context.Context, tenantID string, beforeMs int64, afterTeamID string, limit int) ([]saas.PurgedTeam, error) {
+	return list(ctx, r.q, func(s scanner) (saas.PurgedTeam, error) {
+		var t saas.PurgedTeam
+		return t, s.Scan(&t.TeamID, &t.PurgeReason)
+	}, `SELECT g.team_id, COALESCE((SELECT p.reason FROM audit_log p
+	      WHERE p.tenant_id = $1 AND p.team_id = g.team_id AND p.action = 'team.purge'
+	      ORDER BY p.at_ms DESC, p.event_id DESC LIMIT 1), '')
+	    FROM (SELECT DISTINCT a.team_id FROM audit_log a
+	      WHERE a.tenant_id = $1 AND a.team_id IS NOT NULL AND a.team_id > $3 AND a.at_ms < $2
+	        AND NOT EXISTS (SELECT 1 FROM teams t WHERE t.tenant_id = a.tenant_id AND t.team_id = a.team_id)
+	      ORDER BY a.team_id LIMIT $4) g
+	    ORDER BY g.team_id`, tenantID, beforeMs, afterTeamID, limit)
+}
+
 func (r retentionRepo) PruneTeamAudit(ctx context.Context, tenantID, teamID string, beforeMs int64, limit int) (int, error) {
 	tag, err := r.q.Exec(ctx,
 		`DELETE FROM audit_log WHERE (at_ms, event_id) IN (

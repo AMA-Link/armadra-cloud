@@ -258,25 +258,44 @@ func TestRetentionJobsDeleteOnlyTheirScope(t *testing.T) {
 	}
 }
 
-// 团队清除后 entitlements 随之删掉，但审计行按设计保留：不能按 free 的 7 天删，只随 13 个月的整月分区 DROP。
-func TestRetentionKeepsAuditOfPurgedTeams(t *testing.T) {
+// 团队清除后 entitlements 随之删掉，审计行按清除时的计划保留（计划记在 team.purge 行的 reason 里，从各行 at_ms 起算）：
+// 90 天计划的行 31 天时留着、91 天时删；没有计划记录的按 free（7 天）；team.purge 行最新，最后一个删。
+func TestRetentionAppliesPlanToPurgedTeams(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, rigOptions{})
 	owner := r.verified()
-	gone := r.seedTeam("gone", map[string]string{owner.accountID: "owner"})
+	team := r.seedTeam("team-plan", map[string]string{owner.accountID: "owner"})
+	gone := r.seedTeam("gone-team", map[string]string{owner.accountID: "owner"})
+	nameless := r.seedTeam("gone-free", map[string]string{owner.accountID: "owner"})
 	live := r.seedTeam("live", map[string]string{owner.accountID: "owner"})
-	r.exec(`INSERT INTO entitlements (tenant_id, space_kind, space_id, plan, status, updated_at_ms) VALUES ('cloud', 'team', $1, 'enterprise', 'active', 1)`, gone)
 	now := r.clock.Now().Add(dayDur + time.Minute)
-	eighth := now.Add(-8 * dayDur).UnixMilli()
-	r.putAudit(eighth, "gone-8d", gone, "", "system", "", "team.purge")
-	r.putAudit(eighth, "live-8d", live, "", "system", "", "x.old") // 对照：还在的 free 团队，8 天前的行要被删
+	ago := func(d time.Duration) int64 { return now.Add(-d).UnixMilli() }
+	// team 计划（90 天）的已清除团队：清除行在 1 天前，旧行分别是 31 天与 91 天前。
+	r.putAudit(ago(31*dayDur), "team-31d", team, "", "system", "", "x.mid")
+	r.putAudit(ago(91*dayDur), "team-91d", team, "", "system", "", "x.old")
+	r.putAudit(ago(dayDur), "team-purge", team, "", "system", "", "team.purge")
+	r.exec("UPDATE audit_log SET reason = 'plan:team' WHERE event_id = 'team-purge'")
+	// 清除行里是 free：8 天前的行删，3 天前的留。
+	r.putAudit(ago(8*dayDur), "gone-8d", gone, "", "system", "", "x.old")
+	r.putAudit(ago(3*dayDur), "gone-3d", gone, "", "system", "", "x.new")
+	r.putAudit(ago(dayDur), "gone-purge", gone, "", "system", "", "team.purge")
+	r.exec("UPDATE audit_log SET reason = 'plan:free' WHERE event_id = 'gone-purge'")
+	// 没有 team.purge 行：按 free。
+	r.putAudit(ago(8*dayDur), "nameless-8d", nameless, "", "system", "", "x.old")
+	r.putAudit(ago(3*dayDur), "nameless-3d", nameless, "", "system", "", "x.new")
+	// 对照：还在的 free 团队，8 天前的行要被删。
+	r.putAudit(ago(8*dayDur), "live-8d", live, "", "system", "", "x.old")
 	// 清除：团队行（成员级联）与 entitlements 都没了，审计行还在。
-	r.exec("DELETE FROM entitlements WHERE space_id = $1", gone)
-	r.exec("DELETE FROM teams WHERE team_id = $1", gone)
+	for _, id := range []string{team, gone, nameless} {
+		r.exec("DELETE FROM entitlements WHERE space_id = $1", id)
+		r.exec("DELETE FROM teams WHERE team_id = $1", id)
+	}
 
 	r.clock.Advance(dayDur + time.Minute)
-	eventuallyDB(t, "保留期作业跑过", func() bool { return r.auditCount("event_id = 'live-8d'") == 0 })
-	if r.auditCount("event_id = 'gone-8d'") != 1 {
-		t.Fatal("已清除团队的审计行不按 free 的 7 天删")
+	eventuallyDB(t, "保留期作业跑过", func() bool {
+		return r.auditCount("event_id IN ('live-8d', 'team-91d', 'gone-8d', 'nameless-8d')") == 0
+	})
+	if got := r.auditCount("event_id IN ('team-31d', 'team-purge', 'gone-3d', 'gone-purge', 'nameless-3d')"); got != 5 {
+		t.Fatalf("没到期的行都留着：%d %s", got, r.queryString("SELECT string_agg(event_id, ',') FROM audit_log"))
 	}
 }

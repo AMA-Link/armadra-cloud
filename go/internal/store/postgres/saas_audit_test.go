@@ -126,8 +126,11 @@ func TestRetentionPrunesOnlyTheNamedScope(t *testing.T) {
 	e.team("t1", "a1")
 	e.team("t2", "a1")
 	e.must(`INSERT INTO entitlements (tenant_id, space_kind, space_id, plan, status, updated_at_ms) VALUES ($1, 'team', 't2', 'pro', 'active', 1)`, saasTenant)
-	// 已清除的团队（teams 表里没有）的审计行不在扫描里：t3 的行留给整月分区 DROP。
+	// 已清除的团队（teams 表里没有）不在 TeamsWithAuditBefore 里，另由 PurgedTeamsWithAuditBefore 扫：
+	// t3 有 team.purge 行（reason 记计划），t4 没有。
 	e.must(`INSERT INTO audit_log (at_ms, event_id, tenant_id, team_id, actor_kind, action) VALUES ($1, 'gone', $2, 't3', 'system', 'x.y')`, base, saasTenant)
+	e.must(`INSERT INTO audit_log (at_ms, event_id, tenant_id, team_id, actor_kind, action, reason) VALUES ($1, 'gone-purge', $2, 't3', 'system', 'team.purge', 'plan:pro')`, base+1, saasTenant)
+	e.must(`INSERT INTO audit_log (at_ms, event_id, tenant_id, team_id, actor_kind, action) VALUES ($1, 'gone4', $2, 't4', 'system', 'x.y')`, base, saasTenant)
 	s := e.db.SaaS()
 	before := base + 4 // 删 e01–e04（T1 全部）、e05 在 base+4 不删
 	var n int
@@ -145,6 +148,22 @@ func TestRetentionPrunesOnlyTheNamedScope(t *testing.T) {
 	if err != nil || n != 2 {
 		t.Fatalf("每次最多删 limit 行：%d %v", n, err)
 	}
+	err = s.Tx(e.ctx, func(tx saas.Tx) error {
+		purged, err := tx.Retention().PurgedTeamsWithAuditBefore(e.ctx, saasTenant, before+10, "", 10)
+		if err != nil || fmt.Sprint(purged) != "[{t3 plan:pro} {t4 }]" {
+			t.Fatalf("已清除的团队与记下的计划：%v %v", purged, err)
+		}
+		if next, err := tx.Retention().PurgedTeamsWithAuditBefore(e.ctx, saasTenant, before+10, "t3", 10); err != nil || fmt.Sprint(next) != "[{t4 }]" {
+			t.Fatalf("翻页从 t3 之后开始：%v %v", next, err)
+		}
+		if none, err := tx.Retention().PurgedTeamsWithAuditBefore(e.ctx, saasTenant, base, "", 10); err != nil || len(none) != 0 {
+			t.Fatalf("没有早于界线的行就不列：%v %v", none, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	err = s.Tx(e.ctx, func(tx saas.Tx) (err error) {
 		n, err = tx.Retention().PruneTeamAudit(e.ctx, saasTenant, "t1", before, 10)
 		return err
@@ -152,8 +171,8 @@ func TestRetentionPrunesOnlyTheNamedScope(t *testing.T) {
 	if err != nil || n != 2 {
 		t.Fatalf("T1 剩下的：%d %v", n, err)
 	}
-	if e.count("SELECT count(*)::int FROM audit_log WHERE team_id = 't3'") != 1 {
-		t.Fatal("已清除团队的审计行保留")
+	if e.count("SELECT count(*)::int FROM audit_log WHERE team_id = 't3'") != 2 {
+		t.Fatal("按名字删：没点名的已清除团队的审计行不动")
 	}
 	if e.count("SELECT count(*)::int FROM audit_log WHERE team_id = 't1'") != 0 || e.count("SELECT count(*)::int FROM audit_log WHERE team_id = 't2'") != 1 {
 		t.Fatal("只删 T1 的行，T2 的不动")
