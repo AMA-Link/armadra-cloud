@@ -452,6 +452,7 @@ personal 模式默认自签 CA + 指纹钉扎，可选 ACME 或运维给证书�
 - `audit.list`：`fromMs`（含）/ `toMs`（不含）/ `actor` / `sourceId` / `action`（前缀）筛选，游标分页（`limit` 缺省 100、最多 500，`nextCursor` 原样回传）。
 - `audit.export`：同样的筛选，`format = csv | json`，一次最多 10 000 行，超出答 `400 bad_request`；`content` 是序列化后的文本。
 - 保留期按计划（Free 7 天、Pro 30 天、Team 90 天、Enterprise 1 年起），由作业清理；查询与导出 M2 起。
+- 已清除的团队，审计行仍按清除时的计划保留（从各行时间起算，规则同上）：清除时把计划记进 `team.purge` 行，作业据此清理；找不到该记录按 Free。`team.purge` 行最新，最后一个到期，删完不留痕迹。
 
 <!-- rpc:begin contract=§25 -->
 
