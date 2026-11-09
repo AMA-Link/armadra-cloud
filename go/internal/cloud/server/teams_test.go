@@ -733,6 +733,10 @@ func TestTeamsDeleteRestorePurge(t *testing.T) {
 	if n := r.queryInt("SELECT count(*)::int FROM audit_log WHERE team_id = $1 AND action IN ('team.create', 'team.delete', 'team.restore', 'team.purge')", team); n < 3 {
 		t.Fatalf("审计行应保留：%d", n)
 	}
+	// 清除时的计划记在 team.purge 行的 reason 里（已清除团队的审计行按它保留）。
+	if got := r.queryString("SELECT reason FROM audit_log WHERE team_id = $1 AND action = 'team.purge'", team); got != "plan:free" {
+		t.Fatalf("team.purge 行应记清除时的计划：%q", got)
+	}
 	if _, ok := r.run.Relay.Quota(team); ok {
 		t.Fatal("清除应删团队并发额度")
 	}

@@ -5,6 +5,7 @@ package audit
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/AMA-Link/armadra-cloud/go/internal/clientip"
@@ -77,4 +78,19 @@ func WriteSecurity(ctx context.Context, tx saas.Tx, tenantID string, nowMs int64
 		AccountID: who.AccountID, ActorKind: saas.ActorAccount, ActorID: who.AccountID, Action: action,
 		IPPrefix: IPPrefix(who.IP), DeviceName: who.DeviceName,
 	})
+}
+
+// purgeReasonPrefix 是 team.purge 行 reason 的前缀：reason 记清除时团队的计划（plan:<计划>），不加迁移。
+const purgeReasonPrefix = "plan:"
+
+// PurgeReason 是 team.purge 行的 reason：记下清除时的计划，已清除团队的审计行按它保留。
+func PurgeReason(plan string) string { return purgeReasonPrefix + plan }
+
+// PurgePlan 从 team.purge 行的 reason 取出清除时的计划；格式不对答空串（调用方按 free 处理）。
+func PurgePlan(reason string) string {
+	plan, ok := strings.CutPrefix(reason, purgeReasonPrefix)
+	if !ok {
+		return ""
+	}
+	return plan
 }

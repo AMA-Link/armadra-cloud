@@ -30,3 +30,16 @@ func TestTruncateKeepsWholeRunes(t *testing.T) {
 		t.Fatal("不超长原样")
 	}
 }
+
+func TestPurgeReasonRoundTrip(t *testing.T) {
+	for _, plan := range []string{"free", "pro", "team", "enterprise"} {
+		if got := PurgePlan(PurgeReason(plan)); got != plan {
+			t.Errorf("PurgePlan(PurgeReason(%q)) = %q", plan, got)
+		}
+	}
+	for _, bad := range []string{"", "pro", "plan", "x:pro"} {
+		if got := PurgePlan(bad); got != "" {
+			t.Errorf("PurgePlan(%q) = %q，应为空", bad, got)
+		}
+	}
+}
