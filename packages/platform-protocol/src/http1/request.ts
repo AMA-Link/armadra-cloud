@@ -12,9 +12,7 @@
 export type HeaderPair = [string, string];
 
 export type BodyFraming =
-  | { kind: "none" }
-  | { kind: "length"; length: number }
-  | { kind: "chunked" };
+  { kind: "none" } | { kind: "length"; length: number } | { kind: "chunked" };
 
 export class Http1RequestError extends Error {
   constructor() {

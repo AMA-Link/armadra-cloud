@@ -12,7 +12,7 @@ mkdir -p "$HERE/results" "$HERE/logs" "$HERE/work"
 [ -x "$HERE/bin/armadra-relay-linux" ] || "$HERE/build.sh"
 PORT=18443
 NAME=rb-$LABEL
-IMAGE=${BENCH_IMAGE:-node:24.21.0-bookworm-slim}
+IMAGE=${BENCH_IMAGE:-node:24.22.2-bookworm-slim}
 RELAY_CPUS=${RELAY_CPUS:-0}
 LOAD_CPUS=${LOAD_CPUS:-1}
 CREDS=work/creds-$SOURCES.json JWKS=work/jwks-$SOURCES.json
