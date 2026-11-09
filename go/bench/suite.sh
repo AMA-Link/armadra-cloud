@@ -10,7 +10,7 @@ LOG=$HERE/logs/suite.log
 [ -x "$HERE/bin/armadra-relay-linux" ] || "$HERE/build.sh"
 for r in $(seq 1 "$ROUNDS"); do
   echo "=== 第 $r 轮 $(date '+%H:%M:%S')" | tee -a "$LOG"
-  docker run --rm --cpuset-cpus 1 -v "$HERE:/b" "${BENCH_IMAGE:-node:24.21.0-bookworm-slim}" /b/bin/calib-linux | tee -a "$LOG"
+  docker run --rm --cpuset-cpus 1 -v "$HERE:/b" "${BENCH_IMAGE:-node:24.22.2-bookworm-slim}" /b/bin/calib-linux | tee -a "$LOG"
   for tier in "250 4 t1" "1500 4 t2" "3000 4 t3"; do
     set -- $tier
     "$HERE/run.sh" "$1" "$2" "$3-r$r" >>"$LOG" 2>&1 || echo "失败：$3-r$r" | tee -a "$LOG"

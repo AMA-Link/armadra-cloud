@@ -14,7 +14,7 @@
 # 缺省是空目录：/app 答「页面不可用」错误页，其余功能不受影响。
 #
 # 版本号缺省取根 package.json（/health 与 version 子命令报它），--build-arg VERSION=<v> 可覆盖。
-ARG GO_IMAGE=golang:1.27.1-bookworm
+ARG GO_IMAGE=golang:1.27.3-bookworm
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12
 ARG WEB_IMAGE=web-empty
 
