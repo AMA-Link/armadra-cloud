@@ -118,7 +118,7 @@ export class Client {
       redirect: "manual",
     });
     const text = await response.text();
-    let json = {};
+    let json;
     try {
       json = text === "" ? {} : JSON.parse(text);
     } catch {

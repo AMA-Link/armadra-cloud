@@ -439,7 +439,7 @@ async function viaRelay(client, method, path, body, extra = {}) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const text = await response.text();
-  let parsed = {};
+  let parsed;
   try {
     parsed = text === "" ? {} : JSON.parse(text);
   } catch {

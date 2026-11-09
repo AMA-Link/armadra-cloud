@@ -156,7 +156,7 @@ export function relayEndpoint({ issuer, getCa }) {
           response.on("data", (chunk) => chunks.push(chunk));
           response.on("end", () => {
             const text = Buffer.concat(chunks).toString("utf8");
-            let parsed = {};
+            let parsed;
             try {
               parsed = text === "" ? {} : JSON.parse(text);
             } catch {
