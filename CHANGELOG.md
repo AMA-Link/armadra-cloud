@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.17.0（2026-11-10）
+
+### 变更 / Changed
+
+- 发版 0.17.0（与 Armadra、armadra-agent 统一）：本版只有工具链、依赖与测试的维护，没有功能或接口变化。协议包 `@armadra/platform-protocol` 0.17.0 没有形状变化，仍是协议 1.4（`Armadra-Protocol: 1.4`，`deploy/compat.json` 的 `protocol` 不变）；`MIN_CORE_VERSION_TEAM_ASSERTION`（0.10.0）与 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`（0.11.0）不变；没有新的数据库迁移。
+  Release 0.17.0 (unified with Armadra and armadra-agent): maintenance only (toolchain, dependencies and tests), with no feature or interface changes. The protocol package `@armadra/platform-protocol` 0.17.0 has no shape changes and is still protocol 1.4 (`Armadra-Protocol: 1.4`; the `protocol` of `deploy/compat.json` is unchanged); `MIN_CORE_VERSION_TEAM_ASSERTION` (0.10.0) and `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION` (0.11.0) are unchanged; there are no new database migrations.
+- 部署注意：**先发 Armadra v0.17.0，再打本仓标签**：`deploy/compat.json` 的 `web` 改为 0.17.0，发布构建据此把 `ghcr.io/ama-link/armadra-server:0.17.0` 的页面拷进 `armadra-cloud` 镜像，镜像不存在时构建失败；把自建页面挂到 `/app/web` 的部署也要换成 0.17.0 的页面。
+  Deployment note: **release Armadra v0.17.0 before tagging this repository**: `web` in `deploy/compat.json` becomes 0.17.0 and the release build copies the pages of `ghcr.io/ama-link/armadra-server:0.17.0` into the `armadra-cloud` image, so the build fails while that image does not exist; deployments that mount their own pages at `/app/web` must switch to the 0.17.0 pages too.
+- 工具链与依赖升级（#223）：Go 1.27.3（`go.mod` 与两个 Dockerfile）、pnpm 12.18.0；Go 模块 pgx 5.12.0、x/net 0.62.0、modernc sqlite 1.62.0；npm 依赖在同主版本内升级（zod、`@orpc/*`、ws、prettier 3.9 等）。
+  Toolchain and dependency upgrades (#223): Go 1.27.3 (`go.mod` and both Dockerfiles), pnpm 12.18.0; Go modules pgx 5.12.0, x/net 0.62.0 and modernc sqlite 1.62.0; npm dependencies upgraded within their major versions (zod, `@orpc/*`, ws, prettier 3.9 and others).
+- ESLint 10（#225）：新推荐规则命中的几处逐条修复，不加禁用注释；TypeScript 5.9.3。
+  ESLint 10 (#225): the findings of the new recommended rules are fixed one by one without disable comments; TypeScript 5.9.3.
+
+### 修复 / Fixed
+
+- 两个偶发失败的测试改为不依赖执行顺序（#227、#231）：团队清除测试不再受每日审计保留作业先后的影响；`TestCtlQueueBudgetReleased` 用哨兵帧确认控制帧额度已归还再进下一轮。产品行为不变。
+  Two flaky tests no longer depend on ordering (#227, #231): the team purge test no longer depends on whether the daily audit retention job runs first, and `TestCtlQueueBudgetReleased` waits on a sentinel frame to confirm the control-frame budget is back before the next round. Product behaviour is unchanged.
+
 ## 0.16.0（2026-11-09）
 
 ### 变更 / Changed
