@@ -75,13 +75,13 @@
     "zod": ">=4.0.0 <5"
   },
   "dependencies": {
-    "@orpc/contract": "1.15.4"
+    "@orpc/contract": "1.16.1"
   },
   "devDependencies": {
-    "@types/node": "24.3.0",
+    "@types/node": "24.19.2",
     "typescript": "5.9.2",
     "vitest": "4.1.12",
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   },
   "publishConfig": {
     "access": "public",
