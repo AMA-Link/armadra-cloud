@@ -212,7 +212,7 @@ export interface X25519KeyPair {
 export async function generateX25519(): Promise<X25519KeyPair> {
   const pair = (await subtle().generateKey({ name: "X25519" }, false, [
     "deriveBits",
-  ])) as { publicKey: CryptoKey; privateKey: CryptoKey };
+  ])) as unknown as { publicKey: CryptoKey; privateKey: CryptoKey };
   return {
     publicKey: new Uint8Array(await subtle().exportKey("raw", pair.publicKey)),
     privateKey: pair.privateKey,
