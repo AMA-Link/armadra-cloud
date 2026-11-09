@@ -49,6 +49,7 @@ func TestCtlQueueBudgetReleased(t *testing.T) {
 		c, client, _ := pair(t, wrap, h)
 		data := bytes.Repeat([]byte{1}, 256<<10)
 		ctl := bytes.Repeat([]byte{2}, 40<<10)
+		sentinel := []byte{3}
 		total := 0
 		for round := 0; round < 3; round++ {
 			// 带信用的数据先把内核缓冲写满，其后的控制帧只能排队。
@@ -61,12 +62,18 @@ func TestCtlQueueBudgetReleased(t *testing.T) {
 			if !c.Write(ctl, 0) {
 				t.Fatalf("第 %d 轮：连接被断开", round)
 			}
-			// 对端读走一轮：排队的字节写完，控制帧额度要还回来，下一轮才不会累计超限。
-			want := 32*len(data) + len(ctl)
+			// 控制帧不带信用，写出后没有任何回调能说明额度已还；排在它后面的带信用哨兵帧报了 ack，
+			// 就说明写协程已把控制帧出队并归还额度（出队先于下一帧的写），下一轮才有确定的起点。
+			if !c.Write(sentinel, len(sentinel)) {
+				t.Fatalf("第 %d 轮：连接被断开", round)
+			}
+			total += len(sentinel)
+			// 对端读走一轮：排队的字节写完。
+			want := 32*len(data) + len(ctl) + len(sentinel)
 			if n, err := io.CopyN(io.Discard, client, int64(want)); err != nil || n != int64(want) {
 				t.Fatalf("第 %d 轮：只读到 %d/%d：%v", round, n, want, err)
 			}
-			eventually(t, "信用全部报告", func() bool { return h.acked() == total })
+			eventually(t, "信用全部报告（含哨兵帧，说明控制帧额度已还）", func() bool { return h.acked() == total })
 		}
 		select {
 		case err := <-h.closed:
