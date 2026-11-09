@@ -385,7 +385,7 @@ export async function echo(ws, total) {
     received += data.length;
   };
   ws.on("message", onMessage);
-  for (let offset = 0; offset < total; ) {
+  for (let offset = 0; offset < total;) {
     const size = Math.min(total - offset, 48 * 1024);
     const chunk = randomBytes(size);
     sent.update(chunk);
@@ -409,9 +409,8 @@ export function metric(text, name) {
 
 /** 跑完全部步骤；`report` 是 e2e.mjs 的步骤记录。 */
 export async function runSaasNodesE2e({ root, report, redisUrl: givenRedis }) {
-  const { FakeCore } = await import(
-    "../../packages/e2e-fake-core/src/fake-core.ts"
-  );
+  const { FakeCore } =
+    await import("../../packages/e2e-fake-core/src/fake-core.ts");
   const nodes = {};
   const cores = [];
   const sockets = [];

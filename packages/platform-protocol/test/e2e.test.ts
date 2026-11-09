@@ -613,10 +613,10 @@ describe("e2e 记录层", () => {
 
   it("并发 seal：结果按调用顺序对应计数器", async () => {
     const { client, core } = await layers();
-    const frames = Array.from(
-      { length: 20 },
-      (_, ts): Frame => ({ type: "ping", ts }),
-    );
+    const frames = Array.from({ length: 20 }, (_, ts): Frame => ({
+      type: "ping",
+      ts,
+    }));
     const units = await Promise.all(
       frames.map((frame) => client.sealer.sealFrames([frame])),
     );

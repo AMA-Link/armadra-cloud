@@ -27,9 +27,7 @@ const filled = (length: number, fill: number) =>
   new Uint8Array(length).fill(fill);
 
 type Bytes =
-  | { text: string }
-  | { hex: string }
-  | { length: number; fill: number };
+  { text: string } | { hex: string } | { length: number; fill: number };
 
 // ------------------------------------------------------------------ http1
 

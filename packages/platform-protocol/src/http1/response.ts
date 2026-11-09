@@ -114,9 +114,7 @@ function parseHeaderLine(line: string): HeaderPair {
 function bodyFraming(
   headers: readonly HeaderPair[],
 ):
-  | { kind: "chunked" }
-  | { kind: "length"; length: number }
-  | { kind: "close" } {
+  { kind: "chunked" } | { kind: "length"; length: number } | { kind: "close" } {
   const encodings: string[] = [];
   const lengths: string[] = [];
   for (const [name, value] of headers) {

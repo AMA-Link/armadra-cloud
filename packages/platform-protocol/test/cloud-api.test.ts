@@ -79,8 +79,7 @@ describe("契约结构", () => {
         (match) => match[1],
       );
       const input = entry.procedure["~orpc"].inputSchema as
-        | z.ZodObject
-        | undefined;
+        z.ZodObject | undefined;
       for (const param of params)
         expect(
           Object.keys(input?.shape ?? {}),
@@ -899,9 +898,8 @@ describe("协议 1.4 补充：控制台缺口（G1–G9）", () => {
 
 describe("platform.info 的挑战范围（cloud-api §16）", () => {
   it("客户端解析忽略不认识的 scope 项，认识的保留", async () => {
-    const { platformChallengeSchema } = await import(
-      "../src/cloud-api/index.ts"
-    );
+    const { platformChallengeSchema } =
+      await import("../src/cloud-api/index.ts");
     const parsed = platformChallengeSchema.parse({
       provider: "turnstile",
       siteKey: "k",

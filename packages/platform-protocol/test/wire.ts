@@ -1,8 +1,6 @@
 /** 线上字节夹具（`fixtures/http1/`、`fixtures/ws/`）里体与载荷的三种写法。 */
 export type FixtureBytes =
-  | { text: string }
-  | { hex: string }
-  | { length: number; fill: number };
+  { text: string } | { hex: string } | { length: number; fill: number };
 
 export function fixtureBytes(value: FixtureBytes): Uint8Array {
   if ("text" in value) return new TextEncoder().encode(value.text);

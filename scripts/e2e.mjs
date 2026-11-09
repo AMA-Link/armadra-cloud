@@ -129,9 +129,8 @@ try {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 }
-const { ed25519SignerFromSeed } = await import(
-  "@armadra/platform-protocol/e2e"
-);
+const { ed25519SignerFromSeed } =
+  await import("@armadra/platform-protocol/e2e");
 if (mode === "saas" || mode === "saas-nodes") {
   const { runSaasE2e } =
     mode === "saas"
