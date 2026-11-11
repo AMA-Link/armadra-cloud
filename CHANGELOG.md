@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.2（2026-11-12）
+
+### 变更 / Changed
+
+- 发版 0.17.2（与 Armadra、armadra-agent 统一的修复版）：本仓没有代码改动，修复都在 Armadra（更新的下载、检查、重启不再并发两路；ACP 会话时间线改成条目卡片版式；Windows 代答探针按实测修正；壳重启后页面不再指向旧端口）。协议包 `@armadra/platform-protocol` 0.17.2 没有形状变化，仍是协议 1.4（`Armadra-Protocol: 1.4`，`deploy/compat.json` 的 `protocol` 不变）；`MIN_CORE_VERSION_TEAM_ASSERTION`（0.10.0）与 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`（0.11.0）不变；没有新的数据库迁移。
+  Release 0.17.2 (a bugfix release unified with Armadra and armadra-agent): no code changes in this repository; the fixes are in Armadra (update download, check and restart no longer run twice concurrently; the ACP session timeline uses an item-card layout; the Windows host-reply probe is corrected from measurements; after a shell restart the page no longer points at a stale port). The protocol package `@armadra/platform-protocol` 0.17.2 has no shape changes and is still protocol 1.4 (`Armadra-Protocol: 1.4`; the `protocol` of `deploy/compat.json` is unchanged); `MIN_CORE_VERSION_TEAM_ASSERTION` (0.10.0) and `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION` (0.11.0) are unchanged; there are no new database migrations.
+- 部署注意：**先发 Armadra v0.17.2，再打本仓标签**：`deploy/compat.json` 的 `web` 改为 0.17.2，发布构建据此把 `ghcr.io/ama-link/armadra-server:0.17.2` 的页面拷进 `armadra-cloud` 镜像，镜像不存在时构建失败；把自建页面挂到 `/app/web` 的部署也要换成 0.17.2 的页面。
+  Deployment note: **release Armadra v0.17.2 before tagging this repository**: `web` in `deploy/compat.json` becomes 0.17.2 and the release build copies the pages of `ghcr.io/ama-link/armadra-server:0.17.2` into the `armadra-cloud` image, so the build fails while that image does not exist; deployments that mount their own pages at `/app/web` must switch to the 0.17.2 pages too.
+
 ## 0.17.1（2026-11-10）
 
 ### 变更 / Changed
