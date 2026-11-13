@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.3（2026-11-13）
+
+### 变更 / Changed
+
+- 发版 0.17.3（与 Armadra、armadra-agent 统一的修复版）：开发依赖 `minimatch` 覆盖到 11.0.4，修 GHSA-g3hv-75wg-m249（#236，Closes #235；只在 typescript-eslint 的 lint 开发链，不进发布产物）。协议包 `@armadra/platform-protocol` 0.17.3 没有形状变化，仍是协议 1.4（`Armadra-Protocol: 1.4`，`deploy/compat.json` 的 `protocol` 不变）；`MIN_CORE_VERSION_TEAM_ASSERTION`（0.10.0）与 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`（0.11.0）不变；没有新的数据库迁移。
+  Release 0.17.3 (a bugfix release unified with Armadra and armadra-agent): the development dependency `minimatch` is overridden to 11.0.4 to fix GHSA-g3hv-75wg-m249 (#236, Closes #235; only in the typescript-eslint lint toolchain, not in release artifacts). The protocol package `@armadra/platform-protocol` 0.17.3 has no shape changes and is still protocol 1.4 (`Armadra-Protocol: 1.4`; the `protocol` of `deploy/compat.json` is unchanged); `MIN_CORE_VERSION_TEAM_ASSERTION` (0.10.0) and `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION` (0.11.0) are unchanged; there are no new database migrations.
+- 部署注意：**先发 Armadra v0.17.3，再打本仓标签**：`deploy/compat.json` 的 `web` 改为 0.17.3，发布构建据此把 `ghcr.io/ama-link/armadra-server:0.17.3` 的页面拷进 `armadra-cloud` 镜像，镜像不存在时构建失败；把自建页面挂到 `/app/web` 的部署也要换成 0.17.3 的页面。
+  Deployment note: **release Armadra v0.17.3 before tagging this repository**: `web` in `deploy/compat.json` becomes 0.17.3 and the release build copies the pages of `ghcr.io/ama-link/armadra-server:0.17.3` into the `armadra-cloud` image, so the build fails while that image does not exist; deployments that mount their own pages at `/app/web` must switch to the 0.17.3 pages too.
+
 ## 0.17.2（2026-11-12）
 
 ### 变更 / Changed
