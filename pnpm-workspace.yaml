@@ -18,3 +18,6 @@ storeDir: .pnpm-store
 overrides:
   # GHSA-68fv-2mgg-jv7q：只在 vitest 开发链（magicast、postcss）。
   source-map-js: 1.2.2
+  # GHSA-g3hv-75wg-m249：minimatch 7.x 至 11.0.0，只在 typescript-eslint 的 lint 开发链。
+  # 跨大版本（上游范围还没放到 11）；11.x 的具名导出不变，同时带 ESM 与 CJS。
+  "minimatch@>=7.0.0 <11.0.1": 11.0.4
