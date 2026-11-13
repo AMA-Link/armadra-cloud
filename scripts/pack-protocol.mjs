@@ -3,7 +3,7 @@
 //
 //   node scripts/pack-protocol.mjs [--out <目录>]
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,12 +27,12 @@ run(
   ["pack", "--pack-destination", out],
   join(root, "packages/platform-protocol"),
 );
-const tarball = readdirSync(out)
-  .filter((name) => /^armadra-platform-protocol-.*\.tgz$/.test(name))
-  .sort()
-  .at(-1);
-if (!tarball) throw new Error(`没有在 ${out} 找到 tgz`);
-const path = join(out, tarball);
+// 按当前版本拼出文件名：输出目录里可能留着旧版本的包，不能按目录排序去挑。
+const { version } = JSON.parse(
+  readFileSync(join(root, "packages/platform-protocol/package.json"), "utf8"),
+);
+const path = join(out, `armadra-platform-protocol-${version}.tgz`);
+if (!existsSync(path)) throw new Error(`没有在 ${out} 找到 ${path}`);
 const entries = execFileSync("tar", ["-tzf", path], { encoding: "utf8" })
   .split("\n")
   .filter(Boolean);
