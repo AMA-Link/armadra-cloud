@@ -3,10 +3,14 @@ import { describe, it } from "node:test";
 
 import {
   classify,
+  cleanEnv,
+  generatedDrift,
+  parseStatus,
   parsePushLines,
   parseSkip,
   planChecks,
   refsToCheck,
+  workingTreeReport,
 } from "./pre-push.mjs";
 
 const SHA = "a".repeat(40);
@@ -60,6 +64,43 @@ describe("与 CI 的 changes 作业同一判定", () => {
       code: true,
       go: true,
     });
+  });
+});
+
+describe("工作区", () => {
+  it("porcelain -z：首行前导空格与改名都解析对；未跟踪的 .go 算源码", () => {
+    const entries = parseStatus(
+      [
+        " M go/a.go",
+        "?? go/internal/x/new.go",
+        "?? notes.txt",
+        "R  b.ts",
+        "a.ts",
+        "",
+      ].join("\0"),
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.path),
+      ["go/a.go", "go/internal/x/new.go", "notes.txt", "b.ts"],
+    );
+    assert.deepEqual(workingTreeReport(entries, new Set(["b.ts"])), {
+      untrackedCode: ["go/internal/x/new.go"],
+      untrackedOther: ["notes.txt"],
+      outside: ["go/a.go"],
+      inside: ["b.ts"],
+    });
+  });
+
+  it("go generate 之后与 HEAD 的差异与未跟踪文件都算", () => {
+    assert.deepEqual(
+      generatedDrift("go/internal/protocol/gen/a.go\n", "go/x.go\n"),
+      ["go/internal/protocol/gen/a.go", "go/x.go"],
+    );
+    assert.deepEqual(generatedDrift("", ""), []);
+  });
+
+  it("子进程环境去掉全部 GIT_*", () => {
+    assert.deepEqual(cleanEnv({ GIT_DIR: "/x", HOME: "/h" }), { HOME: "/h" });
   });
 });
 
