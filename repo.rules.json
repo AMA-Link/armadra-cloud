@@ -3,6 +3,7 @@
   "root": [
     ".dockerignore",
     ".gitattributes",
+    ".githooks",
     ".github",
     ".gitignore",
     ".npmrc",
