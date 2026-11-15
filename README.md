@@ -75,7 +75,7 @@ pnpm db:migrate        # 执行数据库迁移（读 .env.dev）
 pnpm protocol:pack     # 协议包打成 tgz（.data/pack/），核对内容，不发布
 ```
 
-`pnpm install` 会把 `core.hooksPath` 指到 `.githooks`：`git push` 前自动跑 `tools/hooks/pre-push.mjs`，只查这次推送带上的改动，判定与 CI 的 `changes` 作业一致——只改文档时查改动文件的格式与 `repo:check`；有代码时并行跑 `pnpm check` 各项（prettier、ESLint 只看改动文件）、`repo:test` 与协议包受影响的单测，命中 Go 判定时加 `go:check` 的受影响包与生成物新鲜度；改了 terraform 且本机有 terraform 时跑 `fmt -check`。删除分支、只推 tag 不查。失败会拦下推送；临时跳过用 `git push --no-verify`，或 `ARMADRA_SKIP_PREPUSH=1`（全部）/ `ARMADRA_SKIP_PREPUSH=go:test,lint`（指定步骤）。
+`pnpm install` 会把 `core.hooksPath` 指到 `.githooks`：`git push` 前自动跑 `tools/hooks/pre-push.mjs`，只查这次推送带上的改动，判定与 CI 的 `changes` 作业一致——只改文档时查改动文件的格式与 `repo:check`；有代码时并行跑 `pnpm check` 各项（prettier、ESLint 只看改动文件）、`repo:test` 与协议包受影响的单测，命中 Go 判定时加 `go:check` 的受影响包与生成物新鲜度；改了 terraform 且本机有 terraform 时跑 `fmt -check`。删除分支、只推 tag 不查；推送的提交不是当前检出时不查并输出「未检查」。未跟踪的源码（`.ts` / `.mjs` / `.js` / `.go`）默认拦下，范围外的未提交修改会列出来；`go generate` 之后 `go/` 必须与 HEAD 一致。失败会拦下推送；临时跳过用 `git push --no-verify`，或 `ARMADRA_SKIP_PREPUSH=1`（全部）/ `ARMADRA_SKIP_PREPUSH=go:test,lint`（指定步骤）。
 
 ## 跨仓端到端
 
