@@ -350,11 +350,12 @@ func TestDecoyAndUndeliverableAreDroppedWithoutSending(t *testing.T) {
 	e.account("a1", "ann@example.test")
 	// 占位发件（找回口令对没注册的邮箱）：丢弃，不留地址。
 	e.enqueue(mail.Mail{Template: mail.PasswordReset, Locale: mail.LocaleZH, To: "nobody@example.test", Params: mail.Params{Decoy: true}})
-	// 验证邮件发信时账号已经验证过：没有意义，丢掉。
-	e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleZH, To: "ann@example.test", AccountID: "a1"})
+	// 验证邮件发信时账号已经验证过：没有意义，丢掉。先记成已验证再入队，
+	// 否则后台作业可能抢在 UPDATE 之前把信发出去。
 	if _, err := e.db.Pool().Exec(e.ctx, "UPDATE accounts SET email_verified_at_ms = 1 WHERE account_id = 'a1'"); err != nil {
 		t.Fatal(err)
 	}
+	e.enqueue(mail.Mail{Template: mail.VerifyEmail, Locale: mail.LocaleZH, To: "ann@example.test", AccountID: "a1"})
 	e.eventually("两封都处理完", func() bool {
 		return e.count("SELECT count(*) FROM jobs WHERE kind = 'mail.send' AND done_at_ms IS NOT NULL") == 2
 	})
