@@ -52,6 +52,7 @@
 - 怎么跑见 [README](README.md)；文档索引在 [docs/README.md](docs/README.md)，新增文档要登记。
 - 契约：`docs/contracts/cloud-api.md`（§N 不改号，只追加）；形状表与 `cloud-openapi.json` 由 `pnpm contract:generate` 从协议包生成，改形状改协议包。
 - 协议包的黄金夹具、schema 导出（`schema/`，JSON Schema、错误码表、常量与 OpenAPI）与身份向量是生成物：改了帧、声明、契约或身份常量，同一个 PR 里重新生成（`pnpm --filter @armadra/platform-protocol fixtures`、`pnpm --filter @armadra/platform-protocol schema`、`pnpm contract:generate`、`node scripts/gen-vectors.mjs`），`pnpm protocol:check` 守住。
+- 推送前钩子（`.githooks/pre-push` → `tools/hooks/pre-push.mjs`，`pnpm install` 时启用）只查推送范围内的改动，判定与 CI 的 `changes` 作业一致；改 CI 的挑选规则时同步它。
 - 验证：本机 `pnpm verify`（一条命令跑完 `pnpm check`、`pnpm repo:test`、`pnpm go:check`、`pnpm test`，只测受影响的部分，`--full` 全量）；另有 `pnpm images:build`、`pnpm e2e --mode personal`（Go 镜像 + Armadra 服务器壳）；SaaS 另有 `pnpm e2e --mode saas`（真实控制面 + 两个节点 + 一次性 PostgreSQL / Redis / mailpit 容器，设计 §8.4 的全部场景）与 `pnpm e2e --mode saas-nodes`（三个节点 + 一次性 Redis 容器，测试签发者代替控制面）。
 - 发布（npm、GHCR）、域名、证书、密钥都是对外操作，由维护者执行；本地绝不手动 `npm publish` / `docker push`。下线旧的 Workers 中继（`wrangler delete`）与改 DNS 同样由维护者执行。
 - 依赖写精确版本（无 `^`）；改生产依赖后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`（含 Go 模块）。
