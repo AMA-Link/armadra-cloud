@@ -17,23 +17,23 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | github.com/gorilla/websocket | v1.5.3 | BSD-2-Clause |
 | github.com/jackc/pgpassfile | v1.0.0 | MIT |
 | github.com/jackc/pgservicefile | v0.0.0-20240606120523-5a60cdf6a761 | MIT |
-| github.com/jackc/pgx/v5 | v5.12.0 | MIT |
-| github.com/jackc/puddle/v2 | v2.2.3 | MIT |
+| github.com/jackc/pgx/v5 | v5.13.0 | MIT |
+| github.com/jackc/puddle/v2 | v2.2.4 | MIT |
 | github.com/mattn/go-isatty | v0.0.24 | MIT |
 | github.com/ncruces/go-strftime | v1.1.0 | MIT |
 | github.com/redis/go-redis/v9 | v9.23.0 | BSD-2-Clause |
 | github.com/remyoudompheng/bigfft | v0.0.0-20230129092748-24d4a6f8daec | BSD-3-Clause |
 | github.com/santhosh-tekuri/jsonschema/v6 | v6.0.3 | Apache-2.0 |
 | go.uber.org/atomic | v1.12.0 | MIT |
-| golang.org/x/crypto | v0.58.0 | BSD-3-Clause |
-| golang.org/x/net | v0.62.0 | BSD-3-Clause |
-| golang.org/x/sync | v0.24.0 | BSD-3-Clause |
-| golang.org/x/sys | v0.49.0 | BSD-3-Clause |
-| golang.org/x/text | v0.43.0 | BSD-3-Clause |
-| modernc.org/libc | v1.80.1 | MIT |
+| golang.org/x/crypto | v0.59.0 | BSD-3-Clause |
+| golang.org/x/net | v0.63.0 | BSD-3-Clause |
+| golang.org/x/sync | v0.25.0 | BSD-3-Clause |
+| golang.org/x/sys | v0.50.0 | BSD-3-Clause |
+| golang.org/x/text | v0.44.0 | BSD-3-Clause |
+| modernc.org/libc | v1.82.12 | MIT |
 | modernc.org/mathutil | v1.7.1 | BSD-2-Clause |
-| modernc.org/memory | v1.12.1 | BSD-3-Clause |
-| modernc.org/sqlite | v1.62.0 | Apache-2.0 |
+| modernc.org/memory | v1.13.0 | BSD-3-Clause |
+| modernc.org/sqlite | v1.63.0 | Apache-2.0 |
 | openapi-types | 12.1.3 | MIT |
 | radash | 12.1.1 | MIT |
 | tagged-tag | 1.0.0 | MIT |
@@ -427,7 +427,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## github.com/jackc/pgx/v5@v5.12.0
+## github.com/jackc/pgx/v5@v5.13.0
 
 License: MIT
 Homepage: https://github.com/jackc/pgx
@@ -457,7 +457,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## github.com/jackc/puddle/v2@v2.2.3
+## github.com/jackc/puddle/v2@v2.2.4
 
 License: MIT
 Homepage: https://github.com/jackc/puddle
@@ -811,7 +811,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## golang.org/x/crypto@v0.58.0
+## golang.org/x/crypto@v0.59.0
 
 License: BSD-3-Clause
 Homepage: https://golang.org/x/crypto
@@ -846,7 +846,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## golang.org/x/net@v0.62.0
+## golang.org/x/net@v0.63.0
 
 License: BSD-3-Clause
 Homepage: https://golang.org/x/net
@@ -881,7 +881,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## golang.org/x/sync@v0.24.0
+## golang.org/x/sync@v0.25.0
 
 License: BSD-3-Clause
 Homepage: https://golang.org/x/sync
@@ -916,7 +916,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## golang.org/x/sys@v0.49.0
+## golang.org/x/sys@v0.50.0
 
 License: BSD-3-Clause
 Homepage: https://golang.org/x/sys
@@ -951,7 +951,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## golang.org/x/text@v0.43.0
+## golang.org/x/text@v0.44.0
 
 License: BSD-3-Clause
 Homepage: https://golang.org/x/text
@@ -986,7 +986,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## modernc.org/libc@v1.80.1
+## modernc.org/libc@v1.82.12
 
 License: MIT
 Homepage: https://modernc.org/libc
@@ -1364,7 +1364,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## modernc.org/memory@v1.12.1
+## modernc.org/memory@v1.13.0
 
 License: BSD-3-Clause
 Homepage: https://modernc.org/memory
@@ -1460,7 +1460,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## modernc.org/sqlite@v1.62.0
+## modernc.org/sqlite@v1.63.0
 
 License: Apache-2.0
 Homepage: https://modernc.org/sqlite
