@@ -4,12 +4,12 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 
 | 包 | 版本 | 许可证 |
 | --- | --- | --- |
-| @orpc/client | 1.16.1 | MIT |
-| @orpc/contract | 1.16.1 | MIT |
-| @orpc/shared | 1.16.1 | MIT |
-| @orpc/standard-server | 1.16.1 | MIT |
-| @orpc/standard-server-fetch | 1.16.1 | MIT |
-| @orpc/standard-server-peer | 1.16.1 | MIT |
+| @orpc/client | 1.16.2 | MIT |
+| @orpc/contract | 1.16.2 | MIT |
+| @orpc/shared | 1.16.2 | MIT |
+| @orpc/standard-server | 1.16.2 | MIT |
+| @orpc/standard-server-fetch | 1.16.2 | MIT |
+| @orpc/standard-server-peer | 1.16.2 | MIT |
 | @standard-schema/spec | 1.1.0 | MIT |
 | github.com/cespare/xxhash/v2 | v2.3.0 | MIT |
 | github.com/dustin/go-humanize | v1.1.0 | MIT |
@@ -38,38 +38,9 @@ armadra-cloud 的依赖及其许可证全文：npm 生产依赖，以及 Go 模�
 | radash | 12.1.1 | MIT |
 | tagged-tag | 1.0.0 | MIT |
 | type-fest | 5.10.0 | (MIT OR CC0-1.0) |
-| ws | 8.22.1 | MIT |
+| ws | 8.23.0 | MIT |
 
-## @orpc/client@1.16.1
-
-License: MIT
-Homepage: https://orpc.dev
-
-```text
-MIT License
-
-Copyright (c) 2023 oRPC
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-## @orpc/contract@1.16.1
+## @orpc/client@1.16.2
 
 License: MIT
 Homepage: https://orpc.dev
@@ -98,7 +69,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @orpc/shared@1.16.1
+## @orpc/contract@1.16.2
 
 License: MIT
 Homepage: https://orpc.dev
@@ -127,7 +98,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @orpc/standard-server@1.16.1
+## @orpc/shared@1.16.2
 
 License: MIT
 Homepage: https://orpc.dev
@@ -156,7 +127,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @orpc/standard-server-fetch@1.16.1
+## @orpc/standard-server@1.16.2
 
 License: MIT
 Homepage: https://orpc.dev
@@ -185,7 +156,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @orpc/standard-server-peer@1.16.1
+## @orpc/standard-server-fetch@1.16.2
+
+License: MIT
+Homepage: https://orpc.dev
+
+```text
+MIT License
+
+Copyright (c) 2023 oRPC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## @orpc/standard-server-peer@1.16.2
 
 License: MIT
 Homepage: https://orpc.com
@@ -3379,7 +3379,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## ws@8.22.1
+## ws@8.23.0
 
 License: MIT
 Homepage: https://github.com/websockets/ws
