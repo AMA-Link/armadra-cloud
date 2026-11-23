@@ -22,7 +22,7 @@ Armadra 平台的服务端：控制面与中继（`go/`，Go：`armadra-cloud`�
 
 - Node ≥ 24（原生类型剥离，开发态直接跑 `.ts`）
 - pnpm 12.21.0（`corepack enable`）
-- Go 1.27.3（中继在 `go/`：`relay:personal`、`dev`、`go:check`、`notices` 与镜像之外的本地运行都要）
+- Go 1.27.4（中继在 `go/`：`relay:personal`、`dev`、`go:check`、`notices` 与镜像之外的本地运行都要）
 - Docker（只用于本地 PostgreSQL / Redis 与镜像构建）
 
 ```sh
