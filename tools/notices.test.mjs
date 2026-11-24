@@ -3,14 +3,18 @@ import { test } from "node:test";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  NOTICES_FILE,
   detectLicense,
+  generate,
   goPackagesFrom,
   packagesFrom,
   parseJsonStream,
@@ -179,4 +183,11 @@ test("按 LICENSE 正文认 SPDX 标识", () => {
     "Apache-2.0",
   );
   assert.equal(detectLicense("all rights reserved"), "见许可证文本");
+});
+
+test("并行采集结果与仓库 THIRD_PARTY_NOTICES.md 逐字节一致", async () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const expected = readFileSync(join(root, NOTICES_FILE), "utf8");
+  const actual = await generate();
+  assert.equal(actual, expected);
 });

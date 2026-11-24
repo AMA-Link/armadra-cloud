@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { goSteps, planGo, snapshotDiff, TEST_TIMEOUT } from "./go-check.mjs";
+import {
+  goSteps,
+  planGo,
+  snapshotDiff,
+  staticcheckCachePath,
+  TEST_TIMEOUT,
+} from "./go-check.mjs";
 
 const M = "github.com/AMA-Link/armadra-cloud/go";
 
@@ -202,4 +208,23 @@ test("生成物快照：改了、多了、少了都报", () => {
   assert.ok(problems.some((p) => p.includes("gen/a.go")));
   assert.ok(problems.some((p) => p.includes("gen/b.go")));
   assert.ok(problems.some((p) => p.includes("gen/c.go")));
+});
+
+test("staticcheck 缓存路径按 Go 版本与工具版本隔离", () => {
+  const unix = staticcheckCachePath(
+    "/repo/go/bin/tools",
+    "go1.27.4",
+    "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+    "linux",
+  );
+  assert.equal(unix.dir, "/repo/go/bin/tools/go1.27.4-v0.8.2");
+  assert.equal(unix.bin, "/repo/go/bin/tools/go1.27.4-v0.8.2/staticcheck");
+
+  const win = staticcheckCachePath(
+    "/repo/go/bin/tools",
+    "go1.27.4",
+    "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+    "win32",
+  );
+  assert.equal(win.bin, "/repo/go/bin/tools/go1.27.4-v0.8.2/staticcheck.exe");
 });

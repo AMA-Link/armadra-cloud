@@ -7,8 +7,10 @@
  * - 改动按推送的 ref 范围算：已有的远端分支是「远端旧值..本地新值」，新分支是相对
  *   远端缺省分支的合并基点。删除分支、只推 tag 时什么都不做。
  * - 只改文档：改动文件的 prettier 与 `repo:check`（CI 的 docs 作业）。
- * - 有代码：`libs:build` 后并行跑 `pnpm check` 的各项（prettier 与 ESLint 只看改动文件，
- *   配置变了全量）、`repo:test`、协议包受影响的 vitest（`verify.mjs` 的 `planVitest`）；
+ * - 只改 Go / Dockerfile / Terraform（没碰 TS 与声明）：跑改动文件的 prettier、`repo:check`，
+ *   命中 `go` 时加受影响 Go 包检查与 `go generate`，命中 `terraform` 且本机装了 terraform 时加 `fmt -check`。
+ * - 有 TS / 协议 / 声明改动（`code`）：`libs:build` 后并行跑 `pnpm check` 的各项（prettier 与 ESLint
+ *   只看改动文件，配置变了全量）、`repo:test`、协议包受影响的 vitest（`verify.mjs` 的 `planVitest`）；
  *   命中 CI 的 `go` 判定时加上 `scripts/go-check.mjs` 的 gofmt、vet、staticcheck、受影响
  *   包的 `go test -race`（`planGoScope` 挑包），最后比对 `go generate` 的生成物。
  * - terraform、镜像、协议包打包：装了 terraform 就 `fmt -check`，其余只提示本机命令。
@@ -35,34 +37,57 @@ const TERRAFORM = "deploy/cloudflare/terraform";
 /** 命令行一次传多少个文件；再多就改跑全量，免得撞上命令行长度上限。 */
 const MAX_FILE_ARGS = 200;
 
-/** CI 的 `changes` 作业：返回 `{ code, go }`。 */
+/** CI 的 `changes` 作业：返回 `{ code, go, images, terraform }`。 */
 export function classify(files) {
-  let code = files.length === 0;
-  let go = files.length === 0;
+  const empty = files.length === 0;
+  let code = empty;
+  let go = empty;
+  let images = empty;
+  let terraform = empty;
   for (const file of files) {
-    if (
-      file.startsWith("go/") ||
+    if (file === "go/go.mod" || file === "go/go.sum") {
+      code = true;
+      go = true;
+      images = true;
+    } else if (/^go\/Dockerfile/.test(file)) {
+      images = true;
+    } else if (file.startsWith("go/")) {
+      go = true;
+      images = true;
+    } else if (file.startsWith(`${TERRAFORM}/`)) {
+      terraform = true;
+    } else if (file === "deploy/README.md") {
+      go = true;
+    } else if (
       /^packages\/platform-protocol\/(schema|fixtures|src\/identity-vectors)\//.test(
         file,
       ) ||
-      /^(scripts\/go-check\.mjs|package\.json|repo\.rules\.json)$/.test(file) ||
-      file.startsWith(".github/workflows/")
+      file === "scripts/go-check.mjs"
     ) {
       code = true;
       go = true;
     } else if (
+      file.startsWith(".github/workflows/") ||
+      /^(package\.json|pnpm-lock\.yaml|repo\.rules\.json)$/.test(file)
+    ) {
+      code = true;
+      go = true;
+      images = true;
+      terraform = true;
+    } else if (
       file === "THIRD_PARTY_NOTICES.md" ||
       file.startsWith("docs/contracts/")
-    )
+    ) {
       code = true;
-    else if (!(
+    } else if (!(
       file.endsWith(".md") ||
       file.startsWith("docs/") ||
       file.startsWith(".github/ISSUE_TEMPLATE/")
-    ))
+    )) {
       code = true;
+    }
   }
-  return { code, go };
+  return { code, go, images, terraform };
 }
 
 const FORMAT_GLOBAL = [
@@ -93,11 +118,12 @@ const WHOLE_REPO = [
 ];
 
 /**
- * 按改动的文件排出 pnpm 这一侧的步骤。返回 `{ docsOnly, go, libs, statics, vitest,
- * hints }`；步骤是 `{ id, args, cwd? }`（给 pnpm 的参数）。Go 的范围另由 `planGoScope` 定。
+ * 按改动的文件排出 pnpm 这一侧的步骤。返回 `{ docsOnly, go, images, terraform, libs, statics,
+ * vitest, hints }`；步骤是 `{ id, args, cwd? }`（给 pnpm 的参数）。Go 的范围另由 `planGoScope` 定。
  */
 export function planChecks(files, { base, exists = () => true } = {}) {
-  const { code, go } = classify(files);
+  const { code, go, images, terraform } = classify(files);
+  const docsOnly = !code && !go && !images && !terraform;
   const present = files.filter(exists);
   const format =
     files.some((file) => FORMAT_GLOBAL.some((re) => re.test(file))) ||
@@ -119,14 +145,31 @@ export function planChecks(files, { base, exists = () => true } = {}) {
           }
         : null;
   const repoCheck = { id: "repo:check", args: ["repo:check"] };
+  const hints = [];
+  if (files.some((file) => /^go\/Dockerfile/.test(file)))
+    hints.push(
+      "改了 Dockerfile：CI 会构建两个镜像并冒烟，本机 pnpm images:build",
+    );
+  if (
+    files.some(
+      (file) =>
+        file === `${PROTOCOL}package.json` ||
+        file === "scripts/pack-protocol.mjs",
+    )
+  )
+    hints.push(
+      "改了协议包的打包：本机 pnpm protocol:pack --out <临时目录> 核对内容",
+    );
   if (!code)
     return {
-      docsOnly: true,
-      go: false,
+      docsOnly,
+      go,
+      images,
+      terraform,
       libs: null,
       statics: [format, repoCheck].filter(Boolean),
       vitest: null,
-      hints: [],
+      hints,
     };
 
   const lintFiles = present.filter((file) => LINTABLE.test(file));
@@ -154,30 +197,16 @@ export function planChecks(files, { base, exists = () => true } = {}) {
     ...WHOLE_REPO.map((id) => ({ id, args: [id] })),
   ].filter(Boolean);
   const vitestArgs = planVitest(files, { base });
-  const hints = [];
-  if (files.some((file) => /^go\/Dockerfile/.test(file)))
-    hints.push(
-      "改了 Dockerfile：CI 会构建两个镜像并冒烟，本机 pnpm images:build",
-    );
-  if (
-    files.some(
-      (file) =>
-        file === `${PROTOCOL}package.json` ||
-        file === "scripts/pack-protocol.mjs",
-    )
-  )
-    hints.push(
-      "改了协议包的打包：本机 pnpm protocol:pack --out <临时目录> 核对内容",
-    );
   return {
     docsOnly: false,
     go,
+    images,
+    terraform,
     libs: { id: "libs:build", args: ["libs:build"] },
     statics,
     vitest: vitestArgs
       ? { id: "test:protocol", args: vitestArgs, cwd: PROTOCOL }
       : null,
-    terraform: files.some((file) => file.startsWith(`${TERRAFORM}/`)),
     hints,
   };
 }
