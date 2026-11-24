@@ -51,6 +51,8 @@ type Options struct {
 	OnCommit func(tenantID string, revision int64)
 	// KeyRefreshGap 是验签查不到 kid 时重读签名钥的最短间隔；缺省 5 秒。
 	KeyRefreshGap time.Duration
+	// Clock 只供签名钥未命中重读的限频判断，缺省 time.Now；测试注入假时钟以摆脱墙钟。
+	Clock func() time.Time
 	// Now 缺省 time.Now；账本的 applied_at_ms 用它。
 	Now func() int64
 	// NoMigrate 为真时只对账不迁移（armadra-cloud serve）：账本落后答 store.KindBehind，
@@ -68,6 +70,7 @@ type DB struct {
 	pool       *pgxpool.Pool
 	schema     string
 	refreshGap time.Duration
+	clock      func() time.Time
 	onError    func(string, error)
 	onCommit   func(string, int64)
 
@@ -156,6 +159,10 @@ func Open(ctx context.Context, options Options) (*DB, error) {
 	if gap <= 0 {
 		gap = refreshOnMissGap
 	}
+	clock := options.Clock
+	if clock == nil {
+		clock = time.Now
+	}
 	var wrapper *store.Wrapper
 	if options.MasterKey != nil {
 		if wrapper, err = store.NewWrapper(options.MasterKey); err != nil {
@@ -163,7 +170,7 @@ func Open(ctx context.Context, options Options) (*DB, error) {
 			return nil, store.Errorf(store.KindUnknown, "%v", err)
 		}
 	}
-	db := &DB{wrapper: wrapper, pool: pool, schema: options.Schema, refreshGap: gap, onError: sanitizedReport(options.OnError), onCommit: options.OnCommit, keys: map[string]*keyCache{}}
+	db := &DB{wrapper: wrapper, pool: pool, schema: options.Schema, refreshGap: gap, clock: clock, onError: sanitizedReport(options.OnError), onCommit: options.OnCommit, keys: map[string]*keyCache{}}
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {

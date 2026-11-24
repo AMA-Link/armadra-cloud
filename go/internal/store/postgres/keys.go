@@ -74,12 +74,20 @@ func (d *DB) readSigningKeys(ctx context.Context, q querier, tenantID string) ([
 		"SELECT "+keyColumns+" FROM signing_keys WHERE tenant_id = $1 ORDER BY seq", tenantID)
 }
 
+// now 取限频用的时间；没有装配存储（单测里裸建的缓存）或没注入时钟时用 time.Now。
+func (c *keyCache) now() time.Time {
+	if c.d != nil && c.d.clock != nil {
+		return c.d.clock()
+	}
+	return time.Now()
+}
+
 // RefreshOnMiss 实现 store.KeyRefresher：验签查不到 kid 时限频重读。
 // 间隔内（含上一次重读失败之后）什么也不做；名额在持锁时占下，并发的未命中只有一个去读库。
 // 重读失败只报告、当作「kid 不认识」（调用方答 401），不把库的错误冒成 500。
 func (c *keyCache) RefreshOnMiss(ctx context.Context) error {
 	c.mu.Lock()
-	now := time.Now()
+	now := c.now()
 	if now.Sub(c.lastRefresh) < c.d.refreshGap && c.loaded || now.Sub(c.lastMiss) < c.d.refreshGap {
 		c.mu.Unlock()
 		return nil
@@ -106,7 +114,7 @@ func (c *keyCache) begin() uint64 {
 func (c *keyCache) apply(ticket uint64, issuer string, keys []store.SigningKeyRecord) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.lastRefresh = time.Now()
+	c.lastRefresh = c.now()
 	if ticket < c.applied {
 		return false // 后发的读（或本实例的失效）已经生效，这份是旧的
 	}

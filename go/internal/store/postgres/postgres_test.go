@@ -211,8 +211,13 @@ func TestRevisionAndRotateKey(t *testing.T) {
 func TestSignerRefreshesOnUnknownKid(t *testing.T) {
 	ctx := context.Background()
 	url, schema := pgtest.Schema(t)
+	// 假时钟只推进限频判断，不依赖墙钟：慢机器上两次查询之间隔多久都不影响断言。
+	var clockMu sync.Mutex
+	clockNow := time.UnixMilli(storetest.Now)
+	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clockNow }
+	advance := func(d time.Duration) { clockMu.Lock(); clockNow = clockNow.Add(d); clockMu.Unlock() }
 	open := func() *postgres.DB {
-		db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, KeyRefreshGap: time.Second})
+		db, err := postgres.Open(ctx, postgres.Options{URL: url, Schema: schema, KeyRefreshGap: time.Second, Clock: clock})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,7 +242,7 @@ func TestSignerRefreshesOnUnknownKid(t *testing.T) {
 	if keys, _ := b.Keys("default").SigningKeys(ctx); len(keys) != 1 {
 		t.Fatalf("B 的缓存应还是旧的：%d", len(keys))
 	}
-	time.Sleep(1100 * time.Millisecond) // 过了重读的最短间隔
+	advance(1100 * time.Millisecond) // 过了重读的最短间隔
 	if _, ok, err := signer.Key(ctx, "k2"); err != nil || !ok {
 		t.Fatalf("查不到 kid 应触发重读而认出 k2：%v %v", ok, err)
 	}
