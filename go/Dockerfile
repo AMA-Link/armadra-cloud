@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # armadra-relay 中继镜像：Go 实现（go/cmd/armadra-relay），saas 与 personal 同一镜像。构建上下文是仓库根：
 #   docker build -f go/Dockerfile -t armadra-relay:local .
 #
@@ -30,10 +31,13 @@ FROM ${GO_IMAGE} AS build
 ARG VERSION=
 WORKDIR /src/go
 COPY go/go.mod go/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 COPY package.json /src/package.json
 COPY go/ ./
-RUN v="${VERSION:-$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' /src/package.json)}" \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    v="${VERSION:-$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' /src/package.json)}" \
  && test -n "$v" \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${v}" -o /out/armadra-relay ./cmd/armadra-relay
 

@@ -31,7 +31,11 @@ jobs:
             echo "标签 ${GITHUB_REF_NAME} 与 package.json 版本 ${version} 不一致" >&2
             exit 1
           fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          web="$(node -p "require('./deploy/compat.json').armadraServer.web")"
+          {
+            echo "version=${version}"
+            echo "web=${web}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: 本版更新记录
         shell: bash
@@ -48,37 +52,62 @@ jobs:
         shell: bash
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: 构建、冒烟并推送镜像
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: 构建 armadra-cloud 镜像
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: go/Dockerfile.cloud
+          build-args: WEB_IMAGE=ghcr.io/ama-link/armadra-server:${{ steps.version.outputs.web }}
+          tags: |
+            ghcr.io/ama-link/armadra-cloud:${{ steps.version.outputs.version }}
+            ghcr.io/ama-link/armadra-cloud:latest
+          load: true
+          cache-from: |
+            type=gha,scope=armadra-cloud
+            type=gha,scope=armadra-relay
+          cache-to: type=gha,mode=max,scope=armadra-cloud
+
+      - name: 构建 armadra-relay 镜像
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: go/Dockerfile
+          tags: |
+            ghcr.io/ama-link/armadra-relay:${{ steps.version.outputs.version }}
+            ghcr.io/ama-link/armadra-relay:latest
+          load: true
+          cache-from: |
+            type=gha,scope=armadra-relay
+            type=gha,scope=armadra-cloud
+          cache-to: type=gha,mode=max,scope=armadra-relay
+
+      - name: 冒烟并推送镜像
         shell: bash
         run: |
           set -euo pipefail
           v="${{ steps.version.outputs.version }}"
-          for app in cloud relay; do
-            image="ghcr.io/ama-link/armadra-${app}"
-            # 两个镜像都是 Go 构建。
-            dockerfile="go/Dockerfile"
-            [ "$app" = cloud ] && dockerfile="go/Dockerfile.cloud"
-            args=()
-            if [ "$app" = cloud ]; then
-              # 控制台页面（Armadra 带控制台外壳的 web 产物）取 compat.json 的 web 版本，没有它 / 不托管页面。
-              web="$(node -p "require('./deploy/compat.json').armadraServer.web")"
-              args+=(--build-arg "WEB_IMAGE=ghcr.io/ama-link/armadra-server:${web}")
-            fi
-            docker build -f "$dockerfile" "${args[@]}" -t "${image}:${v}" -t "${image}:latest" .
-          done
           # 冒烟过了才推。
           docker run --rm "ghcr.io/ama-link/armadra-relay:${v}" personal --help
           docker run --rm "ghcr.io/ama-link/armadra-cloud:${v}" version
           # 缺配置时 serve 以 64 退出并只列变量名（证明入口、用户与二进制可用）。
           set +e
           docker run --rm "ghcr.io/ama-link/armadra-cloud:${v}" serve
-          [ "$?" -eq 64 ] || { echo "armadra-cloud serve 冒烟：退出码不是 64"; exit 1; }
+          rc=$?
           set -e
-          for app in cloud relay; do
-            image="ghcr.io/ama-link/armadra-${app}"
+          [ "$rc" -eq 64 ] || { echo "armadra-cloud serve 冒烟：退出码 ${rc} 不是 64" >&2; exit 1; }
+          push_image() {
+            local image="ghcr.io/ama-link/armadra-$1"
             docker push "${image}:${v}"
             docker push "${image}:latest"
-          done
+          }
+          push_image cloud &
+          pid_cloud=$!
+          push_image relay &
+          pid_relay=$!
+          wait "$pid_cloud"
+          wait "$pid_relay"
 
       - name: 建 Release
         shell: bash
