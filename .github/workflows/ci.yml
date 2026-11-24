@@ -290,8 +290,6 @@ jobs:
     name: terraform
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -305,6 +303,8 @@ jobs:
       - name: terraform fmt
         run: terraform -chdir=deploy/cloudflare/terraform fmt -check -diff -recursive
       - name: terraform validate（不连账号）
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
         run: |
           mkdir -p "$TF_PLUGIN_CACHE_DIR"
           terraform -chdir=deploy/cloudflare/terraform init -backend=false -input=false
