@@ -316,8 +316,10 @@ func (s *selfSigned) Current() Material { return *s.current.Load() }
 
 func (s *selfSigned) Start(onChange func(Material), onError func(error)) func() {
 	done := make(chan struct{})
+	exited := make(chan struct{})
 	var once sync.Once
 	go func() {
+		defer close(exited)
 		t := time.NewTicker(s.interval)
 		defer t.Stop()
 		for {
@@ -342,5 +344,9 @@ func (s *selfSigned) Start(onChange func(Material), onError func(error)) func() 
 			}
 		}
 	}()
-	return func() { once.Do(func() { close(done) }) }
+	// 等循环退出再返回：停下之后不再有迟到的续期往数据目录写。
+	return func() {
+		once.Do(func() { close(done) })
+		<-exited
+	}
 }
