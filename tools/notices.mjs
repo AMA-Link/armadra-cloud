@@ -14,7 +14,7 @@
  * 每个包的许可证正文从安装目录（Go 是模块缓存）里的 LICENSE / NOTICE 等文件原样读出。
  * 输出只取决于锁文件与 go.sum：按名字与版本排序，不写绝对路径与时间，换行统一为 LF。
  */
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   existsSync,
   readFileSync,
@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const isWindows = process.platform === "win32";
 export const NOTICES_FILE = "THIRD_PARTY_NOTICES.md";
 const NOTICE_NAME = /^(licen[cs]e|copying|notice)([-._].*)?$/i;
 
@@ -136,29 +137,59 @@ export const GO_TARGETS = [
   ["windows", "amd64"],
 ];
 
-function goPackages() {
+function exec(command, args, { cwd = root, env = process.env } = {}) {
+  return new Promise((resolve) => {
+    const out = [];
+    const err = [];
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      shell: isWindows && command === "pnpm",
+    });
+    child.stdout.on("data", (chunk) => out.push(chunk));
+    child.stderr.on("data", (chunk) => err.push(chunk));
+    let settled = false;
+    const finish = (status, errorText = "") => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        status,
+        stdout: Buffer.concat(out).toString("utf8"),
+        stderr: Buffer.concat(err).toString("utf8") + errorText,
+      });
+    };
+    child.on("error", (error) => finish(1, `${error.message}\n`));
+    child.on("close", (code) => finish(code ?? 1));
+  });
+}
+
+async function goPackages() {
   const goDir = join(root, "go");
   if (!existsSync(join(goDir, "go.mod"))) return [];
-  let output = "";
-  for (const [goos, goarch] of GO_TARGETS) {
-    const result = spawnSync(
-      "go",
-      ["list", "-deps", "-test", "-json=ImportPath,Module,Standard", "./..."],
-      {
-        cwd: goDir,
-        encoding: "utf8",
-        maxBuffer: 256 * 1024 * 1024,
-        env: { ...process.env, GOOS: goos, GOARCH: goarch, CGO_ENABLED: "0" },
-      },
-    );
-    if (result.error || result.status !== 0) {
-      throw new Error(
-        `go list 失败（Go 模块的许可证要从它读；${goos}/${goarch}）：\n${result.error ?? result.stderr}`,
+  const outputs = await Promise.all(
+    GO_TARGETS.map(async ([goos, goarch]) => {
+      const result = await exec(
+        "go",
+        ["list", "-deps", "-test", "-json=ImportPath,Module,Standard", "./..."],
+        {
+          cwd: goDir,
+          env: {
+            ...process.env,
+            GOOS: goos,
+            GOARCH: goarch,
+            CGO_ENABLED: "0",
+          },
+        },
       );
-    }
-    output += result.stdout;
-  }
-  return goPackagesFrom(output);
+      if (result.status !== 0) {
+        throw new Error(
+          `go list 失败（Go 模块的许可证要从它读；${goos}/${goarch}）：\n${result.stderr}`,
+        );
+      }
+      return result.stdout;
+    }),
+  );
+  return goPackagesFrom(outputs.join(""));
 }
 
 function noticeTexts(directory) {
@@ -196,22 +227,17 @@ export function render(packages, readTexts = noticeTexts) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function generate() {
-  const result = spawnSync(
-    "pnpm",
-    ["licenses", "list", "-r", "--prod", "--json"],
-    {
-      cwd: root,
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    },
-  );
+export async function generate() {
+  const [result, go] = await Promise.all([
+    exec("pnpm", ["licenses", "list", "-r", "--prod", "--json"]),
+    goPackages(),
+  ]);
   if (result.status !== 0) {
     throw new Error(`pnpm licenses list failed:\n${result.stderr}`);
   }
   const text = result.stdout.trim();
   const npm = npmRows(withResolvedPeers(text === "" ? {} : JSON.parse(text)));
-  return render(sortPackages([...npm, ...goPackages()]));
+  return render(sortPackages([...npm, ...go]));
 }
 
 /**
@@ -277,9 +303,9 @@ function readManifest(directory) {
   }
 }
 
-function main(argv) {
+async function main(argv) {
   const target = join(root, NOTICES_FILE);
-  const output = generate();
+  const output = await generate();
   if (argv.includes("--check")) {
     const current = existsSync(target) ? readFileSync(target, "utf8") : "";
     if (current !== output) {
@@ -297,5 +323,5 @@ function main(argv) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  process.exit(main(process.argv.slice(2)));
+  process.exitCode = await main(process.argv.slice(2));
 }
