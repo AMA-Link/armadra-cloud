@@ -25,12 +25,12 @@
 - 日志字段走白名单（`internal/obs`）：字段名固定，不记流正文、终端输出、画布内容、口令、令牌明文；日志 `msg` 是简体中文短句，变量进字段。
 - `internal/core` 不 import `internal/tunnel`、`internal/edge`（延续「控制核不碰中继内核」），由 `repo.rules.json` 的 `goModules.internalBoundaries` 守。
 - `TeamScope` 只能在 `internal/cloud/teams` 的 `Require` / `Lock` 里构造：`internal/store/saas/teamscope` 的生产代码只许 `cloud/teams` 与 `store/saas`（类型别名）import，由 `goModules.onlyImportedBy`（白名单写法，`_test.go` 不受限）守；团队范围的仓储方法只收 `TeamScope`，不收裸 teamId。
-- 依赖写精确版本，`go/` 只许 import 标准库、本模块与 `repo.rules.json` 的 `goModules.allow` 登记过的模块（`go.mod` 不用 `replace`）；测试专用的模块（JSON Schema 校验库）只许出现在 `_test.go` 与 `testutil/`。staticcheck 固定版本，经 `go run` 调用，不进 `go.mod`。改 `go.mod` 后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。
+- 依赖写精确版本，`go/` 只许 import 标准库、本模块与 `repo.rules.json` 的 `goModules.allow` 登记过的模块（`go.mod` 不用 `replace`）；测试专用的模块（JSON Schema 校验库）只许出现在 `_test.go` 与 `testutil/`。staticcheck 固定版本，按 Go 与工具版本缓存在 `go/bin/tools/` 调用，不进 `go.mod`。改 `go.mod` 后 `pnpm notices` 并提交 `THIRD_PARTY_NOTICES.md`。
 - 代码注释与日志、CLI 文案是简体中文短句，标识符用英文；夹具（`packages/platform-protocol/fixtures/`）作表驱动测试，测试不迁就实现去改夹具。
 - 存储与兼容：迁移 SQL 的唯一来源是 `go/internal/store/{sqlite,postgres}/migrations/`（`go:embed`），新迁移只在这里加，`repo-check` 按 `migrations.lock` 守字节。`go/testdata/compat/` 是冻结的静态夹具（SQLite 库、PostgreSQL 转储、`state.json`、`expected.json`，由已删除的 TS 存储写出，代表已部署的库，不再重新生成、不手改），`internal/store/compat` 的测试让 Go 读这些夹具、核对夹具账本的 SHA-384 与内嵌迁移逐条相同、再写再重开读回；记录形状变了，加迁移与 Go 侧测试，不改夹具。
 - Redis 的测试读 `REDIS_URL`（`pnpm dev:up` 的 Redis 是 `redis://127.0.0.1:6390`，CI 的 `go` 作业带 Redis 服务容器），每个测试一个随机前缀、用完只删这个前缀的键；没有这个变量就跳过，CI 里（`CI` 非空）一律失败。多节点控制面（`internal/control/{redis,postgres}`）的键、频道、表与 JSON 形状以 Go 实现为准（线上形状与已删除的 Node 版相同，滚动切换时两种节点可共用同一个 Redis / 库）；合同测试在 `internal/control/controltest`。
 - 邮件的集成测试读 `MAILPIT_SMTP_ADDR`（`pnpm dev:up` 的 mailpit 是 `127.0.0.1:1026`）与 `MAILPIT_API_URL`（`http://127.0.0.1:8026`），CI 的 `go` 作业带 mailpit 服务容器；mailpit 是共用的，每个测试用随机收件地址、只按 `to:` 查自己的信，不清空信箱；没有这两个变量就跳过，CI 里（`CI` 非空）一律失败。
-- PostgreSQL 的测试读 `ARMADRA_CLOUD_TEST_DATABASE_URL`（`pnpm dev:up` 的库或 CI 的服务容器），每个测试一个随机名字的 schema、用完只删它；没有这个变量就跳过并说明。CI 的 `go` 作业带 PostgreSQL 服务容器并装 TS 依赖，所以两边都会跑。
+- PostgreSQL 的测试读 `ARMADRA_CLOUD_TEST_DATABASE_URL`（`pnpm dev:up` 的库或 CI 的服务容器），每个测试一个随机名字的 schema、用完只删它；没有这个变量就跳过并说明。CI 的 `go` 作业带 PostgreSQL 服务容器，所以两边都会跑。
 - 验证：`pnpm go:check`（gofmt、`go vet`、staticcheck、`go test -race`、生成物新鲜度；CI 全量并带 `-count=1`）；本机用 `pnpm verify`，只查相对 `origin/main` 受影响的包并保留测试缓存（挑包规则在 `scripts/go-check.mjs` 的 `planGo`，测试按路径读的仓库文件变了要登记进 `GO_FULL_TRIGGERS`）。
 
 ## 界面与文案统一

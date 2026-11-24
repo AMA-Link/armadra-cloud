@@ -1,7 +1,7 @@
 // Go 侧的检查（pnpm go:check），本地与 CI 同一份：
 //
 //   1. gofmt -l 必须为空；
-//   2. go vet、staticcheck（固定版本，经 go run 调用，不进 go.mod）与
+//   2. go vet、staticcheck（固定版本，按 Go 与工具版本缓存在 go/bin/tools/，不进 go.mod）与
 //      go test -race（超时见 TEST_TIMEOUT）三步并行，输出各自收齐后再打印；
 //   3. go generate ./... 之后生成物与已提交的一致（git diff 为空、没有未跟踪的新文件）。
 //
@@ -15,7 +15,7 @@
 // go.mod、测试会读的协议包夹具与 schema 等变了，或者拿不到基点，就全量。go test 保留缓存，
 // 没变的包直接取上次的结果。生成物新鲜度改成比对 go generate 前后的文件，不看 git。
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +26,26 @@ const GENERATED = "go/internal/protocol/gen/";
 
 /** staticcheck 的精确版本；换版本时只改这里。 */
 export const STATICCHECK = "honnef.co/go/tools/cmd/staticcheck@v0.8.2";
+
+/**
+ * 按 Go 工具链版本与 staticcheck 版本拼出缓存路径（换 Go 版本或 staticcheck 版本自动隔离，
+ * 免得旧 Go 编译出的分析器读不了新标准库）。
+ */
+export function staticcheckCachePath(
+  toolsDir,
+  goVersion,
+  spec = STATICCHECK,
+  platform = process.platform,
+) {
+  const toolVersion = spec.split("@")[1] ?? "unknown";
+  const key = `${goVersion || "go"}-${toolVersion}`.replace(
+    /[^A-Za-z0-9._-]/g,
+    "_",
+  );
+  const dir = join(toolsDir, key);
+  const exe = platform === "win32" ? "staticcheck.exe" : "staticcheck";
+  return { dir, bin: join(dir, exe) };
+}
 
 /**
  * go test 的单包超时（每个测试二进制各算一次）。显式写出来，不靠默认的 10 分钟：
@@ -135,11 +155,11 @@ export function listPackages() {
 }
 
 /** 跑一条命令，收齐输出；返回 { status, stdout, stderr }。 */
-function exec(command, args, cwd = goDir) {
+function exec(command, args, cwd = goDir, env = process.env) {
   return new Promise((resolve) => {
     const out = [];
     const err = [];
-    const child = spawn(command, args, { cwd });
+    const child = spawn(command, args, { cwd, env });
     child.stdout.on("data", (chunk) => out.push(chunk));
     child.stderr.on("data", (chunk) => err.push(chunk));
     child.on("error", (error) =>
@@ -153,6 +173,30 @@ function exec(command, args, cwd = goDir) {
       }),
     );
   });
+}
+
+async function ensureStaticcheck() {
+  const versionResult = spawnSync("go", ["env", "GOVERSION"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  const goVersion =
+    versionResult.status === 0 ? versionResult.stdout.trim() : "go";
+  const { dir, bin } = staticcheckCachePath(
+    join(goDir, "bin", "tools"),
+    goVersion,
+  );
+  if (existsSync(bin)) return { bin, output: "", problems: [] };
+  mkdirSync(dir, { recursive: true });
+  const installed = await exec("go", ["install", STATICCHECK], root, {
+    ...process.env,
+    GOBIN: dir,
+  });
+  const output = installed.stdout + installed.stderr;
+  if (installed.status !== 0 || !existsSync(bin)) {
+    return { bin: null, output, problems: ["staticcheck 安装失败"] };
+  }
+  return { bin, output, problems: [] };
 }
 
 /** gen/ 下每个文件的内容，比对 go generate 前后用。 */
@@ -230,7 +274,22 @@ export function goSteps({
       },
     },
     command("vet", ["vet"]),
-    command("staticcheck", ["run", STATICCHECK]),
+    {
+      name: "staticcheck",
+      group: 2,
+      args: targets.length === 0 ? null : [STATICCHECK, ...targets],
+      async run() {
+        if (targets.length === 0)
+          return { output: "没有受影响的 Go 包，跳过\n", problems: [] };
+        const prepared = await ensureStaticcheck();
+        if (prepared.problems.length > 0) return prepared;
+        const result = await exec(prepared.bin, targets);
+        return {
+          output: prepared.output + result.stdout + result.stderr,
+          problems: result.status === 0 ? [] : ["staticcheck 失败"],
+        };
+      },
+    },
     command("test", [
       "test",
       "-race",
