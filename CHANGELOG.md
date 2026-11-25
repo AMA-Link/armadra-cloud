@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.23.0（2026-11-24）
+
+### 变更 / Changed
+
+- 发版 0.23.0（与 Armadra、armadra-agent 统一的功能版）：本仓没有面向用户的改动。协议包 `@armadra/platform-protocol` 0.23.0 没有形状变化，仍是协议 1.4（`Armadra-Protocol: 1.4`，`deploy/compat.json` 的 `protocol` 不变）；`MIN_CORE_VERSION_TEAM_ASSERTION`（0.10.0）与 `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION`（0.11.0）不变；没有新的数据库迁移。
+  Release 0.23.0 (a feature release unified with Armadra and armadra-agent): no user-facing changes in this repository. The protocol package `@armadra/platform-protocol` 0.23.0 has no shape changes and is still protocol 1.4 (`Armadra-Protocol: 1.4`; the `protocol` of `deploy/compat.json` is unchanged); `MIN_CORE_VERSION_TEAM_ASSERTION` (0.10.0) and `MIN_CORE_VERSION_ROLE_ONLY_ASSERTION` (0.11.0) are unchanged; there are no new database migrations.
+- 本版仓内没有其他改动。
+  No other changes in this repository.
+- 部署注意：**先发 Armadra v0.23.0，再打本仓标签**：`deploy/compat.json` 的 `web` 改为 0.23.0，发布构建据此把 `ghcr.io/ama-link/armadra-server:0.23.0` 的页面拷进 `armadra-cloud` 镜像，镜像不存在时构建失败；把自建页面挂到 `/app/web` 的部署也要换成 0.23.0 的页面。
+  Deployment note: **release Armadra v0.23.0 before tagging this repository**: `web` in `deploy/compat.json` becomes 0.23.0 and the release build copies the pages of `ghcr.io/ama-link/armadra-server:0.23.0` into the `armadra-cloud` image, so the build fails while that image does not exist; deployments that mount their own pages at `/app/web` must switch to the 0.23.0 pages too.
+
 ## 0.22.0（2026-11-24）
 
 ### 变更 / Changed
